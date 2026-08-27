@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
@@ -30,10 +29,10 @@ func (c *sessionRuntimeClient) ReadChatSettings() (serverapi.ChatSettings, error
 	return response.Settings, nil
 }
 
-func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
+func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (chatSettingsMutationResult, error) {
 	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
 	if err != nil {
-		return serverapi.ChatSettingsMutationResponse{}, err
+		return chatSettingsMutationResult{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
@@ -42,39 +41,14 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 		Operation: operation,
 	})
 	if err != nil {
-		return serverapi.ChatSettingsMutationResponse{}, err
+		return chatSettingsMutationResult{}, err
 	}
+	result := chatSettingsMutationResult{response: response}
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Session.AgentRole = chatSettingsAgentRole(response.Settings.SelectedAgent.Role)
-		view.Status.ThinkingLevel = response.Settings.SelectedAgent.Thinking
-		view.Status.ReviewerFrequency = string(response.Settings.Supervisor.Value)
-		view.Status.ReviewerEnabled = response.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
-		view.Status.FastModeAvailable = response.Settings.Fast != nil
-		view.Status.FastModeEnabled = response.Settings.Fast != nil && response.Settings.Fast.Value
-		view.Status.QuestionsEnabled = response.Settings.Questions.Enabled
-		view.Status.AutoCompactionEnabled = response.Context.AutoCompactionEnabled
-		view.Status.CompactionMode = string(response.Context.CompactionMode)
-		view.Status.CompactionCount = int(response.Context.CompletedCompactionCount)
-		view.Status.ContextUsage = runtimeContextUsageFromChatContext(response.Context)
+		result.projection = projectChatSettingsMutation(response, *view)
+		result.projection.applyToRuntimeMainView(view)
 	})
-	return response, nil
-}
-
-func runtimeContextUsageFromChatContext(contextFacts serverapi.ChatContext) clientui.RuntimeContextUsage {
-	return clientui.RuntimeContextUsage{
-		UsedTokens:               int(contextFacts.UsedTokens),
-		WindowTokens:             int(contextFacts.ContextWindowTokens),
-		AutomaticThresholdTokens: int(contextFacts.AutomaticThresholdTokens),
-		HasAutomaticThreshold:    true,
-	}
-}
-
-func chatSettingsAgentRole(role string) *string {
-	role = strings.TrimSpace(role)
-	if role == "" || strings.EqualFold(role, config.DefaultSubagentRole) {
-		return nil
-	}
-	return &role
+	return result, nil
 }
 
 func runtimeRequestCallWithID[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, requestID string, call func(ctx context.Context, requestID string) (T, error)) (T, error) {

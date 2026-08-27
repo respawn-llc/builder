@@ -20,7 +20,7 @@ type runtimeInterruptCandidateClient interface {
 
 type chatSettingsRuntimeClient interface {
 	ReadChatSettings() (serverapi.ChatSettings, error)
-	MutateChatSettings(serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error)
+	MutateChatSettings(serverapi.ChatSettingsMutationOperation) (chatSettingsMutationResult, error)
 }
 
 func (m *uiModel) runtimeClient() clientui.RuntimeClient {
@@ -40,11 +40,12 @@ func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMu
 	}
 	client := m.runtimeClient().(chatSettingsRuntimeClient)
 	return func() tea.Msg {
-		response, err := client.MutateChatSettings(operation)
+		result, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
-			operation: operation.Kind,
-			response:  response,
-			err:       err,
+			operation:  operation.Kind,
+			response:   result.response,
+			projection: result.projection,
+			err:        err,
 		}
 	}
 }
@@ -66,11 +67,12 @@ func (m *uiModel) chatSettingsToggleCommand(
 		if err != nil {
 			return chatSettingsDoneMsg{operation: kind, err: err}
 		}
-		response, err := client.MutateChatSettings(operation)
+		result, err := client.MutateChatSettings(operation)
 		return chatSettingsDoneMsg{
-			operation: kind,
-			response:  response,
-			err:       err,
+			operation:  kind,
+			response:   result.response,
+			projection: result.projection,
+			err:        err,
 		}
 	}
 }
@@ -151,21 +153,7 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 		return m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	response := msg.response
-	settings := response.Settings
-	m.modelName = settings.SelectedAgent.Model
-	m.agentRole = chatSettingsAgentRole(settings.SelectedAgent.Role)
-	m.thinkingLevel = settings.SelectedAgent.Thinking
-	m.fastModeAvailable = settings.Fast != nil
-	m.fastModeEnabled = settings.Fast != nil && settings.Fast.Value
-	m.reviewerMode = string(settings.Supervisor.Value)
-	m.reviewerEnabled = settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
-	m.questionsEnabled = settings.Questions.Enabled
-	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
-	m.compactionMode = string(response.Context.CompactionMode)
-	m.compactionCount = int(response.Context.CompletedCompactionCount)
-	m.modelContractLocked = settings.AgentLocked
-	m.status.snapshot.CompactionCount = m.compactionCount
-	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), runtimeContextUsageFromChatContext(response.Context))
+	msg.projection.applyToUIModel(m)
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
 		reason := "Chat settings mutation rejected"
 		if response.Result.Rejected != nil {

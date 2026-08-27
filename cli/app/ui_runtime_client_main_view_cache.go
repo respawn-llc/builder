@@ -35,6 +35,12 @@ func (c *sessionRuntimeClient) mergeMainViewCandidate(
 	defer c.mu.Unlock()
 	decision := decideRuntimeTuple(c.mainView.Version, view.Version, ingress)
 	if metadataBaselineRevision == nil || c.metadataRevision == *metadataBaselineRevision {
+		if c.mainView.Session.SessionID == view.Session.SessionID {
+			view.Status.ContextUsage = mergeRuntimeContextUsagePolicy(
+				c.mainView.Status.ContextUsage,
+				view.Status.ContextUsage,
+			)
+		}
 		c.mainView.Status = view.Status
 		c.mainView.Session = view.Session
 		c.advanceMetadataRevision()

@@ -170,8 +170,22 @@ func (m *uiModel) setRuntimeContextUsage(sessionID string, usage clientui.Runtim
 		m.runtimeContextUsageSession = ""
 		return
 	}
+	if strings.TrimSpace(m.runtimeContextUsageSession) == sessionID {
+		usage = mergeRuntimeContextUsagePolicy(m.runtimeContextUsage, usage)
+	}
 	m.runtimeContextUsage = usage
 	m.runtimeContextUsageSession = sessionID
+}
+
+func mergeRuntimeContextUsagePolicy(
+	current clientui.RuntimeContextUsage,
+	incoming clientui.RuntimeContextUsage,
+) clientui.RuntimeContextUsage {
+	if !incoming.HasAutomaticThreshold && current.HasAutomaticThreshold {
+		incoming.AutomaticThresholdTokens = current.AutomaticThresholdTokens
+		incoming.HasAutomaticThreshold = true
+	}
+	return incoming
 }
 
 func (m *uiModel) runtimeContextUsageAppliesTo(sessionID string) bool {
