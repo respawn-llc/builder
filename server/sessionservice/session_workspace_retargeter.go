@@ -82,11 +82,9 @@ func (s *SessionWorkspaceRetargeter) Close() error {
 		return nil
 	}
 	s.mu.Lock()
-	if !s.closed {
-		s.closed = true
-		s.cancel()
-	}
+	s.closed = true
 	s.mu.Unlock()
+	s.cancel()
 	s.wg.Wait()
 	return nil
 }
@@ -110,9 +108,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("no-op Session retarget requires a source binding")
 		}
 		outcome := successfulSessionRetargetOutcome(invocation.OperationID, *plan.SourceBinding, false)
-		if !s.publishTerminalOutcome(plan.SessionID, outcome, nil) {
-			return serverapi.SessionRetargetWorkspaceResponse{}, context.Canceled
-		}
+		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, outcome, nil)
 		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
 			response.Outcome = &outcome
 		}
@@ -163,12 +159,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 			}
 			return response, nil
 		}
-		if !s.publishTerminalOutcome(plan.SessionID, *outcome, runErr) {
-			if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
-				return serverapi.SessionRetargetWorkspaceResponse{}, context.Canceled
-			}
-			return response, nil
-		}
+		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, *outcome, runErr)
 		if invocation.CompletionMode == serverapi.SessionRetargetCompletionWait {
 			response.Outcome = outcome
 			return response, nil
@@ -180,7 +171,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(
 		if outcome == nil {
 			return
 		}
-		s.publishTerminalOutcome(plan.SessionID, *outcome, runErr)
+		s.publishTerminalOutcome(s.lifetimeCtx, plan.SessionID, *outcome, runErr)
 	}()
 	return response, nil
 }
@@ -368,23 +359,17 @@ func (s *SessionWorkspaceRetargeter) steerFailure(
 }
 
 func (s *SessionWorkspaceRetargeter) publishTerminalOutcome(
+	ctx context.Context,
 	sessionID string,
 	outcome serverapi.SessionRetargetOutcome,
 	runErr error,
-) bool {
-	// Keep shutdown start and terminal side effects on one lifecycle boundary.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return false
-	}
+) {
 	if s.outcomes != nil {
 		s.outcomes.PublishSessionRetargetOutcome(sessionID, outcome)
 	}
 	if runErr != nil {
-		s.steerFailure(s.lifetimeCtx, sessionID, outcome)
+		s.steerFailure(ctx, sessionID, outcome)
 	}
-	return true
 }
 
 func (s *SessionWorkspaceRetargeter) targetFilesystemContext(
