@@ -105,6 +105,35 @@ func TestRunUIProgramAttemptsBestEffortNativeProgressResetWhenEnabled(t *testing
 	}
 }
 
+func TestRunUIProgramCancelsPendingNativeProgressBeforeFinalReset(t *testing.T) {
+	model, progress := nativeProgressTestModel(t, true)
+	model.worktrees.create.submitting = true
+	_ = model.reconcileNativeProgress()
+	generation := model.nativeProgress.generation
+	_, showCmd := model.Update(nativeProgressDelayMsg{generation: generation})
+	if showCmd == nil {
+		t.Fatal("eligible operation did not schedule native progress")
+	}
+
+	composition := &uiProgramComposition{
+		model:                 model,
+		options:               []tea.ProgramOption{tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithoutRenderer()},
+		terminalOutput:        model.terminalOutput,
+		nativeProgressEnabled: true,
+		close:                 func() {},
+	}
+	if _, err := runUIProgram(composition, uiProgramFinalModelHarness{final: newProjectedStaticUIModel()}); err != nil {
+		t.Fatalf("runUIProgram: %v", err)
+	}
+	done, ok := showCmd().(nativeProgressWriteDoneMsg)
+	if !ok || !done.canceled {
+		t.Fatalf("post-exit show command result = %#v, want canceled completion", showCmd())
+	}
+	if got, want := progress.String(), xansi.ResetProgressBar; got != want {
+		t.Fatalf("post-exit native progress output = %q, want %q", got, want)
+	}
+}
+
 func TestRunUIProgramSkipsNativeProgressResetWhenDisabled(t *testing.T) {
 	var progress bytes.Buffer
 	composition := &uiProgramComposition{

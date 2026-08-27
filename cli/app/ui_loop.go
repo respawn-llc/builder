@@ -68,6 +68,9 @@ func runUIProgram(composition *uiProgramComposition, initialModel tea.Model) (te
 	defer composition.close()
 	finalModel, runErr := tea.NewProgram(initialModel, composition.options...).Run()
 	if composition.nativeProgressEnabled {
+		if composition.model != nil {
+			composition.model.cancelPendingNativeProgressWrite()
+		}
 		if composition.terminalOutput == nil {
 			if composition.logger != nil {
 				composition.logger.Logf("app.exit native_progress_reset_error=%q", "terminal output is required")

@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	"core/shared/clientui"
@@ -27,11 +28,47 @@ const (
 	uiNativeProgressReset
 )
 
+type nativeProgressWrite struct {
+	kind nativeProgressWriteKind
+	gate *nativeProgressWriteGate
+}
+
+type nativeProgressWriteGate struct {
+	mu       sync.Mutex
+	canceled bool
+	written  bool
+}
+
+// The gate makes cancellation and the terminal write one ordered operation, so
+// an exit reset cannot be overtaken by a stale asynchronous show command.
+func (g *nativeProgressWriteGate) cancel() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.canceled = true
+	return g.written
+}
+
+func (g *nativeProgressWriteGate) write(write func() error) (bool, error) {
+	if g == nil {
+		return false, errors.New("native progress write gate is required")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.canceled {
+		return false, nil
+	}
+	g.written = true
+	return true, write()
+}
+
 type uiNativeProgressState struct {
 	phase        uiNativeProgressPhase
 	generation   uint64
 	delayElapsed bool
-	pending      *nativeProgressWriteKind
+	pending      *nativeProgressWrite
 }
 
 type nativeProgressDelayMsg struct {
@@ -39,8 +76,9 @@ type nativeProgressDelayMsg struct {
 }
 
 type nativeProgressWriteDoneMsg struct {
-	kind nativeProgressWriteKind
-	err  error
+	write    *nativeProgressWrite
+	canceled bool
+	err      error
 }
 
 func (m *uiModel) nativeProgressEligible() bool {
@@ -57,17 +95,30 @@ func (m *uiModel) nativeProgressEligible() bool {
 func (m *uiModel) reconcileNativeProgress() tea.Cmd {
 	if m == nil || !m.tuiNativeProgressBar || m.terminalOutput == nil {
 		if m != nil {
+			m.cancelPendingNativeProgressWrite()
 			m.nativeProgress = uiNativeProgressState{}
 		}
 		return nil
 	}
 	if m.exitAction != UIActionNone {
+		m.cancelPendingNativeProgressWrite()
 		m.nativeProgress.phase = uiNativeProgressHidden
 		m.nativeProgress.delayElapsed = false
 		m.nativeProgress.generation++
 		return nil
 	}
 	if m.nativeProgress.pending != nil {
+		if m.nativeProgress.pending.kind == uiNativeProgressShow && !m.nativeProgressEligible() {
+			written := m.cancelPendingNativeProgressWrite()
+			m.nativeProgress.phase = uiNativeProgressHidden
+			m.nativeProgress.delayElapsed = false
+			m.nativeProgress.generation++
+			if written {
+				m.nativeProgress.phase = uiNativeProgressVisible
+				m.nativeProgress.pending = newNativeProgressWrite(uiNativeProgressReset)
+				return m.nativeProgressWriteCmd(m.nativeProgress.pending)
+			}
+		}
 		return nil
 	}
 	if !m.nativeProgressEligible() {
@@ -77,8 +128,8 @@ func (m *uiModel) reconcileNativeProgress() tea.Cmd {
 			m.nativeProgress.delayElapsed = false
 			m.nativeProgress.generation++
 		case uiNativeProgressVisible:
-			m.nativeProgress.pending = nativeProgressWritePointer(uiNativeProgressReset)
-			return m.nativeProgressWriteCmd(uiNativeProgressReset)
+			m.nativeProgress.pending = newNativeProgressWrite(uiNativeProgressReset)
+			return m.nativeProgressWriteCmd(m.nativeProgress.pending)
 		}
 		return nil
 	}
@@ -93,8 +144,8 @@ func (m *uiModel) reconcileNativeProgress() tea.Cmd {
 		})
 	case uiNativeProgressWaiting:
 		if m.nativeProgress.delayElapsed {
-			m.nativeProgress.pending = nativeProgressWritePointer(uiNativeProgressShow)
-			return m.nativeProgressWriteCmd(uiNativeProgressShow)
+			m.nativeProgress.pending = newNativeProgressWrite(uiNativeProgressShow)
+			return m.nativeProgressWriteCmd(m.nativeProgress.pending)
 		}
 	}
 	return nil
@@ -110,6 +161,7 @@ func (m *uiModel) reduceNativeProgressMessage(msg tea.Msg) uiFeatureUpdateResult
 			return handledUIFeatureUpdate(m, nil)
 		}
 		if !m.nativeProgressEligible() || m.exitAction != UIActionNone {
+			m.cancelPendingNativeProgressWrite()
 			m.nativeProgress.phase = uiNativeProgressHidden
 			m.nativeProgress.delayElapsed = false
 			m.nativeProgress.generation++
@@ -121,14 +173,23 @@ func (m *uiModel) reduceNativeProgressMessage(msg tea.Msg) uiFeatureUpdateResult
 		if m == nil || m.nativeProgress.pending == nil {
 			return handledUIFeatureUpdate(m, nil)
 		}
-		if *m.nativeProgress.pending != msg.kind {
-			panic("native progress completion does not match pending write")
+		if m.nativeProgress.pending != msg.write {
+			if msg.err != nil && !msg.canceled {
+				return handledUIFeatureUpdate(m, m.handleFatalUIError("native progress output failed", msg.err))
+			}
+			return handledUIFeatureUpdate(m, nil)
 		}
+		write := m.nativeProgress.pending
 		m.nativeProgress.pending = nil
 		if msg.err != nil {
 			return handledUIFeatureUpdate(m, m.handleFatalUIError("native progress output failed", msg.err))
 		}
-		switch msg.kind {
+		if msg.canceled {
+			m.nativeProgress.phase = uiNativeProgressHidden
+			m.nativeProgress.delayElapsed = false
+			return handledUIFeatureUpdate(m, nil)
+		}
+		switch write.kind {
 		case uiNativeProgressShow:
 			m.nativeProgress.phase = uiNativeProgressVisible
 			m.nativeProgress.delayElapsed = false
@@ -144,20 +205,44 @@ func (m *uiModel) reduceNativeProgressMessage(msg tea.Msg) uiFeatureUpdateResult
 	}
 }
 
-func (m *uiModel) nativeProgressWriteCmd(kind nativeProgressWriteKind) tea.Cmd {
+func (m *uiModel) nativeProgressWriteCmd(write *nativeProgressWrite) tea.Cmd {
+	if write == nil {
+		return func() tea.Msg {
+			return nativeProgressWriteDoneMsg{err: errors.New("native progress write is required")}
+		}
+	}
+	var output *uiTerminalOutput
+	if m != nil {
+		output = m.terminalOutput
+	}
 	return func() tea.Msg {
-		if m == nil || m.terminalOutput == nil {
-			return nativeProgressWriteDoneMsg{kind: kind, err: errors.New("terminal output is required")}
+		if output == nil {
+			return nativeProgressWriteDoneMsg{write: write, err: errors.New("terminal output is required")}
 		}
 		sequence := xansi.ResetProgressBar
-		if kind == uiNativeProgressShow {
+		if write.kind == uiNativeProgressShow {
 			sequence = xansi.SetIndeterminateProgressBar
 		}
-		_, err := m.terminalOutput.Write([]byte(sequence))
-		return nativeProgressWriteDoneMsg{kind: kind, err: err}
+		written, err := write.gate.write(func() error {
+			_, err := output.Write([]byte(sequence))
+			return err
+		})
+		return nativeProgressWriteDoneMsg{write: write, canceled: !written, err: err}
 	}
 }
 
-func nativeProgressWritePointer(kind nativeProgressWriteKind) *nativeProgressWriteKind {
-	return &kind
+func (m *uiModel) cancelPendingNativeProgressWrite() bool {
+	if m == nil || m.nativeProgress.pending == nil {
+		return false
+	}
+	pending := m.nativeProgress.pending
+	m.nativeProgress.pending = nil
+	return pending.gate.cancel()
+}
+
+func newNativeProgressWrite(kind nativeProgressWriteKind) *nativeProgressWrite {
+	return &nativeProgressWrite{
+		kind: kind,
+		gate: &nativeProgressWriteGate{},
+	}
 }

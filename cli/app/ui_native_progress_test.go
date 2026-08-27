@@ -155,7 +155,7 @@ func TestNativeProgressUsesOneDelayedAggregateInterval(t *testing.T) {
 		t.Fatalf("Update performed terminal I/O: %q", output.Bytes())
 	}
 	done, ok := cmd().(nativeProgressWriteDoneMsg)
-	if !ok || done.kind != uiNativeProgressShow {
+	if !ok || done.write == nil || done.write.kind != uiNativeProgressShow {
 		t.Fatalf("show command result = %#v, want typed show completion", cmd())
 	}
 	_, _ = model.Update(done)
@@ -196,6 +196,36 @@ func TestNativeProgressEndingDuringDelayInvalidatesStaleTimerAndStartsFreshInter
 	}
 }
 
+func TestNativeProgressStaleShowCommandIsCanceledBeforeOutput(t *testing.T) {
+	model, output := nativeProgressTestModel(t, true)
+	model.worktrees.create.submitting = true
+	_ = model.reconcileNativeProgress()
+	generation := model.nativeProgress.generation
+	_, showCmd := model.Update(nativeProgressDelayMsg{generation: generation})
+	if showCmd == nil {
+		t.Fatal("eligible operation did not schedule native progress")
+	}
+
+	model.worktrees.create.submitting = false
+	if cmd := model.reconcileNativeProgress(); cmd != nil {
+		t.Fatal("ended operation scheduled a stale native progress command")
+	}
+	if model.nativeProgress.pending != nil || model.nativeProgress.phase != uiNativeProgressHidden {
+		t.Fatalf("ended operation state = %+v, want no pending write and hidden progress", model.nativeProgress)
+	}
+
+	done, ok := showCmd().(nativeProgressWriteDoneMsg)
+	if !ok {
+		t.Fatalf("stale show command result = %T, want native progress completion", showCmd())
+	}
+	if !done.canceled {
+		t.Fatal("stale show command performed terminal I/O")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("stale show output = %q, want empty", output.String())
+	}
+}
+
 func TestNativeProgressClearsAfterLastEligibleSource(t *testing.T) {
 	model, output := nativeProgressTestModel(t, true)
 	model.worktrees.create.submitting = true
@@ -214,7 +244,7 @@ func TestNativeProgressClearsAfterLastEligibleSource(t *testing.T) {
 		t.Fatal("ending last eligible source did not request reset")
 	}
 	resetDone, ok := resetCmd().(nativeProgressWriteDoneMsg)
-	if !ok || resetDone.kind != uiNativeProgressReset {
+	if !ok || resetDone.write == nil || resetDone.write.kind != uiNativeProgressReset {
 		t.Fatalf("reset command result = %#v, want typed reset completion", resetCmd())
 	}
 	_, _ = model.Update(resetDone)
@@ -242,10 +272,11 @@ func TestNativeProgressWriteFailureUsesFatalPolicyWithoutRetry(t *testing.T) {
 	model.worktrees.create.submitting = true
 	model.nativeProgress.phase = uiNativeProgressWaiting
 	model.nativeProgress.delayElapsed = true
-	model.nativeProgress.pending = nativeProgressWritePointer(uiNativeProgressShow)
+	pending := newNativeProgressWrite(uiNativeProgressShow)
+	model.nativeProgress.pending = pending
 	_, cmd := model.Update(nativeProgressWriteDoneMsg{
-		kind: uiNativeProgressShow,
-		err:  errors.New("terminal unavailable"),
+		write: pending,
+		err:   errors.New("terminal unavailable"),
 	})
 	if cmd == nil {
 		t.Fatal("failed native progress write did not request quit")
@@ -264,10 +295,11 @@ func TestNativeProgressWriteFailureUsesFatalPolicyWithoutRetry(t *testing.T) {
 func TestNativeProgressResetFailureUsesFatalPolicyWithoutRetry(t *testing.T) {
 	model, _ := nativeProgressTestModel(t, true)
 	model.nativeProgress.phase = uiNativeProgressVisible
-	model.nativeProgress.pending = nativeProgressWritePointer(uiNativeProgressReset)
+	pending := newNativeProgressWrite(uiNativeProgressReset)
+	model.nativeProgress.pending = pending
 	_, cmd := model.Update(nativeProgressWriteDoneMsg{
-		kind: uiNativeProgressReset,
-		err:  errors.New("terminal unavailable"),
+		write: pending,
+		err:   errors.New("terminal unavailable"),
 	})
 	if cmd == nil {
 		t.Fatal("failed native progress reset did not request quit")
