@@ -17,7 +17,7 @@ import {
   type WorkflowProjectEvent,
 } from "@/api";
 import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
-import { defaultProjectTaskSort, type ProjectTaskSort } from "./projectTaskSorting";
+import { defaultProjectTaskSort, projectTaskSortsEqual, type ProjectTaskSort } from "./projectTaskSorting";
 
 export const projectTaskGroups = ["active", "backlog", "done"] as const satisfies readonly ProjectTaskGroup[];
 export type { ProjectTaskGroup } from "@/api";
@@ -201,10 +201,6 @@ function projectTaskGenerationReducer(
     state.replacementSort === null
     ? state
     : { currentSort: action.sort, establishedData: action.data, replacementSort: null };
-}
-
-function projectTaskSortsEqual(left: ProjectTaskSort | null, right: ProjectTaskSort): boolean {
-  return left !== null && left.field === right.field && left.direction === right.direction;
 }
 
 function projectTaskSortReplacement({

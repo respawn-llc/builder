@@ -73,7 +73,7 @@ import {
   projectTaskWorkflowStrip,
 } from "./projectTaskSurfaceState";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
-import type { ProjectTaskSort } from "./projectTaskSorting";
+import { projectTaskSortsEqual, type ProjectTaskSort } from "./projectTaskSorting";
 import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 import {
@@ -115,7 +115,7 @@ export function ProjectTasksSurface({
   });
   const onSortChange = useCallback(
     (nextSort: ProjectTaskSort) => {
-      if (nextSort.field === sort.field && nextSort.direction === sort.direction) {
+      if (projectTaskSortsEqual(sort, nextSort)) {
         return;
       }
       for (const group of projectTaskGroups) {

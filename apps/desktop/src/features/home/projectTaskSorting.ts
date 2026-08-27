@@ -6,6 +6,10 @@ export type ProjectTaskSort = Readonly<{
   direction: WorkflowTaskListSort["direction"];
 }>;
 
+export function projectTaskSortsEqual(left: ProjectTaskSort | null, right: ProjectTaskSort): boolean {
+  return left !== null && left.field === right.field && left.direction === right.direction;
+}
+
 export const defaultProjectTaskSort = {
   direction: "desc",
   field: "updated",
