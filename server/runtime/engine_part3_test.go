@@ -1138,7 +1138,7 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 	}
 }
 
-func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) {
+func TestSubmitUserMessageMissingPhaseRemainsTerminal(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{

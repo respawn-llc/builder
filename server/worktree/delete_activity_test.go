@@ -39,7 +39,7 @@ func (l *deleteInFlightStartLifecycle) ResourceDraining(context.Context, session
 
 type deleteActivityTestLLMClient struct{}
 
-func (deleteActivityTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (deleteActivityTestLLMClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
@@ -68,7 +68,7 @@ func newDeleteActivityReviewerClient() *deleteActivityReviewerClient {
 	}
 }
 
-func (c *deleteActivityReviewerClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *deleteActivityReviewerClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.startedOnce.Do(func() { close(c.started) })
 	select {
 	case <-c.release:

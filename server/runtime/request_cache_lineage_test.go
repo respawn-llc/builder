@@ -567,8 +567,8 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 			payload:   payload,
 		}
 		capturedRequests = append(capturedRequests, captured)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\ndata: [DONE]\n\n"))
 	}))
 	defer server.Close()
 
@@ -592,7 +592,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	send := func(req llm.Request) capturedRequest {
 		t.Helper()
 		before := len(capturedRequests)
-		if _, err := openAIClient.Generate(context.Background(), req); err != nil {
+		if _, err := openAIClient.Generate(context.Background(), req, llm.StreamCallbacks{}); err != nil {
 			t.Fatalf("transport generate: %v", err)
 		}
 		if len(capturedRequests) != before+1 {
@@ -941,7 +941,7 @@ type failingCacheClient struct {
 	caps llm.ProviderCapabilities
 }
 
-func (f *failingCacheClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (f *failingCacheClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, context.DeadlineExceeded
 }
 

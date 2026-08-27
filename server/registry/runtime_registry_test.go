@@ -37,7 +37,7 @@ func newRegistryBlockingClient() *registryBlockingClient {
 	}
 }
 
-func (c *registryBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *registryBlockingClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
 	case <-ctx.Done():
@@ -144,7 +144,7 @@ func resolvePendingPromptResourceForTest(
 	_ = registry.publishCurrentRuntimeActivity(id)
 }
 
-func (registryRuntimeFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (registryRuntimeFakeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

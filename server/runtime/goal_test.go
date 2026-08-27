@@ -1259,7 +1259,7 @@ func newScriptedGoalLoopClient() *scriptedGoalLoopClient {
 	}
 }
 
-func (c *scriptedGoalLoopClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *scriptedGoalLoopClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
 	call := c.calls

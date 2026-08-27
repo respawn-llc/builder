@@ -922,7 +922,7 @@ func (f currentNodeQuestionFixture) answerPromptBatch(
 
 type currentNodeQuestionLLMClient struct{}
 
-func (currentNodeQuestionLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (currentNodeQuestionLLMClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, errors.New("question fixture model must not generate")
 }
 

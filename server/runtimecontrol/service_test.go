@@ -360,7 +360,7 @@ type blockingRuntimeControlClient struct {
 	runtimeControlFakeClient
 }
 
-func (c *blockingRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+func (c *blockingRuntimeControlClient) Generate(ctx context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()
 }
@@ -400,7 +400,7 @@ func newCancelObservingRuntimeControlClient() *cancelObservingRuntimeControlClie
 	}
 }
 
-func (c *cancelObservingRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+func (c *cancelObservingRuntimeControlClient) Generate(ctx context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	_ = req
 	select {
 	case <-c.started:
@@ -447,7 +447,7 @@ func newRestartableRuntimeControlClient() *restartableRuntimeControlClient {
 	}
 }
 
-func (c *restartableRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+func (c *restartableRuntimeControlClient) Generate(ctx context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	_ = req
 	c.mu.Lock()
 	c.calls++
@@ -500,7 +500,7 @@ func newSteeringDrainRuntimeControlClient() *steeringDrainRuntimeControlClient {
 	}
 }
 
-func (c *steeringDrainRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+func (c *steeringDrainRuntimeControlClient) Generate(ctx context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	call := len(c.requests)
@@ -940,7 +940,7 @@ func TestServiceSubmitUserTurnRejectsMismatchedReactivatedWorkflowExecution(t *t
 	}
 }
 
-func (c *runtimeControlFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (c *runtimeControlFakeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++

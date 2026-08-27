@@ -25,14 +25,14 @@ type delayedGenerateClient struct {
 	delay time.Duration
 }
 
-func (c *delayedGenerateClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+func (c *delayedGenerateClient) Generate(ctx context.Context, req llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	callCount := len(c.calls)
 	c.mu.Unlock()
 	if callCount == 1 {
 		time.Sleep(c.delay)
 	}
-	return c.fakeClient.Generate(ctx, req)
+	return c.fakeClient.Generate(ctx, req, callbacks)
 }
 
 func forwardBackgroundEvents(t *testing.T, manager *shelltool.Manager, eng *Engine, ownerSessionID string) {

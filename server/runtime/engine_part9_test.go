@@ -9,6 +9,7 @@ import (
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -334,13 +335,9 @@ func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 
 type fakeNonRetriableStreamClient struct{}
 
-func (fakeNonRetriableStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (fakeNonRetriableStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
-	if onDelta != nil {
-		onDelta("partial")
+func (fakeNonRetriableStreamClient) Generate(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+	if callbacks.OnAssistantDelta != nil {
+		callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "partial"})
 	}
 	return llm.Response{}, &llm.ProviderAPIError{
 		ProviderID: "openai-compatible",

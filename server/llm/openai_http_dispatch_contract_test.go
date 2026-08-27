@@ -32,11 +32,7 @@ func (*countingOAuthAuth) OpenAIAuthMetadata(context.Context) (string, string, e
 func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 	methods := map[string]func(*HTTPTransport, *string) error{
 		"generate": func(transport *HTTPTransport, sessionID *string) error {
-			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: sessionID})
-			return err
-		},
-		"stream": func(transport *HTTPTransport, sessionID *string) error {
-			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: sessionID}, StreamCallbacks{})
+			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: sessionID}, StreamCallbacks{})
 			return err
 		},
 		"compact": func(transport *HTTPTransport, sessionID *string) error {
@@ -124,7 +120,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
 	}
-	_, err = transport.Generate(context.Background(), request)
+	_, err = transport.Generate(context.Background(), request, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -139,7 +135,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 	}
 	assertCanonicalGenerationMetadata(t, capturedBody)
 	request.FastMode = true
-	if _, err = transport.Generate(context.Background(), request); err != nil {
+	if _, err = transport.Generate(context.Background(), request, StreamCallbacks{}); err != nil {
 		t.Fatalf("fast generate: %v", err)
 	}
 	if got := capturedHeaders.Get("session-id"); got != "session-1" {
@@ -188,7 +184,7 @@ func TestOAuthExplicitCompatibleEndpointSendsCommonIdentityWithoutCodexMetadata(
 		Model:          "gpt-5.6-sol",
 		SessionID:      textutil.Value("session-1"),
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-	}); err != nil {
+	}, StreamCallbacks{}); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	if got := capturedHeaders.Get("session-id"); got != "session-1" {
@@ -235,11 +231,7 @@ func requireCodexTurnMetadata(t *testing.T, body map[string]any) map[string]any 
 func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *testing.T) {
 	methods := map[string]func(*HTTPTransport, string, *CodexDispatchContext) error{
 		"generate": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
-			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: model, ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch})
-			return err
-		},
-		"stream": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
-			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: model, ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch}, StreamCallbacks{})
+			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: model, ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch}, StreamCallbacks{})
 			return err
 		},
 		"compact": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
@@ -285,11 +277,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T) {
 	methods := map[string]func(*HTTPTransport) error{
 		"generate": func(transport *HTTPTransport) error {
-			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: "unknown-model", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1")})
-			return err
-		},
-		"stream": func(transport *HTTPTransport) error {
-			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "unknown-model", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1")}, StreamCallbacks{})
+			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: "unknown-model", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1")}, StreamCallbacks{})
 			return err
 		},
 		"compact": func(transport *HTTPTransport) error {

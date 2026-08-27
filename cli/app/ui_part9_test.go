@@ -31,7 +31,7 @@ func TestMouseSGRSplitEscAndRunesDoNotArmRollback(t *testing.T) {
 
 type statusLineFakeClient struct{}
 
-func (statusLineFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (statusLineFakeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
 }
 

@@ -41,7 +41,7 @@ func requestMessages(req llm.Request) []llm.Message {
 	return llm.MessagesFromItems(req.Items)
 }
 
-func (f *fakeClient) Generate(_ context.Context, req llm.Request) (llm.Response, error) {
+func (f *fakeClient) Generate(_ context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, req)
@@ -82,7 +82,7 @@ func (f *fakeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabili
 	}, nil
 }
 
-func (c *hookClient) Generate(_ context.Context, req llm.Request) (llm.Response, error) {
+func (c *hookClient) Generate(_ context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls = append(c.calls, req)
 	beforeReturn := c.beforeReturn
@@ -148,7 +148,7 @@ type contextWindowClient struct {
 	resolveCalls int
 }
 
-func (c *contextWindowClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *contextWindowClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 
@@ -184,7 +184,7 @@ type preciseCompactionClient struct {
 	resolveCalls int
 }
 
-func (c *preciseCompactionClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *preciseCompactionClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 
@@ -235,7 +235,7 @@ func (c *preciseCompactionClient) ProviderCapabilities(context.Context) (llm.Pro
 	}, nil
 }
 
-func (f *fakeCompactionClient) Generate(_ context.Context, req llm.Request) (llm.Response, error) {
+func (f *fakeCompactionClient) Generate(_ context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, req)
@@ -417,11 +417,7 @@ func (fakeNonRetriableStreamClient) ProviderCapabilities(context.Context) (llm.P
 	return defaultTestProviderCapabilities(), nil
 }
 
-func (f *fakeStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (f *fakeStreamClient) GenerateStream(_ context.Context, req llm.Request, onDelta func(string)) (llm.Response, error) {
+func (f *fakeStreamClient) Generate(_ context.Context, req llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
 	f.mu.Lock()
 	attempt := f.attempts
 	f.attempts++
@@ -430,13 +426,13 @@ func (f *fakeStreamClient) GenerateStream(_ context.Context, req llm.Request, on
 
 	switch attempt {
 	case 0:
-		if onDelta != nil {
-			onDelta("partial")
+		if callbacks.OnAssistantDelta != nil {
+			callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "partial"})
 		}
 		return llm.Response{}, errors.New("transient stream failure")
 	default:
-		if onDelta != nil {
-			onDelta("final")
+		if callbacks.OnAssistantDelta != nil {
+			callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "final"})
 		}
 		return llm.Response{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final")},
@@ -566,16 +562,12 @@ func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMes
 	}
 }
 
-func (fakeAsyncLateDeltaClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (fakeAsyncLateDeltaClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
-	if onDelta != nil {
-		onDelta("final")
+func (fakeAsyncLateDeltaClient) Generate(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+	if callbacks.OnAssistantDelta != nil {
+		callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "final"})
 		go func() {
 			time.Sleep(10 * time.Millisecond)
-			onDelta("late")
+			callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "late"})
 		}()
 	}
 	return llm.Response{
@@ -584,22 +576,14 @@ func (fakeAsyncLateDeltaClient) GenerateStream(_ context.Context, _ llm.Request,
 	}, nil
 }
 
-func (fakeNoopStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (fakeNoopStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
+func (fakeNoopStreamClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(""), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
 
-func (fakeReasoningStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (fakeReasoningStreamClient) GenerateStreamWithEvents(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+func (fakeReasoningStreamClient) Generate(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
 	if callbacks.OnReasoningSummaryDelta != nil {
 		outputIndex, partIndex := int64(0), int64(0)
 		coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
@@ -625,7 +609,7 @@ type authFailClient struct {
 	calls int
 }
 
-func (c *authFailClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *authFailClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
 	c.mu.Unlock()
@@ -668,11 +652,7 @@ type streamRequiredClient struct {
 	response    llm.Response
 }
 
-func (c *streamRequiredClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, &llm.APIStatusError{StatusCode: 400, Body: `{"detail":"Stream must be set to true"}`}
-}
-
-func (c *streamRequiredClient) GenerateStream(_ context.Context, req llm.Request, _ func(string)) (llm.Response, error) {
+func (c *streamRequiredClient) Generate(_ context.Context, req llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.streamCalls++
@@ -686,7 +666,7 @@ func (c *streamRequiredClient) StreamCalls() int {
 	return c.streamCalls
 }
 
-func (c *statusFailClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *statusFailClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
 	status := c.status
@@ -700,7 +680,7 @@ func (c *statusFailClient) Calls() int {
 	return c.calls
 }
 
-func (c *providerContractFailClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *providerContractFailClient) Generate(_ context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
 	c.mu.Unlock()

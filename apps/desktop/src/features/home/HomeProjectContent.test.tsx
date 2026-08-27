@@ -5,12 +5,24 @@ import { appI18n, initializeI18n } from "@/i18n";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { HomeProjectContent } from "./HomeProjectContent";
 
+type ProjectQueryFixture = Readonly<{
+  data: Readonly<{ displayName: string; projectKey: string }> | undefined;
+  error: Error | null;
+  isPending: boolean;
+}>;
+
+const fixture = vi.hoisted((): { projectQuery: ProjectQueryFixture } => ({
+  projectQuery: {
+    data: { displayName: "Kent", projectKey: "KNT" },
+    error: null,
+    isPending: false,
+  },
+}));
+
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
   useQueryClient: () => ({ invalidateQueries: vi.fn(), resetQueries: vi.fn() }),
-  useQuery: () => ({
-    data: { displayName: "Kent", projectKey: "KNT" },
-  }),
+  useQuery: () => fixture.projectQuery,
   useInfiniteQuery: () => ({
     data: { pages: [] },
     error: null,
@@ -55,6 +67,30 @@ vi.mock("./ProjectTasksSurface", () => ({
 }));
 
 beforeAll(async () => initializeI18n());
+
+beforeEach(() => {
+  fixture.projectQuery = {
+    data: { displayName: "Kent", projectKey: "KNT" },
+    error: null,
+    isPending: false,
+  };
+});
+
+it("shows the generic loading state until the selected Project resolves", () => {
+  fixture.projectQuery = {
+    data: undefined,
+    error: null,
+    isPending: true,
+  };
+
+  render(<HomeProjectContent projectID="project-1" sessionsVisible={false} sidebarMode="shift" />);
+
+  expect(screen.getByTestId("loading-state")).toBeInTheDocument();
+  expect(screen.getByText(appI18n.t("states.loading"))).toBeInTheDocument();
+  expect(
+    screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+  ).not.toBeInTheDocument();
+});
 
 it("restores Task-grid pixels after visiting another Project tab", () => {
   render(<HomeProjectContent projectID="project-1" sessionsVisible sidebarMode="shift" />);

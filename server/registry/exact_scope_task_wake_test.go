@@ -25,7 +25,7 @@ import (
 
 type exactScopeTaskWakeClient struct{}
 
-func (exactScopeTaskWakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (exactScopeTaskWakeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,

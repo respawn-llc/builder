@@ -63,6 +63,7 @@ func (*persistedBoundaryClient) ProviderCapabilities(
 func (c *persistedBoundaryClient) Generate(
 	_ context.Context,
 	request llm.Request,
+	_ llm.StreamCallbacks,
 ) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

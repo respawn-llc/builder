@@ -1081,29 +1081,10 @@ func generateWithRetryClient(
 				onReasoningDelta(delta)
 			}
 		}
-		if streamingClient, ok := client.(llm.StreamEventsClient); ok {
-			resp, attemptErr = streamingClient.GenerateStreamWithEvents(ctx, req, llm.StreamCallbacks{
-				OnAssistantDelta:        attemptOnDelta,
-				OnReasoningSummaryDelta: attemptOnReasoningDelta,
-			})
-		} else if streamingClient, ok := client.(llm.StreamClient); ok {
-			var onTextDelta func(string)
-			if attemptOnDelta != nil {
-				onTextDelta = func(text string) {
-					attemptOnDelta(llm.AssistantDelta{Text: text})
-				}
-			}
-			resp, attemptErr = streamingClient.GenerateStream(ctx, req, onTextDelta)
-		} else {
-			resp, attemptErr = client.Generate(ctx, req)
-			if attemptErr == nil && attemptOnDelta != nil && resp.Assistant.Content != nil {
-				delta := llm.AssistantDelta{Text: *resp.Assistant.Content}
-				if resp.Assistant.Phase != nil {
-					delta.Phase = *resp.Assistant.Phase
-				}
-				attemptOnDelta(delta)
-			}
-		}
+		resp, attemptErr = client.Generate(ctx, req, llm.StreamCallbacks{
+			OnAssistantDelta:        attemptOnDelta,
+			OnReasoningSummaryDelta: attemptOnReasoningDelta,
+		})
 		attemptDone.Store(true)
 		if onAttemptFinished != nil {
 			onAttemptFinished()

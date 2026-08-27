@@ -418,7 +418,7 @@ func TestAuthorityCloseCancelsLifecycleStartWaitingForSessionAdmission(t *testin
 	}
 }
 
-func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
 	call := c.calls
