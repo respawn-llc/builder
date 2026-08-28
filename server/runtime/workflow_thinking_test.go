@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -9,10 +10,11 @@ import (
 	"core/server/llm"
 	"core/server/session/sessiontest"
 	"core/server/workflow"
+	"core/shared/clientui"
 	"core/shared/textutil"
 )
 
-func TestWorkflowAssignmentAppliesThinkingInItsRuntimeFIFOPosition(t *testing.T) {
+func TestPausedWorkflowThinkingDoesNotBlockOperatorThinkingAndMayApplyLater(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
 		Model:                   "workflow-thinking-model",
@@ -23,41 +25,103 @@ func TestWorkflowAssignmentAppliesThinkingInItsRuntimeFIFOPosition(t *testing.T)
 		t.Fatalf("pause Runtime FIFO: %v", err)
 	}
 
-	operatorDone := make(chan error, 1)
-	go func() {
-		operatorDone <- engine.SetThinkingLevel(t.Context(), "low")
-	}()
-	waitForPendingRuntimeOperation(t, engine)
-
 	thinking, err := workflow.NewThinkingValue("max")
 	if err != nil {
 		t.Fatalf("NewThinkingValue: %v", err)
 	}
-	snapshot, err := NewWorkflowAssignmentSnapshot(workflowAssignmentForCompactionTest())
-	if err != nil {
-		t.Fatalf("NewWorkflowAssignmentSnapshot: %v", err)
+	workflowDone := make(chan error, 1)
+	go func() {
+		workflowDone <- engine.SetWorkflowThinkingValue(thinking)
+	}()
+	waitForPendingRuntimeOperation(t, engine)
+
+	if err := engine.SetThinkingLevel(t.Context(), "low"); err != nil {
+		t.Fatalf("SetThinkingLevel while Workflow mutation is paused: %v", err)
 	}
-	steer, err := engine.SteerWorkflowAssignmentSnapshot(snapshot.WithThinkingLevel(string(thinking)))
-	if err != nil {
-		t.Fatalf("SteerWorkflowAssignmentSnapshot: %v", err)
+	if got := engine.ThinkingLevel(); got != "low" {
+		t.Fatalf("operator Thinking = %q, want low", got)
 	}
 
 	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("drain Runtime FIFO: %v", err)
 	}
 	select {
-	case err := <-operatorDone:
+	case err := <-workflowDone:
 		if err != nil {
-			t.Fatalf("SetThinkingLevel: %v", err)
+			t.Fatalf("SetWorkflowThinkingValue: %v", err)
 		}
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for operator Thinking mutation")
-	}
-	if _, err := steer.Wait(t.Context()); err != nil {
-		t.Fatalf("wait Workflow assignment: %v", err)
+		t.Fatal("timed out waiting for Workflow Thinking mutation")
 	}
 	if got := engine.ThinkingLevel(); got != "max" {
-		t.Fatalf("ThinkingLevel = %q, want Workflow assignment value max", got)
+		t.Fatalf("Thinking after later Workflow write = %q, want max", got)
+	}
+}
+
+func TestOperatorThinkingAppliedAfterWorkflowMayReplaceIt(t *testing.T) {
+	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), &fakeClient{}, Config{
+		Model:         "workflow-thinking-model",
+		ThinkingLevel: "medium",
+	})
+	thinking, err := workflow.NewThinkingValue("max")
+	if err != nil {
+		t.Fatalf("NewThinkingValue: %v", err)
+	}
+	if err := engine.SetWorkflowThinkingValue(thinking); err != nil {
+		t.Fatalf("SetWorkflowThinkingValue: %v", err)
+	}
+	if err := engine.SetThinkingLevel(t.Context(), "low"); err != nil {
+		t.Fatalf("SetThinkingLevel: %v", err)
+	}
+	if got := engine.ThinkingLevel(); got != "low" {
+		t.Fatalf("Thinking after later operator write = %q, want low", got)
+	}
+}
+
+func TestOperatorThinkingPublicationFailureRemainsAppliedUntilLaterWorkflowWrite(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+		Model:         "workflow-thinking-model",
+		ThinkingLevel: "medium",
+	})
+	publicationErr := errors.New("setting publication failed")
+	changed, err := engine.SetThinkingLevelWithPublication(t.Context(), "high", func(clientui.TranscriptSessionSettingFeedback) error {
+		return publicationErr
+	})
+	if !errors.Is(err, publicationErr) || !changed || engine.ThinkingLevel() != "high" {
+		t.Fatalf("operator Thinking = changed %t value %q error %v", changed, engine.ThinkingLevel(), err)
+	}
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "high" {
+		t.Fatalf("durable operator Thinking = %+v, want high", meta.ChatSettings)
+	}
+
+	thinking, err := workflow.NewThinkingValue("low")
+	if err != nil {
+		t.Fatalf("NewThinkingValue: %v", err)
+	}
+	if err := engine.SetWorkflowThinkingValue(thinking); err != nil {
+		t.Fatalf("SetWorkflowThinkingValue: %v", err)
+	}
+	if got := engine.ThinkingLevel(); got != "low" {
+		t.Fatalf("Thinking after independent Workflow write = %q, want low", got)
+	}
+}
+
+func TestDefinitelyUncommittedOperatorThinkingDoesNotPublishOrWriteLive(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+		Model:         "workflow-thinking-model",
+		ThinkingLevel: "medium",
+	})
+	blockTestSessionMetadataMutations(t, store)
+	publications := 0
+	changed, err := engine.SetThinkingLevelWithPublication(t.Context(), "high", func(clientui.TranscriptSessionSettingFeedback) error {
+		publications++
+		return nil
+	})
+	if err == nil || changed || publications != 0 || engine.ThinkingLevel() != "medium" {
+		t.Fatalf("uncommitted operator Thinking = changed %t publications %d value %q error %v", changed, publications, engine.ThinkingLevel(), err)
 	}
 }
 
