@@ -109,11 +109,13 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 	if err := transition.Validate(); err != nil {
 		return nil, err
 	}
-	err := e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
-		worktreeOperationID: &operationID,
-		reservationKind:     exclusiveStepReservationWorktreeTransition,
-		worktreeTransition:  &transition,
-		accept:              accept,
+	item, err := worktreePendingWorkItem(operationID, transition)
+	if err != nil {
+		return nil, err
+	}
+	err = e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
+		item:   item,
+		accept: accept,
 		run: func(pendingCtx context.Context, reservation *exclusiveStepReservation, pendingItem runtimeinput.PendingWorkItem) error {
 			e.pauseQueuedUserAutoDrain()
 			defer e.resumeQueuedUserAutoDrain()

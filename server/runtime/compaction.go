@@ -237,11 +237,13 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 	accept CommandAcceptance,
 ) (session.CommitReceipt, error) {
 	e := c.engine
-	err := e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
-		compactionRequestID: &requestID,
-		reservationKind:     exclusiveStepReservationManualCompaction,
-		manualCompaction:    &admission,
-		accept:              accept,
+	item, err := manualCompactionPendingWorkItem(requestID, admission)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	err = e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
+		item:   item,
+		accept: accept,
 		run: func(pendingCtx context.Context, reservation *exclusiveStepReservation, pendingItem runtimeinput.PendingWorkItem) error {
 			receipt, runErr := c.compactContext(
 				pendingCtx,

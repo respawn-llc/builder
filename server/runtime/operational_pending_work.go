@@ -11,18 +11,18 @@ import (
 )
 
 type operationalPendingWorkRequest struct {
-	compactionRequestID *runtimeids.CompactionRequestID
-	worktreeOperationID *clientui.WorktreeTransitionID
-	reservationKind     exclusiveStepReservationKind
-	manualCompaction    *runtimeinput.ManualCompactionAdmission
-	worktreeTransition  *runtimeinput.PendingWorkWorktreeTransition
-	accept              CommandAcceptance
-	run                 func(context.Context, *exclusiveStepReservation, runtimeinput.PendingWorkItem) error
+	item   runtimeinput.PendingWorkItem
+	accept CommandAcceptance
+	run    func(context.Context, *exclusiveStepReservation, runtimeinput.PendingWorkItem) error
 }
 
 func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request operationalPendingWorkRequest) error {
 	if request.run == nil {
 		return errors.New("operational Pending Work executor is required")
+	}
+	if request.item.Kind != runtimeinput.PendingWorkItemKindManualCompaction &&
+		request.item.Kind != runtimeinput.PendingWorkItemKindWorktreeTransition {
+		return errors.New("operational Pending Work item kind is invalid")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -33,14 +33,17 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 	if err := e.requirePendingWorkCapacity(); err != nil {
 		return err
 	}
-	item, err := request.pendingWorkItem()
-	if err != nil {
+	if err := request.item.Validate(); err != nil {
 		return err
+	}
+	reservationKind := exclusiveStepReservationWorktreeTransition
+	if request.item.Kind == runtimeinput.PendingWorkItemKindManualCompaction {
+		reservationKind = exclusiveStepReservationManualCompaction
 	}
 
 	e.ensureOrchestrationCollaborators()
 	reservation := &exclusiveStepReservation{
-		Kind:      request.reservationKind,
+		Kind:      reservationKind,
 		queueable: true,
 	}
 	pendingCtx, cancelPending := context.WithCancelCause(context.Background())
@@ -48,7 +51,7 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 	committed, acceptErr := runCommandAcceptance(request.accept, func() (bool, error) {
 		reservation.pendingWork = &pendingOperationalWork{
 			order:  *e.nextPendingWorkSteerAdmission(),
-			item:   item,
+			item:   request.item,
 			cancel: cancelPending,
 		}
 		if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
@@ -78,7 +81,7 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 		defer stopLifecycleCancellation()
 		defer cancelPending(context.Canceled)
 		defer e.stepLifecycle.ReleaseReservation(reservation)
-		runErr := request.run(pendingCtx, reservation, item)
+		runErr := request.run(pendingCtx, reservation, request.item)
 		fatal, abort := resultGroupFatalFromError(runErr)
 		if abort {
 			return fatal
@@ -96,59 +99,42 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 	return nil
 }
 
-func (r operationalPendingWorkRequest) pendingWorkItem() (runtimeinput.PendingWorkItem, error) {
-	item := runtimeinput.PendingWorkItem{
-		Lane:  runtimeinput.PendingWorkLaneSteer,
-		State: runtimeinput.PendingWorkItemStatePending,
-	}
-	var err error
-	switch r.reservationKind {
-	case exclusiveStepReservationManualCompaction:
-		if r.compactionRequestID == nil ||
-			r.worktreeOperationID != nil ||
-			r.manualCompaction == nil ||
-			r.worktreeTransition != nil {
-			return runtimeinput.PendingWorkItem{}, errors.New("manual-compaction Pending Work payload is required")
-		}
-		item.ID, err = serverapi.PendingWorkItemIDFromCompactionRequest(*r.compactionRequestID)
-		if err != nil {
-			return runtimeinput.PendingWorkItem{}, err
-		}
-		payload := *r.manualCompaction
-		if payload.Guidance != nil {
-			guidance := *payload.Guidance
-			payload.Guidance = &guidance
-		}
-		item.Kind = runtimeinput.PendingWorkItemKindManualCompaction
-		item.ManualCompaction = &payload
-		item.CanonicalInput, err = payload.CanonicalInput()
-	case exclusiveStepReservationWorktreeTransition:
-		if r.worktreeOperationID == nil ||
-			r.compactionRequestID != nil ||
-			r.worktreeTransition == nil ||
-			r.manualCompaction != nil {
-			return runtimeinput.PendingWorkItem{}, errors.New("Worktree-transition Pending Work payload is required")
-		}
-		item.ID, err = serverapi.PendingWorkItemIDFromWorktreeOperation(*r.worktreeOperationID)
-		if err != nil {
-			return runtimeinput.PendingWorkItem{}, err
-		}
-		payload := *r.worktreeTransition
-		if payload.Selector != nil {
-			selector := *payload.Selector
-			payload.Selector = &selector
-		}
-		item.Kind = runtimeinput.PendingWorkItemKindWorktreeTransition
-		item.WorktreeTransition = &payload
-		item.CanonicalInput, err = payload.CanonicalInput()
-	default:
-		return runtimeinput.PendingWorkItem{}, errors.New("operational Pending Work reservation kind is invalid")
-	}
+func manualCompactionPendingWorkItem(id runtimeids.CompactionRequestID, payload runtimeinput.ManualCompactionAdmission) (runtimeinput.PendingWorkItem, error) {
+	itemID, err := serverapi.PendingWorkItemIDFromCompactionRequest(id)
 	if err != nil {
 		return runtimeinput.PendingWorkItem{}, err
 	}
-	if err := item.Validate(); err != nil {
+	if payload.Guidance != nil {
+		guidance := *payload.Guidance
+		payload.Guidance = &guidance
+	}
+	canonical, err := payload.CanonicalInput()
+	if err != nil {
 		return runtimeinput.PendingWorkItem{}, err
 	}
-	return item, nil
+	item := runtimeinput.PendingWorkItem{
+		ID: itemID, Lane: runtimeinput.PendingWorkLaneSteer, Kind: runtimeinput.PendingWorkItemKindManualCompaction,
+		State: runtimeinput.PendingWorkItemStatePending, CanonicalInput: canonical, ManualCompaction: &payload,
+	}
+	return item, item.Validate()
+}
+
+func worktreePendingWorkItem(id clientui.WorktreeTransitionID, payload runtimeinput.PendingWorkWorktreeTransition) (runtimeinput.PendingWorkItem, error) {
+	itemID, err := serverapi.PendingWorkItemIDFromWorktreeOperation(id)
+	if err != nil {
+		return runtimeinput.PendingWorkItem{}, err
+	}
+	if payload.Selector != nil {
+		selector := *payload.Selector
+		payload.Selector = &selector
+	}
+	canonical, err := payload.CanonicalInput()
+	if err != nil {
+		return runtimeinput.PendingWorkItem{}, err
+	}
+	item := runtimeinput.PendingWorkItem{
+		ID: itemID, Lane: runtimeinput.PendingWorkLaneSteer, Kind: runtimeinput.PendingWorkItemKindWorktreeTransition,
+		State: runtimeinput.PendingWorkItemStatePending, CanonicalInput: canonical, WorktreeTransition: &payload,
+	}
+	return item, item.Validate()
 }
