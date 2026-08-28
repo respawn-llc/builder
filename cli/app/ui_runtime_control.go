@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"core/cli/app/internal/runtimeattach"
@@ -166,71 +165,49 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 		WindowTokens: int(response.Context.ContextWindowTokens),
 	})
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
-		if response.Result.Rejected == nil {
-			return m.handleChatSettingsPresentationError(
-				errors.New("rejected Chat settings response is missing its reason"),
-			)
-		}
-		notice, err := chatSettingsRejectionNotice(response.Result.Rejected.Reason)
-		if err != nil {
-			return m.handleChatSettingsPresentationError(err)
-		}
 		return m.sendTransientStatusWithNoticeID(
-			notice,
+			chatSettingsRejectionNotice(response.Result.Rejected.Reason),
 			uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "",
 		)
 	}
 	if response.Result.Applied == nil || !response.Result.Applied.Changed {
 		return nil
 	}
-	notice, err := chatSettingsSuccessNotice(msg.operation, settings)
-	if err != nil {
-		return m.handleChatSettingsPresentationError(err)
-	}
 	return m.sendTransientStatusWithNoticeID(
-		notice,
+		chatSettingsSuccessNotice(msg.operation, settings),
 		uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "",
-	)
-}
-
-func (m *uiModel) handleChatSettingsPresentationError(err error) tea.Cmd {
-	if err == nil {
-		err = errors.New("invalid Chat settings presentation")
-	}
-	m.logf("chat_settings.presentation_error err=%q", err.Error())
-	if m.debugMode {
-		panic(err)
-	}
-	return m.sendTransientStatusWithNoticeID(
-		"Chat settings response was invalid; retry the operation and report this error: "+err.Error(),
-		uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "",
 	)
 }
 
 func chatSettingsSuccessNotice(
 	operation serverapi.ChatSettingsMutationOperationKind,
 	settings serverapi.ChatSettings,
-) (string, error) {
+) string {
+	name := map[serverapi.ChatSettingsMutationOperationKind]string{
+		serverapi.ChatSettingsMutationAgent:          "Agent",
+		serverapi.ChatSettingsMutationSupervisor:     "Supervisor",
+		serverapi.ChatSettingsMutationThinking:       "Thinking",
+		serverapi.ChatSettingsMutationFast:           "Fast",
+		serverapi.ChatSettingsMutationQuestions:      "Questions",
+		serverapi.ChatSettingsMutationAutoCompaction: "Auto-compaction",
+	}[operation]
+	value := settings.SelectedAgent.Role
 	switch operation {
-	case serverapi.ChatSettingsMutationAgent:
-		return "Agent: " + settings.SelectedAgent.Role, nil
 	case serverapi.ChatSettingsMutationSupervisor:
-		value, err := chatSettingsSupervisorNotice(settings.Supervisor.Value)
-		if err != nil {
-			return "", err
-		}
-		return "Supervisor: " + value, nil
+		value = chatSettingsSupervisorNotice(settings.Supervisor.Value)
 	case serverapi.ChatSettingsMutationThinking:
-		return "Thinking: " + settings.SelectedAgent.Thinking, nil
+		value = settings.SelectedAgent.Thinking
 	case serverapi.ChatSettingsMutationFast:
-		return "Fast: " + chatSettingsOnOff(settings.Fast != nil && settings.Fast.Value), nil
+		value = chatSettingsOnOff(settings.Fast != nil && settings.Fast.Value)
 	case serverapi.ChatSettingsMutationQuestions:
-		return "Questions: " + chatSettingsOnOff(settings.Questions.Enabled), nil
+		value = chatSettingsOnOff(settings.Questions.Enabled)
 	case serverapi.ChatSettingsMutationAutoCompaction:
-		return "Auto-compaction: " + chatSettingsOnOff(settings.AutoCompaction.Stored), nil
-	default:
-		return "", fmt.Errorf("unhandled Chat settings mutation operation %q", operation)
+		value = chatSettingsOnOff(settings.AutoCompaction.Stored)
 	}
+	if name == "" {
+		return "Chat settings updated"
+	}
+	return name + ": " + value
 }
 
 func chatSettingsOnOff(enabled bool) string {
@@ -240,33 +217,33 @@ func chatSettingsOnOff(enabled bool) string {
 	return "off"
 }
 
-func chatSettingsSupervisorNotice(value serverapi.ChatSettingsSupervisorValue) (string, error) {
+func chatSettingsSupervisorNotice(value serverapi.ChatSettingsSupervisorValue) string {
 	switch value {
 	case serverapi.ChatSettingsSupervisorOff:
-		return "Off", nil
+		return "Off"
 	case serverapi.ChatSettingsSupervisorAfterEdits:
-		return "After edits", nil
+		return "After edits"
 	case serverapi.ChatSettingsSupervisorAlways:
-		return "Always", nil
+		return "Always"
 	default:
-		return "", fmt.Errorf("unhandled Chat settings Supervisor value %q", value)
+		return "Unknown"
 	}
 }
 
-func chatSettingsRejectionNotice(reason serverapi.ChatSettingsMutationRejectionReason) (string, error) {
+func chatSettingsRejectionNotice(reason serverapi.ChatSettingsMutationRejectionReason) string {
 	switch reason {
 	case serverapi.ChatSettingsMutationAgentLocked:
-		return "Agent is locked", nil
+		return "Agent is locked"
 	case serverapi.ChatSettingsMutationAgentUnavailable:
-		return "Agent is unavailable", nil
+		return "Agent is unavailable"
 	case serverapi.ChatSettingsMutationThinkingUnavailable:
-		return "Thinking is unavailable", nil
+		return "Thinking is unavailable"
 	case serverapi.ChatSettingsMutationFastUnavailable:
-		return "Fast mode is unavailable", nil
+		return "Fast mode is unavailable"
 	case serverapi.ChatSettingsMutationAutoCompactionPolicyLock:
-		return "Auto-compaction is unavailable", nil
+		return "Auto-compaction is unavailable"
 	default:
-		return "", fmt.Errorf("unhandled Chat settings mutation rejection reason %q", reason)
+		return "Chat settings mutation rejected"
 	}
 }
 

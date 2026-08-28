@@ -218,15 +218,11 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 		errText := "invalid thinking level " + strconv.Quote(requested) + " (expected low|medium|high|xhigh|max|ultra)"
 		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if m.hasRuntimeClient() {
-		value := normalized
-		return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-			Kind:  serverapi.ChatSettingsMutationThinking,
-			Value: &value,
-		})
-	}
-	m.thinkingLevel = normalized
-	return m, m.sendTransientStatusWithNoticeID("Thinking: "+m.thinkingLevel, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+	value := normalized
+	return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
+		Kind:  serverapi.ChatSettingsMutationThinking,
+		Value: &value,
+	})
 }
 
 func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
@@ -257,140 +253,48 @@ func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, t
 		errText := "Usage: /fast [on|off|status]"
 		return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if m.hasRuntimeClient() {
-		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationFast, requested)
-	}
-	if !available && requested != "off" {
-		return m, m.sendTransientStatusWithNoticeID("Fast mode is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-	}
-	targetEnabled := currentEnabled
-	switch requested {
-	case "":
-		targetEnabled = !currentEnabled
-	case "on":
-		targetEnabled = true
-	case "off":
-		targetEnabled = false
-	}
-
-	changed := currentEnabled != targetEnabled
-	m.fastModeEnabled = targetEnabled
-
-	if !changed {
-		return m, nil
-	}
-	value := "off"
-	if m.fastModeEnabled {
-		value = "on"
-	}
-	return m, m.sendTransientStatusWithNoticeID("Fast: "+value, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+	return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationFast, requested)
 }
 
 func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Model, tea.Cmd) {
 	m := c.model
 	requested = strings.ToLower(strings.TrimSpace(requested))
-	currentEnabled, currentMode := m.reviewerInvocationState()
-	targetEnabled := currentEnabled
 	switch requested {
-	case "":
-		targetEnabled = !currentEnabled
-	case "on":
-		targetEnabled = true
-	case "off":
-		targetEnabled = false
+	case "", "on", "off":
 	default:
 		errText := "invalid supervisor mode " + strconv.Quote(requested) + " (expected on|off)"
 		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if m.hasRuntimeClient() {
-		if requested == "" || requested == "on" {
-			return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationSupervisor, requested)
-		}
-		value := string(serverapi.ChatSettingsSupervisorOff)
-		return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-			Kind:  serverapi.ChatSettingsMutationSupervisor,
-			Value: &value,
-		})
+	if requested == "" || requested == "on" {
+		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationSupervisor, requested)
 	}
-	changed := false
-	nextMode := currentMode
-	nextMode = "off"
-	if targetEnabled {
-		nextMode = "edits"
-	}
-	changed = currentEnabled != targetEnabled
-	m.reviewerMode = nextMode
-	m.reviewerEnabled = nextMode != "off"
-	if !changed {
-		return m, nil
-	}
-	return m, m.sendTransientStatusWithNoticeID("Supervisor: "+nextMode, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+	value := string(serverapi.ChatSettingsSupervisorOff)
+	return m, m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
+		Kind:  serverapi.ChatSettingsMutationSupervisor,
+		Value: &value,
+	})
 }
 
 func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, tea.Cmd) {
 	m := c.model
 	requested = strings.ToLower(strings.TrimSpace(requested))
-	currentEnabled := m.questionsEnabled
-	targetEnabled := currentEnabled
 	switch requested {
-	case "":
-		targetEnabled = !currentEnabled
-	case "on":
-		targetEnabled = true
-	case "off":
-		targetEnabled = false
+	case "", "on", "off":
 	default:
 		errText := "invalid questions mode " + strconv.Quote(requested) + " (expected on|off)"
 		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if m.hasRuntimeClient() {
-		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationQuestions, requested)
-	}
-	changed := false
-	nextEnabled := currentEnabled
-	nextEnabled = targetEnabled
-	changed = currentEnabled != targetEnabled
-	m.questionsEnabled = nextEnabled
-	if !changed {
-		return m, nil
-	}
-	value := "off"
-	if nextEnabled {
-		value = "on"
-	}
-	return m, m.sendTransientStatusWithNoticeID("Questions: "+value, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+	return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationQuestions, requested)
 }
 
 func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Model, tea.Cmd) {
 	m := c.model
 	requested = strings.ToLower(strings.TrimSpace(requested))
-	currentEnabled := m.autoCompactionEnabled
-	targetEnabled := currentEnabled
 	switch requested {
-	case "":
-		targetEnabled = !currentEnabled
-	case "on":
-		targetEnabled = true
-	case "off":
-		targetEnabled = false
+	case "", "on", "off":
 	default:
 		errText := "invalid autocompaction mode " + strconv.Quote(requested) + " (expected on|off)"
 		return m, m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if m.hasRuntimeClient() {
-		return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationAutoCompaction, requested)
-	}
-	changed := false
-	nextEnabled := currentEnabled
-	nextEnabled = targetEnabled
-	changed = currentEnabled != targetEnabled
-	m.autoCompactionEnabled = nextEnabled
-	if !changed {
-		return m, nil
-	}
-	value := "off"
-	if nextEnabled {
-		value = "on"
-	}
-	return m, m.sendTransientStatusWithNoticeID("Auto-compaction: "+value, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+	return m, m.chatSettingsToggleCommand(serverapi.ChatSettingsMutationAutoCompaction, requested)
 }
