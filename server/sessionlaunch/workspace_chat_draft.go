@@ -167,11 +167,7 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 	if err := validateWorkspaceChatDraftTransform(next, current); err != nil {
 		return WorkspaceChatDraft{}, err
 	}
-	var replacement *WorkspaceChatDraft
-	defaults := current.Baselines[config.DefaultSubagentRole]
-	if strings.TrimSpace(next.Message) != "" || !workspaceChatDraftSettingsEqual(next, defaults) {
-		replacement = &next
-	}
+	replacement := canonicalWorkspaceChatDraft(next, current.Baselines[config.DefaultSubagentRole])
 	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
 		return WorkspaceChatDraft{}, err
 	}
@@ -237,11 +233,7 @@ func (o *WorkspaceChatDraftOwner) MutateWorkspaceChatSettings(
 		Questions:      *settings.Questions,
 		AutoCompaction: *settings.AutoCompaction,
 	}
-	var replacement *WorkspaceChatDraft
-	defaults := resolved.Baselines[config.DefaultSubagentRole]
-	if strings.TrimSpace(next.Message) != "" || !workspaceChatDraftSettingsEqual(next, defaults) {
-		replacement = &next
-	}
+	replacement := canonicalWorkspaceChatDraft(next, resolved.Baselines[config.DefaultSubagentRole])
 	if stored == nil && replacement == nil ||
 		stored != nil && replacement != nil && *stored == *replacement {
 		return projected, false, nil
@@ -398,6 +390,13 @@ func resolveWorkspaceChatDraftBaselines(
 }
 func workspaceChatDraftSettingsEqual(a, b WorkspaceChatDraft) bool {
 	return a.Agent == b.Agent && a.Supervisor == b.Supervisor && a.Thinking == b.Thinking && a.Fast == b.Fast && a.Questions == b.Questions && a.AutoCompaction == b.AutoCompaction
+}
+
+func canonicalWorkspaceChatDraft(draft, defaults WorkspaceChatDraft) *WorkspaceChatDraft {
+	if strings.TrimSpace(draft.Message) == "" && workspaceChatDraftSettingsEqual(draft, defaults) {
+		return nil
+	}
+	return &draft
 }
 
 func validateWorkspaceChatDraftTransform(draft WorkspaceChatDraft, resolved WorkspaceChatDraftResolution) error {

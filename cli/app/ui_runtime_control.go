@@ -180,7 +180,7 @@ func chatSettingsSuccessNotice(kind serverapi.ChatSettingsMutationOperationKind,
 	case serverapi.ChatSettingsMutationAutoCompaction:
 		return "Auto-compaction: " + chatSettingsOnOffValues[settings.AutoCompaction.Stored]
 	}
-	return ""
+	panic("invalid Chat settings mutation operation kind " + string(kind))
 }
 
 var chatSettingsOnOffValues = map[bool]string{false: "off", true: "on"}
