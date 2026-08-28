@@ -5,7 +5,7 @@ import {
   type InfiniteData,
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useReducer } from "react";
 
 import {
   errorMessage,
@@ -17,6 +17,7 @@ import {
   type WorkflowProjectEvent,
 } from "@/api";
 import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
+import { defaultProjectTaskSort, projectTaskSortsEqual, type ProjectTaskSort } from "./projectTaskSorting";
 
 export const projectTaskGroups = ["active", "backlog", "done"] as const satisfies readonly ProjectTaskGroup[];
 export type { ProjectTaskGroup } from "@/api";
@@ -39,6 +40,7 @@ export type ProjectTaskGroupData = Readonly<{
   isFetchingNextPage: boolean;
   isFetchingPreviousPage: boolean;
   isPending: boolean;
+  isSortReplacement: boolean;
   nextRequestGeneration: string;
   pages: readonly TaskListPage[];
   previousRequestGeneration: string;
@@ -63,19 +65,19 @@ export function projectTaskListWorkflowCardinality(
   return undefined;
 }
 
-const updatedDescending = [{ field: "updated", direction: "desc" }] as const;
-
 export function useProjectTaskListData({
   expanded,
   projectID,
+  sort = defaultProjectTaskSort,
 }: Readonly<{
   expanded: ProjectTaskGroupDisclosure;
   projectID: string;
+  sort?: ProjectTaskSort;
 }>): ProjectTaskListData {
   const counts = useProjectTaskGroupCounts(projectID);
-  const active = useProjectTaskGroupData(projectID, "active", expanded.active);
-  const backlog = useProjectTaskGroupData(projectID, "backlog", expanded.backlog);
-  const done = useProjectTaskGroupData(projectID, "done", expanded.done);
+  const active = useProjectTaskGroupData(projectID, "active", expanded.active, sort);
+  const backlog = useProjectTaskGroupData(projectID, "backlog", expanded.backlog, sort);
+  const done = useProjectTaskGroupData(projectID, "done", expanded.done, sort);
   return { active, backlog, counts, done };
 }
 
@@ -96,10 +98,12 @@ function useProjectTaskGroupData(
   projectID: string,
   group: ProjectTaskGroup,
   enabled: boolean,
+  sort: ProjectTaskSort,
 ): ProjectTaskGroupData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
-  const queryKey = queryKeys.projectTaskGroup(projectID, group);
+  const queryKey = queryKeys.projectTaskGroup(projectID, group, sort);
+  const queryKeyRoot = queryKeys.projectTaskGroupRoot(projectID, group);
   const query = useInfiniteQuery<
     TaskListPage,
     Error,
@@ -113,7 +117,7 @@ function useProjectTaskGroupData(
         projectID,
         group,
         labelFilter: noTaskLabelFilter,
-        sort: updatedDescending,
+        sort: [sort],
         offset: pageParam,
         limit: projectTaskGroupPageSize,
       }),
@@ -124,28 +128,119 @@ function useProjectTaskGroupData(
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     maxPages: projectTaskGroupRetainedPages,
   });
+  const [generation, dispatchGeneration] = useReducer(projectTaskGenerationReducer, emptyGenerationState);
+  const sortChanged = generation.currentSort !== null && !projectTaskSortsEqual(generation.currentSort, sort);
+  const queryEstablished = !query.isError && query.data !== undefined;
+  const targetEstablished = queryEstablished && query.data.pageParams[0] === 0;
+  const isSortReplacement = projectTaskSortReplacement({
+    hasSource: generation.establishedData !== null,
+    replacementSort: generation.replacementSort,
+    sort,
+    sortChanged,
+    targetEstablished,
+  });
+  const displayedData = query.data ?? (isSortReplacement ? generation.establishedData : undefined);
+  useEffect(() => {
+    if (sortChanged) {
+      dispatchGeneration({ kind: "selected", sort });
+      return;
+    }
+    if (queryEstablished) {
+      dispatchGeneration({ data: query.data, kind: "established", sort });
+    }
+  }, [query.data, queryEstablished, sort, sortChanged]);
   useEffect(() => {
     if (enabled) {
       return;
     }
+    dispatchGeneration({ kind: "disabled" });
     queryClient.removeQueries({
-      queryKey: queryKeys.projectTaskGroup(projectID, group),
-      exact: true,
+      queryKey: queryKeyRoot,
     });
   }, [enabled, group, projectID, queryClient]);
-  return projectTaskGroupData(query, enabled, projectID);
+  return projectTaskGroupData({
+    displayedData: displayedData ?? undefined,
+    enabled,
+    isSortReplacement,
+    projectID,
+    query,
+  });
 }
 
-function projectTaskGroupData(
-  query: UseInfiniteQueryResult<InfiniteData<TaskListPage, number>>,
-  enabled: boolean,
-  projectID: string,
-): ProjectTaskGroupData {
+type ProjectTaskGenerationState = Readonly<{
+  currentSort: ProjectTaskSort | null;
+  establishedData: InfiniteData<TaskListPage, number> | null;
+  replacementSort: ProjectTaskSort | null;
+}>;
+
+type ProjectTaskGenerationAction =
+  | Readonly<{ data: InfiniteData<TaskListPage, number>; kind: "established"; sort: ProjectTaskSort }>
+  | Readonly<{ kind: "disabled" }>
+  | Readonly<{ kind: "selected"; sort: ProjectTaskSort }>;
+
+const emptyGenerationState: ProjectTaskGenerationState = {
+  currentSort: null,
+  establishedData: null,
+  replacementSort: null,
+};
+
+function projectTaskGenerationReducer(
+  state: ProjectTaskGenerationState,
+  action: ProjectTaskGenerationAction,
+): ProjectTaskGenerationState {
+  if (action.kind === "disabled") {
+    return emptyGenerationState;
+  }
+  if (action.kind === "selected") {
+    return projectTaskSortsEqual(state.currentSort, action.sort)
+      ? state
+      : { ...state, currentSort: action.sort, replacementSort: action.sort };
+  }
+  return projectTaskSortsEqual(state.currentSort, action.sort) &&
+    state.establishedData === action.data &&
+    state.replacementSort === null
+    ? state
+    : { currentSort: action.sort, establishedData: action.data, replacementSort: null };
+}
+
+function projectTaskSortReplacement({
+  hasSource,
+  replacementSort,
+  sort,
+  sortChanged,
+  targetEstablished,
+}: Readonly<{
+  hasSource: boolean;
+  replacementSort: ProjectTaskSort | null;
+  sort: ProjectTaskSort;
+  sortChanged: boolean;
+  targetEstablished: boolean;
+}>): boolean {
+  return (
+    hasSource &&
+    (sortChanged || (replacementSort !== null && projectTaskSortsEqual(replacementSort, sort))) &&
+    !targetEstablished
+  );
+}
+
+function projectTaskGroupData({
+  displayedData,
+  enabled,
+  isSortReplacement,
+  projectID,
+  query,
+}: Readonly<{
+  displayedData: InfiniteData<TaskListPage, number> | undefined;
+  enabled: boolean;
+  isSortReplacement: boolean;
+  projectID: string;
+  query: UseInfiniteQueryResult<InfiniteData<TaskListPage, number>>;
+}>): ProjectTaskGroupData {
   if (!enabled) {
     return emptyProjectTaskGroupData;
   }
-  const pages = query.data?.pages ?? [];
-  const pageParams = query.data?.pageParams ?? [];
+  const pages = displayedData?.pages ?? [];
+  const pageParams = displayedData?.pageParams ?? [];
   const firstPageParam = pageParams[0] ?? 0;
   const nextPageParam = pages.at(-1)?.nextOffset;
   return {
@@ -161,6 +256,7 @@ function projectTaskGroupData(
     isFetchingNextPage: query.isFetchingNextPage,
     isFetchingPreviousPage: query.isFetchingPreviousPage,
     isPending: query.isPending,
+    isSortReplacement,
     nextRequestGeneration: `${projectID}:${nextPageParam?.toString() ?? "end"}`,
     pages,
     previousRequestGeneration: `${projectID}:${firstPageParam.toString()}`,
@@ -182,6 +278,7 @@ const emptyProjectTaskGroupData: ProjectTaskGroupData = {
   isFetchingNextPage: false,
   isFetchingPreviousPage: false,
   isPending: false,
+  isSortReplacement: false,
   nextRequestGeneration: "disabled",
   pages: [],
   previousRequestGeneration: "disabled",

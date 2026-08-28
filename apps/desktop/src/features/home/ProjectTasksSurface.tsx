@@ -1,6 +1,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronRight, Circle, CircleDot } from "lucide-react";
-import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useState,
+  type HTMLAttributes,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type WorkflowExecutionTargetSelection } from "@/api";
@@ -43,8 +51,6 @@ import {
   useProjectTaskListData,
   useProjectTaskListEvents,
   type ProjectTaskGroup,
-  type ProjectTaskGroupDisclosure,
-  type ProjectTaskListData,
 } from "./projectTaskListData";
 import {
   projectTaskColumnStyle,
@@ -55,7 +61,19 @@ import {
 } from "./projectTaskColumnLayout";
 import { ProjectTaskColumnMeasurements } from "./ProjectTaskColumnMeasurements";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
+import {
+  emptyProjectTaskSortLayoutState,
+  previousSortProjectionChanged,
+  projectTaskSortLayoutReducer,
+  projectTaskSortProjection,
+} from "./projectTaskSortLayout";
+import {
+  projectTaskScrollRestorationReady,
+  projectTaskWorkflowInitialState,
+  projectTaskWorkflowStrip,
+} from "./projectTaskSurfaceState";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
+import { projectTaskSortsEqual, type ProjectTaskSort } from "./projectTaskSorting";
 import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 import {
@@ -83,12 +101,35 @@ export function ProjectTasksSurface({
   const { open } = useOwnedSidebarRoots();
   const { activeDestination } = useSidebarShell();
   const [disclosure, setDisclosure] = useState(viewMemory.read().disclosure);
+  const [sort, setSort] = useState(viewMemory.read().sort);
+  const [sortLayout, dispatchSortLayout] = useReducer(
+    projectTaskSortLayoutReducer,
+    emptyProjectTaskSortLayoutState,
+  );
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
   const workflowsQuery = useProjectTaskWorkflowPages(projectID);
   const data = useProjectTaskListData({
     expanded: disclosure,
     projectID,
+    sort,
   });
+  const onSortChange = useCallback(
+    (nextSort: ProjectTaskSort) => {
+      if (projectTaskSortsEqual(sort, nextSort)) {
+        return;
+      }
+      for (const group of projectTaskGroups) {
+        queryClient.removeQueries({
+          exact: true,
+          queryKey: queryKeys.projectTaskGroup(projectID, group, nextSort),
+        });
+      }
+      viewMemory.setSort(nextSort);
+      setSort(nextSort);
+      dispatchSortLayout({ kind: "sort-selected" });
+    },
+    [projectID, queryClient, sort, viewMemory],
+  );
   const refreshTaskSurfaces = useCallback(async (): Promise<void> => {
     await Promise.all([
       invalidateProjectBoardQueries(queryClient, projectID),
@@ -228,6 +269,29 @@ export function ProjectTasksSurface({
     taskDetailID,
     t,
   });
+  const sortProjection = useMemo(
+    () =>
+      projectTaskSortProjection(
+        { error: data.active.isError, isSortReplacement: data.active.isSortReplacement },
+        { error: data.backlog.isError, isSortReplacement: data.backlog.isSortReplacement },
+        { error: data.done.isError, isSortReplacement: data.done.isSortReplacement },
+      ),
+    [
+      data.active.isError,
+      data.active.isSortReplacement,
+      data.backlog.isError,
+      data.backlog.isSortReplacement,
+      data.done.isError,
+      data.done.isSortReplacement,
+    ],
+  );
+  const sortProjectionChanged =
+    sortLayout.transition && previousSortProjectionChanged(sortLayout.previousProjection, sortProjection);
+  const layoutChangeScrollBehavior =
+    sortLayout.pulse || sortProjectionChanged ? "natural" : "preserve-leading-item";
+  useLayoutEffect(() => {
+    dispatchSortLayout({ kind: "projection-committed", projection: sortProjection });
+  }, [sortProjection]);
   const scrollRestorationReady = projectTaskScrollRestorationReady(data, disclosure);
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
@@ -262,6 +326,7 @@ export function ProjectTasksSurface({
         countsBoundary={countsBoundary}
         columnLayout={columnLayout}
         entries={presentation.entries}
+        layoutChangeScrollBehavior={layoutChangeScrollBehavior}
         onLinkWorkflow={openLinkWorkflow}
         onNewTask={openNewTask}
         onScrollElementChange={onScrollElementChange}
@@ -290,8 +355,10 @@ export function ProjectTasksSurface({
             onLoadPrevious={() => {
               void workflowsQuery.fetchPreviousPage();
             }}
+            onSortChange={onSortChange}
             previousBoundary={previousWorkflowsBoundary}
             projectID={projectID}
+            sort={sort}
             workflows={workflows}
           />,
         )}
@@ -304,42 +371,11 @@ export function ProjectTasksSurface({
   );
 }
 
-function projectTaskWorkflowStrip(
-  boundary: VirtualizedInfiniteListBoundaryState | undefined,
-  workflowCount: number,
-  strip: ReactNode,
-): ReactNode {
-  return boundary === undefined && workflowCount === 0 ? null : strip;
-}
-
-function projectTaskWorkflowInitialState(
-  established: boolean,
-  failed: boolean,
-  loading: boolean,
-): Readonly<{ failed: boolean; loading: boolean }> {
-  return {
-    failed: !established && failed,
-    loading: !established && loading,
-  };
-}
-
-function projectTaskScrollRestorationReady(
-  data: ProjectTaskListData,
-  disclosure: ProjectTaskGroupDisclosure,
-): boolean {
-  const counts = data.counts.data?.counts;
-  return (
-    counts !== undefined &&
-    projectTaskGroups.every(
-      (group) => !disclosure[group] || counts[group] === 0 || data[group].pages.length > 0,
-    )
-  );
-}
-
 function ProjectTasksContent({
   columnLayout,
   countsBoundary,
   entries,
+  layoutChangeScrollBehavior,
   onLinkWorkflow,
   onNewTask,
   onScrollElementChange,
@@ -356,6 +392,7 @@ function ProjectTasksContent({
   columnLayout: ProjectTaskColumnLayout;
   countsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   entries: readonly ProjectTaskListEntry[];
+  layoutChangeScrollBehavior: "natural" | "preserve-leading-item";
   onLinkWorkflow: () => void;
   onNewTask: () => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
@@ -416,6 +453,7 @@ function ProjectTasksContent({
             isFetchingNextPage={false}
             itemRole="row"
             items={listEntries}
+            layoutChangeScrollBehavior={layoutChangeScrollBehavior}
             loadingLabel={t("app.loadingMore")}
             onLoadMore={() => undefined}
             onScrollElementChange={onScrollElementChange}

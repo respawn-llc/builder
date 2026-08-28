@@ -100,11 +100,16 @@ describe("board query identities", () => {
   it("keeps Project Task counts and independent groups below one invalidation root", () => {
     const root = queryKeys.projectTaskListsRoot("project-1");
     const counts = queryKeys.projectTaskGroupCounts("project-1");
-    const active = queryKeys.projectTaskGroup("project-1", "active");
-    const backlog = queryKeys.projectTaskGroup("project-1", "backlog");
+    const activeRoot = queryKeys.projectTaskGroupRoot("project-1", "active");
+    const active = queryKeys.projectTaskGroup("project-1", "active", { field: "updated", direction: "desc" });
+    const backlog = queryKeys.projectTaskGroup("project-1", "backlog", {
+      field: "updated",
+      direction: "desc",
+    });
 
     expect(counts.slice(0, root.length)).toEqual(root);
     expect(active.slice(0, root.length)).toEqual(root);
+    expect(active.slice(0, activeRoot.length)).toEqual(activeRoot);
     expect(active).not.toEqual(backlog);
   });
 });

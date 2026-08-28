@@ -96,9 +96,9 @@ function groupEntries(
   const initial = groupBoundary(data, "initial", input.t);
   if (initial !== undefined) {
     entries.push(boundaryEntry({ data, direction: "initial", group, state: initial, t: input.t }));
-    return entries;
+    if (!data.isSortReplacement) return entries;
   }
-  if (data.hasPreviousPage || data.isFetchingPreviousPage || data.isFetchPreviousPageError) {
+  if (!data.isSortReplacement && hasPreviousBoundary(data)) {
     entries.push(
       boundaryEntry({
         data,
@@ -126,7 +126,7 @@ function groupEntries(
       }),
     ),
   );
-  if (data.hasNextPage || data.isFetchingNextPage || data.isFetchNextPageError) {
+  if (!data.isSortReplacement && hasNextBoundary(data)) {
     entries.push(
       boundaryEntry({
         data,
@@ -138,6 +138,14 @@ function groupEntries(
     );
   }
   return entries;
+}
+
+function hasPreviousBoundary(data: ProjectTaskGroupData): boolean {
+  return data.hasPreviousPage || data.isFetchingPreviousPage || data.isFetchPreviousPageError;
+}
+
+function hasNextBoundary(data: ProjectTaskGroupData): boolean {
+  return data.hasNextPage || data.isFetchingNextPage || data.isFetchNextPageError;
 }
 
 type BoundaryDirection = "initial" | "next" | "previous";
@@ -196,12 +204,12 @@ function groupBoundary(
 ): VirtualizedInfiniteListBoundaryState | undefined {
   const initial = direction === "initial";
   const failed = initial
-    ? data.isError && data.tasks.length === 0
+    ? data.isError && (data.tasks.length === 0 || data.isSortReplacement)
     : direction === "previous"
       ? data.isFetchPreviousPageError
       : data.isFetchNextPageError;
   const loading = initial
-    ? data.isPending
+    ? data.isPending && !data.isSortReplacement
     : direction === "previous"
       ? data.isFetchingPreviousPage
       : data.isFetchingNextPage;

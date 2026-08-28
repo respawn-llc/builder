@@ -246,6 +246,8 @@ export const englishResources = {
           label: "Sort field",
           updated: "Updated",
           created: "Created",
+          status: "Status",
+          title: "Title",
           labels: "Labels",
           short_id: "Short ID",
         },

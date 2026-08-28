@@ -10,6 +10,8 @@ import {
   type VirtualizedInfiniteListBoundaryState,
 } from "@/ui";
 import type { ProjectTaskWorkflowItem } from "./projectTaskWorkflows";
+import { ProjectSortChrome } from "./ProjectSortChrome";
+import type { ProjectTaskSort } from "./projectTaskSorting";
 
 type WorkflowStripAnchor = Readonly<{
   offsetWithinViewportPx: number;
@@ -32,8 +34,10 @@ export function ProjectWorkflowStrip({
   onLinkWorkflow,
   onLoadNext,
   onLoadPrevious,
+  onSortChange,
   previousBoundary,
   projectID,
+  sort,
   workflows,
 }: Readonly<{
   hasNextPage: boolean;
@@ -45,8 +49,10 @@ export function ProjectWorkflowStrip({
   onLinkWorkflow: () => void;
   onLoadNext: () => void;
   onLoadPrevious: () => void;
+  onSortChange(sort: ProjectTaskSort): void;
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   projectID: string;
+  sort: ProjectTaskSort;
   workflows: readonly ProjectTaskWorkflowItem[];
 }>) {
   const { t } = useTranslation();
@@ -133,6 +139,11 @@ export function ProjectWorkflowStrip({
       onScroll={onScroll}
       ref={scrollRef}
     >
+      <ProjectSortChrome onSortChange={onSortChange} sort={sort} />
+      <InteractiveChip className="shrink-0" onClick={onLinkWorkflow}>
+        <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
+        {t("workflowLibrary.linkWorkflow")}
+      </InteractiveChip>
       {initialBoundary === undefined ? (
         <>
           {previousBoundary === undefined ? null : (
@@ -164,12 +175,6 @@ export function ProjectWorkflowStrip({
             <div className="min-w-64 shrink-0">
               <InfiniteListBoundary direction="next" state={nextBoundary} />
             </div>
-          )}
-          {workflows.length === 0 ? null : (
-            <InteractiveChip className="shrink-0" onClick={onLinkWorkflow}>
-              <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
-              {t("workflowLibrary.linkWorkflow")}
-            </InteractiveChip>
           )}
         </>
       ) : (
