@@ -864,22 +864,13 @@ func (s *Starter) planCurrentNodeSession(
 		if err != nil {
 			return err
 		}
-		effective, err := session.ResolveEffectiveChatSettings(
-			state.Settings,
-			nil,
-			session.ChatSettings{
-				Supervisor:     plan.ActiveSettings.Reviewer.Frequency,
-				Thinking:       plan.ActiveSettings.ThinkingLevel,
-				Fast:           plan.ActiveSettings.PriorityRequestMode,
-				Questions:      plan.QuestionsEnabled,
-				AutoCompaction: plan.AutoCompactionEnabled,
-			},
-		)
-		if err != nil {
-			return err
-		}
-		effective.AutoCompaction = true
-		target, err := session.ChatSettingsStateFromCompleteSettings(state.Agent, effective)
+		target, err := session.ChatSettingsStateFromCompleteSettings(state.Agent, session.ChatSettings{
+			Supervisor:     plan.ActiveSettings.Reviewer.Frequency,
+			Thinking:       plan.ActiveSettings.ThinkingLevel,
+			Fast:           plan.ActiveSettings.PriorityRequestMode,
+			Questions:      plan.QuestionsEnabled,
+			AutoCompaction: true,
+		})
 		if err != nil {
 			return err
 		}

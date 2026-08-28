@@ -37,9 +37,6 @@ func (m *uiModel) hasRuntimeClient() bool {
 }
 
 func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMutationOperation) tea.Cmd {
-	if m == nil {
-		return nil
-	}
 	client := m.runtimeClient().(chatSettingsRuntimeClient)
 	return func() tea.Msg {
 		response, err := client.MutateChatSettings(operation)
@@ -51,9 +48,6 @@ func (m *uiModel) chatSettingsToggleCommand(
 	kind serverapi.ChatSettingsMutationOperationKind,
 	requested string,
 ) tea.Cmd {
-	if m == nil {
-		return nil
-	}
 	client := m.runtimeClient().(chatSettingsRuntimeClient)
 	return func() tea.Msg {
 		settings, err := client.ReadChatSettings()
@@ -137,9 +131,6 @@ func enabledChatSettingsOperation(
 }
 
 func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
-	if m == nil {
-		return nil
-	}
 	if msg.err != nil {
 		errText := runtimeattach.FormatSubmissionError(msg.err)
 		return m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
@@ -183,31 +174,21 @@ func chatSettingsSuccessNotice(
 	operation serverapi.ChatSettingsMutationOperationKind,
 	settings serverapi.ChatSettings,
 ) string {
-	name := map[serverapi.ChatSettingsMutationOperationKind]string{
-		serverapi.ChatSettingsMutationAgent:          "Agent",
-		serverapi.ChatSettingsMutationSupervisor:     "Supervisor",
-		serverapi.ChatSettingsMutationThinking:       "Thinking",
-		serverapi.ChatSettingsMutationFast:           "Fast",
-		serverapi.ChatSettingsMutationQuestions:      "Questions",
-		serverapi.ChatSettingsMutationAutoCompaction: "Auto-compaction",
-	}[operation]
-	value := settings.SelectedAgent.Role
 	switch operation {
+	case serverapi.ChatSettingsMutationAgent:
+		return "Agent: " + settings.SelectedAgent.Role
 	case serverapi.ChatSettingsMutationSupervisor:
-		value = chatSettingsSupervisorNotice(settings.Supervisor.Value)
+		return "Supervisor: " + chatSettingsSupervisorNotice(settings.Supervisor.Value)
 	case serverapi.ChatSettingsMutationThinking:
-		value = settings.SelectedAgent.Thinking
+		return "Thinking: " + settings.SelectedAgent.Thinking
 	case serverapi.ChatSettingsMutationFast:
-		value = chatSettingsOnOff(settings.Fast != nil && settings.Fast.Value)
+		return "Fast: " + chatSettingsOnOff(settings.Fast != nil && settings.Fast.Value)
 	case serverapi.ChatSettingsMutationQuestions:
-		value = chatSettingsOnOff(settings.Questions.Enabled)
+		return "Questions: " + chatSettingsOnOff(settings.Questions.Enabled)
 	case serverapi.ChatSettingsMutationAutoCompaction:
-		value = chatSettingsOnOff(settings.AutoCompaction.Stored)
+		return "Auto-compaction: " + chatSettingsOnOff(settings.AutoCompaction.Stored)
 	}
-	if name == "" {
-		return "Chat settings updated"
-	}
-	return name + ": " + value
+	return "Chat settings updated"
 }
 
 func chatSettingsOnOff(enabled bool) string {
