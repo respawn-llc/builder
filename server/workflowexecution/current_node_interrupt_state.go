@@ -14,7 +14,7 @@ type currentNodeInterruptFence struct {
 }
 
 // currentNodeInterruptState indexes one Task-wide lifecycle fence only through
-// the canonical Current Node and Exact Execution Scope identities it owns.
+// exact Scope and Current Node identities.
 // Callers hold CurrentNodeController.mu.
 type currentNodeInterruptState struct {
 	byScope       map[runtimeids.ExecutionScopeID]*currentNodeInterruptFence
@@ -53,9 +53,12 @@ func (s *currentNodeInterruptState) taskFence(taskID workflow.TaskID) *currentNo
 	return nil
 }
 
-func (s *currentNodeInterruptState) addScope(fence *currentNodeInterruptFence, scopeID runtimeids.ExecutionScopeID) {
+func (s *currentNodeInterruptState) addScope(
+	fence *currentNodeInterruptFence,
+	scopeID runtimeids.ExecutionScopeID,
+) {
 	if existing := s.byScope[scopeID]; existing != nil && existing != fence {
-		panic("exact execution scope belongs to conflicting Task interruption fences")
+		panic("Exact Execution Scope belongs to conflicting Task interruption fences")
 	}
 	s.byScope[scopeID] = fence
 }

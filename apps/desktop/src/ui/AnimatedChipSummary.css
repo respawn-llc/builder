@@ -1,0 +1,31 @@
+.animated-chip-summary {
+  transition: width var(--motion-morph);
+}
+
+@keyframes animated-chip-summary-crossfade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes animated-chip-summary-crossfade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+.animated-chip-summary-incoming {
+  animation: animated-chip-summary-crossfade-in var(--motion-morph) both;
+}
+
+.animated-chip-summary-outgoing {
+  animation: animated-chip-summary-crossfade-out var(--motion-morph) both;
+}

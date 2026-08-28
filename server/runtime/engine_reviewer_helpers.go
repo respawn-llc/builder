@@ -28,7 +28,18 @@ type reviewerRequestConfig struct {
 
 func (e *Engine) runReviewerSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.reviewerFlow.RunSuggestions(ctx, stepID, reviewerClient)
+	prepared, err := e.reviewerFlow.Prepare(ctx, stepID, reviewerClient)
+	if err != nil {
+		return reviewerSuggestionsResult{}, err
+	}
+	result := e.reviewerFlow.Run(ctx, prepared)
+	if result.err != nil {
+		return reviewerSuggestionsResult{}, result.err
+	}
+	if err := e.observePromptCacheResponse(stepID, prepared.cacheObservation, result.usage); err != nil {
+		return reviewerSuggestionsResult{}, err
+	}
+	return result.suggestions, nil
 }
 
 func parseReviewerSuggestionsObject(

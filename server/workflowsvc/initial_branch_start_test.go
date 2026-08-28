@@ -66,7 +66,7 @@ func TestServiceTaskStartMaterializesLatestTaskScopedPendingBranch(t *testing.T)
 	service.executionTargets = targets
 
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, BranchName: &branchA,
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(), TaskID: task.Task.ID, BranchName: &branchA,
 	})
 	if err != nil || response.Applied == nil {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want placed task", response, err)
@@ -155,7 +155,7 @@ func TestServiceTaskStartRestoresAlreadyLockedExecutionTarget(t *testing.T) {
 	service.executionTargets = targets
 
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 		TaskID:           task.Task.ID,
 	})
 	if err != nil || response.Applied == nil {

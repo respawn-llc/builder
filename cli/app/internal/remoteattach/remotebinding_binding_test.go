@@ -129,6 +129,28 @@ func TestBindProjectWorkspaceAcknowledgesBeforeSwitchAndFinalCloseIsIdempotent(t
 	nextServer.requireClosed(t)
 }
 
+func TestBindSessionReplacesTheProjectScopedConnection(t *testing.T) {
+	currentServer := newRemoteBindingServer(t, remoteBindingServerOptions{rootID: "root"})
+	current := currentServer.dial(t)
+	nextServer := newRemoteBindingServer(t, remoteBindingServerOptions{rootID: "root"})
+	next := nextServer.dial(t)
+	t.Cleanup(func() { _ = next.Close() })
+
+	var selectedSessionID string
+	bound, err := bindSession(context.Background(), current, " session-b ", "root", func(_ context.Context, sessionID string) (*client.Remote, error) {
+		selectedSessionID = sessionID
+		return next, nil
+	})
+	if err != nil {
+		t.Fatalf("bind Session: %v", err)
+	}
+	if bound != next || selectedSessionID != "session-b" {
+		t.Fatalf("bound remote/session = %p/%q, want %p/session-b", bound, selectedSessionID, next)
+	}
+	currentServer.requireClosed(t)
+	requireRemoteUsable(t, bound)
+}
+
 type remoteBindingServerOptions struct {
 	rootID     string
 	ackErr     error

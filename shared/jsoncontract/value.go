@@ -71,6 +71,36 @@ type ObjectField struct {
 	Aliases []string
 }
 
+type ObjectFieldMatcher func(name string) (canonical string, priority int, ok bool)
+
+func (v Value) ProjectObjectWithMatcher(fields []string, matcher ObjectFieldMatcher) (Value, error) {
+	source, ok := v.value.(map[string]any)
+	if !ok {
+		return Value{}, fmt.Errorf("JSON value is not an object")
+	}
+	allowed := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		allowed[field] = struct{}{}
+	}
+	projected := make(map[string]any, len(fields))
+	priorities := make(map[string]int, len(fields))
+	for name, value := range source {
+		canonical, priority, matched := matcher(name)
+		if !matched {
+			continue
+		}
+		if _, allowed := allowed[canonical]; !allowed {
+			continue
+		}
+		if previous, exists := priorities[canonical]; exists && previous <= priority {
+			continue
+		}
+		projected[canonical] = value
+		priorities[canonical] = priority
+	}
+	return Value{value: projected}, nil
+}
+
 func (v Value) ProjectObject(fields []ObjectField) (Value, error) {
 	source, ok := v.value.(map[string]any)
 	if !ok {

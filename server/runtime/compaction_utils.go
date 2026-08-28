@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 
 	"core/server/llm"
-	"core/shared/textutil"
 )
 
 const (
@@ -41,91 +38,6 @@ func (e *Engine) currentProviderCapabilities(ctx context.Context) (llm.ProviderC
 		return llm.ProviderCapabilities{}, err
 	}
 	return providerCaps, nil
-}
-
-func sanitizeRemoteCompactionOutput(output []llm.ResponseItem) ([]llm.ResponseItem, error) {
-	filtered := make([]llm.ResponseItem, 0, len(output))
-	hasCheckpoint := false
-	typeCounts := make(map[string]int)
-	for _, item := range output {
-		typeCounts[outputItemTypeLabel(item)]++
-		switch item.Type {
-		case llm.ResponseItemTypeMessage:
-			if item.Role != nil &&
-				*item.Role == llm.RoleUser &&
-				item.Content != nil &&
-				strings.TrimSpace(*item.Content) != "" {
-				filtered = append(filtered, item)
-			}
-		case llm.ResponseItemTypeCompaction:
-			if _, present := textutil.OptionalTrimmed(item.EncryptedContent); !present {
-				continue
-			}
-			filtered = append(filtered, item)
-			hasCheckpoint = true
-		case llm.ResponseItemTypeReasoning:
-			if _, present := textutil.OptionalTrimmed(item.EncryptedContent); !present {
-				continue
-			}
-			filtered = append(filtered, item)
-			hasCheckpoint = true
-		case llm.ResponseItemTypeOther:
-			if !itemHasEncryptedCheckpoint(item) {
-				continue
-			}
-			filtered = append(filtered, item)
-			hasCheckpoint = true
-		}
-	}
-	if !hasCheckpoint {
-		return nil, fmt.Errorf("%w (types=%s)", errRemoteCompactionMissingCheckpoint, formatOutputTypeCounts(typeCounts))
-	}
-	return filtered, nil
-}
-
-func outputItemTypeLabel(item llm.ResponseItem) string {
-	if v := strings.TrimSpace(string(item.Type)); v != "" {
-		return v
-	}
-	if len(item.Raw) > 0 {
-		var decoded struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(item.Raw, &decoded); err == nil {
-			if v := strings.TrimSpace(decoded.Type); v != "" {
-				return v
-			}
-		}
-	}
-	return "unknown"
-}
-
-func itemHasEncryptedCheckpoint(item llm.ResponseItem) bool {
-	if _, present := textutil.OptionalTrimmed(item.EncryptedContent); present {
-		return true
-	}
-	if len(item.Raw) == 0 || !json.Valid(item.Raw) {
-		return false
-	}
-	var decoded struct {
-		EncryptedContent string `json:"encrypted_content"`
-	}
-	if err := json.Unmarshal(item.Raw, &decoded); err != nil {
-		return false
-	}
-	return strings.TrimSpace(decoded.EncryptedContent) != ""
-}
-
-func formatOutputTypeCounts(counts map[string]int) string {
-	if len(counts) == 0 {
-		return "none"
-	}
-	keys := slices.Sorted(maps.Keys(counts))
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		parts = append(parts, fmt.Sprintf("%s:%d", key, counts[key]))
-	}
-	return strings.Join(parts, ",")
 }
 
 // estimateTokensFromBytes approximates the token cost of a UTF-8 string of the

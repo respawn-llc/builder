@@ -12,10 +12,12 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/server/worktree"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -43,8 +45,7 @@ type Service struct {
 		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
-		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
-		CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
+		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionResult, error)
 	}
 }
 
@@ -55,8 +56,8 @@ type initiatingActionTargetDecision struct {
 
 type preparedInitiatingActionTarget struct {
 	candidate                *workflowstore.ExecutionTargetCandidate
-	retainedWorktree         *serverapi.WorktreeTopologyEntry
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	retainedWorktree         *worktreepb.RegisteredFacts
+	retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 	setupResult              *worktree.WorktreeSetupResult
 }
 
@@ -78,7 +79,7 @@ const (
 
 type initiatingActionRequest struct {
 	taskID                  workflow.TaskID
-	setupOperationID        *serverapi.WorktreeSetupOperationID
+	setupOperationID        *worktreecontract.SetupOperationID
 	requiresExecutionTarget bool
 	targetPreflight         initiatingActionTargetPreflight
 	afterTargetResolution   func() error
@@ -87,7 +88,7 @@ type initiatingActionRequest struct {
 type initiatingActionResult[T any] struct {
 	applied                  *T
 	selectionRequired        *serverapi.WorkflowExecutionTargetSelectionRequirement
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 }
 
 type initiatingActionPreflight struct {
@@ -134,7 +135,7 @@ type ExecutionTargetResolveRequest struct {
 
 type ExecutionTargetMaterializeRequest struct {
 	TaskID                 workflow.TaskID
-	SetupOperationID       *serverapi.WorktreeSetupOperationID
+	SetupOperationID       *worktreecontract.SetupOperationID
 	Snapshot               workflowstore.ExecutionTargetSnapshot
 	SetupRequirement       worktreecontract.SetupRequirement
 	InitialBranchAssertion *string
@@ -143,13 +144,13 @@ type ExecutionTargetMaterializeRequest struct {
 type ExecutionTargetMaterialization struct {
 	RetainedRoot             *workflowstore.ManagedExecutionRoot
 	SetupResult              *worktree.WorktreeSetupResult
-	RetainedWorktree         *serverapi.WorktreeTopologyEntry
-	RetainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	RetainedWorktree         *worktreepb.RegisteredFacts
+	RetainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 }
 
 type ExecutionTargetRestoreRequest struct {
 	TaskID                 workflow.TaskID
-	SetupOperationID       *serverapi.WorktreeSetupOperationID
+	SetupOperationID       *worktreecontract.SetupOperationID
 	InitialBranchAssertion *string
 }
 
@@ -166,7 +167,7 @@ type workflowAttentionFinalizer interface {
 }
 
 type workflowTaskSetupEventPublisher interface {
-	PublishWorkflowTaskSetupEvent(serverapi.WorktreeSetupEvent)
+	PublishWorkflowTaskSetupEvent(*worktreepb.SetupEvent)
 }
 
 const (
@@ -186,8 +187,7 @@ func WithCurrentNodeExecution(execution interface {
 	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
-	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
-	CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
+	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionResult, error)
 }) Option {
 	return func(s *Service) {
 		s.currentNodeExecution = execution
@@ -230,13 +230,7 @@ func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflo
 	}
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
-	service := &Service{
-		store:         store,
-		readModels:    readModels,
-		roleResolver:  roleResolver,
-		events:        events,
-		taskMutations: taskMutations,
-	}
+	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, taskMutations: taskMutations}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -323,9 +317,7 @@ func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpda
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
-	if _, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
-	}); err != nil {
+	if err := s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
 	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionUpdated, req.WorkflowID.String())
@@ -473,6 +465,23 @@ func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID r
 	return nil
 }
 
+func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, workflowID runtimeids.WorkflowID, mutation func(context.Context) (T, error)) (T, error) {
+	var result T
+	if service == nil {
+		return result, errors.New("workflow service is required")
+	}
+	taskIDs, err := service.store.ListWorkflowTaskIDs(ctx, workflowID)
+	if err != nil {
+		return result, err
+	}
+	err = service.taskMutations.RunMany(ctx, taskIDs, func(ctx context.Context) error {
+		var mutationErr error
+		result, mutationErr = mutation(ctx)
+		return mutationErr
+	})
+	return result, err
+}
+
 func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
@@ -575,28 +584,16 @@ func (s *Service) DeriveWorkflowGraphWiring(ctx context.Context, req serverapi.W
 }
 
 func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+	storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
 	if err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	var result workflowstore.WorkflowGraphSaveResult
-	if currentVersion != req.ExpectedVersion {
-		result = workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion)
-	} else {
-		if err := req.Validate(); err != nil {
-			return serverapi.WorkflowGraphSavePreviewResponse{}, err
-		}
-		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
-		if err != nil {
-			return serverapi.WorkflowGraphSavePreviewResponse{}, err
-		}
-		result, err = s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
-		if err != nil {
-			return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
-		}
+	result, err := s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
+	if err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
 	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
 	if err := resp.Validate(); err != nil {
@@ -606,20 +603,10 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 }
 
 func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
-	result, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
-		if err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
-		}
-		if currentVersion != req.ExpectedVersion {
-			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
-		}
-		if err := req.Validate(); err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
-		}
+	result, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
 		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation)
 		if err != nil {
 			return workflowstore.WorkflowGraphSaveResult{}, err
@@ -627,7 +614,7 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return s.store.SaveWorkflowGraph(ctx, storeRequest)
 	})
 	if err != nil {
-		return serverapi.WorkflowGraphSaveResponse{}, workflowGraphSaveError(err)
+		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
 	resp := workflowGraphSaveResponse(result, workflowGraphSaveValidationResponses(result))
 	if result.Saved {
@@ -642,26 +629,6 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
 	}
 	return resp, nil
-}
-
-func (s *Service) workflowGraphSaveCurrentVersion(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
-	_, record, err := s.store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		return 0, err
-	}
-	return record.Version, nil
-}
-
-func workflowGraphSaveError(err error) error {
-	var ownershipErr workflowstore.WorkflowGraphIdentityOwnershipError
-	if errors.As(err, &ownershipErr) {
-		return serverapi.WorkflowRequestValidationError{
-			Code:    serverapi.WorkflowRequestErrorInvalidValue,
-			Field:   ownershipErr.Field,
-			Message: ownershipErr.Error(),
-		}
-	}
-	return err
 }
 
 func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {
@@ -857,7 +824,8 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 }
 
 func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return s.startWorkflowTask(ctx, req)
+	response, err := s.startWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
@@ -909,19 +877,20 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 			},
 		}, nil
 	}
-	observation, err := newTaskSetupObservation(req.SetupOperationID, target.selection, s.setupEvents)
+	setupOperationID := req.SetupOperationID.Domain()
+	observation, err := newTaskSetupObservation(setupOperationID, target.selection, s.setupEvents)
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	target.unavailable = initiatingActionTargetInterrupt
 	preparation := s.initiatingActionPreparation(
 		workflow.TaskID(req.TaskID),
-		req.SetupOperationID,
+		setupOperationID,
 		target,
 		observation,
 		func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 			return s.prepareInitiatingActionTarget(
-				preparationCtx, workflow.TaskID(req.TaskID), &req.SetupOperationID, target,
+				preparationCtx, workflow.TaskID(req.TaskID), &setupOperationID, target,
 			)
 		},
 	)
@@ -950,7 +919,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 
 func (s *Service) initiatingActionPreparation(
 	taskID workflow.TaskID,
-	setupOperationID serverapi.WorktreeSetupOperationID,
+	setupOperationID worktreecontract.SetupOperationID,
 	target initiatingActionTargetPreflight,
 	observation *taskSetupObservation,
 	materialize func(context.Context) (preparedInitiatingActionTarget, error),
@@ -996,7 +965,7 @@ func (s *Service) initiatingActionPreparation(
 func (s *Service) prepareInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	setupOperationID *serverapi.WorktreeSetupOperationID,
+	setupOperationID *worktreecontract.SetupOperationID,
 	target initiatingActionTargetPreflight,
 ) (preparedInitiatingActionTarget, error) {
 	decision, preparationErr := s.initiatingActionTarget(ctx, taskID, setupOperationID, target)
@@ -1014,7 +983,7 @@ func (s *Service) prepareInitiatingActionTarget(
 
 func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
 	var candidate *workflowstore.ExecutionTargetCandidate
-	var retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	var retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
 		if err != nil {
@@ -1046,6 +1015,60 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 		return initiatingActionResult[T]{retainedPreviousWorktree: retainedPreviousWorktree}, err
 	}
 	return initiatingActionResult[T]{applied: applied, retainedPreviousWorktree: retainedPreviousWorktree}, nil
+}
+
+func workflowRetainedPreviousWorktree(retained *worktreepb.RetainedPreviousWorktree) *serverapi.WorkflowRetainedPreviousWorktree {
+	if retained == nil {
+		return nil
+	}
+	return &serverapi.WorkflowRetainedPreviousWorktree{Worktree: workflowRegisteredWorktree(retained.GetWorktree())}
+}
+
+func workflowRegisteredWorktree(registered *worktreepb.RegisteredFacts) serverapi.WorkflowRegisteredWorktreeTopology {
+	git := registered.GetGit()
+	kent := registered.GetKent()
+	facts := &serverapi.WorkflowRegisteredWorktreeFacts{}
+	if git != nil {
+		facts.Git = serverapi.WorkflowWorktreeGitFacts{
+			CanonicalRoot:  git.CanonicalRoot,
+			HeadObject:     git.HeadObject,
+			BranchRef:      git.BranchRef,
+			BranchName:     git.BranchName,
+			Detached:       git.Detached,
+			Bare:           git.Bare,
+			LockedReason:   git.LockedReason,
+			PrunableReason: git.PrunableReason,
+			IsMain:         git.IsMain,
+			PathAvailable:  git.PathAvailable,
+		}
+	}
+	if kent != nil {
+		facts.Kent = serverapi.WorkflowWorktreeKentFacts{
+			WorktreeID:      kent.WorktreeId,
+			CanonicalRoot:   kent.CanonicalRoot,
+			DisplayName:     kent.DisplayName,
+			Managed:         kent.Managed,
+			CreatedBranch:   kent.CreatedBranch,
+			OriginSessionID: kent.OriginSessionId,
+		}
+	}
+	return serverapi.WorkflowRegisteredWorktreeTopology{
+		Variant:    "registered",
+		Registered: facts,
+	}
+}
+
+func workflowSetupRetainedError(err error) error {
+	var retained *worktreecontract.SetupRetainedError
+	if !errors.As(err, &retained) || retained == nil || retained.Details == nil {
+		return err
+	}
+	return &serverapi.WorkflowSetupRetainedError{
+		Worktree:                 workflowRegisteredWorktree(retained.Details.Worktree),
+		ScriptPath:               retained.Details.ScriptPath,
+		Diagnostic:               retained.Details.Diagnostic,
+		RetainedPreviousWorktree: workflowRetainedPreviousWorktree(retained.Details.RetainedPreviousWorktree),
+	}
 }
 
 func (s *Service) preflightInitiatingActionTarget(
@@ -1177,7 +1200,7 @@ func operationCannotCreateInitialWorktreeError(branchName string) *serverapi.Wor
 	}
 }
 
-func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID *serverapi.WorktreeSetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
+func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID *worktreecontract.SetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
 	targetContext := preflight.context
 	if targetContext.Task.ExecutionTarget != nil {
 		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
@@ -1247,7 +1270,7 @@ func (s *Service) resolveInitiatingActionTarget(
 func (s *Service) materializeInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	setupOperationID *serverapi.WorktreeSetupOperationID,
+	setupOperationID *worktreecontract.SetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	snapshot *workflowstore.ExecutionTargetSnapshot,
 	setupRequirement worktreecontract.SetupRequirement,
@@ -1494,7 +1517,8 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
-	return s.resumeWorkflowTask(ctx, req)
+	response, err := s.resumeWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
@@ -1507,10 +1531,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskResumeResponse{}, errors.New("current node workflow execution is required")
 	}
-	taskID := workflow.TaskID(req.TaskID)
-	return workflowexecution.RunTaskMutation(ctx, s.taskMutations, taskID, func(ctx context.Context) (serverapi.WorkflowTaskResumeResponse, error) {
-		return s.resumeWorkflowTaskAuthorized(ctx, req, taskID)
-	})
+	return s.resumeWorkflowTaskAuthorized(ctx, req, workflow.TaskID(req.TaskID))
 }
 
 func (s *Service) resumeWorkflowTaskAuthorized(
@@ -1576,7 +1597,8 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	observation, err := newTaskSetupObservation(req.SetupOperationID, target.selection, s.setupEvents)
+	setupOperationID := req.SetupOperationID.Domain()
+	observation, err := newTaskSetupObservation(setupOperationID, target.selection, s.setupEvents)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
@@ -1599,14 +1621,14 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 		}
 		prepared := s.initiatingActionPreparation(
 			taskID,
-			req.SetupOperationID,
+			setupOperationID,
 			target,
 			observation,
 			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 				return s.materializeInitiatingActionTarget(
 					preparationCtx,
 					taskID,
-					&req.SetupOperationID,
+					&setupOperationID,
 					target,
 					snapshot,
 					setupRequirement,
@@ -1617,12 +1639,12 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 	} else if target.context.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		prepared := s.initiatingActionPreparation(
 			taskID,
-			req.SetupOperationID,
+			setupOperationID,
 			target,
 			observation,
 			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 				return s.prepareInitiatingActionTarget(
-					preparationCtx, taskID, &req.SetupOperationID, target,
+					preparationCtx, taskID, &setupOperationID, target,
 				)
 			},
 		)
@@ -1690,7 +1712,7 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		}
 	}
 	approved, err := s.currentNodeExecution.ApplyPendingApproval(ctx, approvalID)
-	if err != nil && !approved.Committed() {
+	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
 	s.finalizeTaskAttentionResolution(approved.TaskAttentionResolution)
@@ -1704,11 +1726,12 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 			TaskID:       taskID,
 			CurrentNodes: workflowview.ProjectCurrentNodes(approved.Mutation.Created),
 		},
-	}, err
+	}, nil
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
-	return s.moveWorkflowTask(ctx, req)
+	response, err := s.moveWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
@@ -1875,7 +1898,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
 				CurrentNodes:             workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
-				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
+				RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
 			},
 		}, nil
 	}
@@ -1911,7 +1934,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
 				CurrentNodes:             workflowview.ProjectCurrentNodes(moved.CurrentNodes),
-				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
+				RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
 			},
 		}, nil
 	}
@@ -1923,7 +1946,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
 			CurrentNodes:             workflowview.ProjectCurrentNodes(moved.Mutation.Created),
-			RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
+			RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
 		},
 	}, nil
 }
@@ -1978,66 +2001,174 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node workflow execution is required")
 	}
-	var (
-		completed workflowstore.CurrentNodeCompletionResult
-		taskID    workflow.TaskID
-		err       error
-	)
+	if req.ActorKind == serverapi.WorkflowTaskCompleteActorUser {
+		return s.forceCompleteWorkflowTask(ctx, req)
+	}
 	if req.ActorKind == serverapi.WorkflowTaskCompleteActorAgent {
 		sessionID, parseErr := runtimeids.ParseSessionID(req.AgentSessionID)
 		if parseErr != nil {
 			return serverapi.WorkflowTaskCompleteResponse{}, parseErr
 		}
-		completed, err = s.currentNodeExecution.CompleteSessionCurrentNode(ctx, sessionID, req.TransitionID, req.OutputValues, req.Commentary)
-	} else {
-		selector := workflowstore.IdleCurrentNodeSelector{}
-		if strings.TrimSpace(req.SessionID) != "" {
-			sessionID, parseErr := runtimeids.ParseSessionID(req.SessionID)
-			if parseErr != nil {
-				return serverapi.WorkflowTaskCompleteResponse{}, parseErr
+		outcome, err := s.currentNodeExecution.CompleteSessionCurrentNode(
+			ctx, sessionID, *req.RunID, *req.StepID,
+			req.TransitionID, req.OutputValues, req.Commentary,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) || errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+				return serverapi.WorkflowTaskCompleteResponse{}, serverapi.ErrWorkflowTaskCompleteTargetNotFound
 			}
-			selector.SessionID = &sessionID
+			return serverapi.WorkflowTaskCompleteResponse{}, err
+		}
+		if !outcome.IsApplied() {
+			return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node completion returned no applied result")
+		}
+		completed := outcome.CommittedResult
+		var taskID workflow.TaskID
+		if completed.PendingApproval != nil {
+			taskID = completed.PendingApproval.Source.TaskID
 		} else {
-			value := workflow.TaskID(req.TaskID)
-			selector.TaskID = &value
+			if len(completed.Mutation.Removed) != 1 {
+				return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node completion did not remove exactly one source")
+			}
+			taskID = completed.Mutation.Removed[0].TaskID
 		}
-		completed, err = s.currentNodeExecution.CompleteIdleCurrentNode(ctx, selector, req.TransitionID, req.OutputValues, req.Commentary)
+		completion := serverapi.WorkflowTaskAgentCompletion{
+			TaskID:       string(taskID),
+			CurrentNodes: workflowview.ProjectCurrentNodes(completed.Mutation.Created),
+			Handoff: serverapi.WorkflowTaskCompletionHandoff{
+				SourceNodeDisplayName:  completed.Handoff.SourceNodeDisplayName,
+				DestinationDisplayName: completed.Handoff.DestinationDisplayName,
+			},
+		}
+		if completed.PendingApproval != nil {
+			approvalID := completed.PendingApproval.ID.String()
+			completion.PendingApprovalID = &approvalID
+			if s.attentionFinalizer != nil {
+				finalizeCtx, cancel := workflowAttentionContext(ctx)
+				defer cancel()
+				s.attentionFinalizer.PublishPendingApproval(finalizeCtx, completed.PendingApproval.ID)
+			}
+		}
+		return serverapi.WorkflowTaskCompleteResponse{AgentCompletion: &completion}, nil
 	}
-	if err != nil && !completed.Committed() {
-		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
-			return serverapi.WorkflowTaskCompleteResponse{}, serverapi.ErrWorkflowTaskCompleteTargetNotFound
-		}
-		if errors.Is(err, workflowstore.ErrCurrentNodeCompletionSelectorAmbiguous) {
-			return serverapi.WorkflowTaskCompleteResponse{}, serverapi.WorkflowTaskCompleteSelectorAmbiguousError{}
-		}
+	return serverapi.WorkflowTaskCompleteResponse{}, errors.New("workflow task completion actor is invalid")
+}
+
+func (s *Service) forceCompleteWorkflowTask(
+	ctx context.Context,
+	req serverapi.WorkflowTaskCompleteRequest,
+) (serverapi.WorkflowTaskCompleteResponse, error) {
+	taskID, source, target, err := s.resolveForcedCompletionMove(ctx, req)
+	if err != nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
-	if completed.PendingApproval != nil {
-		taskID = completed.PendingApproval.Source.TaskID
-	} else {
-		if len(completed.Mutation.Removed) != 1 {
-			return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node completion did not remove exactly one source")
-		}
-		taskID = completed.Mutation.Removed[0].TaskID
+	if err := s.currentNodeExecution.Interrupt(ctx, workflowexecution.InterruptSelector{TaskID: taskID}); err != nil &&
+		!errors.Is(err, workflowexecution.ErrNoInterruptibleExecution) {
+		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
-	response := serverapi.WorkflowTaskCompleteResponse{
-		TaskID:       string(taskID),
-		CurrentNodes: workflowview.ProjectCurrentNodes(completed.Mutation.Created),
-		Handoff: serverapi.WorkflowTaskCompletionHandoff{
-			SourceNodeDisplayName:  completed.Handoff.SourceNodeDisplayName,
-			DestinationDisplayName: completed.Handoff.DestinationDisplayName,
+	var transitionKey *string
+	if target.Kind() != workflow.NodeKindTerminal {
+		value := string(workflow.TransitionID(req.TransitionID))
+		transitionKey = &value
+	}
+	var values map[string]map[string]string
+	if len(req.OutputValues) != 0 {
+		values = map[string]map[string]string{
+			string(workflow.NodeKey(source)): req.OutputValues,
+		}
+	}
+	moved, err := s.moveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:        string(taskID),
+		TargetNodeID:  string(workflow.NodeIDOf(target)),
+		TransitionKey: transitionKey,
+		Values:        values,
+		Commentary:    req.Commentary,
+	})
+	if err != nil {
+		return serverapi.WorkflowTaskCompleteResponse{}, err
+	}
+	return serverapi.WorkflowTaskCompleteResponse{
+		ForcedMove: &serverapi.WorkflowTaskForcedCompletionMove{
+			TaskID:       string(taskID),
+			TargetNodeID: string(workflow.NodeIDOf(target)),
+			Outcome:      moved,
 		},
+	}, nil
+}
+
+func (s *Service) resolveForcedCompletionMove(
+	ctx context.Context,
+	req serverapi.WorkflowTaskCompleteRequest,
+) (workflow.TaskID, workflow.Node, workflow.Node, error) {
+	var taskID workflow.TaskID
+	if req.TaskID != "" {
+		taskID = workflow.TaskID(req.TaskID)
+	} else {
+		sessionID, err := runtimeids.ParseSessionID(req.SessionID)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		resolved, err := s.store.TaskIDForSession(ctx, sessionID)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		if resolved == nil {
+			return "", nil, nil, serverapi.ErrWorkflowTaskCompleteTargetNotFound
+		}
+		taskID = *resolved
 	}
-	if completed.PendingApproval != nil {
-		approvalID := completed.PendingApproval.ID.String()
-		response.PendingApprovalID = &approvalID
-		if s.attentionFinalizer != nil {
-			finalizeCtx, cancel := workflowAttentionContext(ctx)
-			defer cancel()
-			s.attentionFinalizer.PublishPendingApproval(finalizeCtx, completed.PendingApproval.ID)
+	currentNodes, err := s.store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if len(currentNodes) != 1 {
+		if len(currentNodes) == 0 {
+			return "", nil, nil, serverapi.ErrWorkflowTaskCompleteTargetNotFound
+		}
+		return "", nil, nil, serverapi.WorkflowTaskCompleteSelectorAmbiguousError{}
+	}
+	scope, err := s.store.TaskExecutionScope(ctx, taskID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	definition, _, err := s.store.GetDefinition(ctx, scope.WorkflowID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	source, err := workflowNodeByID(definition, currentNodes[0].Reference.NodeID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	var target workflow.Node
+	for _, group := range definition.TransitionGroups {
+		if group.SourceNodeID != workflow.NodeIDOf(source) || group.TransitionID != workflow.TransitionID(req.TransitionID) {
+			continue
+		}
+		for _, edge := range definition.Edges {
+			if edge.TransitionGroupID != group.ID {
+				continue
+			}
+			target, err = workflowNodeByID(definition, edge.TargetNodeID)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			break
+		}
+		break
+	}
+	if target == nil {
+		return "", nil, nil, errors.New("forced completion transition is unavailable")
+	}
+	return taskID, source, target, nil
+}
+
+func workflowNodeByID(definition workflow.Definition, nodeID workflow.NodeID) (workflow.Node, error) {
+	for _, node := range definition.Nodes {
+		if workflow.NodeIDOf(node) == nodeID {
+			return node, nil
 		}
 	}
-	return response, err
+	return nil, fmt.Errorf("workflow node %q is absent", nodeID)
 }
 
 func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskDeleteRequest) error {
@@ -2113,6 +2244,17 @@ func (s *Service) ListWorkflowTaskAttention(ctx context.Context, req serverapi.W
 	}
 	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) ListWorkflowTaskSessions(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
+	}
+	response, err := s.readModels.TaskSessions.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
 	}
 	return response, nil
 }
@@ -2197,17 +2339,6 @@ func (s *Service) ListWorkflowTaskActivity(ctx context.Context, req serverapi.Wo
 	}
 	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err
-	}
-	return response, nil
-}
-
-func (s *Service) ListWorkflowTaskSessions(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTaskSessionListResponse{}, err
-	}
-	response, err := s.readModels.TaskSessions.List(ctx, req)
-	if err != nil {
-		return serverapi.WorkflowTaskSessionListResponse{}, err
 	}
 	return response, nil
 }
@@ -2422,7 +2553,9 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph serverapi.WorkflowGraphDraft) (workflow.Definition, error) {
 	def := workflow.Definition{ID: workflowID}
 	groupMemberIDs := map[string][]workflow.NodeID{}
+	groupIDByKey := make(map[workflow.ModelKey]string, len(graph.NodeGroups))
 	for _, group := range graph.NodeGroups {
+		groupIDByKey[workflow.ModelKey(strings.TrimSpace(group.Key))] = group.ID
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{
 			WorkflowID:  workflowID,
 			ID:          group.ID,
@@ -2431,8 +2564,20 @@ func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph se
 		})
 	}
 	for _, node := range graph.Nodes {
-		if node.GroupID != nil {
-			groupMemberIDs[*node.GroupID] = append(groupMemberIDs[*node.GroupID], workflow.NodeID(node.ID))
+		groupID := optionalStringValue(node.GroupID)
+		if groupID == "" && strings.TrimSpace(node.GroupKey) != "" {
+			groupKey := workflow.ModelKey(strings.TrimSpace(node.GroupKey))
+			var ok bool
+			groupID, ok = groupIDByKey[groupKey]
+			if !ok {
+				return workflow.Definition{}, fmt.Errorf(
+					"workflow node group key %q is not in the saved graph",
+					groupKey,
+				)
+			}
+		}
+		if groupID != "" {
+			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
 		}
 		workflowNode, err := workflow.NewNode(
 			workflow.NodeIdentity{
@@ -2440,7 +2585,7 @@ func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph se
 				ID:          workflow.NodeID(node.ID),
 				Key:         workflow.ModelKey(node.Key),
 				DisplayName: node.DisplayName,
-				GroupID:     textutil.Pointer(node.GroupID),
+				GroupID:     textutil.OptionalExactString(groupID),
 			},
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{

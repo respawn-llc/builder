@@ -339,7 +339,13 @@ func newWorkflowPromptCompletionContract(
 	if prompt == nil {
 		return workflowruntime.CompletionContract{}, errors.New("workflow prompt is unavailable")
 	}
-	return workflowruntime.NewCompletionContract(prompt.Transitions)
+	contract := workflowruntime.CompletionContract{
+		Transitions: append([]workflowruntime.CompletionTransition(nil), prompt.Transitions...),
+	}
+	if _, err := workflowruntime.CompletionJSONSchema(contract); err != nil {
+		return workflowruntime.CompletionContract{}, err
+	}
+	return contract, nil
 }
 
 func (e *Engine) workflowCompletionContract() (workflowruntime.CompletionContract, error) {
@@ -525,7 +531,14 @@ func (e *Engine) requestTools(ctx context.Context, workflowMode workflowruntime.
 			if contractErr != nil {
 				return nil, contractErr
 			}
-			schema, err := workflowruntime.FunctionSchema(contract)
+			document, err := workflowruntime.CompletionJSONSchema(contract)
+			if err != nil {
+				return nil, fmt.Errorf("prepare complete_node request schema: %w", err)
+			}
+			schema, err := jsoncontract.NewPreparer(e.cfg.Debug).FunctionDocument(
+				"workflow completion function",
+				document,
+			)
 			if err != nil {
 				return nil, fmt.Errorf("prepare complete_node request schema: %w", err)
 			}

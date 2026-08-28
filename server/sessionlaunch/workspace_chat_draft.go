@@ -9,7 +9,7 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
-	"core/server/requestmemo"
+	"core/server/mutationlane"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -48,14 +48,14 @@ type WorkspaceChatDraftInputResolver func(context.Context) (WorkspaceChatDraftRe
 type WorkspaceChatMaterializer func(context.Context, WorkspaceChatDraftResolution) (runtimeids.SessionID, error)
 type WorkspaceChatDraftOwner struct {
 	persistence workspaceChatDraftPersistence
-	lanes       *requestmemo.MutationLaneRegistry[string]
+	lanes       *mutationlane.MutationLaneRegistry[string]
 }
 
 func NewWorkspaceChatDraftOwner(p workspaceChatDraftPersistence) *WorkspaceChatDraftOwner {
 	if p == nil {
 		return nil
 	}
-	return &WorkspaceChatDraftOwner{persistence: p, lanes: requestmemo.NewMutationLaneRegistry[string]()}
+	return &WorkspaceChatDraftOwner{persistence: p, lanes: mutationlane.NewMutationLaneRegistry[string]()}
 }
 
 func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(

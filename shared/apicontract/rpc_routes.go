@@ -36,6 +36,7 @@ const (
 	ScopeProjectWorkspaceBinding    ScopePolicy = "project_workspace_binding"
 	ScopeSessionActiveProject       ScopePolicy = "session_active_project"
 	ScopeSessionActiveProjectIfSet  ScopePolicy = "session_active_project_if_set"
+	ScopeSessionDraftHandoffProject ScopePolicy = "session_draft_handoff_project"
 	ScopeSessionAttachedProject     ScopePolicy = "session_attached_project"
 	ScopeAttachedSession            ScopePolicy = "attached_session"
 	ScopeGoalSession                ScopePolicy = "goal_session"
@@ -210,22 +211,11 @@ var routeContracts = []Route{
 	unary[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse](protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.SessionExecutionEnvironmentRequest, serverapi.SessionExecutionEnvironmentResponse](protocol.MethodSessionGetExecutionEnvironment, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](protocol.MethodSessionGetInitialInput, AuthPreServerAuth, ScopeSessionActiveProjectIfSet, ConnectionControl),
-	unary[serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](protocol.MethodSessionPersistInputDraft, AuthServer, ScopeSessionActiveProject, ConnectionControl),
+	unary[serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](protocol.MethodSessionPersistInputDraft, AuthServer, ScopeSessionDraftHandoffProject, ConnectionControl),
 	unary[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](protocol.MethodSessionRetargetWorkspace, AuthServer, ScopeSessionAttachedProject, ConnectionUnscoped),
 	unary[serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](protocol.MethodSessionResolveTransition, AuthServer, ScopeSessionActiveProjectIfSet, ConnectionControl),
 	unary[serverapi.SessionRuntimeActivateRequest, serverapi.SessionRuntimeActivateResponse](protocol.MethodSessionRuntimeActivate, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.SessionRuntimeReleaseRequest, serverapi.SessionRuntimeReleaseResponse](protocol.MethodSessionRuntimeRelease, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](protocol.MethodWorktreeStatus, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](protocol.MethodWorktreeList, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](protocol.MethodWorktreeWorkspaceList, AuthServer, ScopeProjectWorkspaceBinding, ConnectionControl),
-	unary[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](protocol.MethodWorktreeSelectorResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](protocol.MethodWorktreeDeletePreview, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](protocol.MethodWorktreeCreateTargetResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](protocol.MethodWorktreeCreate, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](protocol.MethodWorktreeEnter, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeLeaveRequest, serverapi.WorktreeScheduledAcknowledgement](protocol.MethodWorktreeLeave, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](protocol.MethodWorktreeDelete, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	subscription[serverapi.WorktreeSetupSubscribeRequest, protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupSubscribe, AuthServer, ScopeNone, protocol.MethodWorktreeSetupEvent, protocol.MethodWorktreeSetupComplete),
+	unary[serverapi.SessionRuntimeReleaseRequest, serverapi.SessionRuntimeReleaseResponse](protocol.MethodSessionRuntimeRelease, AuthServer, ScopeNone, ConnectionControl),
 	unary[serverapi.RuntimeSetSessionNameRequest, struct{}](protocol.MethodRuntimeSetSessionName, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeAppendCommittedEntryRequest, struct{}](protocol.MethodRuntimeAppendCommittedEntry, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeShouldCompactBeforeUserMessageRequest, serverapi.RuntimeShouldCompactBeforeUserMessageResponse](protocol.MethodRuntimeShouldCompactBeforeUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl),
@@ -237,14 +227,15 @@ var routeContracts = []Route{
 	dedicatedUnary[serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](protocol.MethodRuntimeLiveStop, "runtime-live-stop", ScopeRuntimeLiveSessionOptional),
 	dedicatedUnary[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](protocol.MethodRuntimeLiveWait, "runtime-live-wait", ScopeRuntimeLiveSessionRequired),
 	dedicatedUnary[serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](protocol.MethodRuntimeLiveWatch, "runtime-live-watch", ScopeRuntimeLiveSessionOptional),
-	unary[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](protocol.MethodRuntimeDiscardQueuedUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl),
+	unary[serverapi.RuntimeListPendingWorkRequest, serverapi.RuntimeListPendingWorkResponse](protocol.MethodRuntimeListPendingWork, AuthServer, ScopeSessionActiveProject, ConnectionControl),
+	unary[serverapi.RuntimeRemovePendingWorkRequest, serverapi.RuntimeRemovePendingWorkResponse](protocol.MethodRuntimeRemovePendingWork, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeRecordPromptHistoryRequest, struct{}](protocol.MethodRuntimeRecordPromptHistory, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalShow, AuthServer, ScopeGoalSession, ConnectionControl),
-	unary[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](protocol.MethodRuntimeGoalSet, AuthServer, ScopeGoalSession, ConnectionControl),
-	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](protocol.MethodRuntimeGoalPause, AuthServer, ScopeGoalSession, ConnectionControl),
-	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](protocol.MethodRuntimeGoalResume, AuthServer, ScopeGoalSession, ConnectionControl),
-	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](protocol.MethodRuntimeGoalComplete, AuthServer, ScopeGoalSession, ConnectionControl),
-	unary[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](protocol.MethodRuntimeGoalClear, AuthServer, ScopeGoalSession, ConnectionControl),
+	unary[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalSet, AuthServer, ScopeGoalSession, ConnectionControl),
+	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalPause, AuthServer, ScopeGoalSession, ConnectionControl),
+	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalResume, AuthServer, ScopeGoalSession, ConnectionControl),
+	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalComplete, AuthServer, ScopeGoalSession, ConnectionControl),
+	unary[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalClear, AuthServer, ScopeGoalSession, ConnectionControl),
 	unary[serverapi.ProcessListRequest, serverapi.ProcessListResponse](protocol.MethodProcessList, AuthPreServerAuth, ScopeProcessListActiveProject, ConnectionControl),
 	unary[serverapi.ProcessGetRequest, serverapi.ProcessGetResponse](protocol.MethodProcessGet, AuthPreServerAuth, ScopeProcessActiveProject, ConnectionControl),
 	unary[serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](protocol.MethodProcessKill, AuthServer, ScopeProcessActiveProject, ConnectionControl),
@@ -275,8 +266,6 @@ var routeContracts = []Route{
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowComplete),
 	notification[protocol.WorkflowProjectEventParams](protocol.MethodWorkflowProjectEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowProjectComplete),
-	notification[protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupEvent),
-	notification[protocol.StreamCompleteParams](protocol.MethodWorktreeSetupComplete),
 }
 
 func Routes() []Route {

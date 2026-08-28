@@ -1,8 +1,6 @@
 package protocol
 
 import (
-	"encoding/json"
-
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
@@ -81,19 +79,6 @@ const (
 	MethodSessionResolveTransition                      = "session.resolveTransition"
 	MethodSessionRuntimeActivate                        = "session.runtime.activate"
 	MethodSessionRuntimeRelease                         = "session.runtime.release"
-	MethodWorktreeList                                  = "worktree.list"
-	MethodWorktreeWorkspaceList                         = "worktree.workspace.list"
-	MethodWorktreeStatus                                = "worktree.status"
-	MethodWorktreeSelectorResolve                       = "worktree.selector.resolve"
-	MethodWorktreeDeletePreview                         = "worktree.deletePreview"
-	MethodWorktreeCreateTargetResolve                   = "worktree.create_target.resolve"
-	MethodWorktreeCreate                                = "worktree.create"
-	MethodWorktreeEnter                                 = "worktree.enter"
-	MethodWorktreeLeave                                 = "worktree.leave"
-	MethodWorktreeDelete                                = "worktree.delete"
-	MethodWorktreeSetupSubscribe                        = "worktree.setup.subscribe"
-	MethodWorktreeSetupEvent                            = "worktree.setup"
-	MethodWorktreeSetupComplete                         = "worktree.setup.complete"
 	MethodRuntimeSetSessionName                         = "runtime.setSessionName"
 	MethodRuntimeAppendCommittedEntry                   = "runtime.appendCommittedEntry"
 	MethodRuntimeShouldCompactBeforeUserMessage         = "runtime.shouldCompactBeforeUserMessage"
@@ -105,7 +90,8 @@ const (
 	MethodRuntimeLiveStop                               = "runtime.liveStop"
 	MethodRuntimeLiveWait                               = "runtime.liveWait"
 	MethodRuntimeLiveWatch                              = "runtime.liveWatch"
-	MethodRuntimeDiscardQueuedUserMessage               = "runtime.discardQueuedUserMessage"
+	MethodRuntimeListPendingWork                        = "runtime.pendingWork.list"
+	MethodRuntimeRemovePendingWork                      = "runtime.pendingWork.remove"
 	MethodRuntimeRecordPromptHistory                    = "runtime.recordPromptHistory"
 	MethodRuntimeGoalShow                               = "runtime.goal.show"
 	MethodRuntimeGoalSet                                = "runtime.goal.set"
@@ -180,19 +166,6 @@ type PromptFollowUpEvent struct {
 
 type WorkflowProjectEventParams struct {
 	Event WorkflowProjectEvent `json:"event"`
-}
-
-type WorktreeSetupEventParams struct {
-	Event WorktreeSetupEvent `json:"event"`
-}
-
-type WorktreeSetupEvent struct {
-	SetupOperationID string          `json:"setup_operation_id"`
-	Phase            string          `json:"phase"`
-	Started          json.RawMessage `json:"started,omitempty"`
-	Completed        json.RawMessage `json:"completed,omitempty"`
-	NotRequired      json.RawMessage `json:"not_required,omitempty"`
-	Failed           json.RawMessage `json:"failed,omitempty"`
 }
 
 type WorkflowProjectEventResource string

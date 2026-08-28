@@ -19,7 +19,9 @@ type uiPendingDetailTranscriptRequest struct {
 	id        uuid.UUID
 	sessionID runtimeids.SessionID
 	request   clientui.TranscriptPageRequest
-	cancel    context.CancelFunc
+	// Session replacement may warm this request outside Detail Mode.
+	detailMode bool
+	cancel     context.CancelFunc
 }
 
 func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest) tea.Cmd {
@@ -70,10 +72,11 @@ func (m *uiModel) loadDetailTranscriptPageWithOptionsCmd(
 	requestID := uuid.New()
 	parentCtx, cancel := context.WithCancel(context.Background())
 	m.pendingDetailTranscript = &uiPendingDetailTranscriptRequest{
-		id:        requestID,
-		sessionID: sessionID,
-		request:   request,
-		cancel:    cancel,
+		id:         requestID,
+		sessionID:  sessionID,
+		request:    request,
+		detailMode: m.surface() == uiSurfaceTranscriptDetail,
+		cancel:     cancel,
 	}
 	if options.noticePolicy == uiDetailTranscriptLoadingNoticeVisible &&
 		(request.Cursor != nil || request.NewerCursor != nil) {

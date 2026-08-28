@@ -4,8 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 func TestProjectItemPreservesServerSelectorAndTopologyFacts(t *testing.T) {
@@ -25,7 +26,7 @@ func TestResolveCurrentDeletionTargetRejectsMainWorkspace(t *testing.T) {
 
 func TestResolveCurrentDeletionTargetFallsBackToNotFound(t *testing.T) {
 	_, err := ResolveCurrentDeletionTarget(nil)
-	if !errors.Is(err, serverapi.ErrWorktreeNotFound) {
+	if !errors.Is(err, worktreecontract.ErrWorktreeNotFound) {
 		t.Fatalf("expected worktree not found, got %v", err)
 	}
 }
@@ -39,28 +40,29 @@ func TestSanitizeBranchSuggestion(t *testing.T) {
 func testWorktreeItem(t *testing.T, id, name, root, branch string, main, current bool) Item {
 	t.Helper()
 	branchValue := branch
-	entry := serverapi.WorktreeListEntry{
-		Topology: serverapi.WorktreeTopologyEntry{
-			Variant: serverapi.WorktreeTopologyVariantRegistered,
-			Registered: &serverapi.WorktreeRegisteredFacts{
-				Git: serverapi.WorktreeGitFacts{
-					CanonicalRoot: root,
-					HeadObject:    "deadbeef",
-					BranchRef:     textutil.OptionalTrimmedString("refs/heads/" + branch),
-					BranchName:    &branchValue,
-					IsMain:        main,
-					PathAvailable: true,
-				},
-				Kent: serverapi.WorktreeKentFacts{
-					WorktreeID:    id,
-					CanonicalRoot: root,
-					DisplayName:   name,
-					Managed:       true,
-					CreatedBranch: !main,
+	entry := &worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_Registered{
+				Registered: &worktreepb.RegisteredFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot: root,
+						HeadObject:    "deadbeef",
+						BranchRef:     textutil.OptionalTrimmedString("refs/heads/" + branch),
+						BranchName:    &branchValue,
+						IsMain:        main,
+						PathAvailable: true,
+					},
+					Kent: &worktreepb.KentFacts{
+						WorktreeId:    id,
+						CanonicalRoot: root,
+						DisplayName:   name,
+						Managed:       true,
+						CreatedBranch: !main,
+					},
 				},
 			},
 		},
-		Projection: serverapi.WorktreeListProjection{Selector: branch, IsCurrent: current},
+		Projection: &worktreepb.ListProjection{Selector: branch, IsCurrent: current},
 	}
 	item, err := ProjectItem(entry)
 	if err != nil {

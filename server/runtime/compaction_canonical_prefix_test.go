@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,18 +31,10 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	const checkpointID = "remote-compaction-checkpoint"
 	store := mustCreateNamedTestSession(t, "ws", workspace)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
-		OutputItems: []llm.ResponseItem{
-			{
-				Type:        llm.ResponseItemTypeMessage,
-				Role:        textutil.Value(llm.RoleUser),
-				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-				Content:     textutil.Value("summary"),
-			},
-			{
-				Type:             llm.ResponseItemTypeCompaction,
-				ID:               textutil.Value(checkpointID),
-				EncryptedContent: textutil.Value("encrypted"),
-			},
+		Checkpoint: llm.ResponseItem{
+			Type:             llm.ResponseItemTypeCompaction,
+			ID:               textutil.Value(checkpointID),
+			EncryptedContent: textutil.Value("encrypted"),
 		},
 		Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 	}}}
@@ -57,22 +50,20 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("enable headless context: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}})); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	_, receipt, err := compactNowInActiveTestRun(
-		t,
-		engine,
+	stepID := runtimeTestStepID("compact")
+	restoreStep := setTestActiveStep(engine, stepID)
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		stepID,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
 	)
+	restoreStep()
 	if err != nil || !receipt.Committed {
 		t.Fatalf("compact remote context: receipt=%+v error=%v", receipt, err)
 	}
@@ -104,19 +95,94 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 			)
 		}
 	}
-	if items[4].Type != llm.ResponseItemTypeMessage ||
-		items[4].MessageType == nil ||
-		*items[4].MessageType != llm.MessageTypeCompactionSummary {
-		t.Fatalf("canonical replacement summary = %+v, want provider output after stable context", items[4])
+	if items[4].Type != llm.ResponseItemTypeCompaction ||
+		items[4].ID == nil ||
+		*items[4].ID != checkpointID {
+		t.Fatalf("canonical replacement checkpoint = %+v, want identity %q", items[4], checkpointID)
 	}
-	if items[5].Type != llm.ResponseItemTypeCompaction ||
-		items[5].ID == nil ||
-		*items[5].ID != checkpointID {
-		t.Fatalf("canonical replacement checkpoint = %+v, want identity %q", items[5], checkpointID)
+	if items[5].Type != llm.ResponseItemTypeMessage ||
+		items[5].MessageType == nil ||
+		*items[5].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("canonical replacement environment = %+v, want volatile suffix", items[5])
 	}
 	if items[6].Type != llm.ResponseItemTypeMessage ||
 		items[6].MessageType == nil ||
-		*items[6].MessageType != llm.MessageTypeEnvironment {
-		t.Fatalf("canonical replacement environment = %+v, want volatile suffix", items[6])
+		*items[6].MessageType != llm.MessageTypeCompactionPreservedUserMessage {
+		t.Fatalf("canonical replacement carryover = %+v, want preserved user message", items[6])
+	}
+}
+
+func assertCompactionReplacementOrder(t *testing.T, items []llm.ResponseItem, wantFutureAgentMessage bool) {
+	t.Helper()
+	var compactedIndex *int
+	var environmentIndex *int
+	var carryoverIndex *int
+	var futureIndex *int
+	for index, item := range items {
+		if item.Type == llm.ResponseItemTypeCompaction ||
+			(item.Type == llm.ResponseItemTypeMessage &&
+				item.MessageType != nil &&
+				*item.MessageType == llm.MessageTypeCompactionSummary) {
+			if compactedIndex != nil {
+				t.Fatalf("replacement contains multiple compacted outputs: %+v", items)
+			}
+			compactedIndex = textutil.Value(index)
+		}
+		if item.Type != llm.ResponseItemTypeMessage || item.MessageType == nil {
+			continue
+		}
+		switch *item.MessageType {
+		case llm.MessageTypeEnvironment:
+			if environmentIndex != nil {
+				t.Fatalf("replacement contains multiple Environment messages: %+v", items)
+			}
+			environmentIndex = textutil.Value(index)
+		case llm.MessageTypeCompactionPreservedUserMessage:
+			if carryoverIndex != nil {
+				t.Fatalf("replacement contains duplicate carryover messages: %+v", items)
+			}
+			carryoverIndex = textutil.Value(index)
+		case llm.MessageTypeHandoffFutureMessage:
+			if futureIndex != nil {
+				t.Fatalf("replacement contains duplicate future-agent messages: %+v", items)
+			}
+			futureIndex = textutil.Value(index)
+		}
+	}
+	if compactedIndex == nil || environmentIndex == nil || carryoverIndex == nil {
+		t.Fatalf(
+			"replacement must contain stable context, one compacted output, Environment, and one carryover: %+v",
+			items,
+		)
+	}
+	if *environmentIndex != *compactedIndex+1 || *carryoverIndex != *environmentIndex+1 {
+		t.Fatalf(
+			"replacement order must be stable context -> compacted output -> Environment -> carryover with no interleaving: %+v",
+			items,
+		)
+	}
+	for index := 0; index < *compactedIndex; index++ {
+		item := items[index]
+		if item.Type != llm.ResponseItemTypeMessage || item.MessageType == nil {
+			continue
+		}
+		switch *item.MessageType {
+		case llm.MessageTypeEnvironment,
+			llm.MessageTypeCompactionPreservedUserMessage,
+			llm.MessageTypeHandoffFutureMessage:
+			t.Fatalf("post-compaction context appeared before compacted output: %+v", items)
+		}
+	}
+	if wantFutureAgentMessage {
+		if futureIndex == nil || *futureIndex != *carryoverIndex+1 || *futureIndex != len(items)-1 {
+			t.Fatalf(
+				"replacement order must end with carryover -> future-agent message with no interleaving: %+v",
+				items,
+			)
+		}
+	} else if futureIndex != nil {
+		t.Fatalf("unexpected future-agent message in replacement: %+v", items)
+	} else if *carryoverIndex != len(items)-1 {
+		t.Fatalf("replacement must end with carryover when no future-agent message is requested: %+v", items)
 	}
 }

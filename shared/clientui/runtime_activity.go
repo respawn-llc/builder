@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
@@ -57,6 +56,23 @@ const (
 	RuntimeActivityClosing        RuntimeActivityState = "closing"
 )
 
+type ReviewerActivity string
+
+const (
+	ReviewerActivityInactive           ReviewerActivity = "inactive"
+	ReviewerActivityInvoking           ReviewerActivity = "invoking"
+	ReviewerActivityAddressingFeedback ReviewerActivity = "addressing_feedback"
+)
+
+func (a ReviewerActivity) Validate() error {
+	switch a {
+	case ReviewerActivityInactive, ReviewerActivityInvoking, ReviewerActivityAddressingFeedback:
+		return nil
+	default:
+		return fmt.Errorf("unknown reviewer activity %q", a)
+	}
+}
+
 type RuntimeActivityActiveKind string
 
 const (
@@ -87,12 +103,12 @@ func (k RuntimeActivityActiveKind) Validate() error {
 }
 
 type RuntimeSubmitRequest struct {
-	ClientRequestID runtimeids.RuntimeClientRequestID
+	ClientRequestID string
 	Input           runtimeinput.Input
 }
 
 func (r RuntimeSubmitRequest) Validate() error {
-	if r.ClientRequestID.IsZero() {
+	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return fmt.Errorf("runtime submit requires client request id")
 	}
 	return r.Input.Validate()

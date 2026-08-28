@@ -1,11 +1,9 @@
 package sessionruntime
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
@@ -30,54 +28,6 @@ func (r WorkflowExecutionRef) Validate() error {
 		return fmt.Errorf("workflow current node: %w", err)
 	}
 	return nil
-}
-
-// WorkflowExecutionLease is Authority-owned, process-local admission data for
-// one future Exact Execution Scope. It is never persisted and cannot be
-// constructed outside this package.
-type WorkflowExecutionLease struct {
-	authority           *Authority
-	workflow            WorkflowExecutionRef
-	scopeID             runtimeids.ExecutionScopeID
-	executionGeneration ExecutionGeneration
-	start               chan struct{}
-	canceled            chan struct{}
-	startOnce           *sync.Once
-	cancelOnce          *sync.Once
-}
-
-func (l WorkflowExecutionLease) ScopeID() runtimeids.ExecutionScopeID {
-	return l.scopeID
-}
-
-func (l WorkflowExecutionLease) Workflow() WorkflowExecutionRef {
-	return l.workflow
-}
-
-func (l WorkflowExecutionLease) Release() {
-	if l.startOnce != nil && l.start != nil {
-		l.startOnce.Do(func() { close(l.start) })
-	}
-}
-
-func (l WorkflowExecutionLease) Cancel() {
-	if l.cancelOnce != nil && l.canceled != nil {
-		l.cancelOnce.Do(func() { close(l.canceled) })
-	}
-}
-
-func (l WorkflowExecutionLease) wait(ctx context.Context) error {
-	if l.start == nil || l.canceled == nil {
-		return errors.New("workflow execution lease start gate is invalid")
-	}
-	select {
-	case <-l.start:
-		return nil
-	case <-l.canceled:
-		return context.Canceled
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
 }
 
 type ExecutionScopeKind uint8

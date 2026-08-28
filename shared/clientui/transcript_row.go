@@ -35,7 +35,7 @@ type TranscriptCommittedRow struct {
 }
 
 type TranscriptUserRow struct {
-	StepID            runtimeids.StepID
+	StepID            *runtimeids.StepID
 	Text              string
 	CondensedText     *string
 	RollbackTargetID  *string
@@ -52,7 +52,7 @@ type TranscriptAssistantRow struct {
 }
 
 type TranscriptToolRow struct {
-	StepID        runtimeids.StepID
+	StepID        *runtimeids.StepID
 	ToolCallID    ToolCallID
 	ToolName      string
 	Text          string
@@ -126,6 +126,7 @@ const (
 	TranscriptMessageWorkflowModeExit               TranscriptMessageType = "workflow_mode_exit"
 	TranscriptMessageWorktreeMode                   TranscriptMessageType = "worktree_mode"
 	TranscriptMessageWorktreeModeExit               TranscriptMessageType = "worktree_mode_exit"
+	TranscriptMessageSessionRebind                  TranscriptMessageType = "session_rebind"
 	TranscriptMessageGoal                           TranscriptMessageType = "goal"
 	TranscriptMessageActiveGoalContinuation         TranscriptMessageType = "active_goal_continuation"
 	TranscriptMessageAgentSteer                     TranscriptMessageType = TranscriptMessageType(MessageTypeAgentSteer)
@@ -361,8 +362,8 @@ func (r TranscriptReviewerErrorRow) Validate() error {
 }
 
 func (r TranscriptUserRow) Validate() error {
-	if r.StepID.IsZero() {
-		return fmt.Errorf("transcript user row step id is required")
+	if r.StepID != nil && r.StepID.IsZero() {
+		return fmt.Errorf("transcript user row step id is invalid")
 	}
 	if strings.TrimSpace(r.Text) == "" {
 		return fmt.Errorf("transcript user row text is required")
@@ -398,8 +399,8 @@ func (r TranscriptAssistantRow) Validate() error {
 }
 
 func (r TranscriptToolRow) Validate() error {
-	if r.StepID.IsZero() {
-		return fmt.Errorf("transcript tool row step id is required")
+	if r.StepID != nil && r.StepID.IsZero() {
+		return fmt.Errorf("transcript tool row step id is invalid")
 	}
 	if err := r.ToolCallID.Validate(); err != nil {
 		return err
@@ -575,6 +576,7 @@ func (t TranscriptMessageType) Validate() error {
 		TranscriptMessageWorkflowModeExit,
 		TranscriptMessageWorktreeMode,
 		TranscriptMessageWorktreeModeExit,
+		TranscriptMessageSessionRebind,
 		TranscriptMessageGoal,
 		TranscriptMessageActiveGoalContinuation,
 		TranscriptMessageAgentSteer:

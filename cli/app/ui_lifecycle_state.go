@@ -7,8 +7,7 @@ import (
 )
 
 type uiRuntimeLifecycle struct {
-	Run      clientui.RunLifecycle
-	Reviewer clientui.ReviewerLifecycle
+	Run clientui.RunLifecycle
 }
 
 type uiInterruptLifecycle string
@@ -93,36 +92,16 @@ func (m *uiModel) isCompacting() bool {
 	}
 }
 
-func (m *uiModel) isReviewerRunning() bool {
-	return m != nil && m.runtimeLifecycle.Reviewer.IsRunning()
-}
-
-func (m *uiModel) setReviewerRunning(running bool) {
+func (m *uiModel) isReviewerActive() bool {
 	if m == nil {
-		return
+		return false
 	}
-	blocking := running && m.isReviewerBlocking()
-	reviewer, err := clientui.NewReviewerLifecycle(running, blocking)
-	if err != nil {
-		panic(err)
+	switch m.runtimeActivityProjection.Reviewer {
+	case clientui.ReviewerActivityInvoking, clientui.ReviewerActivityAddressingFeedback:
+		return true
+	default:
+		return false
 	}
-	m.runtimeLifecycle.Reviewer = reviewer
-}
-
-func (m *uiModel) isReviewerBlocking() bool {
-	return m != nil && m.runtimeLifecycle.Reviewer.IsBlocking()
-}
-
-func (m *uiModel) setReviewerBlocking(blocking bool) {
-	if m == nil {
-		return
-	}
-	running := m.isReviewerRunning() || blocking
-	reviewer, err := clientui.NewReviewerLifecycle(running, blocking)
-	if err != nil {
-		panic(err)
-	}
-	m.runtimeLifecycle.Reviewer = reviewer
 }
 
 func (m *uiModel) hasPendingInterrupt() bool {

@@ -28,12 +28,6 @@ type sessionPickerBodyRequest struct {
 	requestedOffset int
 }
 
-type sessionPickerDirectionalRequest struct {
-	generation      uint64
-	requestedOffset int
-	move            int
-}
-
 type sessionPickerPageSegment struct {
 	requestedOffset int
 	sessions        []clientui.SessionSummary
@@ -61,15 +55,12 @@ func newSessionPickerSessionSelection(sessionID runtimeids.SessionID) sessionPic
 
 type sessionPickerTab struct {
 	category sessioncontract.SessionCategory
+	startupPickerPageWindow[sessionPickerPageSegment]
 
 	bodyPhase   sessionPickerBodyPhase
 	bodyRequest *sessionPickerBodyRequest
-	directional *sessionPickerDirectionalRequest
-	generation  uint64
-
-	segments []sessionPickerPageSegment
-	selected sessionPickerSelection
-	offset   int
+	selected    sessionPickerSelection
+	offset      int
 }
 
 func newSessionPickerTab(category sessioncontract.SessionCategory) sessionPickerTab {
@@ -92,11 +83,9 @@ func (t *sessionPickerTab) residentSessionCount() int {
 }
 
 func (t *sessionPickerTab) sessions() []clientui.SessionSummary {
-	sessions := make([]clientui.SessionSummary, 0, t.residentSessionCount())
-	for _, segment := range t.segments {
-		sessions = append(sessions, segment.sessions...)
-	}
-	return sessions
+	return flattenBoundedPickerPages(t.segments, func(segment sessionPickerPageSegment) []clientui.SessionSummary {
+		return segment.sessions
+	})
 }
 
 func (t *sessionPickerTab) containsNewestEdge() bool {
@@ -157,9 +146,8 @@ func (t *sessionPickerTab) selectIndex(index int) {
 }
 
 func (t *sessionPickerTab) resetForFreshLoad() {
+	t.startupPickerPageWindow.reset()
 	t.bodyPhase = sessionPickerBodyInitialLoading
-	t.directional = nil
-	t.segments = nil
 	t.offset = 0
 	t.selected = nil
 	if t.category == sessioncontract.SessionCategoryMain {
@@ -186,14 +174,6 @@ func newSessionPickerPageSegment(requestedOffset int, response sessionPageRespon
 	return sessionPickerPageSegment{
 		requestedOffset: requestedOffset,
 		sessions:        append([]clientui.SessionSummary(nil), response.Sessions...),
-		nextOffset:      cloneSessionPageOffset(response.NextOffset),
+		nextOffset:      clonePointer(response.NextOffset),
 	}
-}
-
-func cloneSessionPageOffset(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }

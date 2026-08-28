@@ -17,12 +17,11 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 	return c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult, queuePosition, activeSubmitOriginDirect, "")
 }
 
-func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
-	commandResult commands.Result,
-	queuePosition preSubmitQueuePosition,
-	origin activeSubmitOrigin,
-	submittedText string,
-) (tea.Model, tea.Cmd) {
+func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin) (tea.Model, tea.Cmd) {
+	return c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult, queuePosition, origin, "")
+}
+
+func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin, submittedText string) (tea.Model, tea.Cmd) {
 	return c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(commandResult, queuePosition, origin, nil, submittedText)
 }
 
@@ -138,10 +137,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 		next, cmd := c.handleQuestionsCommand(commandResult.QuestionsMode)
 		return next, sequenceCmds(prefixCmd, cmd)
 	case commands.ActionCompact:
-		if strings.TrimSpace(submittedText) == "" {
-			panic("compact command is missing its exact submitted text")
-		}
-		return m, sequenceCmds(prefixCmd, c.startCompactionWithOrigin(submittedText, commandResult.Args, uiCompactionOriginManual))
+		return m, sequenceCmds(prefixCmd, c.startCompaction(submittedText, commandResult.Args))
 	case commands.ActionStatus:
 		return m, sequenceCmds(prefixCmd, c.startStatusFlowCmd())
 	case commands.ActionGoal:

@@ -22,7 +22,7 @@ func TestForkedSessionAfterTriggerHandoffRequeuesPendingHandoff(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	handoffCall := llm.ToolCall{
@@ -30,20 +30,20 @@ func TestForkedSessionAfterTriggerHandoffRequeuesPendingHandoff(t *testing.T) {
 		Name:  string(toolspec.ToolTriggerHandoff),
 		Input: mustJSON(map[string]any{"future_agent_message": "resume after fork"}),
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("handing off"), Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: []llm.ToolCall{handoffCall}}})); err != nil {
+	if err := steerTestActiveStep(eng, "step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("handing off"), Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: []llm.ToolCall{handoffCall}}})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
 	resultOutput := mustJSON(triggerhandofftool.TriggerHandoffResultPayload{
 		Summary:                 "Handoff scheduled. Context will be compacted before the next model turn and future-agent guidance was saved.",
 		FutureAgentMessageAdded: true,
 	})
-	if err := eng.steer("step-1", steerToolCompletionIntent(tools.Result{CallID: handoffCall.ID, Name: toolspec.ToolTriggerHandoff, Output: resultOutput})); err != nil {
+	if err := steerTestActiveStep(eng, "step-1", steerToolCompletionIntent(tools.Result{CallID: handoffCall.ID, Name: toolspec.ToolTriggerHandoff, Output: resultOutput})); err != nil {
 		t.Fatalf("persist tool completion: %v", err)
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(handoffCall.ID), Name: textutil.Value(string(toolspec.ToolTriggerHandoff)), Content: textutil.Value(string(resultOutput))}})); err != nil {
+	if err := steerTestActiveStep(eng, "step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(handoffCall.ID), Name: textutil.Value(string(toolspec.ToolTriggerHandoff)), Content: textutil.Value(string(resultOutput))}})); err != nil {
 		t.Fatalf("append tool result: %v", err)
 	}
-	if err := eng.steer("step-2", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("edit anchor")}})); err != nil {
+	if err := steerTestActiveStep(eng, "step-2", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("edit anchor")}})); err != nil {
 		t.Fatalf("append second user message: %v", err)
 	}
 
@@ -69,9 +69,10 @@ func TestManualCompactionPreservesLastVisibleUserMessage(t *testing.T) {
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{
 			{
-				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("condensed summary")},
-					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               textutil.Value("cmp_1"),
+					EncryptedContent: textutil.Value("enc_1"),
 				},
 				Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 			},
@@ -79,17 +80,15 @@ func TestManualCompactionPreservesLastVisibleUserMessage(t *testing.T) {
 	}
 
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("older summary")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("older summary")}})); err != nil {
 		t.Fatalf("append compaction summary: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("please keep tests green")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("please keep tests green")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
 	completeManualEligibilityAgentStep(t, eng)
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	if len(messages) == 0 {
@@ -149,14 +148,12 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 		Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("please keep tests green")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("please keep tests green")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
 	completeManualEligibilityAgentStep(t, eng)
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	if len(messages) < 6 {
@@ -174,11 +171,11 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 	if messages[3].MessageType == nil || *messages[3].MessageType != llm.MessageTypeCompactionSummary {
 		t.Fatalf("expected compaction summary after stable context, got %+v", messages[3])
 	}
-	if messages[4].MessageType == nil || *messages[4].MessageType != llm.MessageTypeCompactionPreservedUserMessage || !strings.Contains(messageContent(messages[4]), "please keep tests green") {
-		t.Fatalf("expected compaction-preserved user message after compaction output, got %+v", messages[4])
+	if messages[4].MessageType == nil || *messages[4].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("expected environment after compaction output, got %+v", messages[4])
 	}
-	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeEnvironment {
-		t.Fatalf("expected environment after manual carryover, got %+v", messages[5])
+	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeCompactionPreservedUserMessage || !strings.Contains(messageContent(messages[5]), "please keep tests green") {
+		t.Fatalf("expected compaction-preserved user message after environment, got %+v", messages[5])
 	}
 }
 
@@ -190,22 +187,22 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 		Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if _, err := eng.SetGoal("survive handoff compaction", session.GoalActorUser); err != nil {
+	if _, err := eng.SetGoal(t.Context(), "survive handoff compaction", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("mark headless active: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("continue")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("continue")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	eng.handoffRuntimeState().QueueRequest("", "resume with tests")
 
-	err := withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, applyErr := eng.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
-	if err != nil {
+	stepID := runtimeTestStepID("step-1")
+	if err := runTestActiveStep(eng, stepID, func() error {
+		_, err := eng.applyPendingHandoffIfNeeded(context.Background(), stepID)
+		return err
+	}); err != nil {
 		t.Fatalf("apply pending handoff: %v", err)
 	}
 
@@ -257,16 +254,14 @@ func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCo
 	}
 
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("older user message")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("older user message")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("previous compaction summary")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("previous compaction summary")}})); err != nil {
 		t.Fatalf("append previous compaction summary: %v", err)
 	}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	for _, message := range eng.transcriptRuntimeState().SnapshotMessages() {
 		if message.MessageType != nil && *message.MessageType == llm.MessageTypeCompactionPreservedUserMessage {
@@ -287,15 +282,13 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	}
 
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if _, err := eng.SetGoal("survive process reopen", session.GoalActorUser); err != nil {
+	if _, err := eng.SetGoal(t.Context(), "survive process reopen", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("please keep tests green")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("please keep tests green")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, eng)
 
 	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {

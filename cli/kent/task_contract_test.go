@@ -7,11 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"core/shared/apicontract"
 	"core/shared/config"
-	"core/shared/runtimeids"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -219,11 +220,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	expected := taskListExpectedScope{
-		ProjectID:     "project-1",
-		WorkflowOwner: taskListExpectedWorkflowFromRequest,
-	}
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 || stderr.Len() != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, true); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var output struct {
@@ -239,7 +236,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 ||
+	if code := writeTaskListResponse(&stdout, &stderr, response, false); code != 0 ||
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -256,38 +253,6 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("comment exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-}
-
-func TestTaskListProjectionSuppressesEnrichedWorkflowNameForOneWorkflow(t *testing.T) {
-	workflowID := runtimeids.NewWorkflowID()
-	workflowName := "Delivery"
-	projection, err := taskListProjectionFromResponse(
-		serverapi.WorkflowTaskListResponse{
-			Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
-			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
-			Tasks: []serverapi.WorkflowTaskListItem{{
-				TaskID:       "task-1",
-				ShortID:      "KENT-1",
-				WorkflowID:   workflowID,
-				WorkflowName: &workflowName,
-				Title:        "One Workflow",
-				Status:       taskContractStatus(serverapi.WorkflowTaskStatusKindActive),
-				Labels:       []serverapi.WorkflowProjectLabel{{ID: "label-1", Name: "Priority"}},
-			}},
-		},
-		taskListExpectedScope{
-			ProjectID:     "project-1",
-			WorkflowOwner: taskListExpectedWorkflowFromRequest,
-		},
-	)
-	if err != nil {
-		t.Fatalf("project Task-list projection: %v", err)
-	}
-	if len(projection.Rows) != 1 ||
-		projection.Rows[0].WorkflowName != nil ||
-		!slices.Equal(projection.Rows[0].LabelNames, []string{"Priority"}) {
-		t.Fatalf("one-Workflow row = %+v", projection.Rows)
 	}
 }
 
@@ -323,6 +288,16 @@ func TestTaskCommentListRejectsInvalidPaginationBeforeRemote(t *testing.T) {
 			stderr.Len() == 0 {
 			t.Fatalf("args=%q exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
 		}
+	}
+}
+
+func TestTaskCommentAddCannotSpoofUserAuthorFromAgentSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "018fdd67-89ab-4cde-8123-456789abcdef")
+
+	author := taskCommentAuthorForAdd(t.Context(), nil, "task-1", "user", true)
+
+	if author.Kind != "agent" {
+		t.Fatalf("author kind = %q, want agent", author.Kind)
 	}
 }
 
@@ -528,6 +503,23 @@ func TestTaskMoveStructuredValuesSelectionAndDependencyGuidance(t *testing.T) {
 	if stderr.Len() == 0 {
 		t.Fatalf("guidance=%q", stderr.String())
 	}
+	const recoveryCommand = "kent task move 11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222"
+	stderr.Reset()
+	writeTaskDependencyConfirmationRequiredForCommand(&stderr, "KENT-2", &count, recoveryCommand)
+	if !strings.Contains(stderr.String(), recoveryCommand+" --ignore-dependencies") {
+		t.Fatalf("forced-completion dependency guidance=%q", stderr.String())
+	}
+	stderr.Reset()
+	writeWorkflowExecutionTargetSelectionRequiredForCommand(
+		&stderr,
+		&serverapi.WorkflowExecutionTargetSelectionRequirement{
+			Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+		},
+		recoveryCommand,
+	)
+	if !strings.Contains(stderr.String(), recoveryCommand+" --execution-target head") {
+		t.Fatalf("forced-completion selection guidance=%q", stderr.String())
+	}
 
 	response := serverapi.WorkflowTaskMoveResponse{
 		Outcome:                    serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
@@ -548,21 +540,22 @@ func TestTaskMoveStructuredValuesSelectionAndDependencyGuidance(t *testing.T) {
 }
 
 func TestTaskSetupGuidanceContracts(t *testing.T) {
-	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
 	script := "/repo/setup.sh"
-	failed := &serverapi.WorktreeSetupEvent{
-		Phase: serverapi.WorktreeSetupPhaseFailed,
-		Failed: &serverapi.WorktreeSetupFailed{
-			RetryReadiness: serverapi.WorktreeSetupRetryReady,
-			Cause: serverapi.WorktreeSetupFailureCause{
-				Kind:        serverapi.WorktreeSetupFailureProcessExit,
-				ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1},
+	failed := &worktreepb.SetupEvent{
+		Phase: &worktreepb.SetupEvent_Failed{
+			Failed: &worktreepb.SetupFailed{
+				RetryReadiness: worktreepb.SetupRetryReadiness_WORKTREE_SETUP_RETRY_READY,
+				Cause: &worktreepb.SetupFailureCause{
+					Cause: &worktreepb.SetupFailureCause_ProcessExit{
+						ProcessExit: &worktreepb.SetupProcessExit{ExitCode: 1},
+					},
+				},
+				Diagnostic:               "failed twice",
+				ScriptPath:               &script,
+				ExecutionTarget:          &worktreepb.SetupExecutionTargetSelection{Mode: worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_HEAD},
+				RetainedWorktree:         taskContractSetupWorktree("/tmp/retained").GetRegistered(),
+				RetainedPreviousWorktree: &worktreepb.RetainedPreviousWorktree{Worktree: taskContractSetupWorktree("/tmp/previous").GetRegistered()},
 			},
-			Diagnostic:               "failed twice",
-			ScriptPath:               &script,
-			ExecutionTarget:          &target,
-			RetainedWorktree:         taskContractSetupWorktree("/tmp/retained"),
-			RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/previous")},
 		},
 	}
 	start, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, failed, nil)
@@ -570,7 +563,7 @@ func TestTaskSetupGuidanceContracts(t *testing.T) {
 		start.Outcome != taskSetupOutcomeStartInterruptedSetupFailure ||
 		start.RetainedRoot == nil ||
 		*start.RetainedRoot != "/tmp/retained" ||
-		start.RetainedPreviousWorktree == nil ||
+		start.RetainedPreviousRoot == nil ||
 		len(start.Actions) != 5 ||
 		start.Actions[0].Kind != taskSetupActionRetry ||
 		start.Actions[0].Args[len(start.Actions[0].Args)-1] != "head" {
@@ -580,16 +573,17 @@ func TestTaskSetupGuidanceContracts(t *testing.T) {
 	if err != nil || resume.Outcome != taskSetupOutcomeResumeInterruptedSetupFailure {
 		t.Fatalf("resume setup guidance=%+v err=%v", resume, err)
 	}
-	completed, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, &serverapi.WorktreeSetupEvent{
-		Phase: serverapi.WorktreeSetupPhaseNotRequired,
-		NotRequired: &serverapi.WorktreeSetupNotRequired{
-			Reason:                   serverapi.WorktreeSetupNotRequiredNoConfiguredScript,
-			RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/orphan")},
+	completed, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, &worktreepb.SetupEvent{
+		Phase: &worktreepb.SetupEvent_NotRequired{
+			NotRequired: &worktreepb.SetupNotRequired{
+				Reason:                   worktreepb.SetupNotRequiredReason_WORKTREE_SETUP_NOT_REQUIRED_REASON_NO_CONFIGURED_SCRIPT,
+				RetainedPreviousWorktree: &worktreepb.RetainedPreviousWorktree{Worktree: taskContractSetupWorktree("/tmp/orphan").GetRegistered()},
+			},
 		},
 	}, nil)
 	if err != nil ||
 		completed.Outcome != taskSetupOutcomeCompleted ||
-		completed.RetainedPreviousWorktree == nil ||
+		completed.RetainedPreviousRoot == nil ||
 		len(completed.Actions) != 1 ||
 		completed.Actions[0].Kind != taskSetupActionListWorktrees {
 		t.Fatalf("completed setup guidance=%+v err=%v", completed, err)
@@ -624,82 +618,35 @@ func TestTaskMoveSetupRecoveryPreservesStructuredInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
-	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorktreeSetupRetainedError{
-		Worktree:                 *taskContractSetupWorktree("/tmp/retained"),
+	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorkflowSetupRetainedError{
+		Worktree:                 taskContractWorkflowSetupWorktree("/tmp/retained"),
 		Diagnostic:               "failed twice",
 		ScriptPath:               "/repo/setup.sh",
-		RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/previous")},
+		RetainedPreviousWorktree: &serverapi.WorkflowRetainedPreviousWorktree{Worktree: taskContractWorkflowSetupWorktree("/tmp/previous")},
 	})
 	if err != nil ||
 		guidance.Outcome != taskSetupOutcomeMoveSetupFailure ||
 		guidance.RetainedRoot == nil ||
 		*guidance.RetainedRoot != "/tmp/retained" ||
-		guidance.RetainedPreviousWorktree == nil ||
+		guidance.RetainedPreviousRoot == nil ||
 		len(guidance.Actions) != 5 ||
 		!slices.Contains(guidance.Actions[0].Args, `{"plan":{"summary":"done"}}`) {
 		t.Fatalf("move setup guidance=%+v err=%v", guidance, err)
 	}
 }
 
-func TestWorktreeRuntimeOriginHeaderAndBranchCleanupPolicy(t *testing.T) {
-	const (
-		runID  = "018fdd67-89ab-4cde-8123-456789abc001"
-		stepID = "018fdd67-89ab-4cde-8123-456789abc002"
-	)
-	t.Setenv(sessionenv.RunIDEnv, runID)
-	t.Setenv(sessionenv.StepIDEnv, stepID)
-	origin, err := worktreeCommandRuntimeOrigin()
-	if err != nil || origin == nil || origin.RunID != runID || origin.StepID != stepID {
-		t.Fatalf("origin=%+v err=%v", origin, err)
-	}
-	header, err := newWorktreeCommandTransitionHeader("session-1")
-	if err != nil || header.SessionID != "session-1" || header.Origin == nil ||
-		header.Origin.RunID != runID || header.Origin.StepID != stepID ||
-		header.OperationID.String() == "" {
-		t.Fatalf("header=%+v err=%v", header, err)
-	}
-
-	for _, invalid := range []struct {
-		run  string
-		step string
-	}{
-		{run: runID},
-		{step: stepID},
-		{run: "invalid", step: stepID},
-		{run: runID, step: "invalid"},
-	} {
-		t.Run(invalid.run+"/"+invalid.step, func(t *testing.T) {
-			t.Setenv(sessionenv.RunIDEnv, invalid.run)
-			t.Setenv(sessionenv.StepIDEnv, invalid.step)
-			if _, err := worktreeCommandRuntimeOrigin(); err == nil {
-				t.Fatal("invalid origin accepted")
-			}
-			if _, err := newWorktreeCommandTransitionHeader("session-1"); err == nil {
-				t.Fatal("header accepted invalid origin")
-			}
-		})
-	}
-
-	unsetEnvironmentForTaskContractTest(t, sessionenv.RunIDEnv)
-	unsetEnvironmentForTaskContractTest(t, sessionenv.StepIDEnv)
-	if origin, err := worktreeCommandRuntimeOrigin(); err != nil || origin != nil {
-		t.Fatalf("absent origin=%+v err=%v", origin, err)
-	}
-	if header, err := newWorktreeCommandTransitionHeader("session-1"); err != nil || header.Origin != nil {
-		t.Fatalf("external header=%+v err=%v", header, err)
-	}
-
+func TestWorktreeHeaderAndBranchCleanupPolicy(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		delete      bool
 		forceDelete bool
 		agent       bool
-		want        serverapi.WorktreeBranchCleanupMode
+		want        worktreepb.BranchCleanupMode
 		wantError   bool
 	}{
-		{name: "retain", want: serverapi.WorktreeBranchCleanupModeRetain},
-		{name: "safe delete", delete: true, want: serverapi.WorktreeBranchCleanupModeDeleteSafe},
-		{name: "force delete", delete: true, forceDelete: true, want: serverapi.WorktreeBranchCleanupModeDeleteForce},
+		{name: "retain", want: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN},
+		{name: "safe delete", delete: true, want: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE},
+		{name: "force delete", delete: true, forceDelete: true, want: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_FORCE},
 		{name: "force requires delete", forceDelete: true, wantError: true},
 		{name: "agent retains branch", delete: true, agent: true, wantError: true},
 	} {
@@ -762,12 +709,23 @@ func taskContractStatus(kind serverapi.WorkflowTaskStatusKind) serverapi.Workflo
 	return serverapi.WorkflowTaskStatus{Kind: kind, NativeState: native}
 }
 
-func taskContractSetupWorktree(root string) *serverapi.WorktreeTopologyEntry {
-	return &serverapi.WorktreeTopologyEntry{
-		Variant: serverapi.WorktreeTopologyVariantRegistered,
-		Registered: &serverapi.WorktreeRegisteredFacts{
-			Git:  serverapi.WorktreeGitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
-			Kent: serverapi.WorktreeKentFacts{WorktreeID: "worktree-1", CanonicalRoot: root, DisplayName: "KENT-453", Managed: true},
+func taskContractSetupWorktree(root string) *worktreepb.TopologyEntry {
+	return &worktreepb.TopologyEntry{
+		Topology: &worktreepb.TopologyEntry_Registered{
+			Registered: &worktreepb.RegisteredFacts{
+				Git:  &worktreepb.GitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
+				Kent: &worktreepb.KentFacts{WorktreeId: "worktree-1", CanonicalRoot: root, DisplayName: "KENT-453", Managed: true},
+			},
+		},
+	}
+}
+
+func taskContractWorkflowSetupWorktree(root string) serverapi.WorkflowRegisteredWorktreeTopology {
+	return serverapi.WorkflowRegisteredWorktreeTopology{
+		Variant: "registered",
+		Registered: &serverapi.WorkflowRegisteredWorktreeFacts{
+			Git:  serverapi.WorkflowWorktreeGitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
+			Kent: serverapi.WorkflowWorktreeKentFacts{WorktreeID: "worktree-1", CanonicalRoot: root, DisplayName: "KENT-453", Managed: true},
 		},
 	}
 }

@@ -147,6 +147,10 @@ func (e routePolicyExecutor) authenticationStage(method string) (sharedpb.Authen
 		if _, migrated := registration.BinaryBinding(trimmed); migrated {
 			return operation.Options.AuthenticationStage, true
 		}
+		if operation.Options.Kind == sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION &&
+			operation.LegacyWireName == nil {
+			return operation.Options.AuthenticationStage, true
+		}
 	}
 	operation, _, ok := registration.LegacyOperation(trimmed)
 	if !ok {
@@ -256,6 +260,8 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 			return nil
 		}
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
+	case rpccontract.ScopeSessionDraftHandoffProject:
+		return e.gateway.requireSessionInActiveProjectOrAttached(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionAttachedProject:
 		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeAttachedSession:
@@ -295,6 +301,7 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 	case rpccontract.ScopeAttachSession,
 		rpccontract.ScopeSessionActiveProject,
 		rpccontract.ScopeSessionActiveProjectIfSet,
+		rpccontract.ScopeSessionDraftHandoffProject,
 		rpccontract.ScopeSessionAttachedProject,
 		rpccontract.ScopeAttachedSession,
 		rpccontract.ScopeGoalSession,
@@ -329,12 +336,7 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 }
 
 func routeProjectWorkspaceBinding(params any) (string, string, bool) {
-	switch request := params.(type) {
-	case serverapi.WorktreeWorkspaceListRequest:
-		return request.ProjectID, request.WorkspaceID, true
-	default:
-		return "", "", false
-	}
+	return "", "", false
 }
 
 func routeSessionID(params any) (string, bool) {
@@ -365,24 +367,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionRuntimeReleaseRequest:
 		return p.Attachment.SessionID, true
-	case serverapi.WorktreeListRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeStatusRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeSelectorPreviewRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeDeletePreviewRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeCreateTargetResolveRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeCreateRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeEnterRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeLeaveRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeDeleteRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeSetSessionNameRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeAppendCommittedEntryRequest:
@@ -405,7 +389,9 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.RuntimeLiveWatchRequest:
 		return p.SessionID, true
-	case serverapi.RuntimeDiscardQueuedUserMessageRequest:
+	case serverapi.RuntimeListPendingWorkRequest:
+		return p.SessionID, true
+	case serverapi.RuntimeRemovePendingWorkRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeRecordPromptHistoryRequest:
 		return p.SessionID, true
@@ -494,6 +480,19 @@ func (g *Gateway) requireSessionInActiveProject(ctx context.Context, state *conn
 		return sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
 	}
 	return nil
+}
+
+func (g *Gateway) requireSessionInActiveProjectOrAttached(ctx context.Context, state *connectionState, sessionID string) error {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	if state != nil &&
+		state.attachedSession != nil &&
+		state.attachedSession.String() == trimmedSessionID {
+		return nil
+	}
+	return g.requireSessionInActiveProject(ctx, state, trimmedSessionID)
 }
 
 func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectionState, sessionID string) error {

@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestDiscardQueuedUserMessagePreservesOtherQueuedIdentities(t *testing.T) {
+func TestQueuedUserMessageOwnerDiscardPreservesOtherQueuedIdentities(t *testing.T) {
 	t.Parallel()
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
@@ -13,7 +13,7 @@ func TestDiscardQueuedUserMessagePreservesOtherQueuedIdentities(t *testing.T) {
 	target := mustQueueUserMessage(t, engine, "same")
 	last := mustQueueUserMessage(t, engine, "same")
 
-	if !engine.DiscardQueuedUserMessage(target.ID) {
+	if _, removed := engine.messageFlow.DiscardQueuedUserMessage(target.ID); !removed {
 		t.Fatal("target queued identity was not discarded")
 	}
 	queue := engine.messageFlow.(*defaultMessageLifecycle).queue.Snapshot()

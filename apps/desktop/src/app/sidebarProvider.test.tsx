@@ -300,6 +300,25 @@ describe("SidebarProvider stack", () => {
     teardownRoot?.release();
   });
 
+  it("keeps the active sidebar mode across root replacement and chooses again after close", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(useHarness, { wrapper });
+
+    act(() => {
+      result.current.roots.open({ ...destination("A"), mode: "shift" });
+      result.current.roots.open({ ...destination("B"), mode: "overlay" });
+    });
+    expect(result.current.shell.activeDestination).toEqual({ ...destination("B"), mode: "shift" });
+
+    act(() => {
+      expect(requireNavigator(result.current).close()).toBe("accepted");
+      vi.runAllTimers();
+      result.current.roots.open({ ...destination("C"), mode: "overlay" });
+    });
+    expect(result.current.shell.activeDestination).toEqual({ ...destination("C"), mode: "overlay" });
+    vi.useRealTimers();
+  });
+
   it("replays capture and availability registration without clearing a newer registration", () => {
     const { result } = renderHook(useHarness, { wrapper });
     act(() => {

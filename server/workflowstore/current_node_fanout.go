@@ -18,7 +18,6 @@ type currentNodeFanoutTarget struct {
 	CurrentNode    workflow.CurrentNode
 	Node           workflow.Node
 	NodeKind       workflow.NodeKind
-	Invariant      *workflow.RetainedTargetInvariantDetail
 	LegacyFallback *legacyContinuationSourceFallbackDetail
 }
 
@@ -68,9 +67,6 @@ func completeCurrentNodeFanout(
 			return CurrentNodeCompletionResult{}, err
 		}
 		targetCurrentNode := materializedTarget.CurrentNode
-		if materializedTarget.Invariant != nil {
-			checkRetainedTargetInvariantBeforeMutation(policy, *materializedTarget.Invariant)
-		}
 		if materializedTarget.LegacyFallback != nil {
 			checkLegacyContinuationSourceBeforeMutation(policy, *materializedTarget.LegacyFallback)
 		}
@@ -78,7 +74,6 @@ func completeCurrentNodeFanout(
 			BranchKey:      branchKey,
 			CurrentNode:    targetCurrentNode,
 			Node:           target.Node,
-			Invariant:      materializedTarget.Invariant,
 			LegacyFallback: materializedTarget.LegacyFallback,
 		})
 		contextResolution, err := pendingApprovalContextSourceResolution(target.Node.Kind(), targetCurrentNode)
@@ -116,9 +111,6 @@ func completeCurrentNodeFanout(
 		}
 		result := CurrentNodeCompletionResult{PendingApproval: &approval}
 		for _, target := range preparedTargets {
-			if target.Invariant != nil {
-				result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
-			}
 			if target.LegacyFallback != nil {
 				result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
 			}
@@ -139,9 +131,6 @@ func completeCurrentNodeFanout(
 		},
 	}
 	for _, target := range preparedTargets {
-		if target.Invariant != nil {
-			result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
-		}
 		if target.LegacyFallback != nil {
 			result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
 		}
@@ -185,33 +174,6 @@ func replaceCurrentNodeWithFanout(
 	return insertFrozenTaskFanoutTargets(ctx, q, source.TaskID, targets, associatedAt)
 }
 
-func updateActiveFanoutBranchContinuationSource(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	source workflow.CurrentNodeReference,
-	continuationSource workflow.MaterializedContinuationSource,
-) error {
-	branchKey := currentNodeReferenceBranchKey(source)
-	if branchKey == nil {
-		return nil
-	}
-	sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(continuationSource)
-	if err != nil {
-		return err
-	}
-	updated, err := q.UpdateTaskActiveFanoutBranchContinuationSource(ctx, sqlitegen.UpdateTaskActiveFanoutBranchContinuationSourceParams{
-		TaskID: string(source.TaskID), TransitionBranchKey: string(*branchKey),
-		ContinuationSourceKind: sourceKind, ContinuationSourceSessionID: sourceSessionID, LegacyMaterialized: legacyMaterialized,
-	})
-	if err != nil {
-		return err
-	}
-	if updated != 1 {
-		return errors.New("active fan-out branch is no longer pending")
-	}
-	return nil
-}
-
 func validateFanoutTargets(taskID workflow.TaskID, targets []workflow.CurrentNode) error {
 	if len(targets) < 2 {
 		return errors.New("fan-out requires multiple target branches")
@@ -248,16 +210,9 @@ func insertTaskFanoutTargets(
 	}
 	for _, target := range targets {
 		branchKey, _ := target.Reference.TransitionBranchKey()
-		sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(target.ContinuationSource)
-		if err != nil {
-			return err
-		}
 		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
-			TaskID:                      string(taskID),
-			TransitionBranchKey:         string(branchKey),
-			ContinuationSourceKind:      sourceKind,
-			ContinuationSourceSessionID: sourceSessionID,
-			LegacyMaterialized:          legacyMaterialized,
+			TaskID:              string(taskID),
+			TransitionBranchKey: string(branchKey),
 		}); err != nil {
 			return err
 		}
@@ -287,16 +242,9 @@ func insertFrozenTaskFanoutTargets(
 	}
 	for _, target := range targets {
 		branchKey, _ := target.CurrentNode.Reference.TransitionBranchKey()
-		sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(target.CurrentNode.ContinuationSource)
-		if err != nil {
-			return err
-		}
 		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
-			TaskID:                      string(taskID),
-			TransitionBranchKey:         string(branchKey),
-			ContinuationSourceKind:      sourceKind,
-			ContinuationSourceSessionID: sourceSessionID,
-			LegacyMaterialized:          legacyMaterialized,
+			TaskID:              string(taskID),
+			TransitionBranchKey: string(branchKey),
 		}); err != nil {
 			return err
 		}

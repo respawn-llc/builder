@@ -116,22 +116,33 @@ func (r *Registry) Definitions() []Definition {
 }
 
 func (r *Registry) PrepareInput(id toolspec.ID, raw json.RawMessage) (json.RawMessage, error) {
+	prepared, err := r.PrepareInputOutcome(id, raw)
+	if err != nil {
+		return nil, err
+	}
+	if prepared.ValidationError != nil {
+		return nil, fmt.Errorf("prepare %q input: %w", id, prepared.ValidationError)
+	}
+	return json.RawMessage(prepared.Canonical), nil
+}
+
+func (r *Registry) PrepareInputOutcome(id toolspec.ID, raw json.RawMessage) (PreparedInput, error) {
 	if r == nil {
-		return nil, fmt.Errorf("tool registry is required")
+		return PreparedInput{}, fmt.Errorf("tool registry is required")
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if _, ok := r.byName[id]; !ok {
-		return nil, fmt.Errorf("tool %q is not registered", id)
+		return PreparedInput{}, fmt.Errorf("tool %q is not registered", id)
 	}
 	if r.contracts == nil {
-		return nil, fmt.Errorf("tool registry has no static contracts")
+		return PreparedInput{}, fmt.Errorf("tool registry has no static contracts")
 	}
-	prepared, err := r.contracts.prepareInput(id, raw)
+	prepared, err := r.contracts.prepareInputOutcome(id, raw)
 	if err != nil {
-		return nil, fmt.Errorf("prepare %q input: %w", id, err)
+		return PreparedInput{}, fmt.Errorf("prepare %q input: %w", id, err)
 	}
-	return json.RawMessage(prepared), nil
+	return prepared, nil
 }
 
 func (r *Registry) ReplaceHandlers(handlers ...HandlerRegistration) error {
@@ -166,6 +177,7 @@ func (r *Registry) replaceLocked(handlers []HandlerRegistration) error {
 		m[id] = h.Handler
 		order = append(order, id)
 	}
+	toolspec.ValidateModelToolAliases(order)
 	r.byName = m
 	r.order = order
 	return nil

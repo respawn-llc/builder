@@ -25,7 +25,7 @@ func (e *Engine) publishProviderTurnStateDiagnostics(
 		default:
 			panic("unknown provider turn-state diagnostic category")
 		}
-		if err := e.steer(stepID, steerEventIntent(Event{Kind: kind, StepID: stepID})); err != nil {
+		if err := e.steer(stepID, steerEventIntent(Event{Kind: kind, StepID: &stepID})); err != nil {
 			slog.Error(
 				"publish provider turn-state diagnostic",
 				"category", category,

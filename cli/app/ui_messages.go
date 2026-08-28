@@ -118,8 +118,8 @@ type injectedQueueDiscardDoneMsg struct {
 }
 
 type compactDoneMsg struct {
+	requestID     runtimeids.CompactionRequestID
 	submittedText string
-	origin        uiCompactionOrigin
 	invoked       bool
 	err           error
 }

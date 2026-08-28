@@ -56,12 +56,6 @@ func StaticContractSource() tools.StaticContractSource {
 	return tools.StaticContractSource{
 		ID:    toolspec.ToolEdit,
 		Input: tools.EditInput{},
-		Aliases: []tools.InputAliases{
-			{Canonical: "path", Aliases: []string{"file_path", "filePath"}},
-			{Canonical: "old_string", Aliases: []string{"oldString", "oldText"}},
-			{Canonical: "new_string", Aliases: []string{"newString", "newText"}},
-			{Canonical: "replace_all", Aliases: []string{"replaceAll"}},
-		},
 	}
 }
 

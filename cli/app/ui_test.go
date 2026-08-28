@@ -746,7 +746,7 @@ func TestTabInsideDetailReturnsToOngoingMode(t *testing.T) {
 	}
 }
 
-func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
+func TestDetailModeStatusLineOmitsActionForCompleteAssistantRow(t *testing.T) {
 	page := clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
@@ -775,14 +775,14 @@ func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
 	if updated.view.Mode() != tui.ModeDetail {
 		t.Fatalf("mode=%q want detail", updated.view.Mode())
 	}
-	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionExpand {
-		t.Fatalf("detail selection action = %v, want expand", got)
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionNone {
+		t.Fatalf("detail selection action = %v, want no action for complete row", got)
 	}
 
 	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
-		t.Fatalf("detail selection action = %v, want collapse", got)
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionNone {
+		t.Fatalf("detail selection action after Enter = %v, want no action for complete row", got)
 	}
 }
 

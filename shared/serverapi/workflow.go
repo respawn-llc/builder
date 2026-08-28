@@ -15,6 +15,7 @@ import (
 	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
 	"core/shared/worktreecontract"
+	"github.com/google/uuid"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 	WorkflowRequestErrorTooLong      = "workflow.request.too_long"
 )
 
-const WorkflowPaginationMaxLimit = OffsetPaginationMaxLimit
+const WorkflowPaginationMaxLimit = 100
 const WorkflowTaskListMaxSortSelectors = 7
 const WorkflowBoardNodeCardsMaxPageSize = 25
 
@@ -914,10 +915,24 @@ type WorkflowTaskUpdateResponse struct {
 	Task WorkflowTaskSummary `json:"task"`
 }
 
+type WorkflowSetupOperationID struct {
+	uuid.UUID
+}
+
+func NewWorkflowSetupOperationID() WorkflowSetupOperationID {
+	return WorkflowSetupOperationID{UUID: uuid.New()}
+}
+
+func (id WorkflowSetupOperationID) Domain() worktreecontract.SetupOperationID {
+	return worktreecontract.SetupOperationID(id.UUID)
+}
+
+func (id WorkflowSetupOperationID) Validate() error { return id.Domain().Validate() }
+
 type WorkflowTaskStartRequest struct {
 	TaskID                     string                            `json:"task_id"`
 	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
-	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id"`
+	SetupOperationID           WorkflowSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 	BranchName                 *string                           `json:"branch_name,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
@@ -945,7 +960,7 @@ type WorkflowTaskCurrentNode struct {
 type WorkflowTaskResumeRequest struct {
 	TaskID            string                            `json:"task_id"`
 	InvokingSessionID *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
-	SetupOperationID  WorktreeSetupOperationID          `json:"setup_operation_id"`
+	SetupOperationID  WorkflowSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget   *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 	BranchName        *string                           `json:"branch_name,omitempty"`
 }
@@ -1000,13 +1015,143 @@ type WorkflowTaskMoveResponse struct {
 }
 
 type WorkflowTaskMoveNoOp struct {
-	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
+	CurrentNodes             []WorkflowTaskCurrentNode         `json:"current_nodes"`
+	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 type WorkflowTaskMoveApplied struct {
-	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
+	CurrentNodes             []WorkflowTaskCurrentNode         `json:"current_nodes"`
+	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree `json:"retained_previous_worktree"`
+}
+
+type WorkflowRetainedPreviousWorktree struct {
+	Worktree WorkflowRegisteredWorktreeTopology `json:"worktree"`
+}
+
+type WorkflowRegisteredWorktreeTopology struct {
+	Variant    string                           `json:"variant"`
+	Registered *WorkflowRegisteredWorktreeFacts `json:"registered,omitempty"`
+}
+
+type WorkflowRegisteredWorktreeFacts struct {
+	Git  WorkflowWorktreeGitFacts  `json:"git"`
+	Kent WorkflowWorktreeKentFacts `json:"kent"`
+}
+
+type WorkflowWorktreeGitFacts struct {
+	CanonicalRoot  string  `json:"canonical_root"`
+	HeadObject     string  `json:"head_object"`
+	BranchRef      *string `json:"branch_ref"`
+	BranchName     *string `json:"branch_name"`
+	Detached       bool    `json:"detached"`
+	Bare           bool    `json:"bare"`
+	LockedReason   *string `json:"locked_reason"`
+	PrunableReason *string `json:"prunable_reason"`
+	IsMain         bool    `json:"is_main"`
+	PathAvailable  bool    `json:"path_available"`
+}
+
+type WorkflowWorktreeKentFacts struct {
+	WorktreeID      string  `json:"worktree_id"`
+	CanonicalRoot   string  `json:"canonical_root"`
+	DisplayName     string  `json:"display_name"`
+	Managed         bool    `json:"managed"`
+	CreatedBranch   bool    `json:"created_branch"`
+	OriginSessionID *string `json:"origin_session_id"`
+}
+
+func (t WorkflowRegisteredWorktreeTopology) Validate() error {
+	if t.Variant != "registered" || t.Registered == nil {
+		return errors.New("workflow retained worktree must be registered")
+	}
+	facts := t.Registered
+	if strings.TrimSpace(facts.Git.CanonicalRoot) == "" ||
+		strings.TrimSpace(facts.Git.HeadObject) == "" ||
+		strings.TrimSpace(facts.Kent.WorktreeID) == "" ||
+		strings.TrimSpace(facts.Kent.CanonicalRoot) == "" ||
+		strings.TrimSpace(facts.Kent.DisplayName) == "" {
+		return errors.New("workflow retained worktree required facts must be non-blank")
+	}
+	for _, optional := range []*string{facts.Git.BranchRef, facts.Git.BranchName, facts.Git.LockedReason, facts.Git.PrunableReason, facts.Kent.OriginSessionID} {
+		if optional != nil && strings.TrimSpace(*optional) == "" {
+			return errors.New("workflow retained worktree optional facts must be non-blank")
+		}
+	}
+	if facts.Git.CanonicalRoot != facts.Kent.CanonicalRoot {
+		return errors.New("workflow retained worktree Git and Kent canonical roots must match")
+	}
+	return nil
+}
+
+type WorkflowSetupRetainedError struct {
+	Worktree                 WorkflowRegisteredWorktreeTopology `json:"worktree"`
+	ScriptPath               string                             `json:"script_path"`
+	Diagnostic               string                             `json:"diagnostic"`
+	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree  `json:"retained_previous_worktree"`
+}
+
+func (e *WorkflowSetupRetainedError) Error() string {
+	if e == nil || strings.TrimSpace(e.Diagnostic) == "" {
+		return worktreecontract.ErrWorktreeSetupRetained.Error()
+	}
+	return fmt.Sprintf("%s: %s", worktreecontract.ErrWorktreeSetupRetained, strings.TrimSpace(e.Diagnostic))
+}
+
+func (e *WorkflowSetupRetainedError) Is(target error) bool {
+	return target == worktreecontract.ErrWorktreeSetupRetained
+}
+
+func (e *WorkflowSetupRetainedError) RPCErrorCode() int {
+	return protocol.ErrCodeWorktreeSetupRetained
+}
+
+func (e *WorkflowSetupRetainedError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type string `json:"type"`
+		*WorkflowSetupRetainedError
+	}{Type: "worktree_setup_retained", WorkflowSetupRetainedError: e})
+}
+
+func (e *WorkflowSetupRetainedError) Validate() error {
+	if e == nil {
+		return errors.New("retained setup error is required")
+	}
+	if err := e.Worktree.Validate(); err != nil {
+		return err
+	}
+	if e.RetainedPreviousWorktree != nil {
+		if err := e.RetainedPreviousWorktree.Worktree.Validate(); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(e.ScriptPath) == "" || strings.TrimSpace(e.Diagnostic) == "" {
+		return errors.New("retained setup error script_path and diagnostic are required")
+	}
+	return nil
+}
+
+func DecodeWorkflowSetupRetainedError(data json.RawMessage, message string) error {
+	var payload struct {
+		Type string `json:"type"`
+		WorkflowSetupRetainedError
+	}
+	if err := protocol.DecodeStrictJSON(data, &payload); err != nil || payload.Type != "worktree_setup_retained" {
+		return errors.New(strings.TrimSpace(message))
+	}
+	presence := struct {
+		RetainedPreviousWorktree json.RawMessage `json:"retained_previous_worktree"`
+	}{}
+	if err := json.Unmarshal(data, &presence); err != nil || len(presence.RetainedPreviousWorktree) == 0 {
+		return errors.New(strings.TrimSpace(message))
+	}
+	result := &payload.WorkflowSetupRetainedError
+	if err := result.Validate(); err != nil {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return result
 }
 
 const (
@@ -1034,21 +1179,41 @@ func (e WorkflowTaskCompleteSelectorAmbiguousError) Is(target error) bool {
 }
 
 type WorkflowTaskCompleteRequest struct {
-	SessionID      string            `json:"session_id,omitempty"`
-	TaskID         string            `json:"task_id,omitempty"`
-	TransitionID   string            `json:"transition_id,omitempty"`
-	OutputValues   map[string]string `json:"output_values,omitempty"`
-	Commentary     string            `json:"commentary,omitempty"`
-	ActorKind      string            `json:"actor_kind"`
-	AgentSessionID string            `json:"agent_session_id,omitempty"`
-	Force          bool              `json:"force,omitempty"`
+	SessionID      string             `json:"session_id,omitempty"`
+	TaskID         string             `json:"task_id,omitempty"`
+	TransitionID   string             `json:"transition_id,omitempty"`
+	OutputValues   map[string]string  `json:"output_values,omitempty"`
+	Commentary     string             `json:"commentary,omitempty"`
+	ActorKind      string             `json:"actor_kind"`
+	AgentSessionID string             `json:"agent_session_id,omitempty"`
+	RunID          *runtimeids.RunID  `json:"run_id,omitempty"`
+	StepID         *runtimeids.StepID `json:"step_id,omitempty"`
+	Force          bool               `json:"force,omitempty"`
 }
 
 type WorkflowTaskCompleteResponse struct {
+	AgentCompletion *WorkflowTaskAgentCompletion      `json:"agent_completion"`
+	ForcedMove      *WorkflowTaskForcedCompletionMove `json:"forced_move"`
+}
+
+func (r WorkflowTaskCompleteResponse) Validate() error {
+	if (r.AgentCompletion == nil) == (r.ForcedMove == nil) {
+		return errors.New("workflow task completion response must contain exactly one outcome")
+	}
+	return nil
+}
+
+type WorkflowTaskAgentCompletion struct {
 	TaskID            string                        `json:"task_id"`
 	CurrentNodes      []WorkflowTaskCurrentNode     `json:"current_nodes"`
 	PendingApprovalID *string                       `json:"pending_approval_id,omitempty"`
 	Handoff           WorkflowTaskCompletionHandoff `json:"handoff"`
+}
+
+type WorkflowTaskForcedCompletionMove struct {
+	TaskID       string                   `json:"task_id"`
+	TargetNodeID string                   `json:"target_node_id"`
+	Outcome      WorkflowTaskMoveResponse `json:"outcome"`
 }
 
 type WorkflowTaskCompletionHandoff struct {
@@ -2138,23 +2303,6 @@ func (r WorkflowGraphDeriveWiringRequest) Validate() error {
 }
 
 func (r WorkflowGraphSavePreviewRequest) Validate() error {
-	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
-		return err
-	}
-	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
-		return err
-	}
-	return validateWorkflowGraphEntityIDs(r.Graph)
-}
-
-func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
-	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
-		return err
-	}
-	return validateWorkflowGraphDraftCollectionBounds(r.Graph)
-}
-
-func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -2164,37 +2312,29 @@ func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) e
 	if r.ExpectedVersion < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "expected_version", "expected_version must be non-negative")
 	}
-	return nil
+	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
+		return err
+	}
+	return validateWorkflowGraphEntityIDs(r.Graph)
 }
 
 func (r WorkflowGraphSaveRequest) Validate() error {
 	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).Validate(); err != nil {
 		return err
 	}
-	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
-}
-
-func (r WorkflowGraphSaveRequest) ValidateRPC() error {
-	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).ValidateRPC(); err != nil {
-		return err
-	}
-	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
-}
-
-func validateWorkflowGraphSaveConfirmation(confirmation *WorkflowGraphSaveConfirmation) error {
-	if confirmation == nil {
+	if r.Confirmation == nil {
 		return nil
 	}
 	for _, field := range []struct {
 		name  string
 		value int64
 	}{
-		{"expected_removed_node_group_count", confirmation.ExpectedRemovedNodeGroupCount},
-		{"expected_removed_node_count", confirmation.ExpectedRemovedNodeCount},
-		{"expected_removed_transition_group_count", confirmation.ExpectedRemovedTransitionGroupCount},
-		{"expected_removed_edge_count", confirmation.ExpectedRemovedEdgeCount},
-		{"expected_node_task_reference_count", confirmation.ExpectedNodeTaskReferenceCount},
-		{"expected_edge_task_reference_count", confirmation.ExpectedEdgeTaskReferenceCount},
+		{"expected_removed_node_group_count", r.Confirmation.ExpectedRemovedNodeGroupCount},
+		{"expected_removed_node_count", r.Confirmation.ExpectedRemovedNodeCount},
+		{"expected_removed_transition_group_count", r.Confirmation.ExpectedRemovedTransitionGroupCount},
+		{"expected_removed_edge_count", r.Confirmation.ExpectedRemovedEdgeCount},
+		{"expected_node_task_reference_count", r.Confirmation.ExpectedNodeTaskReferenceCount},
+		{"expected_edge_task_reference_count", r.Confirmation.ExpectedEdgeTaskReferenceCount},
 	} {
 		if field.value < 0 {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field.name, field.name+" must be non-negative")
@@ -2364,8 +2504,19 @@ func validateWorkflowGraphValidationModes(modes []WorkflowValidationMode) error 
 }
 
 func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
-	if err := validateWorkflowGraphDraftCollectionBounds(graph); err != nil {
-		return err
+	for _, field := range []struct {
+		name  string
+		count int
+		limit int
+	}{
+		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
+		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
+		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
+		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
+	} {
+		if field.count > field.limit {
+			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
+		}
 	}
 	for _, node := range graph.Nodes {
 		if kind := WorkflowNodeKind(strings.TrimSpace(node.Kind)); !slices.Contains([]WorkflowNodeKind{WorkflowNodeKindStart, WorkflowNodeKindAgent, WorkflowNodeKindScript, WorkflowNodeKindJoin, WorkflowNodeKindTerminal}, kind) {
@@ -2398,24 +2549,6 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 	for _, group := range graph.TransitionGroups {
 		if len([]rune(group.Description)) > 1000 {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.transition_groups.description", "description must be <= 1000 characters")
-		}
-	}
-	return nil
-}
-
-func validateWorkflowGraphDraftCollectionBounds(graph WorkflowGraphDraft) error {
-	for _, field := range []struct {
-		name  string
-		count int
-		limit int
-	}{
-		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
-		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
-		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
-		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
-	} {
-		if field.count > field.limit {
-			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
 		}
 	}
 	return nil
@@ -2864,10 +2997,46 @@ type workflowAttentionInterruptionDetailSchema struct {
 		RequestedRef *string                                 `json:"requested_ref,omitempty"`
 		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
 	} `json:"configured_execution_target_unavailable,omitempty"`
-	SetupRecovery *worktreecontract.SetupRecoveryDetail[
-		WorktreeSetupOperationID,
-		WorkflowExecutionTargetSelection,
-	] `json:"setup_recovery,omitempty"`
+	SetupRecovery *workflowSetupRecoveryDetailSchema `json:"setup_recovery,omitempty"`
+}
+
+type workflowSetupRecoveryDetailSchema struct {
+	SetupOperationID         WorkflowSetupOperationID          `json:"setup_operation_id"`
+	Cause                    worktreecontract.SetupFailureKind `json:"cause"`
+	Diagnostic               string                            `json:"diagnostic"`
+	ScriptPath               *string                           `json:"script_path"`
+	SetupRequirement         worktreecontract.SetupRequirement `json:"setup_requirement"`
+	ExecutionTarget          WorkflowExecutionTargetSelection  `json:"execution_target"`
+	RetainedWorktree         *workflowRetainedWorktreeSchema   `json:"retained_worktree"`
+	RetainedPreviousWorktree *workflowRetainedWorktreeSchema   `json:"retained_previous_worktree"`
+}
+
+type workflowRetainedWorktreeSchema struct {
+	WorktreeID string `json:"worktree_id"`
+	Root       string `json:"root"`
+}
+
+func (retained *workflowRetainedWorktreeSchema) domain() *worktreecontract.RetainedWorktree {
+	if retained == nil {
+		return nil
+	}
+	return &worktreecontract.RetainedWorktree{WorktreeID: retained.WorktreeID, Root: retained.Root}
+}
+
+func (detail workflowSetupRecoveryDetailSchema) domain() worktreecontract.SetupRecoveryDetail[
+	worktreecontract.SetupOperationID,
+	WorkflowExecutionTargetSelection,
+] {
+	return worktreecontract.SetupRecoveryDetail[worktreecontract.SetupOperationID, WorkflowExecutionTargetSelection]{
+		SetupOperationID:         detail.SetupOperationID.Domain(),
+		Cause:                    detail.Cause,
+		Diagnostic:               detail.Diagnostic,
+		ScriptPath:               detail.ScriptPath,
+		SetupRequirement:         detail.SetupRequirement,
+		ExecutionTarget:          detail.ExecutionTarget,
+		RetainedWorktree:         detail.RetainedWorktree.domain(),
+		RetainedPreviousWorktree: detail.RetainedPreviousWorktree.domain(),
+	}
 }
 
 func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
@@ -2903,7 +3072,7 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 		}
 	}
 	if recovery := detail.SetupRecovery; recovery != nil {
-		if err := recovery.Validate(); err != nil {
+		if err := recovery.domain().Validate(); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery facts are invalid")
 		}
 	}
@@ -3150,7 +3319,16 @@ func (r WorkflowTaskCompleteRequest) Validate() error {
 		if strings.TrimSpace(r.AgentSessionID) == "" {
 			return workflowRequestError(WorkflowRequestErrorRequired, "agent_session_id", "agent_session_id is required for agent completion")
 		}
+		if r.RunID == nil || r.RunID.IsZero() {
+			return workflowRequestError(WorkflowRequestErrorRequired, "run_id", "run_id is required for agent completion")
+		}
+		if r.StepID == nil || r.StepID.IsZero() {
+			return workflowRequestError(WorkflowRequestErrorRequired, "step_id", "step_id is required for agent completion")
+		}
 		return nil
+	}
+	if r.RunID != nil || r.StepID != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "provenance", "run_id and step_id are only allowed for agent completion")
 	}
 	if !r.Force {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "force", "force is required for non-agent completion")
@@ -3385,9 +3563,6 @@ func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 		return err
 	}
 	if err := validateRequired("node_id", r.NodeID); err != nil {
-		return err
-	}
-	if err := validateGraphEntityID("node_id", r.NodeID); err != nil {
 		return err
 	}
 	if r.PageSize < 0 {

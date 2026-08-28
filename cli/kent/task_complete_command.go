@@ -16,6 +16,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/jsoncontract"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 
@@ -80,14 +81,35 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, taskCompleteErrorMessage(err))
 			return 1
 		}
+		if err := resp.Validate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if resp.ForcedMove != nil {
+			taskRef := parsed.TaskRef
+			if strings.TrimSpace(taskRef) == "" {
+				taskRef = resp.ForcedMove.TaskID
+			}
+			return writeTaskMoveOutcome(
+				stdout,
+				stderr,
+				remote,
+				resp.ForcedMove.TaskID,
+				taskRef,
+				resp.ForcedMove.Outcome,
+				parsed.JSONPayloadSet || parsed.JSONFileSet,
+				fmt.Sprintf("%s task move %s %s", config.Command, resp.ForcedMove.TaskID, resp.ForcedMove.TargetNodeID),
+			)
+		}
+		completion := *resp.AgentCompletion
 		if parsed.JSONPayloadSet || parsed.JSONFileSet {
 			return writeCommandJSON(stdout, stderr, taskCompleteJSONResponse{
-				TaskID:            resp.TaskID,
-				CurrentNodes:      resp.CurrentNodes,
-				PendingApprovalID: resp.PendingApprovalID,
+				TaskID:            completion.TaskID,
+				CurrentNodes:      completion.CurrentNodes,
+				PendingApprovalID: completion.PendingApprovalID,
 			})
 		}
-		writeTaskCompleteResult(stdout, resp)
+		writeTaskCompleteResult(stdout, completion)
 		return 0
 	})
 }
@@ -122,6 +144,17 @@ func (a taskCompleteArgs) request(
 	if agentContext {
 		req.ActorKind = serverapi.WorkflowTaskCompleteActorAgent
 		req.AgentSessionID = strings.TrimSpace(agentSessionID)
+		rawRunID, rawStepID := sessionenv.LookupRunStepID(os.LookupEnv)
+		runID, err := runtimeids.ParseRunID(rawRunID)
+		if err != nil {
+			return serverapi.WorkflowTaskCompleteRequest{}, fmt.Errorf("agent completion run provenance: %w", err)
+		}
+		stepID, err := runtimeids.ParseStepID(rawStepID)
+		if err != nil {
+			return serverapi.WorkflowTaskCompleteRequest{}, fmt.Errorf("agent completion step provenance: %w", err)
+		}
+		req.RunID = &runID
+		req.StepID = &stepID
 	} else {
 		req.ActorKind = serverapi.WorkflowTaskCompleteActorUser
 		req.Force = a.Force
@@ -360,6 +393,8 @@ func prepareTaskCompleteJSONContract() (taskCompleteJSONContract, error) {
 				"task_id",
 				"actor_kind",
 				"agent_session_id",
+				"run_id",
+				"step_id",
 				"force",
 			} {
 				schema.Properties.Set(field, invjsonschema.FalseSchema)
@@ -480,7 +515,7 @@ func writeTaskCompleteUsage(stderr io.Writer) {
 	fs.Usage()
 }
 
-func writeTaskCompleteResult(stdout io.Writer, resp serverapi.WorkflowTaskCompleteResponse) {
+func writeTaskCompleteResult(stdout io.Writer, resp serverapi.WorkflowTaskAgentCompletion) {
 	if resp.PendingApprovalID != nil {
 		fmt.Fprintf(stdout, "Completion is awaiting approval %s.\n", *resp.PendingApprovalID)
 		return

@@ -1,6 +1,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronRight, Circle, CircleDot } from "lucide-react";
-import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useState,
+  type HTMLAttributes,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type WorkflowExecutionTargetSelection } from "@/api";
@@ -37,12 +45,12 @@ import {
 } from "@/ui";
 import {
   projectTaskGroups,
+  projectTaskGroupPageSize,
+  projectTaskGroupPrefetchPages,
   projectTaskListWorkflowCardinality,
   useProjectTaskListData,
   useProjectTaskListEvents,
   type ProjectTaskGroup,
-  type ProjectTaskGroupDisclosure,
-  type ProjectTaskListData,
 } from "./projectTaskListData";
 import {
   projectTaskColumnStyle,
@@ -53,7 +61,19 @@ import {
 } from "./projectTaskColumnLayout";
 import { ProjectTaskColumnMeasurements } from "./ProjectTaskColumnMeasurements";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
+import {
+  emptyProjectTaskSortLayoutState,
+  previousSortProjectionChanged,
+  projectTaskSortLayoutReducer,
+  projectTaskSortProjection,
+} from "./projectTaskSortLayout";
+import {
+  projectTaskScrollRestorationReady,
+  projectTaskWorkflowInitialState,
+  projectTaskWorkflowStrip,
+} from "./projectTaskSurfaceState";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
+import { projectTaskSortsEqual, type ProjectTaskSort } from "./projectTaskSorting";
 import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 import {
@@ -81,13 +101,35 @@ export function ProjectTasksSurface({
   const { open } = useOwnedSidebarRoots();
   const { activeDestination } = useSidebarShell();
   const [disclosure, setDisclosure] = useState(viewMemory.read().disclosure);
+  const [sort, setSort] = useState(viewMemory.read().sort);
+  const [sortLayout, dispatchSortLayout] = useReducer(
+    projectTaskSortLayoutReducer,
+    emptyProjectTaskSortLayoutState,
+  );
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
-  const [paginationEnabled, setPaginationEnabled] = useState(false);
   const workflowsQuery = useProjectTaskWorkflowPages(projectID);
   const data = useProjectTaskListData({
     expanded: disclosure,
     projectID,
+    sort,
   });
+  const onSortChange = useCallback(
+    (nextSort: ProjectTaskSort) => {
+      if (projectTaskSortsEqual(sort, nextSort)) {
+        return;
+      }
+      for (const group of projectTaskGroups) {
+        queryClient.removeQueries({
+          exact: true,
+          queryKey: queryKeys.projectTaskGroup(projectID, group, nextSort),
+        });
+      }
+      viewMemory.setSort(nextSort);
+      setSort(nextSort);
+      dispatchSortLayout({ kind: "sort-selected" });
+    },
+    [projectID, queryClient, sort, viewMemory],
+  );
   const refreshTaskSurfaces = useCallback(async (): Promise<void> => {
     await Promise.all([
       invalidateProjectBoardQueries(queryClient, projectID),
@@ -188,14 +230,12 @@ export function ProjectTasksSurface({
     setDisclosure(next);
   };
   const taskDetailID = activeDestination?.kind === "taskDetail" ? activeDestination.taskID : null;
-  const activeTaskDetailMode =
-    activeDestination?.kind === "taskDetail" ? (activeDestination.mode ?? "shift") : null;
   const openTaskDetail = useCallback(
     (taskID: string) => {
       setLabelEditorTaskID(null);
-      open({ kind: "taskDetail", mode: activeTaskDetailMode ?? sidebarMode, taskID });
+      open({ kind: "taskDetail", mode: sidebarMode, taskID });
     },
-    [activeTaskDetailMode, open, sidebarMode],
+    [open, sidebarMode],
   );
   const openTaskDependencies = useCallback(
     (taskID: string) => {
@@ -203,11 +243,11 @@ export function ProjectTasksSurface({
       open({
         kind: "taskDetail",
         initialFocus: { kind: "dependencies" },
-        mode: activeTaskDetailMode ?? sidebarMode,
+        mode: sidebarMode,
         taskID,
       });
     },
-    [activeTaskDetailMode, open, sidebarMode],
+    [open, sidebarMode],
   );
   const presentation = projectTasksPresentation({
     data,
@@ -229,13 +269,35 @@ export function ProjectTasksSurface({
     taskDetailID,
     t,
   });
+  const sortProjection = useMemo(
+    () =>
+      projectTaskSortProjection(
+        { error: data.active.isError, isSortReplacement: data.active.isSortReplacement },
+        { error: data.backlog.isError, isSortReplacement: data.backlog.isSortReplacement },
+        { error: data.done.isError, isSortReplacement: data.done.isSortReplacement },
+      ),
+    [
+      data.active.isError,
+      data.active.isSortReplacement,
+      data.backlog.isError,
+      data.backlog.isSortReplacement,
+      data.done.isError,
+      data.done.isSortReplacement,
+    ],
+  );
+  const sortProjectionChanged =
+    sortLayout.transition && previousSortProjectionChanged(sortLayout.previousProjection, sortProjection);
+  const layoutChangeScrollBehavior =
+    sortLayout.pulse || sortProjectionChanged ? "natural" : "preserve-leading-item";
+  useLayoutEffect(() => {
+    dispatchSortLayout({ kind: "projection-committed", projection: sortProjection });
+  }, [sortProjection]);
   const scrollRestorationReady = projectTaskScrollRestorationReady(data, disclosure);
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
       element.scrollLeft = 0;
       element.onscroll = () => {
-        setPaginationEnabled(true);
         const current = viewMemory.read();
         viewMemory.setScrollOffsets(scrollRestorationReady ? element.scrollTop : current.verticalOffsetPx, 0);
       };
@@ -264,6 +326,7 @@ export function ProjectTasksSurface({
         countsBoundary={countsBoundary}
         columnLayout={columnLayout}
         entries={presentation.entries}
+        layoutChangeScrollBehavior={layoutChangeScrollBehavior}
         onLinkWorkflow={openLinkWorkflow}
         onNewTask={openNewTask}
         onScrollElementChange={onScrollElementChange}
@@ -292,12 +355,13 @@ export function ProjectTasksSurface({
             onLoadPrevious={() => {
               void workflowsQuery.fetchPreviousPage();
             }}
+            onSortChange={onSortChange}
             previousBoundary={previousWorkflowsBoundary}
             projectID={projectID}
+            sort={sort}
             workflows={workflows}
           />,
         )}
-        paginationEnabled={paginationEnabled}
       />
       <TaskInitiatingActionDialogs
         continuation={initiatingAction}
@@ -307,42 +371,11 @@ export function ProjectTasksSurface({
   );
 }
 
-function projectTaskWorkflowStrip(
-  boundary: VirtualizedInfiniteListBoundaryState | undefined,
-  workflowCount: number,
-  strip: ReactNode,
-): ReactNode {
-  return boundary === undefined && workflowCount === 0 ? null : strip;
-}
-
-function projectTaskWorkflowInitialState(
-  established: boolean,
-  failed: boolean,
-  loading: boolean,
-): Readonly<{ failed: boolean; loading: boolean }> {
-  return {
-    failed: !established && failed,
-    loading: !established && loading,
-  };
-}
-
-function projectTaskScrollRestorationReady(
-  data: ProjectTaskListData,
-  disclosure: ProjectTaskGroupDisclosure,
-): boolean {
-  const counts = data.counts.data?.counts;
-  return (
-    counts !== undefined &&
-    projectTaskGroups.every(
-      (group) => !disclosure[group] || counts[group] === 0 || data[group].pages.length > 0,
-    )
-  );
-}
-
 function ProjectTasksContent({
   columnLayout,
   countsBoundary,
   entries,
+  layoutChangeScrollBehavior,
   onLinkWorkflow,
   onNewTask,
   onScrollElementChange,
@@ -355,11 +388,11 @@ function ProjectTasksContent({
   workflowsBoundary,
   workflowStrip,
   newTaskAvailable,
-  paginationEnabled,
 }: Readonly<{
   columnLayout: ProjectTaskColumnLayout;
   countsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   entries: readonly ProjectTaskListEntry[];
+  layoutChangeScrollBehavior: "natural" | "preserve-leading-item";
   onLinkWorkflow: () => void;
   onNewTask: () => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
@@ -372,7 +405,6 @@ function ProjectTasksContent({
   workflowsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   workflowStrip: ReactNode;
   newTaskAvailable: boolean;
-  paginationEnabled: boolean;
 }>) {
   const { t } = useTranslation();
   const listEntries = entries;
@@ -421,6 +453,7 @@ function ProjectTasksContent({
             isFetchingNextPage={false}
             itemRole="row"
             items={listEntries}
+            layoutChangeScrollBehavior={layoutChangeScrollBehavior}
             loadingLabel={t("app.loadingMore")}
             onLoadMore={() => undefined}
             onScrollElementChange={onScrollElementChange}
@@ -433,7 +466,7 @@ function ProjectTasksContent({
             role="grid"
             rowSpacing="tight"
             testId="project-task-list-grid"
-            visibilityTriggers={projectTaskVisibilityTriggers(listEntries, paginationEnabled)}
+            visibilityTriggers={projectTaskVisibilityTriggers(listEntries)}
           />
         </div>
       )}
@@ -555,24 +588,32 @@ function ProjectTaskGroupIcon({ group }: Readonly<{ group: ProjectTaskGroup }>) 
 
 function projectTaskVisibilityTriggers(
   entries: readonly ProjectTaskListEntry[],
-  enabled: boolean,
 ): readonly VirtualizedItemVisibilityTrigger[] {
-  if (!enabled) {
-    return [];
-  }
   return entries.flatMap((entry) =>
     entry.kind === "boundary" && entry.direction !== "initial"
       ? [
           {
             enabled: entry.hasMore ?? false,
             fetching: entry.isFetching ?? false,
-            itemKey: entry.key,
+            itemKey: entry.direction === "next" ? projectTaskNextPageTriggerKey(entries, entry) : entry.key,
             onVisible: entry.onLoadMore ?? (() => undefined),
             requestGeneration: `${entry.groupKey}:${entry.direction}:${entry.requestGeneration}`,
           },
         ]
       : [],
   );
+}
+
+function projectTaskNextPageTriggerKey(
+  entries: readonly ProjectTaskListEntry[],
+  boundary: Extract<ProjectTaskListEntry, { kind: "boundary" }>,
+): string {
+  const groupTasks = entries.filter(
+    (entry): entry is Extract<ProjectTaskListEntry, { kind: "task" }> =>
+      entry.kind === "task" && entry.groupKey === boundary.groupKey,
+  );
+  const prefetchDistance = projectTaskGroupPageSize * projectTaskGroupPrefetchPages;
+  return groupTasks[Math.max(0, groupTasks.length - prefetchDistance)]?.key ?? boundary.key;
 }
 
 function TasksShell({

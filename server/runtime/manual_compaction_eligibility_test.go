@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -29,9 +27,13 @@ func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 	})
 	engine.compactionRuntimeState().SetManualCompactionEligible(false)
 
-	err := engine.CompactContext(context.Background(), "")
-	if !errors.Is(err, ErrManualCompactionTooSoon) {
-		t.Fatalf("fresh-session compaction error = %v, want too-soon", err)
+	var events []Event
+	engine.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	scheduleManualCompactionAndWait(t, engine)
+	if !hasEventKind(events, EventCompactionFailed) {
+		t.Fatalf("fresh-session compaction events = %+v, want failed event", events)
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -55,9 +57,7 @@ func TestManualCompactionAcceptsAfterAgentStepBoundary(t *testing.T) {
 	})
 	completeManualEligibilityAgentStep(t, engine)
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compaction after editing tool call: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 	client.mu.Lock()
 	if len(client.calls) != 1 {
 		client.mu.Unlock()
@@ -67,5 +67,48 @@ func TestManualCompactionAcceptsAfterAgentStepBoundary(t *testing.T) {
 
 	if engine.compactionRuntimeState().ManualCompactionEligible() {
 		t.Fatal("successful compaction retained manual eligibility")
+	}
+}
+
+func TestCompactionCarryoverSelectsNewestOrdinaryUserPrompt(t *testing.T) {
+	tests := []struct {
+		name  string
+		items []llm.ResponseItem
+		want  *string
+	}{
+		{
+			name: "typed user prompt is skipped",
+			items: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("ordinary prompt")},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionPreservedUserMessage), Content: textutil.Value("typed context")},
+			},
+			want: textutil.Value("ordinary prompt"),
+		},
+		{
+			name: "typed prompts only",
+			items: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("typed summary")},
+			},
+		},
+		{
+			name: "blank ordinary prompt is skipped",
+			items: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("  \n")},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("ordinary prompt")},
+			},
+			want: textutil.Value("ordinary prompt"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := lastVisibleUserMessageSinceLatestCompaction(test.items)
+			if (got != nil) != (test.want != nil) {
+				t.Fatalf("carryover prompt presence = %t, want %t", got != nil, test.want != nil)
+			}
+			if got != nil && *got != *test.want {
+				t.Fatalf("carryover prompt = %q, want %q", *got, *test.want)
+			}
+		})
 	}
 }

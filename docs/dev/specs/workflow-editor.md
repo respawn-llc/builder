@@ -145,7 +145,7 @@
 
 - A linked Workflow can be edited while its Project has Tasks.
 - A graph-changing save is blocked when it would remove a Node or Transition Branch required by a Task's Current Nodes, live execution, unresolved parallel work, or pending approval.
-- A Task is active for these rules when it has a non-terminal Current Node, pending approval, unresolved parallel branch, Exact Execution Scope, or runtime gate.
+- A Task is active for these rules when it has a non-terminal Current Node, pending Approval, unresolved parallel branch, or Exact Execution Scope.
 - Start deletion is unavailable. Start is hidden from add and kind-change controls; an existing Start may be renamed where safe, but its kind remains fixed. A blocked graph delete reports feedback.
 - A Start Node's outgoing transitions may be edited in a Draft, but execution validation requires exactly one Start transition with one branch to an executable Node.
 - Start cannot be the source of a Fan-Out Transition into a Node Group. Parallel work begins from a later agent Node and rejoins through the group's Join.

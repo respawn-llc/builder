@@ -67,6 +67,19 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorTransitionParameter
 		currentNodes[0].PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
 		t.Fatalf("current nodes = %+v, want audit-owned materialized values", currentNodes)
 	}
+	doneResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       audit.Reference,
+		TransitionID: "done",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode audit: %v", err)
+	}
+	if !doneResult.CommitReceipt.Committed ||
+		len(doneResult.AutomaticIntents) != 0 ||
+		doneResult.SourceSessionID != nil ||
+		doneResult.SessionReuseClassification != workflow.SessionReuseNone {
+		t.Fatalf("terminal completion outcome = %+v, want complete no-successor facts", doneResult)
+	}
 }
 
 func TestCompleteCurrentNodeMaterializesCurrentAndPriorTransitionCommentary(t *testing.T) {

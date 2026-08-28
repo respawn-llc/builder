@@ -4,28 +4,29 @@ import (
 	"errors"
 	"strings"
 
-	"core/shared/serverapi"
+	"core/shared/protoapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 // ErrBranchTargetRequired guards worktree-create target validation. Callers
 // and tests match it with errors.Is rather than comparing rendered text.
 var ErrBranchTargetRequired = errors.New("Branch or ref is required")
 
-func Request(branchTarget string, baseRef string, kind serverapi.WorktreeCreateTargetResolutionKind) (serverapi.WorktreeCreateRequest, error) {
+func Request(branchTarget string, baseRef string, kind worktreepb.CreateTargetResolutionKind) (*worktreepb.CreateRequest, error) {
 	if strings.TrimSpace(branchTarget) == "" {
-		return serverapi.WorktreeCreateRequest{}, ErrBranchTargetRequired
+		return nil, ErrBranchTargetRequired
 	}
 	target := strings.TrimSpace(branchTarget)
-	if kind == serverapi.WorktreeCreateTargetResolutionKindExistingBranch || kind == serverapi.WorktreeCreateTargetResolutionKindDetachedRef {
-		return serverapi.WorktreeCreateRequest{BaseRef: target, CreateBranch: false}, nil
+	spec := &worktreepb.CreateSpec{CreateBranch: kind == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}
+	if spec.CreateBranch {
+		trimmedBaseRef := strings.TrimSpace(baseRef)
+		spec.BaseRef = &trimmedBaseRef
+		spec.BranchName = &target
+	} else {
+		spec.BaseRef = &target
 	}
-	trimmedBaseRef := strings.TrimSpace(baseRef)
-	if err := serverapi.ValidateWorktreeCreateSpec(trimmedBaseRef, true, target); err != nil {
-		return serverapi.WorktreeCreateRequest{}, serverapi.NewWorktreeCreateError(
-			serverapi.ProjectWorktreeCreateValidationOwner(err, true),
-			err.Error(),
-			err,
-		)
+	if err := protoapi.Validate(spec); err != nil {
+		return nil, protoapi.ClassifyWorktreeCreateValidation(err)
 	}
-	return serverapi.WorktreeCreateRequest{BaseRef: trimmedBaseRef, CreateBranch: true, BranchName: target}, nil
+	return &worktreepb.CreateRequest{Spec: spec}, nil
 }

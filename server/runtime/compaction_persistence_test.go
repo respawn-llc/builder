@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
@@ -11,7 +13,7 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
@@ -22,8 +24,12 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 		}
 	})
 
+	stepID := runtimeTestStepID("compaction")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	err := newCompactionPersistence(engine).emitStatus(
-		"compaction",
+		stepID,
+		nil,
 		EventCompactionFailed,
 		compactionModeAuto,
 		"remote",
@@ -52,12 +58,16 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus(t *testing.T) {
 	t.Parallel()
 	var events []Event
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
+	stepID := runtimeTestStepID("compact")
+	requestID := runtimeids.NewCompactionRequestID()
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
-		"compact",
+		stepID,
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{
@@ -68,7 +78,7 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 	if err != nil || !receipt.Committed {
 		t.Fatalf("replace history: receipt=%+v error=%v", receipt, err)
 	}
-	if err := newCompactionPersistence(engine).emitStatus("compact", EventCompactionCompleted, compactionModeManual, "local", "openai", nil, 1, ""); err != nil {
+	if err := newCompactionPersistence(engine).emitStatus(stepID, &requestID, EventCompactionCompleted, compactionModeManual, "local", "openai", nil, 1, ""); err != nil {
 		t.Fatalf("emit completion status: %v", err)
 	}
 
@@ -82,6 +92,10 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 			}
 			localIndexes = append(localIndexes, index)
 		case EventCompactionCompleted:
+			if event.Compaction == nil || event.Compaction.RequestID == nil ||
+				*event.Compaction.RequestID != requestID {
+				t.Fatalf("completion request identity = %+v, want %s", event.Compaction, requestID.String())
+			}
 			statusIndex = index
 		}
 	}
@@ -97,11 +111,14 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T) {
 	t.Parallel()
 	var events []Event
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
-	if err := newCompactionPersistence(engine).emitStatus("compact", EventCompactionCompleted, compactionModeAuto, "local", "openai", nil, 1, ""); err != nil {
+	stepID := runtimeTestStepID("compact")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
+	if err := newCompactionPersistence(engine).emitStatus(stepID, nil, EventCompactionCompleted, compactionModeAuto, "local", "openai", nil, 1, ""); err != nil {
 		t.Fatalf("emit auto completion status: %v", err)
 	}
 	if len(events) != 1 || events[0].Kind != EventCompactionCompleted || events[0].CommittedEntryStartSet {

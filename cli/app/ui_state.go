@@ -11,6 +11,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -69,12 +70,14 @@ type uiInputFeatureState struct {
 	// commands, and other client-only actions; server queues only runtime
 	// injected user work.
 	queued                      []queuedInputItem
-	postTurnCompactionsInFlight uint
+	pendingCompactionRequestIDs map[runtimeids.CompactionRequestID]struct{}
+	pendingWork                 runtimeinput.PendingWork
 	submitToken                 uint64
 	activeSubmit                activeSubmitState
 
 	injectedQueue               []injectedRuntimeQueueItem
 	injectedQueueToken          uint64
+	unownedQueuedTerminalStates map[string]clientui.TranscriptQueuedMessageState
 	pendingInputSubmissionOrder uint64
 	interruptLifecycle          uiInterruptLifecycle
 	currentRunID                string
@@ -117,6 +120,9 @@ type uiInputFeatureState struct {
 
 type uiPresentationFeatureState struct {
 	theme                       string
+	tuiNativeProgressBar        bool
+	terminalOutput              *uiTerminalOutput
+	nativeProgress              uiNativeProgressState
 	markdownLinks               transcriptrender.MarkdownLinkPresentation
 	activeSurface               uiSurface
 	altScreenActive             bool
@@ -156,6 +162,8 @@ type uiSessionTransitionFeatureState struct {
 	nextSessionID                           string
 	nextForkRollbackTargetID                string
 	nextPreviousSessionID                   *runtimeids.SessionID
+	sessionExecutionTarget                  *clientui.SessionExecutionTarget
+	sessionRetargeted                       bool
 	sessionName                             string
 	sessionID                               string
 	forcedLocalExit                         bool

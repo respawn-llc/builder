@@ -194,8 +194,8 @@ func assertDetailTranscriptPageRejected(t *testing.T, page clientui.TranscriptPa
 		},
 	}})
 	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
-	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
-		t.Fatalf("detail action before malformed response = %v, want expand", action)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("detail action before malformed response = %v, want no action", action)
 	}
 	before := model.detailTranscript.page()
 
@@ -213,7 +213,7 @@ func assertDetailTranscriptPageRejected(t *testing.T, page clientui.TranscriptPa
 	if !detailTestRowsEqual(model.detailTranscript.page().Entries, before.Entries) {
 		t.Fatalf("invalid page mutated detail membership: %#v", model.detailTranscript.page().Entries)
 	}
-	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
 		t.Fatalf("invalid page mutated TUI detail selection action: %v", action)
 	}
 	if model.transientStatusKind != uiStatusNoticeError || model.transientStatusRequestID != nil {
@@ -300,7 +300,7 @@ func TestDetailTranscriptInvalidSessionIDDoesNotCreatePendingRequest(t *testing.
 	}
 }
 
-func TestDetailTranscriptLoadingNoticeKeepsExpansionActionIndependent(t *testing.T) {
+func TestDetailTranscriptLoadingNoticeKeepsSelectionActionIndependent(t *testing.T) {
 	sessionViews := newControlledTranscriptPageClient()
 	model := newDetailTranscriptRequestTestModel(sessionViews)
 	model.view = tui.NewModel()
@@ -312,8 +312,8 @@ func TestDetailTranscriptLoadingNoticeKeepsExpansionActionIndependent(t *testing
 		},
 	}})
 	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
-	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
-		t.Fatalf("detail action before loading = %v, want expand", action)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("detail action before loading = %v, want no action", action)
 	}
 
 	model, cmd := updateDetailTranscriptRequest(t, model, tui.DetailTranscriptPageOlder)
@@ -327,8 +327,8 @@ func TestDetailTranscriptLoadingNoticeKeepsExpansionActionIndependent(t *testing
 	if version := model.transientStatusRequestID.Version(); version != 4 {
 		t.Fatalf("loading request UUID version = %d, want 4", version)
 	}
-	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
-		t.Fatalf("detail action while loading = %v, want independent expand action", action)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("detail action while loading = %v, want independent no action", action)
 	}
 }
 
@@ -409,6 +409,9 @@ func TestDetailTranscriptVisibleSessionReplacementCancelsOldRequestAndHydratesNe
 	if newCmd == nil {
 		t.Fatal("visible session replacement did not hydrate the new target")
 	}
+	if model.pendingDetailTranscript == nil || !model.pendingDetailTranscript.detailMode {
+		t.Fatalf("visible session replacement request = %#v, want Detail Mode provenance", model.pendingDetailTranscript)
+	}
 
 	newDone := runDetailTranscriptCommand(newCmd)
 	newRequest := waitForDetailTranscriptRequest(t, sessionViews)
@@ -456,6 +459,9 @@ func TestDetailTranscriptHiddenSessionReplacementResetsAndHydratesNewTarget(t *t
 	}
 	if cmd == nil {
 		t.Fatal("hidden session replacement did not hydrate the new target")
+	}
+	if model.pendingDetailTranscript == nil || model.pendingDetailTranscript.detailMode {
+		t.Fatalf("hidden session replacement request = %#v, want non-Detail Mode provenance", model.pendingDetailTranscript)
 	}
 
 	done := runDetailTranscriptCommand(cmd)

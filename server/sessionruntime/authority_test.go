@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"core/internal/testharness/runtimewirefixture"
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runlog"
@@ -190,19 +191,14 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *te
 	})
 	taskID := workflow.TaskID("task-read-during-selection")
 	ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID("node-read-during-selection"), nil)
-	lease, err := authority.NewWorkflowExecutionLease(ref)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &lease,
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: ref,
 		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
 	})
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
 	t.Cleanup(func() {
-		lease.Cancel()
 		_ = handle.Stop(context.Background())
 	})
 	initial, err := authority.CurrentWorkflowTaskExecutionSnapshots()
@@ -268,19 +264,14 @@ func TestWorkflowManualMoveSelectionDoesNotRetainAuthorityOwnership(t *testing.T
 	})
 	taskID := workflow.TaskID("task-manual-move-selection")
 	ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID("node-manual-move-selection"), nil)
-	lease, err := authority.NewWorkflowExecutionLease(ref)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &lease,
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: ref,
 		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
 	})
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
 	t.Cleanup(func() {
-		lease.Cancel()
 		_ = handle.Stop(context.Background())
 	})
 
@@ -305,10 +296,14 @@ func TestWorkflowManualMoveSelectionDoesNotRetainAuthorityOwnership(t *testing.T
 
 	otherLeaseDone := make(chan error, 1)
 	go func() {
-		_, leaseErr := authority.NewWorkflowExecutionLease(
-			workflowExecutionRefForTest(t, workflow.TaskID("task-other"), workflow.NodeID("node-other"), nil),
-		)
-		otherLeaseDone <- leaseErr
+		detached, prepareErr := authority.PrepareDetachedScriptExecution(context.Background(), DetachedScriptExecutionRequest{
+			Workflow: workflowExecutionRefForTest(t, workflow.TaskID("task-other"), workflow.NodeID("node-other"), nil),
+			Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+		})
+		if prepareErr == nil {
+			detached.Cancel()
+		}
+		otherLeaseDone <- prepareErr
 	}()
 	select {
 	case err := <-otherLeaseDone:
@@ -423,7 +418,7 @@ func TestAuthorityCloseCancelsLifecycleStartWaitingForSessionAdmission(t *testin
 	}
 }
 
-func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
 	call := c.calls
@@ -519,115 +514,6 @@ func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
 	}
 }
 
-func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) {
-	truePath, err := exec.LookPath("true")
-	if err != nil {
-		t.Skipf("true executable unavailable: %v", err)
-	}
-	sleepPath, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skipf("sleep executable unavailable: %v", err)
-	}
-
-	predecessor := workflowExecutionRefForTest(t, workflow.TaskID(uuid.NewString()), workflow.NodeID(uuid.NewString()), nil)
-	successor := predecessor
-	type startResult struct {
-		handle ExecutionHandle
-		err    error
-	}
-	successorStarted := make(chan startResult, 1)
-	successorCancellationGrace := 50 * time.Millisecond
-	var predecessorScopeID runtimeids.ExecutionScopeID
-
-	var authority *Authority
-	authority = NewAuthority(AuthorityOptions{
-		ExecutionFinalized: ExecutionFinalizedFunc(func(finalized ExecutionScope) {
-			finalizedRef, ok := finalized.Workflow()
-			if !ok || !finalizedRef.CurrentNode.Equal(predecessor.CurrentNode) || finalized.ID() != predecessorScopeID {
-				return
-			}
-			handle, startErr := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-				Workflow: releasedWorkflowLeaseForTest(t, authority, successor),
-				Command: ScriptCommand{
-					Path:              sleepPath,
-					Args:              []string{"30"},
-					CancellationGrace: &successorCancellationGrace,
-				},
-			})
-			successorStarted <- startResult{handle: handle, err: startErr}
-		}),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	predecessorLease, err := authority.NewWorkflowExecutionLease(predecessor)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease predecessor: %v", err)
-	}
-	predecessorScopeID = predecessorLease.ScopeID()
-	predecessorLease.Release()
-
-	predecessorHandle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &predecessorLease,
-		Command:  ScriptCommand{Path: truePath},
-	})
-	if err != nil {
-		t.Fatalf("start predecessor: %v", err)
-	}
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelWait()
-	if _, err := predecessorHandle.Wait(waitCtx); err != nil {
-		t.Fatalf("wait predecessor: %v", err)
-	}
-
-	var successorResult startResult
-	select {
-	case successorResult = <-successorStarted:
-	case <-waitCtx.Done():
-		t.Fatal("successor was not admitted from predecessor finalization")
-	}
-	if successorResult.err != nil {
-		t.Fatalf("start successor: %v", successorResult.err)
-	}
-	if successorResult.handle == nil {
-		t.Fatal("successor handle is nil")
-	}
-
-	assertSuccessorCurrent := func(stage string) {
-		t.Helper()
-		current, ok := authority.ExecutionByWorkflow(successor)
-		if !ok {
-			t.Fatalf("%s: successor execution is not indexed", stage)
-		}
-		if current.Scope().ID() != successorResult.handle.Scope().ID() {
-			t.Fatalf(
-				"%s: indexed scope = %q, want successor scope %q",
-				stage,
-				current.Scope().ID(),
-				successorResult.handle.Scope().ID(),
-			)
-		}
-	}
-	assertSuccessorCurrent("after predecessor wait")
-
-	if err := predecessorHandle.Close(waitCtx); err != nil {
-		t.Fatalf("close predecessor: %v", err)
-	}
-	if err := predecessorHandle.Close(waitCtx); err != nil {
-		t.Fatalf("close predecessor again: %v", err)
-	}
-	assertSuccessorCurrent("after predecessor close")
-
-	if err := successorResult.handle.Stop(waitCtx); err != nil {
-		t.Fatalf("stop successor: %v", err)
-	}
-	if err := successorResult.handle.Close(waitCtx); err != nil {
-		t.Fatalf("close successor: %v", err)
-	}
-}
-
 func TestNewLazyWithIDUsesExactCanonicalSessionIdentity(t *testing.T) {
 	containerDir := t.TempDir()
 	sessionID := runtimeids.NewSessionID()
@@ -687,7 +573,7 @@ func TestNewLazyWithIDPreservesCategoryValidation(t *testing.T) {
 	}
 }
 
-func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *testing.T) {
+func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionEvenWithQueuedWork(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -701,8 +587,8 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *test
 		Resource:   CurrentAgentResource{},
 		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
 			if err := bridge.WithEngine(ctx, func(_ context.Context, engine *runtime.Engine) error {
-				engine.QueueUserMessage("queued during current execution")
-				return nil
+				_, queueErr := engine.QueueUserMessage(t.Context(), "queued during current execution")
+				return queueErr
 			}); err != nil {
 				return err
 			}
@@ -734,10 +620,10 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *test
 	if accessErr != nil {
 		t.Fatalf("ready ownerless runtime rejected callback before retirement: %v", accessErr)
 	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "execution finished")
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "current execution finished")
 }
 
-func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
+func TestCloseIfIdleFailsQueuedWorkWhenOwnerlessRuntimeRetires(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	var statusMu sync.Mutex
@@ -753,8 +639,8 @@ func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessage("queued before disconnect")
-		return nil
+		_, queueErr := engine.QueueUserMessage(t.Context(), "queued before disconnect")
+		return queueErr
 	}); err != nil {
 		t.Fatalf("queue user message: %v", err)
 	}
@@ -766,7 +652,7 @@ func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
 	if !release.Released || release.Active {
 		t.Fatalf("queued release = %+v, want immediate retirement", release)
 	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "queued release")
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "queued ownerless runtime retired")
 
 	statusMu.Lock()
 	defer statusMu.Unlock()
@@ -774,7 +660,7 @@ func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
 		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
 		statuses[1].Status != runtime.QueuedUserMessageFailed ||
 		statuses[1].FailureReason != runtime.QueuedUserMessageFailureClosing {
-		t.Fatalf("queued message statuses = %+v, want accepted then failed-closing", statuses)
+		t.Fatalf("queued message statuses = %+v, want accepted then failed on close", statuses)
 	}
 }
 
@@ -897,13 +783,17 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait ownerless execution: %v", err)
 	}
-	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item, queueErr := engine.QueueUserMessage("steer retained runtime")
+	if err := authority.WithRuntime(context.Background(), resource, func(ctx context.Context, engine *runtime.Engine) error {
+		item, queueErr := engine.QueueUserMessage(t.Context(), "steer retained runtime")
 		if queueErr != nil {
 			return queueErr
 		}
-		if !engine.DiscardQueuedUserMessage(item.ID) {
-			return errors.New("discard retained runtime steering")
+		itemID, parseErr := runtimeids.ParseQueueItemID(item.ID)
+		if parseErr != nil {
+			return parseErr
+		}
+		if _, removeErr := engine.RemovePendingWork(ctx, itemID); removeErr != nil {
+			return removeErr
 		}
 		return nil
 	}); err != nil {
@@ -914,281 +804,6 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 		t.Fatalf("release execution resource retention: %v", err)
 	}
 	assertRuntimeUnavailable(t, authority, resource, "execution retention released")
-}
-
-func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	releaseModel := make(chan struct{})
-	close(releaseModel)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: releaseModel,
-	}
-	var statusMu sync.Mutex
-	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
-		if event.QueuedUserMessageStatus == nil {
-			return
-		}
-		statusMu.Lock()
-		statuses = append(statuses, *event.QueuedUserMessageStatus)
-		statusMu.Unlock()
-	})
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	executionStarted := make(chan struct{})
-	finishExecution := make(chan struct{})
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Resource:   OpenAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			close(executionStarted)
-			<-finishExecution
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("start ownerless execution: %v", err)
-	}
-	resource, hasResource := handle.Scope().Resource()
-	if !hasResource {
-		t.Fatal("ownerless agent execution has no resource")
-	}
-	<-executionStarted
-	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item, queueErr := engine.QueueUserMessage("accepted before execution exit")
-		if queueErr != nil {
-			return queueErr
-		}
-		if item.ID == "" {
-			return errors.New("queued user message has no id")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("queue accepted user work: %v", err)
-	}
-
-	close(finishExecution)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait execution retirement: %v", err)
-	}
-	if calls := client.callCount(); calls != 1 {
-		t.Fatalf("model calls = %d, want accepted queue drained before retirement", calls)
-	}
-	assertRuntimeUnavailable(t, authority, resource, "accepted queue drained")
-
-	statusMu.Lock()
-	defer statusMu.Unlock()
-	if len(statuses) != 2 ||
-		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
-		statuses[1].Status != runtime.QueuedUserMessageSubmitted {
-		t.Fatalf("queued message statuses = %+v, want accepted then submitted", statuses)
-	}
-}
-
-func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &blockingLLMClient{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	authority := fixture.authority
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("queued before disconnect", "queued-request")
-		return nil
-	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
-	}
-	select {
-	case <-client.entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
-	}
-
-	type releaseResult struct {
-		result RuntimeReleaseResult
-		err    error
-	}
-	released := make(chan releaseResult, 1)
-	go func() {
-		result, err := attachment.Release(context.Background(), RuntimeReleaseCloseIfIdle)
-		released <- releaseResult{result: result, err: err}
-	}()
-	select {
-	case outcome := <-released:
-		if outcome.err != nil {
-			t.Fatalf("release auto-draining runtime: %v", outcome.err)
-		}
-		if !outcome.result.Active || outcome.result.Released {
-			t.Fatalf("auto-draining release = %+v, want active pending retirement", outcome.result)
-		}
-	case <-time.After(time.Second):
-		close(client.release)
-		<-released
-		t.Fatal("close-if-idle blocked on active auto-drain instead of recording retirement")
-	}
-
-	close(client.release)
-	waitRuntimeUnavailable(t, authority, attachment.Resource(), "auto-drain finished")
-}
-
-func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-	var statusMu sync.Mutex
-	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
-		if event.QueuedUserMessageStatus == nil {
-			return
-		}
-		statusMu.Lock()
-		statuses = append(statuses, *event.QueuedUserMessageStatus)
-		statusMu.Unlock()
-	})
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
-			return bridge.WithEngine(ctx, func(_ context.Context, engine *runtime.Engine) error {
-				_, submitErr := engine.SubmitUserMessage(ctx, "active turn")
-				return submitErr
-			})
-		},
-	})
-	if err != nil {
-		t.Fatalf("start current agent execution: %v", err)
-	}
-	select {
-	case <-client.firstStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("active model request did not start")
-	}
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("queued after active turn", "queued-request")
-		return nil
-	}); err != nil {
-		t.Fatalf("queue follow-up user message: %v", err)
-	}
-
-	release, err := attachment.Release(context.Background(), RuntimeReleaseCloseIfIdle)
-	if err != nil {
-		t.Fatalf("release active runtime: %v", err)
-	}
-	if !release.Active || release.Released {
-		t.Fatalf("active release = %+v, want active pending retirement", release)
-	}
-	close(client.releaseFirst)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait current agent execution: %v", err)
-	}
-	waitRuntimeUnavailable(t, authority, attachment.Resource(), "queued auto-drain completion")
-	if calls := client.callCount(); calls != 2 {
-		t.Fatalf("model calls = %d, want accepted queued follow-up drained before retirement", calls)
-	}
-
-	statusMu.Lock()
-	defer statusMu.Unlock()
-	if len(statuses) != 2 ||
-		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
-		statuses[1].Status != runtime.QueuedUserMessageSubmitted {
-		t.Fatalf("queued message statuses = %+v, want accepted then submitted", statuses)
-	}
-}
-
-func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	authority := fixture.authority
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("auto-drain before forced close", "queued-request")
-		return nil
-	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
-	}
-	select {
-	case <-client.firstStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
-	}
-
-	type releaseResult struct {
-		result RuntimeReleaseResult
-		err    error
-	}
-	released := make(chan releaseResult, 1)
-	go func() {
-		result, err := attachment.Release(context.Background(), RuntimeReleaseClose)
-		released <- releaseResult{result: result, err: err}
-	}()
-	select {
-	case outcome := <-released:
-		if outcome.err != nil {
-			t.Fatalf("force-close active auto-drain: %v", outcome.err)
-		}
-		if !outcome.result.Released || outcome.result.Active {
-			t.Fatalf("forced release = %+v, want closed runtime", outcome.result)
-		}
-	case <-time.After(time.Second):
-		close(client.releaseFirst)
-		<-released
-		t.Fatal("forced close blocked instead of interrupting active auto-drain")
-	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "forced auto-drain close")
-}
-
-func TestAuthorityCloseInterruptsActiveAutoDrain(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	authority := fixture.authority
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("auto-drain before authority close", "queued-request")
-		return nil
-	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
-	}
-	select {
-	case <-client.firstStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
-	}
-
-	closed := make(chan error, 1)
-	go func() {
-		closed <- authority.Close(context.Background())
-	}()
-	select {
-	case err := <-closed:
-		if err != nil {
-			t.Fatalf("close authority with active auto-drain: %v", err)
-		}
-	case <-time.After(time.Second):
-		close(client.releaseFirst)
-		<-closed
-		t.Fatal("authority close blocked instead of interrupting active auto-drain")
-	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "authority auto-drain close")
 }
 
 func TestDetachKeepsOwnerlessRuntimeAvailable(t *testing.T) {
@@ -1299,10 +914,10 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	})
 
 	workflowRef := workflowExecutionRefForTest(t, workflow.TaskID(uuid.NewString()), workflow.NodeID(uuid.NewString()), nil)
-	agent, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+	agent, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Workflow:   workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
 			<-ctx.Done()
@@ -1328,8 +943,8 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	if err != nil {
 		t.Skipf("true executable unavailable: %v", err)
 	}
-	script, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowRef),
+	script, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: workflowRef,
 		Command:  ScriptCommand{Path: truePath},
 	})
 	if err == nil {
@@ -1341,6 +956,145 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 
 	if err := agent.Stop(context.Background()); err != nil {
 		t.Fatalf("stop agent execution: %v", err)
+	}
+}
+
+func TestDetachedScriptAdmissionRunsAfterValidationAndBeforePublication(t *testing.T) {
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("true executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+	ref := workflowExecutionRefForTest(t, "task-publication-order", "node-publication-order", nil)
+	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), DetachedScriptExecutionRequest{
+		Workflow: ref,
+		Command:  ScriptCommand{Path: truePath},
+	})
+	if err != nil {
+		t.Fatalf("prepare detached Script: %v", err)
+	}
+	admitted := false
+	handle, launch, err := detached.Publish(context.Background(), func() error {
+		if authority.workflowExecutionLocked(ref, detached.workflowKey) != nil {
+			return errors.New("Script became live before durable admission")
+		}
+		admitted = true
+		return nil
+	}, nil)
+	if err != nil || !admitted {
+		t.Fatalf("publish detached Script: admitted=%t err=%v", admitted, err)
+	}
+	snapshots, err := authority.CurrentScopedTaskExecutionSnapshots(
+		ref.ProjectID,
+		ref.WorkflowID,
+		[]workflow.TaskID{ref.CurrentNode.TaskID},
+	)
+	snapshot := snapshots[ref.CurrentNode.TaskID]
+	if err != nil || len(snapshot.Executions) != 1 || snapshot.Executions[0].Script == nil {
+		t.Fatalf("Script publication after admission = %+v, %v", snapshot, err)
+	}
+	launch()
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait Script: %v", err)
+	}
+}
+
+func TestDetachedScriptAdmissionFailurePublishesNoExactState(t *testing.T) {
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("true executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+	ref := workflowExecutionRefForTest(t, "task-publication-failure", "node-publication-failure", nil)
+	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), DetachedScriptExecutionRequest{
+		Workflow: ref,
+		Command:  ScriptCommand{Path: truePath},
+	})
+	if err != nil {
+		t.Fatalf("prepare detached Script: %v", err)
+	}
+	admissionErr := errors.New("durable admission rejected")
+	if _, _, err := detached.Publish(context.Background(), func() error { return admissionErr }, nil); !errors.Is(err, admissionErr) {
+		t.Fatalf("publish error = %v, want %v", err, admissionErr)
+	}
+	snapshots, err := authority.CurrentScopedTaskExecutionSnapshots(
+		ref.ProjectID,
+		ref.WorkflowID,
+		[]workflow.TaskID{ref.CurrentNode.TaskID},
+	)
+	snapshot := snapshots[ref.CurrentNode.TaskID]
+	if err != nil || len(snapshot.Executions) != 0 {
+		t.Fatalf("failed admission published exact state = %+v, %v", snapshot, err)
+	}
+}
+
+type detachedPublicationResult struct {
+	handle ExecutionHandle
+	launch func()
+	err    error
+}
+
+func publishAcrossCancellationSelection(
+	t *testing.T,
+	authority *Authority,
+	entered func() bool,
+	publish func(context.Context) (ExecutionHandle, func(), error),
+) detachedPublicationResult {
+	t.Helper()
+	authority.mu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	published := make(chan detachedPublicationResult, 1)
+	go func() {
+		handle, launch, err := publish(ctx)
+		published <- detachedPublicationResult{handle: handle, launch: launch, err: err}
+	}()
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, entered,
+		"detached publication did not enter its owner window")
+	cancel()
+	authority.mu.Unlock()
+	return <-published
+}
+
+func TestDetachedScriptPublicationDoesNotChangeDispositionAfterOwnerEntry(t *testing.T) {
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("true executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), DetachedScriptExecutionRequest{
+		Workflow: workflowExecutionRefForTest(t, "task-publication-cancel", "node-publication-cancel", nil),
+		Command:  ScriptCommand{Path: truePath},
+	})
+	if err != nil {
+		t.Fatalf("prepare detached Script: %v", err)
+	}
+
+	admitted := make(chan struct{})
+	result := publishAcrossCancellationSelection(t, authority, func() bool {
+		detached.mu.Lock()
+		defer detached.mu.Unlock()
+		return detached.settled
+	}, func(ctx context.Context) (ExecutionHandle, func(), error) {
+		return detached.Publish(ctx, func() error {
+			close(admitted)
+			return nil
+		}, nil)
+	})
+	if result.err != nil {
+		t.Fatalf("publication changed disposition after owner entry: %v", result.err)
+	}
+	select {
+	case <-admitted:
+	default:
+		t.Fatal("publication skipped durable admission after owner entry")
+	}
+	result.launch()
+	if _, err := result.handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait Script: %v", err)
 	}
 }
 
@@ -1359,8 +1113,8 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 	cancellationGrace := 50 * time.Millisecond
 	handles := make([]ExecutionHandle, 0, 2)
 	for _, nodeID := range []workflow.NodeID{"node-a", "node-b"} {
-		handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-			Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, nodeID, nil)),
+		handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+			Workflow: workflowExecutionRefForTest(t, taskID, nodeID, nil),
 			Command: ScriptCommand{
 				Path:              sleepPath,
 				Args:              []string{"30"},
@@ -1412,8 +1166,8 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		t.Helper()
 		ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID(uuid.NewString()), nil)
 		ref.ProjectID, ref.WorkflowID = projectID, workflowID
-		handle, startErr := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-			Workflow: releasedWorkflowLeaseForTest(t, authority, ref),
+		handle, startErr := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+			Workflow: ref,
 			Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}, CancellationGrace: &grace},
 		})
 		if startErr != nil {
@@ -1447,7 +1201,45 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 	}
 }
 
-func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
+func TestRunningScriptIsInterruptibleUntilProcessEnds(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-running-script")
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: workflowExecutionRefForTest(t, taskID, "node-running-script", nil),
+		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("start running Script: %v", err)
+	}
+	t.Cleanup(func() { _ = handle.Stop(context.Background()) })
+
+	selectionCalled := false
+	err = authority.WithWorkflowInterruptSelection(taskID, nil, func(selection WorkflowInterruptSelection) error {
+		selectionCalled = true
+		if len(selection.Interruptible) != 1 ||
+			selection.Interruptible[0].Handle.Scope().ID() != handle.Scope().ID() {
+			t.Fatalf("running Script interrupt selection = %+v, want exact Script", selection)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("select running Script for Interrupt: %v", err)
+	}
+	if !selectionCalled {
+		t.Fatal("running Script did not authorize Interrupt")
+	}
+}
+
+func TestTerminalScriptIsNotRunningWhileCleanupCompletes(t *testing.T) {
 	truePath, err := exec.LookPath("true")
 	if err != nil {
 		t.Skipf("true executable unavailable: %v", err)
@@ -1458,11 +1250,11 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	taskID := workflow.TaskID("task-finalizing-script")
+	taskID := workflow.TaskID("task-terminal-script")
 	finalizeStarted := make(chan struct{})
 	releaseFinalize := make(chan struct{})
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-finalizing-script", nil)),
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: workflowExecutionRefForTest(t, taskID, "node-terminal-script", nil),
 		Command:  ScriptCommand{Path: truePath},
 		Finalize: func(context.Context, ExecutionScope, ScriptResult, error) error {
 			close(finalizeStarted)
@@ -1488,7 +1280,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
 	if len(targets.Executions) != 0 {
-		t.Fatalf("finalizing script remains interruptible: %+v", targets)
+		t.Fatalf("terminal Script appears running during cleanup: %+v", targets)
 	}
 	selectionCalled := false
 	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
@@ -1496,94 +1288,15 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 		return nil
 	})
 	if !errors.Is(selectionErr, ErrExecutionNoLongerLive) {
-		t.Fatalf("finalizing script selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
+		t.Fatalf("terminal Script selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
 	}
 	if selectionCalled {
-		t.Fatal("finalizing script alone authorized task interrupt")
+		t.Fatal("terminal Script cleanup authorized Task Interrupt")
 	}
 
 	close(releaseFinalize)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
-	}
-}
-
-func TestTaskInterruptSelectionIncludesFinalizingScriptAlongsideRunningTaskScope(t *testing.T) {
-	truePath, err := exec.LookPath("true")
-	if err != nil {
-		t.Skipf("true executable unavailable: %v", err)
-	}
-	sleepPath, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skipf("sleep executable unavailable: %v", err)
-	}
-	authority := NewAuthority(AuthorityOptions{})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	taskID := workflow.TaskID("task-finalizing-selection")
-	finalizeStarted := make(chan struct{})
-	releaseFinalize := make(chan struct{})
-	finalizing, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-finalizing", nil)),
-		Command:  ScriptCommand{Path: truePath},
-		Finalize: func(context.Context, ExecutionScope, ScriptResult, error) error {
-			close(finalizeStarted)
-			<-releaseFinalize
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("start finalizing script: %v", err)
-	}
-	t.Cleanup(func() {
-		select {
-		case <-releaseFinalize:
-		default:
-			close(releaseFinalize)
-		}
-		_ = finalizing.Close(context.Background())
-	})
-	<-finalizeStarted
-
-	grace := 50 * time.Millisecond
-	running, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-running", nil)),
-		Command: ScriptCommand{
-			Path:              sleepPath,
-			Args:              []string{"30"},
-			CancellationGrace: &grace,
-		},
-	})
-	if err != nil {
-		t.Fatalf("start running script: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = running.Stop(context.Background())
-	})
-
-	deadline := time.After(3 * time.Second)
-	for {
-		var selection WorkflowInterruptSelection
-		selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(got WorkflowInterruptSelection) error {
-			selection = got
-			return nil
-		})
-		if selectionErr == nil &&
-			len(selection.Interruptible) == 1 &&
-			selection.Interruptible[0].Scope().ID() == running.Scope().ID() &&
-			len(selection.Queued) == 0 &&
-			len(selection.Finalizing) == 1 &&
-			selection.Finalizing[0].Scope().ID() == finalizing.Scope().ID() {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("task interrupt selection = %+v, error = %v", selection, selectionErr)
-		case <-time.After(10 * time.Millisecond):
-		}
 	}
 }
 
@@ -1597,8 +1310,8 @@ func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *test
 	taskID := workflow.TaskID("task-script-startup-failure")
 	finalizeStarted := make(chan struct{})
 	releaseFinalize := make(chan struct{})
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-startup-failure", nil)),
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: workflowExecutionRefForTest(t, taskID, "node-startup-failure", nil),
 		Command:  ScriptCommand{Path: filepath.Join(t.TempDir(), "missing-script")},
 		Finalize: func(_ context.Context, _ ExecutionScope, _ ScriptResult, startErr error) error {
 			if startErr == nil {
@@ -1700,11 +1413,7 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := engine.SetWorkflowThinkingValue(thinking); err != nil {
-			return err
-		}
-		_, err = engine.SteerWorkflowAssignment(runtime.WorkflowAssignment{})
-		return err
+		return engine.SetWorkflowThinkingValue(thinking)
 	})
 	if staleErr == nil {
 		t.Fatal("stale assignment callback unexpectedly succeeded")
@@ -1723,47 +1432,6 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	}
 	if _, err := second.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release replacement attachment: %v", err)
-	}
-}
-
-func TestOpenRuntimeStopsWaitingForAdmissionWhenContextIsCanceled(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	gate := authority.gateFor(sessionID)
-	gate.lock.Lock()
-	defer gate.lock.Unlock()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() {
-		_, openErr := authority.OpenRuntime(ctx, RuntimeOpenRequest{
-			SessionID: sessionID,
-			OwnerID:   "waiting-owner",
-		})
-		result <- openErr
-	}()
-	cancel()
-
-	select {
-	case openErr := <-result:
-		if !errors.Is(openErr, context.Canceled) {
-			t.Fatalf("open canceled runtime error = %v, want context.Canceled", openErr)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("open canceled runtime remained blocked on session admission")
 	}
 }
 
@@ -2056,7 +1724,6 @@ func TestExecutionCleanupAlwaysReleasesWorkflowBinding(t *testing.T) {
 				},
 			}
 			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-			plan.options.CurrentNodeExecution = executionConfig
 			attachment, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
 				SessionID: sessionID,
 				OwnerID:   "workflow-cleanup-test",
@@ -2102,11 +1769,11 @@ func TestExecutionCleanupAlwaysReleasesWorkflowBinding(t *testing.T) {
 				t.Fatalf("cleanup error = %v, resource mismatch = %t", cleanupErr, test.resourceMismatch)
 			}
 
-			rebound, err := engine.BindCurrentNodeExecution(executionConfig)
+			reboundBinding, err := engine.BindCurrentNodeExecution(executionConfig)
 			if err != nil {
 				t.Fatalf("workflow execution binding remained owned after cleanup: %v", err)
 			}
-			if err := rebound.Close(); err != nil {
+			if err := reboundBinding.Close(); err != nil {
 				t.Fatalf("close rebound workflow execution: %v", err)
 			}
 		})
@@ -2119,16 +1786,7 @@ func TestOrdinaryExecutionCannotStartWithRetainedWorkflowActivation(t *testing.T
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
-	workflowRef := workflowExecutionRefForTest(t, "task-retained-activation", "node-retained-activation", nil)
-	lease := releasedWorkflowLeaseForTest(t, fixture.authority, workflowRef)
-	executionConfig := &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID: lease.ScopeID(),
-		Instructions: workflowruntime.TaskInstructions{
-			CurrentNode: workflowRef.CurrentNode,
-		},
-	}
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	plan.options.CurrentNodeExecution = executionConfig
 	attachment, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   "retained-workflow-activation-test",
@@ -2142,17 +1800,30 @@ func TestOrdinaryExecutionCannotStartWithRetainedWorkflowActivation(t *testing.T
 			t.Errorf("release retained workflow runtime: %v", releaseErr)
 		}
 	})
-	workflowExecution, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Workflow:   lease,
-		Resource:   CurrentAgentResource{},
-		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-	})
-	if err != nil {
-		t.Fatalf("start workflow execution: %v", err)
-	}
-	if _, err := workflowExecution.Wait(context.Background()); err != nil {
-		t.Fatalf("wait workflow execution: %v", err)
+	workflowRef := workflowExecutionRefForTest(
+		t,
+		workflow.TaskID(uuid.NewString()),
+		workflow.NodeID(uuid.NewString()),
+		nil,
+	)
+	if err := fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+		binding, publicationErr := engine.BindCurrentNodeExecution(&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: runtimeids.NewExecutionScopeID(),
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: workflowRef.CurrentNode,
+			},
+		})
+		if publicationErr != nil {
+			return publicationErr
+		}
+		t.Cleanup(func() {
+			if closeErr := binding.Close(); closeErr != nil {
+				t.Errorf("close retained Workflow binding: %v", closeErr)
+			}
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("publish retained Workflow activation: %v", err)
 	}
 
 	ordinary, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
@@ -2225,173 +1896,12 @@ func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(
 	}
 }
 
-func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *testing.T) {
+func TestIdleSessionStartsBackgroundContinuation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
-	updates := make(chan runtime.BackgroundShellEvent, 1)
 	client := make(lifecycleRequestCaptureClient, 1)
-	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(50 * time.Millisecond))
-	if err != nil {
-		t.Fatalf("new background shell manager: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := manager.Close(); err != nil {
-			t.Errorf("close background shell manager: %v", err)
-		}
-	})
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		Background:      manager,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close runtime authority: %v", err)
-		}
-	})
-	plan := authorityTestRuntimePlan(t, fixture, &client, func(event runtime.Event) {
-		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
-			updates <- *event.Background
-		}
-	})
-
-	predecessor := openLifecycleRuntime(t, authority, sessionID, "predecessor", &plan)
-	correlation, err := runtimeids.NewExecutionCorrelation(
-		runtimeids.NewExecutionScopeID(),
-		predecessor.Resource().Generation(),
-	)
-	if err != nil {
-		t.Fatalf("new execution correlation: %v", err)
-	}
-	releasePath := filepath.Join(t.TempDir(), "release")
-	started, err := manager.Start(context.Background(), shelltool.ExecRequest{
-		Command:              []string{"/bin/sh", "-c", fmt.Sprintf("while [ ! -f %q ]; do sleep 0.01; done; printf done", releasePath)},
-		DisplayCommand:       "wait for release",
-		OwnerSessionID:       sessionID.String(),
-		ExecutionCorrelation: &correlation,
-		Workdir:              t.TempDir(),
-		YieldTime:            50 * time.Millisecond,
-		MaxOutputChars:       16_000,
-	})
-	if err != nil {
-		t.Fatalf("start background shell: %v", err)
-	}
-	if !started.Backgrounded {
-		t.Fatalf("shell must transition to background, got %+v", started)
-	}
-	select {
-	case update := <-updates:
-		if update.Type != runtime.BackgroundShellEventBackgrounded || update.ID != started.SessionID {
-			t.Fatalf("background registration update = %+v", update)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("background registration did not reach predecessor runtime")
-	}
-	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
-		t.Fatalf("release predecessor runtime: %v", err)
-	}
-	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
-		t.Fatalf("release background shell: %v", err)
-	}
-
-	deadline := time.Now().Add(3 * time.Second)
-	var terminal shelltool.Snapshot
-	for {
-		terminal, err = manager.Snapshot(started.SessionID)
-		if err != nil {
-			t.Fatalf("snapshot background shell: %v", err)
-		}
-		if !terminal.Running {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for background shell completion")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	_ = openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
-	select {
-	case update := <-updates:
-		if update.Type != runtime.BackgroundShellEventCompleted ||
-			update.ID != terminal.ID ||
-			update.ActivityID != terminal.ActivityID {
-			t.Fatalf("retried terminal event update = %+v", update)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("undelivered terminal event did not reach the next runtime")
-	}
-
-	request := client.await(t)
-	foundNotice := false
-	for _, message := range llm.MessagesFromItems(request.Items) {
-		if message.Role == llm.RoleDeveloper &&
-			message.MessageType != nil &&
-			*message.MessageType == llm.MessageTypeBackgroundNotice &&
-			message.BackgroundActivityID != nil &&
-			*message.BackgroundActivityID == terminal.ActivityID.String() {
-			foundNotice = true
-			break
-		}
-	}
-	if !foundNotice {
-		t.Fatal("retried terminal event did not steer a developer background notice")
-	}
-}
-
-func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	feed := make(authorityPromptFeed, 2)
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		PromptFeed:      feed,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close runtime authority: %v", err)
-		}
-	})
-	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: textutil.Value("I need a decision."),
-				Phase:   textutil.Value(llm.MessagePhaseCommentary),
-			},
-			ToolCalls: []llm.ToolCall{{
-				ID:    "call-background-question",
-				Name:  string(toolspec.ToolAskQuestion),
-				Input: json.RawMessage(`{"question":"Proceed?"}`),
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: textutil.Value("done"),
-				Phase:   textutil.Value(llm.MessagePhaseFinal),
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	settings := fixture.config.Settings
-	settings.Model = "gpt-5"
-	settings.ModelContextWindow = 200000
-	settings.Reviewer.Frequency = "off"
-	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:              settings,
-		EnabledTools:          []toolspec.ID{toolspec.ToolAskQuestion},
-		FilesystemContext:     runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
-		QuestionsEnabled:      textutil.Value(true),
-		AutoCompactionEnabled: textutil.Value(true),
-		Client:                client,
-	})
-	if err != nil {
-		t.Fatalf("new runtime plan: %v", err)
-	}
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner", &plan)
+	plan := authorityTestRuntimePlan(t, fixture, &client)
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner", &plan)
 
 	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
 	correlation, err := runtimeids.NewExecutionCorrelation(
@@ -2402,44 +1912,75 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 		t.Fatalf("new execution correlation: %v", err)
 	}
 	event.Snapshot.ExecutionCorrelation = &correlation
-	if !authority.routeBackgroundEvent(event) {
+	if !fixture.authority.routeBackgroundEvent(event) {
 		t.Fatal("terminal background event was not delivered")
 	}
 
-	var pending authorityPromptEvent
-	select {
-	case pending = <-feed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("background continuation question was not published from an Exact Execution Scope")
-	}
-	if pending.resource != attachment.Resource() || pending.scopeID.IsZero() || pending.requestID == "" {
-		t.Fatalf("pending background question = %+v", pending)
-	}
-	if err := resolveAuthorityQuestionForTest(
-		authority,
-		sessionID,
-		pending.stepID,
-		pending.requestID,
-		testQuestionResolution("yes"),
-	); err != nil {
-		t.Fatalf("resolve background question batch: %v", err)
-	}
-	select {
-	case resolved := <-feed:
-		if !resolved.resolved ||
-			resolved.resource != pending.resource ||
-			resolved.scopeID != pending.scopeID ||
-			resolved.requestID != pending.requestID {
-			t.Fatalf("resolved background question = %+v, want resolution for %+v", resolved, pending)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("background continuation question was not resolved")
-	}
-
+	client.await(t)
 	deadline := time.Now().Add(5 * time.Second)
-	for authority.sessionExecution(sessionID) != nil {
+	for fixture.authority.sessionExecution(sessionID) != nil {
 		if time.Now().After(deadline) {
 			t.Fatal("background continuation Exact Execution Scope did not retire")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestBackgroundCompletionAfterFinalStepStartsContinuationAfterExecutionRetires(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := make(lifecycleRequestCaptureClient, 2)
+	plan := authorityTestRuntimePlan(t, fixture, &client)
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner", &plan)
+	turnDone := make(chan struct{})
+	releaseExecution := make(chan struct{})
+	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
+				_, runErr := engine.SubmitUserMessage(engineCtx, "start")
+				close(turnDone)
+				select {
+				case <-releaseExecution:
+				case <-engineCtx.Done():
+					return context.Cause(engineCtx)
+				}
+				return runErr
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("start initial execution: %v", err)
+	}
+	client.await(t)
+	select {
+	case <-turnDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial execution did not finish its final Agent Step")
+	}
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		attachment.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if !fixture.authority.routeBackgroundEvent(event) {
+		t.Fatal("terminal background event was not delivered")
+	}
+	close(releaseExecution)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait initial execution: %v", err)
+	}
+	client.await(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for fixture.authority.sessionExecution(sessionID) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("follow-up background Exact Execution Scope did not retire")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -2964,10 +2505,10 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
 	responseDone := make(chan promptAwaitTestResult, 1)
 	releaseExecution := make(chan struct{})
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+	handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Workflow:   workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			resolution, askErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
@@ -3177,10 +2718,10 @@ func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 			ApprovalOptions: []tools.AskQuestionApprovalOption{{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow"}},
 		},
 	}
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+	handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Workflow:   workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			for _, request := range requests {
@@ -3253,10 +2794,10 @@ func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	request := tools.AskQuestionRequest{ID: "duplicate-prompt", StepID: uuid.NewString(), Question: "Question"}
 	workflowRef := workflowExecutionRefForTest(t, "task-duplicate-prompt", "node-duplicate-prompt", nil)
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+	handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Workflow:   workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
@@ -3326,10 +2867,10 @@ func TestAuthorityResolvePromptBatchUsesExactFullKey(t *testing.T) {
 	workflowRef := workflowExecutionRefForTest(t, "task-exact-prompt", "node-exact-prompt", nil)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	responseDone := make(chan promptAwaitTestResult, 1)
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+	handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Workflow:   workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			resolution, askErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
@@ -3385,10 +2926,10 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-question-replacement", "node-question-replacement", nil)
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+	handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Workflow:   workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
@@ -3414,10 +2955,10 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	}
 
 	successorRef := workflowExecutionRefForTest(t, workflowRef.CurrentNode.TaskID, "node-question-successor", nil)
-	successor, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+	successor, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, authority, successorRef),
+		Workflow:   successorRef,
 		Resource:   ReplaceAgentResource{},
 		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
 	})
@@ -3460,17 +3001,64 @@ func workflowExecutionRefForTest(
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"), CurrentNode: reference}
+	return WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"),
+		CurrentNode: reference,
+	}
 }
 
-func releasedWorkflowLeaseForTest(t *testing.T, authority *Authority, ref WorkflowExecutionRef) *WorkflowExecutionLease {
+func startDetachedScriptExecutionForTest(
+	t *testing.T,
+	authority *Authority,
+	request DetachedScriptExecutionRequest,
+) (ExecutionHandle, error) {
 	t.Helper()
-	lease, err := authority.NewWorkflowExecutionLease(ref)
+	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), request)
 	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+		return nil, err
 	}
-	lease.Release()
-	return &lease
+	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
+	if err == nil {
+		launch()
+	}
+	return handle, err
+}
+
+func startWorkflowAgentExecutionForTest(
+	t *testing.T,
+	authority *Authority,
+	request workflowAgentExecutionRequest,
+) (ExecutionHandle, error) {
+	t.Helper()
+	if request.Config == nil {
+		request.Config = &workflowruntime.CurrentNodeExecutionConfig{
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: request.Workflow.CurrentNode,
+				WorkflowID:  request.Workflow.WorkflowID,
+			},
+		}
+	}
+	return authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: request.Descriptor,
+		Runtime:    request.Runtime,
+		Workflow: &WorkflowAgentExecution{
+			Reference: request.Workflow,
+			Config:    request.Config,
+		},
+		Resource: request.Resource,
+		Ask:      request.Ask,
+		Runner:   request.Runner,
+	})
+}
+
+type workflowAgentExecutionRequest struct {
+	Descriptor session.SessionDescriptor
+	Runtime    *AgentRuntimePlan
+	Workflow   WorkflowExecutionRef
+	Resource   AgentResourceSelection
+	Config     *workflowruntime.CurrentNodeExecutionConfig
+	Ask        ExecutionAskHandler
+	Runner     AgentRunner
 }
 
 func workflowExecutionRefForTestPointer(
@@ -3482,19 +3070,6 @@ func workflowExecutionRefForTestPointer(
 	t.Helper()
 	ref := workflowExecutionRefForTest(t, taskID, nodeID, branchKey)
 	return &ref
-}
-
-func TestNewAgentRuntimePlanRequiresEffectiveSessionSettings(t *testing.T) {
-	for name, options := range map[string]AgentRuntimePlanOptions{
-		"Questions":       {AutoCompactionEnabled: textutil.Value(true)},
-		"Auto-compaction": {QuestionsEnabled: textutil.Value(true)},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := NewAgentRuntimePlan(options); err == nil {
-				t.Fatalf("runtime plan accepted missing effective %s setting", name)
-			}
-		})
-	}
 }
 
 func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, client llm.Client, onEvent ...func(runtime.Event)) AgentRuntimePlan {

@@ -338,7 +338,22 @@ message CompactContextRequest {
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.(kent.api.shared.nonblank) = true
   ];
-  string args = 2;
+  string request_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  ManualCompactionAdmission admission = 3 [(buf.validate.field).required = true];
+}
+
+message ManualCompactionAdmission {
+  optional string guidance = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+  string restoration_input = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
 }
 
 message InterruptRequest {
@@ -480,16 +495,83 @@ message LiveWaitSuccess {
   }
 }
 
-message DiscardQueuedUserMessageRequest {
+enum PendingWorkLane {
+  PENDING_WORK_LANE_UNSPECIFIED = 0;
+  PENDING_WORK_LANE_STEER = 1;
+  PENDING_WORK_LANE_QUEUE = 2;
+}
+
+enum PendingWorkItemKind {
+  PENDING_WORK_ITEM_KIND_UNSPECIFIED = 0;
+  PENDING_WORK_ITEM_KIND_MESSAGE = 1;
+  PENDING_WORK_ITEM_KIND_MANUAL_COMPACTION = 2;
+}
+
+message PendingWorkMessage {
+  string text = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+}
+
+message PendingWorkItem {
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  PendingWorkLane lane = 2 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  PendingWorkItemKind kind = 3 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  oneof payload {
+    option (buf.validate.oneof).required = true;
+    PendingWorkMessage message = 4;
+    ManualCompactionAdmission manual_compaction = 5;
+  }
+}
+
+message PendingWork {
+  repeated PendingWorkItem items = 1 [(buf.validate.field).repeated.items.required = true];
+}
+
+message ListPendingWorkRequest {
   string session_id = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.(kent.api.shared.nonblank) = true
   ];
-  string queue_item_id = 2 [(buf.validate.field).string.min_len = 1];
 }
 
-message DiscardQueuedUserMessageSuccess {
-  bool discarded = 1;
+message ListPendingWorkSuccess {
+  PendingWork pending_work = 1 [(buf.validate.field).required = true];
+}
+
+message RemovePendingWorkRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+  string item_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message PendingWorkManualCompactionRestoration {
+  string input = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+}
+
+message PendingWorkRestoration {
+  PendingWorkItemKind kind = 1 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  oneof payload {
+    option (buf.validate.oneof).required = true;
+    PendingWorkMessage message = 2;
+    PendingWorkManualCompactionRestoration manual_compaction = 3;
+  }
+}
+
+message RemovePendingWorkSuccess {
+  PendingWorkRestoration restoration = 1 [(buf.validate.field).required = true];
 }
 
 message Goal {
@@ -636,7 +718,8 @@ message SetSessionNameError {
 }
 
 message ShouldCompactError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
-message DiscardQueuedUserMessageError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message ListPendingWorkError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message RemovePendingWorkError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
 
 message SubmitUserTurnError {
   string code = 1 [
@@ -861,11 +944,19 @@ message LiveWaitResult {
   }
 }
 
-message DiscardQueuedUserMessageResult {
+message ListPendingWorkResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
-    DiscardQueuedUserMessageSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    DiscardQueuedUserMessageError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    ListPendingWorkSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ListPendingWorkError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message RemovePendingWorkResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    RemovePendingWorkSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    RemovePendingWorkError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -954,14 +1045,24 @@ service TurnService {
       legacy_wire_name: "runtime.interrupt"
     };
   }
-  rpc DiscardQueuedUserMessage(DiscardQueuedUserMessageRequest) returns (DiscardQueuedUserMessageResult) {
+  rpc ListPendingWork(ListPendingWorkRequest) returns (ListPendingWorkResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.discardQueuedUserMessage"
+      legacy_wire_name: "runtime.pendingWork.list"
+    };
+  }
+  rpc RemovePendingWork(RemovePendingWorkRequest) returns (RemovePendingWorkResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.pendingWork.remove"
     };
   }
 }

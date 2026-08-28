@@ -6,6 +6,7 @@ export type { JsonValue } from "../json";
 export type {
   RpcCallOptions,
   RpcDedicatedCallOptions,
+  DescriptorSubscriptionInput,
   DescriptorRpcTransport,
   RpcEventHandler,
   RpcSubscription,

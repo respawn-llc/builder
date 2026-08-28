@@ -9,7 +9,12 @@ import {
 } from "./descriptorRpc";
 import { TransportError } from "./errors";
 import type { JsonValue } from "./json";
-import { unaryConnectionPolicy, type DescMethod, type MessageShape } from "@app/server-api-contract";
+import {
+  unaryConnectionPolicy,
+  type DescMessage,
+  type DescMethod,
+  type MessageShape,
+} from "@app/server-api-contract";
 import { z } from "zod";
 import {
   delay,
@@ -19,6 +24,7 @@ import {
   parseFrame,
   responseSchema,
   sendSocketDescriptorRequest,
+  runSocketDescriptorSubscription,
   sendSocketRequest,
   setupSocket,
   socketRequestError,
@@ -28,6 +34,7 @@ import {
 import type {
   RpcCallOptions,
   DescriptorRpcTransport,
+  DescriptorSubscriptionInput,
   RpcDedicatedCallOptions,
   RpcEventHandler,
   RpcSubscription,
@@ -151,9 +158,44 @@ class JsonRpcWebSocketTransport implements RpcTransport {
 
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
     const controller = new AbortController();
-    void this.#openSubscription(method, params, handler, controller.signal);
+    void this.#openSubscription(
+      async (socket) =>
+        this.#runJsonSubscription({
+          socket,
+          method,
+          params,
+          handler,
+          signal: controller.signal,
+        }),
+      handler.onError,
+      controller.signal,
+    );
     return {
       close() {
+        controller.abort();
+      },
+    };
+  }
+
+  subscribeDescriptor<
+    Method extends DescMethod,
+    EventDescriptor extends DescMessage,
+    CompletionDescriptor extends DescMessage,
+  >(input: DescriptorSubscriptionInput<Method, EventDescriptor, CompletionDescriptor>): RpcSubscription {
+    const controller = new AbortController();
+    const { handler } = input;
+    void this.#openSubscription(
+      async (socket) =>
+        runSocketDescriptorSubscription({
+          socket,
+          ...input,
+          signal: controller.signal,
+        }),
+      handler.onError,
+      controller.signal,
+    );
+    return {
+      close: () => {
         controller.abort();
       },
     };
@@ -389,45 +431,39 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   }
 
   async #openSubscription(
-    method: string,
-    params: JsonValue,
-    handler: RpcEventHandler,
+    run: (socket: WebSocket) => Promise<void>,
+    onError: (error: Error) => void,
     signal: AbortSignal,
   ): Promise<void> {
     let attempt = 0;
     while (!signal.aborted) {
       try {
-        await this.#openSubscriptionSession(method, params, handler, signal);
+        await this.#withSubscriptionSocket(signal, run);
         return;
       } catch (error) {
         if (abortSignalWasRequested(signal)) {
           return;
         }
-        handler.onError(error instanceof Error ? error : new TransportError("Subscription failed."));
+        onError(error instanceof Error ? error : new TransportError("Subscription failed."));
         await delay(Math.min(subscriptionReconnectBaseMs * 2 ** attempt, subscriptionReconnectMaxMs), signal);
         attempt += 1;
       }
     }
   }
 
-  async #openSubscriptionSession(
-    method: string,
-    params: JsonValue,
-    handler: RpcEventHandler,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs);
-    if (abortSignalWasRequested(signal)) {
-      socket.close();
-      return;
-    }
-    signal.addEventListener(
-      "abort",
-      () => {
-        socket.close();
-      },
-      { once: true },
-    );
+  async #runJsonSubscription({
+    socket,
+    method,
+    params,
+    handler,
+    signal,
+  }: Readonly<{
+    socket: WebSocket;
+    method: string;
+    params: JsonValue;
+    handler: RpcEventHandler;
+    signal: AbortSignal;
+  }>): Promise<void> {
     const terminalCompleteRef: { current: Readonly<{ code: number; message: string }> | null } = {
       current: null,
     };
@@ -440,13 +476,6 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       }
     };
     try {
-      // The handshake must stay inside this scope: a rejected handshake (e.g. a
-      // server reporting a different persistence root) would otherwise leave the
-      // socket connected to the wrong server while the reconnect loop opens more.
-      await setupSocket(socket, {
-        timeoutMilliseconds: rpcRequestTimeoutMs,
-        expectedRootId: this.#expectedRootId,
-      });
       socket.addEventListener("message", subscriptionListener);
       await sendSocketRequest(socket, method, params, {
         timeoutMilliseconds: rpcRequestTimeoutMs,
@@ -462,6 +491,27 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       throw error;
     } finally {
       socket.removeEventListener("message", subscriptionListener);
+    }
+  }
+
+  async #withSubscriptionSocket(
+    signal: AbortSignal,
+    run: (socket: WebSocket) => Promise<void>,
+  ): Promise<void> {
+    const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs, signal);
+    const abort = () => {
+      socket.close();
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      await setupSocket(socket, {
+        timeoutMilliseconds: rpcRequestTimeoutMs,
+        expectedRootId: this.#expectedRootId,
+        signal,
+      });
+      await run(socket);
+    } finally {
+      signal.removeEventListener("abort", abort);
       socket.close();
     }
   }

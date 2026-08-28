@@ -38,6 +38,15 @@ func (s *lockedContractState) Set(locked session.LockedContract) {
 	s.mu.Unlock()
 }
 
+func (s *lockedContractState) Clear() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.locked = nil
+	s.mu.Unlock()
+}
+
 func (s *lockedContractState) MarkPromptFacingSnapshotsStale() {
 	if s == nil {
 		return

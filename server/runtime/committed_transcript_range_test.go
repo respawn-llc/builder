@@ -21,14 +21,17 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:            "gpt-5",
 			CacheWarningMode: config.CacheWarningModeVerbose,
 			OnEvent:          func(event Event) { events = append(events, event) },
 		},
 	)
-	if err := engine.observePromptCacheResponse("step", preparedCacheRequestObservation{
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
+	if err := engine.observePromptCacheResponse(stepID, preparedCacheRequestObservation{
 		request: persistedCacheRequestObserved{
 			DigestVersion: requestCacheDigestVersion,
 			CacheKey:      "cache-key",
@@ -54,23 +57,12 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 			{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		},
 	}
-	if err := engine.steer(
-		"step",
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityNormal,
-			steeringMessageEventNone,
-			true,
-			[]llm.Message{assistant},
-		),
-	); err != nil {
+	if err := engine.steer(runtimeTestStepID("step"), steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
 		t.Fatalf("persist assistant message: %v", err)
 	}
 	assistantEntries := TranscriptEntriesFromEvent(Event{Kind: EventAssistantMessage, Message: assistant})
 	assistantStart := engine.CommittedTranscriptEntryCount() - len(assistantEntries)
-	if err := engine.steer(
-		"step",
-		steerCommittedAssistantMessageIntent(assistant, &committedAssistantCoordinate{start: assistantStart}),
-	); err != nil {
+	if err := engine.steer(runtimeTestStepID("step"), steerCommittedAssistantMessageIntent(assistant, &committedAssistantCoordinate{start: assistantStart})); err != nil {
 		t.Fatalf("publish assistant message: %v", err)
 	}
 
@@ -113,6 +105,9 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	executor := defaultStepExecutor{
 		engine: engine,
 	}
@@ -123,7 +118,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 	}
 	if _, _, err := executor.materializeFinalAnswerToolCalls(
 		context.Background(),
-		"step",
+		stepID,
 		acceptedResponseCalls{
 			local: []llm.ToolCall{call},
 			order: []acceptedResponseCallRef{{
@@ -131,15 +126,14 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 				index:  0,
 			}},
 		},
+		stepLoopOptions{},
 	); err != nil {
 		t.Fatalf("materialize final-answer tool call: %v", err)
 	}
-	if err := engine.steer(
-		"step",
-		steerLocalEntryIntent(storedLocalEntry{
-			Role: string(transcript.EntryRoleReasoning),
-			Text: "reasoning",
-		}),
+	if err := engine.steer(runtimeTestStepID("step"), steerLocalEntryIntent(storedLocalEntry{
+		Role: string(transcript.EntryRoleReasoning),
+		Text: "reasoning",
+	}),
 	); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
@@ -203,10 +197,9 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
-	if err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, err := engine.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
-		return err
-	}); err != nil {
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
+	if _, err := engine.runStepLoopWithOptions(context.Background(), runtimeTestStepID("step"), "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -269,17 +262,16 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 		t,
 		store,
 		client,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 
-	if err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, err := engine.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
-		return err
-	}); err != nil {
+	if _, err := engine.runStepLoopWithOptions(context.Background(), runtimeTestStepID("step"), "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -432,7 +424,9 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 		}
 	}
 
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "compaction")
+	defer restoreStep()
 	var hydration TranscriptHydrationSnapshot
 	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
 		hydration = snapshot
@@ -445,7 +439,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 	}
 	for index, stepID := range []string{beforeStepID, afterStepID} {
 		row := hydration.CommittedRows[index]
-		if row.StepID != stepID || row.Kind != TranscriptCommittedRowFactUser || row.User == nil {
+		if row.StepID == nil || *row.StepID != stepID || row.Kind != TranscriptCommittedRowFactUser || row.User == nil {
 			t.Fatalf("hydrated row[%d] = %+v", index, row)
 		}
 	}
@@ -454,16 +448,16 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, role := range []string{
 		string(transcript.EntryRoleSystem),
 		string(transcript.EntryRoleSystem),
 	} {
-		if err := engine.AppendCommittedEntry(role, "notice"); err != nil {
+		if err := engine.AppendCommittedEntry(t.Context(), role, "notice"); err != nil {
 			t.Fatalf("append pre-compaction entry: %v", err)
 		}
 	}
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"compaction",
 		steerHistoryReplacementIntent(
 			"local",
@@ -491,7 +485,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 		t,
 		mustOpenTestSession(t, store.Dir()),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -505,7 +499,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 	if got := reopened.CommittedTranscriptEntryCount(); got != 3 {
 		t.Fatalf("reopened committed entry count = %d", got)
 	}
-	if err := reopened.AppendCommittedEntry(string(transcript.EntryRoleSystem), "notice"); err != nil {
+	if err := reopened.AppendCommittedEntry(t.Context(), string(transcript.EntryRoleSystem), "notice"); err != nil {
 		t.Fatalf("append post-reopen entry: %v", err)
 	}
 	if len(events) != 1 {
@@ -527,41 +521,39 @@ func TestHistoryReplacementPublishesPreservedUserMessageBeforeFollowingLocalEntr
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "compaction")
+	defer restoreStep()
 	carryover, ok := compactionPreservedUserMessage("carryover")
 	if !ok {
 		t.Fatal("expected typed compaction-preserved user message")
 	}
-	if err := engine.steer(
-		"compaction",
-		steerHistoryReplacementIntent(
-			"local",
-			compactionModeManual,
-			1,
-			nil,
-			llm.ItemsFromMessages([]llm.Message{
-				{
-					Role:        llm.RoleUser,
-					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-					Content:     textutil.Value("summary"),
-				},
-				carryover,
-			}),
-		),
+	if err := engine.steer(runtimeTestStepID("compaction"), steerHistoryReplacementIntent(
+		"local",
+		compactionModeManual,
+		1,
+		nil,
+		llm.ItemsFromMessages([]llm.Message{
+			{
+				Role:        llm.RoleUser,
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value("summary"),
+			},
+			carryover,
+		}),
+	),
 	); err != nil {
 		t.Fatalf("persist manual history replacement: %v", err)
 	}
-	if err := engine.steer(
-		"compaction",
-		steerLocalEntryIntent(storedLocalEntry{
-			Role: string(transcript.EntryRoleSystem),
-			Text: "notice",
-		}),
+	if err := engine.steer(runtimeTestStepID("compaction"), steerLocalEntryIntent(storedLocalEntry{
+		Role: string(transcript.EntryRoleSystem),
+		Text: "notice",
+	}),
 	); err != nil {
 		t.Fatalf("append following local entry: %v", err)
 	}

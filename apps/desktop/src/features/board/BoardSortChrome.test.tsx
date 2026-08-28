@@ -2,6 +2,8 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
+import { appI18n, initializeI18n } from "@/i18n";
+
 type SortState = Readonly<{
   field: "created" | "updated" | "labels" | "short_id";
   direction: "asc" | "desc";
@@ -12,9 +14,11 @@ const runtime = vi.hoisted((): { sort: SortState; setSort: ReturnType<typeof vi.
   setSort: vi.fn(),
 }));
 
-vi.mock("react-i18next", () => ({
+vi.mock("react-i18next", async (importOriginal) => ({
+  ...(await importOriginal()),
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: Record<string, unknown>) =>
+      options === undefined ? appI18n.t(key) : appI18n.t(key, options),
   }),
 }));
 
@@ -23,6 +27,8 @@ vi.mock("./BoardQueryRuntime", () => ({
 }));
 
 import { boardSortFieldOptions, BoardSortChrome } from "./BoardSortChrome";
+
+beforeAll(async () => initializeI18n());
 
 describe("BoardSortChrome", () => {
   beforeEach(() => {
@@ -35,7 +41,6 @@ describe("BoardSortChrome", () => {
     render(<BoardSortChrome />);
 
     const trigger = screen.getByRole("button");
-    expect(trigger).toHaveAttribute("data-selected", "false");
     await user.click(trigger);
 
     const content = screen.getByRole("dialog");
@@ -75,10 +80,10 @@ describe("BoardSortChrome", () => {
     expect(runtime.setSort).toHaveBeenCalledWith({ field: "created", direction: "asc" });
   });
 
-  it("uses the primary custom summary", () => {
+  it("marks a custom sort as selected", () => {
     runtime.sort = { field: "labels", direction: "asc" };
     render(<BoardSortChrome />);
 
-    expect(screen.getByRole("button")).toHaveAttribute("data-selected", "true");
+    expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "true");
   });
 });

@@ -81,7 +81,6 @@ func clearMismatchedActiveFacts(hydration *clientui.TranscriptHydration) {
 		hydration.ActiveThinkingStatus = nil
 		hydration.ActiveReasoningTraces = nil
 		hydration.ActiveStep = nil
-		hydration.ActiveReviewer = nil
 		hydration.ActiveCompaction = nil
 		hydration.InFlightTools = nil
 		return
@@ -106,9 +105,6 @@ func clearMismatchedActiveFacts(hydration *clientui.TranscriptHydration) {
 			hydration.ActiveStep.StepID != active.StepID ||
 			hydration.ActiveStep.ActiveKind != active.ActiveKind) {
 		hydration.ActiveStep = nil
-	}
-	if hydration.ActiveReviewer != nil && hydration.ActiveReviewer.StepID != active.StepID {
-		hydration.ActiveReviewer = nil
 	}
 	if hydration.ActiveCompaction != nil && hydration.ActiveCompaction.StepID != active.StepID {
 		hydration.ActiveCompaction = nil

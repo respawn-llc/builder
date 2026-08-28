@@ -9,7 +9,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -35,7 +34,7 @@ var ErrSessionRunning = errors.New("selected session has an active run")
 var ErrHeadlessAskUnsupported = errors.New("You can't ask questions in headless/background mode. If the question is critical and materially affects the task, ask it by ending your turn after trying to do as much work as possible beforehand. Otherwise, follow best practice and mention the ambiguity in your final answer.")
 
 type promptHistoryStore interface {
-	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error)
+	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error)
 }
 
 type HeadlessBootstrap struct {
@@ -48,10 +47,7 @@ type HeadlessBootstrap struct {
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
 	launcher := &headlessPromptLauncher{boot: boot}
-	return &inProcessRunPromptService{
-		launcher: launcher,
-		runs:     requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-	}
+	return &inProcessRunPromptService{launcher: launcher}
 }
 
 type headlessPromptLauncher struct {

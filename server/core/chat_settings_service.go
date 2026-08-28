@@ -124,7 +124,7 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 		}
 		changed = committed.Changed
 		if engine != nil && projected.State.Agent == input.Raw.Agent {
-			if err := engine.SetThinkingLevel(projected.Effective.Thinking); err != nil {
+			if err := engine.SetThinkingLevel(runCtx, projected.Effective.Thinking); err != nil {
 				return false, err
 			}
 			if _, err := engine.SetFastModeEnabled(projected.Effective.Fast); err != nil {
@@ -132,7 +132,9 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 			}
 			engine.SetReviewerFrequency(projected.Effective.Supervisor)
 			engine.SetQuestionsEnabled(projected.Effective.Questions)
-			engine.SetAutoCompactionEnabled(projected.Effective.AutoCompaction)
+			if _, _, err := engine.SetAutoCompactionEnabled(runCtx, projected.Effective.AutoCompaction); err != nil {
+				return false, err
+			}
 		}
 		return projected.State.Agent != input.Raw.Agent && changed, err
 	})

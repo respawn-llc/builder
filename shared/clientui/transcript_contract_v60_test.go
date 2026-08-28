@@ -12,7 +12,6 @@ func TestTranscriptContractHydratesAtOneThenCarriesAtomicRuntimeReadModelUpdateA
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
 		CommittedRows:          []TranscriptCommittedRow{},
-		GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 	}))
 	if err := hydration.Validate(); err != nil {
 		t.Fatalf("validate hydration: %v", err)
@@ -52,9 +51,12 @@ func TestTranscriptContractRejectsUninitializedEvents(t *testing.T) {
 	}
 }
 
-func TestRuntimeReadModelUpdateOwnsVersion(t *testing.T) {
+func TestRuntimeReadModelUpdateCarriesVersionWithoutReconciliation(t *testing.T) {
 	if _, present := reflect.TypeOf(RuntimeReadModelUpdate{}).FieldByName("Version"); !present {
 		t.Fatal("RuntimeReadModelUpdate.Version is required")
+	}
+	if _, present := reflect.TypeOf(RuntimeReadModelUpdate{}).FieldByName("InputReconciliation"); present {
+		t.Fatal("RuntimeReadModelUpdate must not expose generic reconciliation")
 	}
 }
 
@@ -64,11 +66,14 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 		field string
 	}{
 		{owner: TranscriptSessionIdentity{}, field: "SessionName"},
+		{owner: TranscriptUserRow{}, field: "StepID"},
 		{owner: TranscriptUserRow{}, field: "CondensedText"},
 		{owner: TranscriptUserRow{}, field: "RollbackTargetID"},
 		{owner: TranscriptAssistantRow{}, field: "StreamID"},
 		{owner: TranscriptAssistantRow{}, field: "CondensedText"},
+		{owner: TranscriptToolRow{}, field: "StepID"},
 		{owner: TranscriptToolRow{}, field: "ResultSummary"},
+		{owner: TranscriptUserMessageFlushed{}, field: "StepID"},
 		{owner: TranscriptToolRow{}, field: "CondensedText"},
 		{owner: TranscriptNoticeRow{}, field: "Background"},
 		{owner: TranscriptNoticeRow{}, field: "Worktree"},
@@ -76,7 +81,6 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 		{owner: TranscriptHydration{}, field: "ActiveAssistant"},
 		{owner: TranscriptHydration{}, field: "ActiveThinkingStatus"},
 		{owner: TranscriptHydration{}, field: "ActiveStep"},
-		{owner: TranscriptHydration{}, field: "ActiveReviewer"},
 		{owner: TranscriptHydration{}, field: "ActiveCompaction"},
 		{owner: TranscriptHydration{}, field: "ContextUsage"},
 		{owner: TranscriptHydration{}, field: "GoalStatus"},
@@ -99,11 +103,11 @@ func TestRuntimeReadModelUpdateRejectsInvalidNestedFacts(t *testing.T) {
 	}
 	valid := RuntimeReadModelUpdate{
 		Version:  version,
-		Activity: RuntimeActivity{State: RuntimeActivityRegisteredIdle, QueueAccepting: true},
+		Activity: RuntimeActivity{State: RuntimeActivityRegisteredIdle, Reviewer: ReviewerActivityInactive, QueueAccepting: true},
 	}
 	tests := []RuntimeReadModelUpdate{
 		{Activity: valid.Activity},
-		{Version: version, Activity: RuntimeActivity{State: RuntimeActivityState("unknown")}},
+		{Version: version, Activity: RuntimeActivity{State: RuntimeActivityState("unknown"), Reviewer: ReviewerActivityInactive}},
 	}
 	for _, update := range tests {
 		if err := update.Validate(); err == nil {
@@ -119,13 +123,25 @@ func TestRuntimeActivityRejectsActiveIdentityOutsideRunningStates(t *testing.T) 
 		ActiveKind: RuntimeActivityActiveKindUserTurn,
 	}
 	tests := []RuntimeActivity{
-		{State: RuntimeActivityRegisteredIdle, ActiveStep: active},
-		{State: RuntimeActivityStarting, QueueAccepting: true},
-		{State: RuntimeActivityRunning},
+		{State: RuntimeActivityRegisteredIdle, Reviewer: ReviewerActivityInactive, ActiveStep: active},
+		{State: RuntimeActivityStarting, Reviewer: ReviewerActivityInactive, QueueAccepting: true},
+		{State: RuntimeActivityRunning, Reviewer: ReviewerActivityInactive},
 	}
 	for _, activity := range tests {
 		if err := activity.Validate(); err == nil {
 			t.Fatalf("accepted invalid runtime activity: %+v", activity)
+		}
+	}
+}
+
+func TestReviewerActivityContractDistinguishesInvocationFromAddressingFeedback(t *testing.T) {
+	for _, activity := range []ReviewerActivity{
+		ReviewerActivityInactive,
+		ReviewerActivityInvoking,
+		ReviewerActivityAddressingFeedback,
+	} {
+		if err := activity.Validate(); err != nil {
+			t.Fatalf("validate Reviewer activity %q: %v", activity, err)
 		}
 	}
 }

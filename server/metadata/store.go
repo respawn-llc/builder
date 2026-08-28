@@ -73,8 +73,8 @@ type sessionMetadataDocument struct {
 	HeadlessActive                  bool                                   `json:"headless_active"`
 	CompactionSoonReminderIssued    bool                                   `json:"compaction_soon_reminder_issued"`
 	GeneratedRecoveredWarningIssued bool                                   `json:"generated_recovered_warning_issued"`
-	PendingModelRecovery            *session.PendingModelRecovery          `json:"pending_model_recovery"`
 	WorktreeReminder                *session.WorktreeReminderState         `json:"worktree_reminder"`
+	RebindReminder                  *session.SessionRebindReminder         `json:"rebind_reminder,omitempty"`
 	Goal                            *session.GoalState                     `json:"goal"`
 	ActiveWorkflowAssignment        *session.MessageRecord                 `json:"active_workflow_assignment,omitempty"`
 	ActiveWorkflowAssignmentState   *session.ActiveWorkflowAssignmentState `json:"active_workflow_assignment_state,omitempty"`
@@ -2494,6 +2494,13 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 		return fmt.Errorf("validate session Chat settings: %w", err)
 	}
 	snapshot.Meta.ChatSettings = chatSettings
+	if snapshot.Meta.RebindReminder != nil {
+		rebindReminder, err := session.NormalizeSessionRebindReminder(*snapshot.Meta.RebindReminder)
+		if err != nil {
+			return fmt.Errorf("validate session rebind reminder: %w", err)
+		}
+		snapshot.Meta.RebindReminder = &rebindReminder
+	}
 	relpath, err := relativePathWithinRoot(s.persistenceRoot, snapshot.SessionDir)
 	if err != nil {
 		return err
@@ -2595,8 +2602,8 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 		HeadlessActive:                  snapshot.Meta.HeadlessActive,
 		CompactionSoonReminderIssued:    snapshot.Meta.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: snapshot.Meta.GeneratedRecoveredWarningIssued,
-		PendingModelRecovery:            snapshot.Meta.PendingModelRecovery,
 		WorktreeReminder:                persistedWorktreeReminder,
+		RebindReminder:                  snapshot.Meta.RebindReminder,
 		Goal:                            snapshot.Meta.Goal,
 		ActiveWorkflowAssignment:        snapshot.Meta.ActiveWorkflowAssignment,
 		ActiveWorkflowAssignmentState:   snapshot.Meta.ActiveWorkflowAssignmentState,
@@ -2809,8 +2816,8 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		HeadlessActive:                  metadataPayload.HeadlessActive,
 		CompactionSoonReminderIssued:    metadataPayload.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,
-		PendingModelRecovery:            metadataPayload.PendingModelRecovery,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
+		RebindReminder:                  metadataPayload.RebindReminder,
 		Goal:                            metadataPayload.Goal,
 		ActiveWorkflowAssignment:        metadataPayload.ActiveWorkflowAssignment,
 		ActiveWorkflowAssignmentState:   metadataPayload.ActiveWorkflowAssignmentState,

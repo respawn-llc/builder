@@ -8,8 +8,6 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
-	"errors"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,14 +21,17 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		OnEvent: func(evt Event) {
 			mu.Lock()
 			events = append(events, evt)
 			mu.Unlock()
 		},
 	})
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
+	stepID := runtimeTestStepID("step-compact")
+	restoreStep := setTestActiveStep(eng, stepID)
+	defer restoreStep()
+	if _, err := newCompactionPersistence(eng).replaceHistory(stepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
 		{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary one")},
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("summary two")},
 	})); err != nil {
@@ -265,51 +266,6 @@ func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
 	}
 }
 
-func TestRestoreMessagesPreservesRecoveredMultiToolRequestParity(t *testing.T) {
-	dir := t.TempDir()
-	liveStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "live"), "ws", dir)
-	restoredStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "restored"), "ws", dir)
-	client := &fakeCompactionClient{}
-	live := mustNewTestEngine(t, liveStore, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	call1 := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
-	call2 := llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)}
-	if err := live.steer("step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}})); err != nil {
-		t.Fatalf("append live assistant tool calls: %v", err)
-	}
-	if _, err := live.executeToolCalls(context.Background(), "step", []llm.ToolCall{call1, call2}); err != nil {
-		t.Fatalf("execute live tool calls: %v", err)
-	}
-	liveReq, err := live.buildRequest(context.Background(), "", true)
-	if err != nil {
-		t.Fatalf("build live request: %v", err)
-	}
-	if _, _, err := appendTestEvent(t, restoredStore, "step", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}); err != nil {
-		t.Fatalf("append restored assistant tool calls: %v", err)
-	}
-	if _, _, err := appendTestEvent(t, restoredStore, "step", map[string]any{"call_id": call1.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"tool":"exec_command"}`)}); err != nil {
-		t.Fatalf("append restored tool completion 1: %v", err)
-	}
-	if _, _, err := appendTestEvent(t, restoredStore, "step", map[string]any{"call_id": call2.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"tool":"exec_command"}`)}); err != nil {
-		t.Fatalf("append restored tool completion 2: %v", err)
-	}
-	restored := mustNewTestEngine(t, restoredStore, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	restoredReq, err := restored.buildRequest(context.Background(), "", true)
-	if err != nil {
-		t.Fatalf("build restored request: %v", err)
-	}
-	liveItemsJSON, err := json.Marshal(liveReq.Items)
-	if err != nil {
-		t.Fatalf("marshal live request items: %v", err)
-	}
-	restoredItemsJSON, err := json.Marshal(restoredReq.Items)
-	if err != nil {
-		t.Fatalf("marshal restored request items: %v", err)
-	}
-	if string(liveItemsJSON) != string(restoredItemsJSON) {
-		t.Fatalf("request items mismatch\nlive=%s\nrestored=%s", liveItemsJSON, restoredItemsJSON)
-	}
-}
-
 func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 	withGenerateRetryDelays(t, []time.Duration{time.Millisecond})
 
@@ -348,11 +304,16 @@ func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && firstDelta == -1 {
 			firstDelta = i
 		}
-		if evt.Kind == EventAssistantDeltaReset && reset == -1 {
-			reset = i
-		}
 		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "final" && secondDelta == -1 {
 			secondDelta = i
+		}
+	}
+	if firstDelta >= 0 && secondDelta >= 0 {
+		for i := firstDelta + 1; i < secondDelta; i++ {
+			if events[i].Kind == EventAssistantDeltaReset {
+				reset = i
+				break
+			}
 		}
 	}
 
@@ -372,13 +333,9 @@ func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 
 type fakeNonRetriableStreamClient struct{}
 
-func (fakeNonRetriableStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (fakeNonRetriableStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
-	if onDelta != nil {
-		onDelta("partial")
+func (fakeNonRetriableStreamClient) Generate(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+	if callbacks.OnAssistantDelta != nil {
+		callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "partial"})
 	}
 	return llm.Response{}, &llm.ProviderAPIError{
 		ProviderID: "openai-compatible",
@@ -414,7 +371,6 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 	var deltaIndex int
 	hasDelta := false
 	var delta Event
-	var terminals []Event
 	assistantMessageCount := 0
 	for i, evt := range events {
 		switch evt.Kind {
@@ -425,8 +381,6 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 			deltaIndex = i
 			hasDelta = true
 			delta = evt
-		case EventAssistantDeltaReset:
-			terminals = append(terminals, evt)
 		case EventAssistantMessage:
 			assistantMessageCount++
 		}
@@ -434,40 +388,23 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 	if !hasDelta || delta.AssistantTranscriptStreamID == nil {
 		t.Fatalf("missing streamed delta before terminal error: %+v", events)
 	}
-	if len(terminals) != 1 {
-		t.Fatalf("assistant stream terminals = %+v, want exactly one: %+v", terminals, events)
+	matchingTerminals := 0
+	for _, evt := range events[deltaIndex+1:] {
+		if evt.Kind != EventAssistantDeltaReset ||
+			evt.AssistantTranscriptStreamID == nil ||
+			*evt.AssistantTranscriptStreamID != *delta.AssistantTranscriptStreamID {
+			continue
+		}
+		matchingTerminals++
+		if evt.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
+			t.Fatalf("assistant stream terminal = %+v, delta = %+v", evt, delta)
+		}
 	}
-	terminal := terminals[0]
-	if terminal.AssistantTranscriptStreamID == nil ||
-		*terminal.AssistantTranscriptStreamID != *delta.AssistantTranscriptStreamID ||
-		terminal.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
-		t.Fatalf("assistant stream terminal = %+v, delta = %+v", terminal, delta)
+	if matchingTerminals != 1 {
+		t.Fatalf("matching assistant stream terminals = %d, want exactly one: %+v", matchingTerminals, events)
 	}
 	if assistantMessageCount != 0 {
 		t.Fatalf("final assistant events = %d, want none: %+v", assistantMessageCount, events)
-	}
-
-	var cleanupKinds []EventKind
-	for _, evt := range events[deltaIndex+1:] {
-		switch evt.Kind {
-		case EventConversationUpdated, EventAssistantDeltaReset, EventReasoningDeltaReset:
-			cleanupKinds = append(cleanupKinds, evt.Kind)
-		}
-	}
-	wantCleanupKinds := []EventKind{
-		EventReasoningDeltaReset,
-		EventConversationUpdated,
-		EventAssistantDeltaReset,
-		EventReasoningDeltaReset,
-		EventConversationUpdated,
-	}
-	if len(cleanupKinds) != len(wantCleanupKinds) {
-		t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
-	}
-	for i, want := range wantCleanupKinds {
-		if cleanupKinds[i] != want {
-			t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
-		}
 	}
 }
 

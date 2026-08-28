@@ -8,12 +8,12 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 type runtimeInterruptCandidateClient interface {
@@ -250,7 +250,7 @@ func (m *uiModel) clearRuntimeGoal() (clientui.GoalMutationResult, error) {
 
 func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
 	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+		ClientRequestID: uuid.NewString(),
 		Input:           runtimeinput.Text(text),
 	})
 }
@@ -271,6 +271,16 @@ func (m *uiModel) submitRuntimeUserShellCommand(ctx context.Context, command str
 func (m *uiModel) submitRuntimeShell(ctx context.Context, req clientui.RuntimeShellRequest) error {
 	if client := m.runtimeClient(); client != nil {
 		err := client.RunUserShell(ctx, req)
+		m.observeRuntimeRequestResult(err)
+		return err
+	}
+	return nil
+}
+
+func (m *uiModel) compactRuntimeInput(ctx context.Context, req clientui.RuntimeCompactRequest) error {
+	m.checkTUIBlockingOperation("runtime control mutation", "compact")
+	if client := m.runtimeClient(); client != nil {
+		err := client.CompactRuntime(ctx, req)
 		m.observeRuntimeRequestResult(err)
 		return err
 	}

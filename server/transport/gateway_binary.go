@@ -21,12 +21,17 @@ import (
 )
 
 type gatewayBinaryBinding struct {
-	operation protoapi.Operation
-	policy    gatewayBinaryExecutionPolicy
-	request   func() proto.Message
-	scope     func(proto.Message) (routeScopeParams, error)
-	invoke    func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error)
-	failure   func(*Gateway, *connectionState, proto.Message, error) proto.Message
+	operation         protoapi.Operation
+	policy            gatewayBinaryExecutionPolicy
+	request           func() proto.Message
+	scope             func(proto.Message) (routeScopeParams, error)
+	invoke            func(*Gateway, context.Context, *connectionState, proto.Message) (proto.Message, error)
+	subscribe         func(*Gateway, context.Context, *connectionState, proto.Message) (gatewayBinarySubscriber, error)
+	associated        *protoapi.SubscriptionOperations
+	start             proto.Message
+	complete          func(error) proto.Message
+	failure           func(*Gateway, *connectionState, proto.Message, error) proto.Message
+	validationFailure func(proto.Message, error) proto.Message
 }
 
 type gatewayBinaryExecutionPolicy uint8
@@ -103,6 +108,12 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 	if err := registerSessionLaunchGatewayBinaryBindings(bindings); err != nil {
 		return nil, err
 	}
+	if err := registerWorktreeGatewayBinaryBindings(bindings); err != nil {
+		return nil, err
+	}
+	if err := registerWorktreeSetupGatewayBinaryBinding(bindings); err != nil {
+		return nil, err
+	}
 	return bindings, nil
 }
 
@@ -118,6 +129,7 @@ func registerGatewayBinaryUnary[
 	scope func(Request) (routeScopeParams, error),
 	invoke func(*Gateway, context.Context, *connectionState, Request) (Success, error),
 	failureDetail func(*Gateway, *connectionState, Request, error) proto.Message,
+	validationFailure ...func(Request, error) proto.Message,
 ) error {
 	if service == nil {
 		return fmt.Errorf("generated service descriptor is required")
@@ -133,7 +145,7 @@ func registerGatewayBinaryUnary[
 	if err != nil {
 		return err
 	}
-	bindings[operation.Name] = gatewayBinaryBinding{
+	binding := gatewayBinaryBinding{
 		operation: operation,
 		policy:    policy,
 		request: func() proto.Message {
@@ -173,8 +185,28 @@ func registerGatewayBinaryUnary[
 			return gatewayBinaryFailureResult(method, failureDetail(g, state, request, err))
 		},
 	}
+	if len(validationFailure) > 1 {
+		return fmt.Errorf("generated %s.%s unary binding has multiple validation failure classifiers", service.Name(), methodName)
+	}
+	if len(validationFailure) == 1 {
+		if validationFailure[0] == nil {
+			return fmt.Errorf("generated %s.%s unary binding validation failure classifier is nil", service.Name(), methodName)
+		}
+		binding.validationFailure = func(message proto.Message, err error) proto.Message {
+			request, ok := message.(Request)
+			if !ok {
+				return nil
+			}
+			detail := validationFailure[0](request, err)
+			if detail == nil {
+				return nil
+			}
+			return gatewayBinaryFailureResult(method, detail)
+		}
+	}
+	bindings[operation.Name] = binding
 	if scope != nil {
-		binding := bindings[operation.Name]
+		binding = bindings[operation.Name]
 		binding.scope = func(message proto.Message) (routeScopeParams, error) {
 			request, ok := message.(Request)
 			if !ok {
@@ -428,7 +460,9 @@ func binaryInternalFailure(err error) *sharedpb.InternalFailureDetails {
 	return &sharedpb.InternalFailureDetails{Cause: &cause}
 }
 
-func (g *Gateway) resolveBinaryRequest(encoded []byte) (*gatewayBinaryRequest, *sharedpb.TransportFailure) {
+func (g *Gateway) resolveBinaryRequest(
+	encoded []byte,
+) (*gatewayBinaryRequest, *sharedpb.TransportFailure) {
 	envelope, err := protoapi.DecodeEnvelope(encoded)
 	if err != nil {
 		correlation := protoapi.DecodeEnvelopeCorrelation(encoded)
@@ -448,20 +482,27 @@ func (g *Gateway) resolveBinaryRequest(encoded []byte) (*gatewayBinaryRequest, *
 			Correlation: envelopeCorrelation(envelope),
 		}
 	}
-	binding, exists := g.registration.BinaryBinding(call.Operation)
-	if !exists {
-		return nil, &sharedpb.TransportFailure{
-			Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_UNKNOWN_OPERATION,
-			Correlation: call.Correlation,
+	if binding, exists := g.registration.BinaryBinding(call.Operation); exists {
+		if binding.operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
+			return nil, &sharedpb.TransportFailure{
+				Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
+				Correlation: call.Correlation,
+			}
+		}
+		return &gatewayBinaryRequest{binding: binding, call: call}, nil
+	}
+	if operation, exists := g.registration.operations[call.Operation]; exists {
+		if operation.Options.Direction == sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT {
+			return nil, &sharedpb.TransportFailure{
+				Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
+				Correlation: call.Correlation,
+			}
 		}
 	}
-	if binding.operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
-		return nil, &sharedpb.TransportFailure{
-			Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_WRONG_DIRECTION,
-			Correlation: call.Correlation,
-		}
+	return nil, &sharedpb.TransportFailure{
+		Code:        sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_UNKNOWN_OPERATION,
+		Correlation: call.Correlation,
 	}
-	return &gatewayBinaryRequest{binding: binding, call: call}, nil
 }
 
 func envelopeCorrelation(envelope *sharedpb.Envelope) *string {
@@ -502,11 +543,11 @@ func (g *Gateway) serveBinaryRequest(
 	state *connectionState,
 	request gatewayBinaryRequest,
 ) bool {
-	result, transportFailure := g.dispatchBinary(ctx, state, request)
+	subscription, result, transportFailure := g.dispatchBinary(ctx, state, request)
 	if transportFailure != nil {
 		return sendTransportFailure(ctx, conn, transportFailure)
 	}
-	encoded, err := encodeBinaryResult(request, result)
+	encoded, err := encodeBinaryResult(request.binding.operation, request.call.Correlation, result)
 	if err != nil {
 		invariant.NewPolicy().Check(false, invariant.FailureDiagnostic(
 			invariant.ScopeServerAPIContract,
@@ -514,23 +555,44 @@ func (g *Gateway) serveBinaryRequest(
 			err,
 		))
 		result = request.binding.failure(g, state, nil, fmt.Errorf("encode operation result: %w", err))
-		encoded, err = encodeBinaryResult(request, result)
+		encoded, err = encodeBinaryResult(request.binding.operation, request.call.Correlation, result)
 		if err != nil {
 			return false
 		}
 	}
-	return conn.Send(ctx, rpcwire.Frame{Kind: rpcwire.FrameBinary, Payload: encoded}) == nil
+	if err := conn.Send(ctx, rpcwire.Frame{Kind: rpcwire.FrameBinary, Payload: encoded}); err != nil {
+		if subscription != nil {
+			_ = subscription.Close()
+		}
+		return false
+	}
+	if subscription == nil {
+		return true
+	}
+	defer func() { _ = subscription.Close() }()
+	for {
+		event, err := subscription.Next(ctx)
+		operation := request.binding.associated.Event
+		payload := event
+		if err != nil {
+			operation = request.binding.associated.Completion
+			payload = request.binding.complete(err)
+		}
+		if err := sendBinaryNotification(ctx, conn, operation, payload); err != nil || operation.Name == request.binding.associated.Completion.Name {
+			return false
+		}
+	}
 }
 
 func (g *Gateway) dispatchBinary(
 	ctx context.Context,
 	state *connectionState,
 	request gatewayBinaryRequest,
-) (proto.Message, *sharedpb.TransportFailure) {
+) (gatewayBinarySubscriber, proto.Message, *sharedpb.TransportFailure) {
 	binding := request.binding
 	var decoded proto.Message
-	fail := func(err error) (proto.Message, *sharedpb.TransportFailure) {
-		return binding.failure(g, state, decoded, err), nil
+	fail := func(err error) (gatewayBinarySubscriber, proto.Message, *sharedpb.TransportFailure) {
+		return nil, binding.failure(g, state, decoded, err), nil
 	}
 	switch binding.policy {
 	case gatewayBinaryCoreActiveOrdinary, gatewayBinaryCoreActiveExclusive:
@@ -547,13 +609,21 @@ func (g *Gateway) dispatchBinary(
 	}
 	payloadField := request.call.ProtoReflect().Descriptor().Fields().ByName("payload")
 	if !request.call.ProtoReflect().Has(payloadField) {
-		return nil, invalidPayloadFailure(request.call.Correlation)
+		return nil, nil, invalidPayloadFailure(request.call.Correlation)
 	}
 	message := binding.request()
-	if err := protoapi.Decode(request.call.Payload, message); err != nil {
-		return nil, invalidPayloadFailure(request.call.Correlation)
+	if err := protoapi.Unmarshal(request.call.Payload, message); err != nil {
+		return nil, nil, invalidPayloadFailure(request.call.Correlation)
 	}
 	decoded = message
+	if err := protoapi.Validate(message); err != nil {
+		if binding.validationFailure != nil {
+			if result := binding.validationFailure(message, err); result != nil {
+				return nil, result, nil
+			}
+		}
+		return nil, nil, invalidPayloadFailure(request.call.Correlation)
+	}
 	var scopeFacts routeScopeParams
 	if binding.scope != nil {
 		facts, err := binding.scope(message)
@@ -571,11 +641,18 @@ func (g *Gateway) dispatchBinary(
 	); err != nil {
 		return fail(err)
 	}
+	if binding.subscribe != nil {
+		subscription, err := binding.subscribe(g, ctx, state, message)
+		if err != nil {
+			return fail(err)
+		}
+		return subscription, binding.start, nil
+	}
 	result, err := binding.invoke(g, ctx, state, message)
 	if err != nil {
 		return fail(err)
 	}
-	return result, nil
+	return nil, result, nil
 }
 
 func invalidPayloadFailure(correlation *string) *sharedpb.TransportFailure {
@@ -585,15 +662,15 @@ func invalidPayloadFailure(correlation *string) *sharedpb.TransportFailure {
 	}
 }
 
-func encodeBinaryResult(request gatewayBinaryRequest, result proto.Message) ([]byte, error) {
+func encodeBinaryResult(operation protoapi.Operation, correlation *string, result proto.Message) ([]byte, error) {
 	if result == nil {
 		return nil, fmt.Errorf("operation result is required")
 	}
-	if result.ProtoReflect().Descriptor().FullName() != request.binding.operation.Descriptor.Output().FullName() {
+	if result.ProtoReflect().Descriptor().FullName() != operation.Descriptor.Output().FullName() {
 		return nil, fmt.Errorf(
 			"operation result type %s does not match %s",
 			result.ProtoReflect().Descriptor().FullName(),
-			request.binding.operation.Descriptor.Output().FullName(),
+			operation.Descriptor.Output().FullName(),
 		)
 	}
 	payload, err := protoapi.Encode(result)
@@ -604,8 +681,8 @@ func encodeBinaryResult(request gatewayBinaryRequest, result proto.Message) ([]b
 	copy(presentPayload, payload)
 	return protoapi.EncodeEnvelope(&sharedpb.Envelope{
 		Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-			Operation:   request.binding.operation.Name,
-			Correlation: request.call.Correlation,
+			Operation:   operation.Name,
+			Correlation: correlation,
 			Payload:     presentPayload,
 		}},
 	})

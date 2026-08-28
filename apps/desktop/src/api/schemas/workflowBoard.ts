@@ -21,7 +21,6 @@ import type {
   WorkflowBoard,
   ProjectWorkflowLink,
 } from "../models";
-import { retainedPreviousWorktreeSchema, type RetainedPreviousWorktree } from "../worktreeSetup";
 import {
   attentionItemSchema,
   boardCardSchema,
@@ -42,6 +41,7 @@ import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
 import { taskDependenciesSchema } from "./taskDependencies";
+import { retainedPreviousWorktreeSchema, type RetainedPreviousWorktree } from "./workflowWorktree";
 export { projectTaskGroupCountsSchema, taskListPageSchema } from "./projectTasks";
 export {
   taskDependenciesSchema,
@@ -49,6 +49,12 @@ export {
   taskDependencyListResponseSchema,
   taskDependencyRemoveResponseSchema,
 } from "./taskDependencies";
+export {
+  decodeWorktreeSetupRetainedError,
+  parseTaskSetupRecoveryDetail,
+  WorktreeSetupRetainedError,
+  type TaskSetupRecovery,
+} from "./workflowWorktree";
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)

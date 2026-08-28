@@ -20,7 +20,7 @@ func TestWorkflowTaskInitialBranchRequestContract(t *testing.T) {
 		{
 			name: "start",
 			request: WorkflowTaskStartRequest{
-				TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), BranchName: &exact,
+				TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), BranchName: &exact,
 			},
 			roundTrip: func(data []byte) *string {
 				var decoded WorkflowTaskStartRequest
@@ -46,7 +46,7 @@ func TestWorkflowTaskInitialBranchRequestContract(t *testing.T) {
 		{
 			name: "resume",
 			request: WorkflowTaskResumeRequest{
-				TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), BranchName: &exact,
+				TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), BranchName: &exact,
 			},
 			roundTrip: func(data []byte) *string {
 				var decoded WorkflowTaskResumeRequest
@@ -75,9 +75,9 @@ func TestWorkflowTaskInitialBranchRequestContract(t *testing.T) {
 	}
 
 	blankRequests := []interface{ Validate() error }{
-		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), BranchName: &blank},
+		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), BranchName: &blank},
 		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", BranchName: &blank},
-		WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), BranchName: &blank},
+		WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), BranchName: &blank},
 	}
 	for _, request := range blankRequests {
 		if err := request.Validate(); err == nil {
@@ -86,7 +86,7 @@ func TestWorkflowTaskInitialBranchRequestContract(t *testing.T) {
 	}
 
 	omitted, err := json.Marshal(WorkflowTaskStartRequest{
-		TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(),
+		TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(),
 	})
 	if err != nil {
 		t.Fatalf("marshal omitted branch request: %v", err)

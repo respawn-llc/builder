@@ -43,11 +43,9 @@ const (
 	ErrCodeWorkflowExecutionTargetResolution = -32035
 	ErrCodeWorkflowLockedExecutionTarget     = -32036
 	ErrCodeWorktreeSelector                  = -32037
-	ErrCodeWorktreeTransitionPending         = -32038
 	ErrCodeWorktreeSetupRetained             = -32039
 	ErrCodeWorktreeDeletePrecondition        = -32040
 	ErrCodeSessionRetarget                   = -32041
-	ErrCodeWorktreeImmediateTransition       = -32042
 	ErrCodeSubagentLaunchDenied              = -32043
 	ErrCodeSubagentLaunchPolicy              = -32044
 	ErrCodeWorkflowTaskCreateSelection       = -32045
@@ -66,6 +64,8 @@ const (
 	ErrCodeRuntimeCommandNotAccepted         = -32061
 	ErrCodeWorkflowTaskStartConflict         = -32062
 	ErrCodeChatSettingsAgentPreparation      = -32063
+	ErrCodePendingWorkNotPending             = -32064
+	ErrCodePendingWorkCapacity               = -32065
 )
 
 type Request struct {

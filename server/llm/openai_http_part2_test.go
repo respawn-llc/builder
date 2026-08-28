@@ -439,8 +439,8 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compact request failed: %v", err)
 	}
-	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Type != ResponseItemTypeCompaction {
-		t.Fatalf("expected one compact output item, got %+v", resp.OutputItems)
+	if resp.Checkpoint.Type != ResponseItemTypeCompaction {
+		t.Fatalf("expected one compact output item, got %+v", resp.Checkpoint)
 	}
 	if captured["stream"] != true {
 		t.Fatalf("stream = %#v, want true", captured["stream"])
@@ -487,10 +487,7 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	if err != nil {
 		t.Fatalf("oauth compact request failed: %v", err)
 	}
-	if len(resp.OutputItems) != 1 {
-		t.Fatalf("output items = %d, want one compaction checkpoint", len(resp.OutputItems))
-	}
-	checkpoint := resp.OutputItems[0]
+	checkpoint := resp.Checkpoint
 	if checkpoint.Type != ResponseItemTypeCompaction || optionalStringValue(checkpoint.ID) != "cmp_1" || optionalStringValue(checkpoint.EncryptedContent) != "enc_1" || !json.Valid(checkpoint.Raw) {
 		t.Fatalf("checkpoint = %+v, want canonical encrypted compaction with raw JSON", checkpoint)
 	}
@@ -520,15 +517,69 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	}
 }
 
-func TestOAuthCompactRequestRejectsCompletedStreamWithoutCompactionOutput(t *testing.T) {
-	server := newOAuthCompactStreamServer(t, []string{
-		`{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"output":[]}}`,
-	})
-	transport := newCanonicalOAuthTestTransport(t, server)
+func TestOAuthCompactRequestPreservesTypedCheckpointContractReasons(t *testing.T) {
+	tests := []struct {
+		name            string
+		output          string
+		reason          CompactionCheckpointReason
+		compactionCount int
+		outputCount     int
+		typeCounts      map[ResponseItemType]int
+	}{
+		{
+			name:            "zero checkpoints",
+			output:          `{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"output":[]}}`,
+			reason:          CompactionCheckpointReasonZero,
+			compactionCount: 0,
+			outputCount:     0,
+			typeCounts:      map[ResponseItemType]int{},
+		},
+		{
+			name:            "multiple checkpoints",
+			output:          `{"type":"response.completed","response":{"output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"},{"type":"compaction","id":"cmp_2","encrypted_content":"enc_2"}]}}`,
+			reason:          CompactionCheckpointReasonMultiple,
+			compactionCount: 2,
+			outputCount:     2,
+			typeCounts:      map[ResponseItemType]int{ResponseItemTypeCompaction: 2},
+		},
+		{
+			name:            "missing encrypted content",
+			output:          `{"type":"response.completed","response":{"output":[{"type":"compaction","id":"cmp_1"}]}}`,
+			reason:          CompactionCheckpointReasonMissingEncryptedContent,
+			compactionCount: 1,
+			outputCount:     1,
+			typeCounts:      map[ResponseItemType]int{ResponseItemTypeCompaction: 1},
+		},
+	}
 
-	_, err := transport.Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
-	if err == nil || !strings.Contains(err.Error(), "compaction_count=0 output_count=0 types=map[]") {
-		t.Fatalf("error = %v, want diagnostic zero-compaction contract failure", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newOAuthCompactStreamServer(t, []string{test.output})
+			transport := newCanonicalOAuthTestTransport(t, server)
+
+			_, err := transport.Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
+			if err == nil {
+				t.Fatal("compact request unexpectedly succeeded")
+			}
+			var contractErr *CompactionCheckpointContractError
+			if !errors.As(err, &contractErr) {
+				t.Fatalf("error = %T %v, want typed checkpoint contract error", err, err)
+			}
+			if contractErr.Reason != test.reason ||
+				contractErr.CompactionCount != test.compactionCount ||
+				contractErr.OutputCount != test.outputCount ||
+				!reflect.DeepEqual(contractErr.OutputTypeCounts, test.typeCounts) {
+				t.Fatalf("checkpoint contract error = %+v, want reason=%q compaction_count=%d output_count=%d type_counts=%v",
+					contractErr, test.reason, test.compactionCount, test.outputCount, test.typeCounts)
+			}
+			var providerErr *ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("error = %T %v, want provider-contract wrapper", err, err)
+			}
+			if providerErr.Code != UnifiedErrorCodeProviderContract {
+				t.Fatalf("provider error code = %q, want provider contract", providerErr.Code)
+			}
+		})
 	}
 }
 
@@ -542,31 +593,11 @@ func TestOAuthCompactRequestUsesStreamedCompactionWhenCompletedOutputIsEmpty(t *
 	if err != nil {
 		t.Fatalf("compact request failed: %v", err)
 	}
-	if len(resp.OutputItems) != 1 || optionalStringValue(resp.OutputItems[0].ID) != "cmp_streamed" || optionalStringValue(resp.OutputItems[0].EncryptedContent) != "enc_streamed" {
-		t.Fatalf("output items = %+v, want streamed compaction checkpoint", resp.OutputItems)
+	if optionalStringValue(resp.Checkpoint.ID) != "cmp_streamed" || optionalStringValue(resp.Checkpoint.EncryptedContent) != "enc_streamed" {
+		t.Fatalf("checkpoint = %+v, want streamed compaction checkpoint", resp.Checkpoint)
 	}
 	if resp.Usage.InputTokens != 9 || resp.Usage.OutputTokens != 4 {
 		t.Fatalf("usage = %+v, want terminal completed usage", resp.Usage)
-	}
-}
-
-func TestOAuthCompactRequestRejectsMultipleCompactionOutputs(t *testing.T) {
-	server := newOAuthCompactStreamServer(t, []string{
-		`{"type":"response.completed","response":{"output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"},{"type":"compaction","id":"cmp_2","encrypted_content":"enc_2"}]}}`,
-	})
-	_, err := newCanonicalOAuthTestTransport(t, server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
-	if err == nil || !strings.Contains(err.Error(), "compaction_count=2 output_count=2") || !strings.Contains(err.Error(), "compaction:2") {
-		t.Fatalf("error = %v, want diagnostic multiple-compaction contract failure", err)
-	}
-}
-
-func TestOAuthCompactRequestRejectsCompactionWithoutEncryptedContent(t *testing.T) {
-	server := newOAuthCompactStreamServer(t, []string{
-		`{"type":"response.completed","response":{"output":[{"type":"compaction","id":"cmp_1"}]}}`,
-	})
-	_, err := newCanonicalOAuthTestTransport(t, server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
-	if err == nil || !strings.Contains(err.Error(), "missing encrypted_content") || !strings.Contains(err.Error(), "compaction_count=1 output_count=1") {
-		t.Fatalf("error = %v, want missing-encrypted-content contract failure", err)
 	}
 }
 

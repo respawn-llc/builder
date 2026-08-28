@@ -9,6 +9,7 @@ import (
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/runtimeinput"
 )
 
 type ongoingTranscriptReadModel struct {
@@ -16,7 +17,7 @@ type ongoingTranscriptReadModel struct {
 	sections         map[ongoing.FrameSectionKind]ongoing.FrameSection
 	pendingTools     []ongoingPendingTool
 	pendingToolIndex map[string]int
-	queuedMessages   keyedOngoingLiveItems[ongoingLiveItemID, ongoingLiveInput]
+	pendingWork      []ongoingLiveInput
 	pendingPrompts   keyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPrompt]
 }
 
@@ -38,7 +39,6 @@ func newOngoingTranscriptReadModel() ongoingTranscriptReadModel {
 	return ongoingTranscriptReadModel{
 		sections:         map[ongoing.FrameSectionKind]ongoing.FrameSection{},
 		pendingToolIndex: map[string]int{},
-		queuedMessages:   newKeyedOngoingLiveItems[ongoingLiveItemID, ongoingLiveInput](),
 		pendingPrompts:   newKeyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPrompt](),
 	}
 }
@@ -132,29 +132,13 @@ func (m *ongoingTranscriptReadModel) refreshPendingToolSection(width int, spinne
 	m.setStyledSection(ongoing.FrameSectionPendingTools, lines)
 }
 
-func (m *ongoingTranscriptReadModel) applyQueuedOrSteered(state *clientui.TranscriptQueuedMessageState) {
-	if state == nil {
-		return
-	}
-	id := queuedOrSteeredStateID(*state)
-	if state.Status != clientui.QueuedUserMessageAccepted {
-		m.queuedMessages.remove(id)
-		m.refreshQueuedOrSteeredSection(80)
-		return
-	}
-	m.queuedMessages.set(id, ongoingLiveInput{
-		Text:        queuedOrSteeredText(state),
-		Disposition: ongoingLiveInputSteering,
-	})
-	m.refreshQueuedOrSteeredSection(80)
-}
-
 func (m *ongoingTranscriptReadModel) refreshQueuedOrSteeredSection(width int) {
-	m.setStyledSection(ongoing.FrameSectionQueuedOrSteered, renderOngoingLiveInputLines(m.queuedMessages.values(), width))
+	m.setStyledSection(ongoing.FrameSectionQueuedOrSteered, renderOngoingLiveInputLines(m.pendingWork, width))
 }
 
-func queuedOrSteeredStateID(state clientui.TranscriptQueuedMessageState) ongoingLiveItemID {
-	return ongoingLiveItemID(state.QueueItemID.String())
+func (m *ongoingTranscriptReadModel) applyPendingWork(pending runtimeinput.PendingWork) {
+	m.pendingWork = pendingWorkInputs(pending)
+	m.refreshQueuedOrSteeredSection(80)
 }
 
 func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.TranscriptPrompt) {

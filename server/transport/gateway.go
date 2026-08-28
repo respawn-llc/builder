@@ -187,7 +187,6 @@ var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodPromptFollowUpWatch:                   (*Gateway).servePromptFollowUpSubscription,
 	protocol.MethodWorkflowSubscribe:                     (*Gateway).serveWorkflowSubscription,
 	protocol.MethodWorkflowSubscribeProject:              (*Gateway).serveWorkflowProjectSubscription,
-	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
 }
 
 var gatewaySubscriptionHandlers = routeHandlersForKind(apicontract.KindSubscription, gatewaySubscriptionHandlerEntries)
@@ -366,6 +365,10 @@ func (g *Gateway) gatewayRequestScheduleForEstablished(request gatewayEstablishe
 	if request.legacy != nil {
 		return g.gatewayRequestScheduleFor(*request.legacy)
 	}
+	if request.binary != nil &&
+		request.binary.binding.operation.Options.Kind == sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION {
+		return gatewayRequestSchedule{kind: gatewayRequestScheduleSubscription}
+	}
 	if request.binary == nil {
 		panic("established Gateway request is required")
 	}
@@ -494,11 +497,10 @@ func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
 	for _, attachment := range owned {
 		ctx, cancel := context.WithTimeout(context.Background(), gatewayRuntimeCleanupTimeout)
 		_, _ = client.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: uuid.NewString(),
-			Attachment:      attachment,
-			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
-			OwnerID:         ownerID,
+			Attachment:  attachment,
+			DropOwner:   true,
+			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+			OwnerID:     ownerID,
 		})
 		cancel()
 	}
@@ -672,9 +674,6 @@ func protocolError(err error) (int, string) {
 	}
 	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
 		return protocol.ErrCodeRuntimeNoFinalAnswer, message
-	}
-	if errors.Is(err, serverapi.ErrWorktreeBlocked) {
-		return protocol.ErrCodeWorktreeBlocked, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message

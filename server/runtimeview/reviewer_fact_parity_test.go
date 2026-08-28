@@ -16,12 +16,12 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 	errorID := runtimeids.NewReviewerErrorID()
 	entries := []runtime.ChatEntry{
 		{
-			StepID: stepID, Visibility: transcript.EntryVisibilityOngoingCollapsed,
+			StepID: runtimeStepIDPointer(stepID), Visibility: transcript.EntryVisibilityOngoingCollapsed,
 			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
 			ReviewerFeedback:    &runtime.ReviewerFeedbackChatEntry{ID: feedbackID, Suggestions: []string{"  **one**  ", "two\nline"}},
 		},
 		{
-			StepID: stepID, Visibility: transcript.EntryVisibilityOngoing,
+			StepID: runtimeStepIDPointer(stepID), Visibility: transcript.EntryVisibilityOngoing,
 			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 2},
 			ReviewerError:       &runtime.ReviewerErrorChatEntry{ID: errorID, Detail: " raw failure "},
 		},
@@ -51,7 +51,7 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 	}
 	for index := range entries {
 		event := runtime.Event{
-			Kind: runtime.EventLocalEntryAdded, StepID: stepID,
+			Kind: runtime.EventLocalEntryAdded, StepID: runtimeStepIDPointer(stepID),
 			LocalEntry: &entries[index], LocalEntryProjected: true,
 			CommittedProvenance: entries[index].CommittedProvenance,
 		}

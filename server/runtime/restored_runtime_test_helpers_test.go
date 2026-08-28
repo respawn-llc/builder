@@ -24,7 +24,7 @@ func newBlockingThenQueuedClient() *blockingThenQueuedClient {
 	}
 }
 
-func (client *blockingThenQueuedClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+func (client *blockingThenQueuedClient) Generate(ctx context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	client.mu.Lock()
 	client.calls = append(client.calls, request)
 	callCount := len(client.calls)

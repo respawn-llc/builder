@@ -9,6 +9,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/runtimeactivity"
 	"core/server/workflow"
+	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -229,17 +230,12 @@ func associateTaskSessionForViewTest(
 }
 func associateHistoricalTaskSessionForViewTest(t *testing.T, fixture currentNodeViewFixture, reference workflow.CurrentNodeReference, sessionID runtimeids.SessionID, associatedAt int64) {
 	t.Helper()
-	branch, scoped := reference.TransitionBranchKey()
-	db := fixture.metadata.DB()
-	if _, err := db.ExecContext(fixture.ctx, `UPDATE sessions SET task_id = ? WHERE id = ?`, string(reference.TaskID), sessionID.String()); err != nil {
-		t.Fatal(err)
-	}
-	_, err := db.ExecContext(fixture.ctx, `INSERT INTO session_workflow_node_associations
-(task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms)
-VALUES (?, ?, kent_graph_entity_id_blob_v1(?), ?, 'historical', NULL, ?)`, string(reference.TaskID), sessionID.String(), string(reference.NodeID),
-		sql.NullString{String: string(branch), Valid: scoped}, associatedAt)
-	if err != nil {
-		t.Fatalf("insert historical Task Session association: %v", err)
+	if _, err := fixture.store.AssociateTaskSession(fixture.ctx, workflowstore.TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  reference,
+		AssociatedAt: time.UnixMilli(associatedAt).UTC(),
+	}); err != nil {
+		t.Fatalf("associate historical Task Session: %v", err)
 	}
 }
 func taskSessionSnapshot(
@@ -257,7 +253,11 @@ func taskSessionSnapshot(
 func taskSessionRuntimeActivity(t *testing.T, state clientui.RuntimeActivityState) clientui.RuntimeActivity {
 	t.Helper()
 	if !(clientui.RuntimeActivity{State: state}).ActiveForControl() {
-		return clientui.RuntimeActivity{State: state, QueueAccepting: state == clientui.RuntimeActivityRegisteredIdle}
+		return clientui.RuntimeActivity{
+			State:          state,
+			Reviewer:       clientui.ReviewerActivityInactive,
+			QueueAccepting: state == clientui.RuntimeActivityRegisteredIdle,
+		}
 	}
 	runID, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
 	if err != nil {
@@ -268,7 +268,8 @@ func taskSessionRuntimeActivity(t *testing.T, state clientui.RuntimeActivityStat
 		t.Fatalf("ParseStepID: %v", err)
 	}
 	return clientui.RuntimeActivity{
-		State: state,
+		State:    state,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID: runID, StepID: stepID, ActiveKind: clientui.RuntimeActivityActiveKindWorkflowTurn,
 		},

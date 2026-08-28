@@ -14,14 +14,20 @@ import (
 	"core/shared/clientui"
 	"core/shared/llmerrors"
 	"core/shared/protoapi"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/transcript"
+	"core/shared/worktreecontract"
 	"golang.org/x/net/websocket"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestNormalizeWorkflowTaskObservationRPCErrorClassifiesConnectionEOF(t *testing.T) {
@@ -45,41 +51,37 @@ func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 }
 
 func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
-	err := protocolError(&protocol.ResponseError{
-		Code: protocol.ErrCodeWorktreeBlocked,
-	})
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
-		t.Fatalf("decoded error = %v, want ErrWorktreeBlocked", err)
-	}
-}
-
-func TestProtocolErrorDecodesMalformedWorktreeCreateAsContractError(t *testing.T) {
-	err := protocolError(&protocol.ResponseError{
-		Code:    protocol.ErrCodeWorktreeCreate,
-		Message: "worktree creation failed",
-		Data:    json.RawMessage(`{"owner":"other","diagnostic":"bad owner"}`),
-	})
-	var contractErr *serverapi.WorktreeCreateContractError
-	if !errors.As(err, &contractErr) {
-		t.Fatalf("decoded error = %T %v, want WorktreeCreateContractError", err, err)
-	}
-	var typed *serverapi.WorktreeCreateError
-	if errors.As(err, &typed) {
-		t.Fatalf("malformed wire data decoded as typed create error: %+v", typed)
-	}
-}
-
-func TestProtocolErrorMapsBlankWorktreeBlockedSentinel(t *testing.T) {
-	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorktreeBlocked})
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+	_, err := decodeGeneratedResult(
+		worktreeMethod("TransitionService", "Delete"),
+		&worktreepb.DeleteResult{
+			Outcome: &worktreepb.DeleteResult_Error{Error: &worktreepb.DeleteError{
+				Code: "worktree_blocked",
+				Detail: &worktreepb.DeleteError_WorktreeBlocked{
+					WorktreeBlocked: &worktreepb.BlockedDetails{},
+				},
+			}},
+		},
+		worktreeError[*worktreepb.DeleteError],
+	)
+	if !errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
 		t.Fatalf("decoded error = %v, want ErrWorktreeBlocked", err)
 	}
 }
 
 func TestProtocolErrorMapsWorkspaceNotRegisteredSentinel(t *testing.T) {
-	err := protocolError(&protocol.ResponseError{
-		Code: protocol.ErrCodeWorkspaceNotRegistered,
-	})
+	workspaceID := "workspace"
+	_, err := decodeGeneratedResult(
+		worktreeMethod("ListService", "ListWorkspace"),
+		&worktreepb.WorkspaceListResult{
+			Outcome: &worktreepb.WorkspaceListResult_Error{Error: &worktreepb.WorkspaceListError{
+				Code: "workspace_not_registered",
+				Detail: &worktreepb.WorkspaceListError_WorkspaceNotRegistered{
+					WorkspaceNotRegistered: &projectpb.WorkspaceNotRegisteredDetails{WorkspaceId: &workspaceID},
+				},
+			}},
+		},
+		worktreeError[*worktreepb.WorkspaceListError],
+	)
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("decoded error = %v, want workspace-not-registered sentinel", err)
 	}
@@ -88,69 +90,54 @@ func TestProtocolErrorMapsWorkspaceNotRegisteredSentinel(t *testing.T) {
 func TestRemotePreviewWorktreeDeleteSendsRouteAndDecodesEveryCleanlinessVariant(t *testing.T) {
 	tests := []struct {
 		name  string
-		state clientui.WorktreeDirtyState
+		state *worktreepb.DirtyState
 	}{
-		{name: "clean", state: clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean}},
+		{name: "clean", state: &worktreepb.DirtyState{Kind: worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN}},
 		{
 			name: "dirty",
-			state: func() clientui.WorktreeDirtyState {
-				count := 3
-				return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateDirty, DirtyFileCount: &count}
+			state: func() *worktreepb.DirtyState {
+				count := int32(3)
+				return &worktreepb.DirtyState{Kind: worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY, DirtyFileCount: &count}
 			}(),
 		},
 		{
 			name: "unknown",
-			state: func() clientui.WorktreeDirtyState {
+			state: func() *worktreepb.DirtyState {
 				cause := "status inspection failed"
-				return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateUnknown, UnknownCause: &cause}
+				return &worktreepb.DirtyState{Kind: worktreepb.DirtyStateKind_DIRTY_STATE_UNKNOWN, UnknownCause: &cause}
 			}(),
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			entry := serverapi.WorktreeTopologyEntry{
-				Variant: serverapi.WorktreeTopologyVariantRegistered,
-				Registered: &serverapi.WorktreeRegisteredFacts{
-					Git: serverapi.WorktreeGitFacts{
-						CanonicalRoot: "/repo/feature",
-						HeadObject:    "abc123",
-						PathAvailable: true,
-					},
-					Kent: serverapi.WorktreeKentFacts{
-						WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
-						CanonicalRoot: "/repo/feature",
-						DisplayName:   "feature",
+			entry := &worktreepb.TopologyEntry{
+				Topology: &worktreepb.TopologyEntry_Registered{
+					Registered: &worktreepb.RegisteredFacts{
+						Git: &worktreepb.GitFacts{
+							CanonicalRoot: "/repo/feature",
+							HeadObject:    "abc123",
+							PathAvailable: true,
+						},
+						Kent: &worktreepb.KentFacts{
+							WorktreeId:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+							CanonicalRoot: "/repo/feature",
+							DisplayName:   "feature",
+						},
 					},
 				},
 			}
-			response := serverapi.WorktreeDeletePreviewResponse{
+			response := &worktreepb.DeletePreviewSuccess{
 				Worktree:         entry,
-				DeletionSelector: entry.Registered.Kent.WorktreeID,
+				DeletionSelector: entry.GetRegistered().Kent.WorktreeId,
 				Cleanliness:      test.state,
 			}
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 				acceptRemoteHandshake(t, ws)
-				var request protocol.Request
-				if err := websocket.JSON.Receive(ws, &request); err != nil {
-					t.Errorf("receive delete preview: %v", err)
-					return
-				}
-				if request.Method != protocol.MethodWorktreeDeletePreview {
-					t.Errorf("method = %q, want %q", request.Method, protocol.MethodWorktreeDeletePreview)
-					return
-				}
-				var params serverapi.WorktreeDeletePreviewRequest
-				if err := json.Unmarshal(request.Params, &params); err != nil {
-					t.Errorf("decode delete preview request: %v", err)
-					return
-				}
-				if err := params.Validate(); err != nil {
-					t.Errorf("delete preview request validation: %v", err)
-					return
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
-					t.Errorf("send delete preview response: %v", err)
-				}
+				var request worktreepb.DeletePreviewRequest
+				call := receiveRemoteGeneratedCall(t, ws, "DeletePreviewService", "Get", &request)
+				sendRemoteGeneratedResult(t, ws, call, &worktreepb.DeletePreviewResult{
+					Outcome: &worktreepb.DeletePreviewResult_Success{Success: response},
+				})
 			})
 			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
 			if err != nil {
@@ -158,8 +145,8 @@ func TestRemotePreviewWorktreeDeleteSendsRouteAndDecodesEveryCleanlinessVariant(
 			}
 			defer func() { _ = remote.Close() }()
 
-			got, err := remote.PreviewWorktreeDelete(context.Background(), serverapi.WorktreeDeletePreviewRequest{
-				SessionID: "session-1",
+			got, err := remote.PreviewWorktreeDelete(context.Background(), &worktreepb.DeletePreviewRequest{
+				SessionId: "session-1",
 				Selector:  "feature",
 			})
 			if err != nil {
@@ -168,7 +155,7 @@ func TestRemotePreviewWorktreeDeleteSendsRouteAndDecodesEveryCleanlinessVariant(
 			if got.Cleanliness.Kind != test.state.Kind {
 				t.Fatalf("cleanliness kind = %q, want %q", got.Cleanliness.Kind, test.state.Kind)
 			}
-			if err := got.Validate(); err != nil {
+			if err := protoapi.Validate(got); err != nil {
 				t.Fatalf("decoded response validation: %v", err)
 			}
 		})
@@ -176,31 +163,29 @@ func TestRemotePreviewWorktreeDeleteSendsRouteAndDecodesEveryCleanlinessVariant(
 }
 
 func TestRemotePreviewWorktreeDeleteRejectsMismatchedResponseSelector(t *testing.T) {
-	entry := serverapi.WorktreeTopologyEntry{
-		Variant: serverapi.WorktreeTopologyVariantExternal,
-		External: &serverapi.WorktreeExternalFacts{
-			Git: serverapi.WorktreeGitFacts{
-				CanonicalRoot: "/repo/external",
-				HeadObject:    "abc123",
-				PathAvailable: true,
+	entry := &worktreepb.TopologyEntry{
+		Topology: &worktreepb.TopologyEntry_External{
+			External: &worktreepb.ExternalFacts{
+				Git: &worktreepb.GitFacts{
+					CanonicalRoot: "/repo/external",
+					HeadObject:    "abc123",
+					PathAvailable: true,
+				},
 			},
 		},
 	}
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		acceptRemoteHandshake(t, ws)
-		var request protocol.Request
-		if err := websocket.JSON.Receive(ws, &request); err != nil {
-			t.Errorf("receive delete preview: %v", err)
-			return
-		}
-		response := serverapi.WorktreeDeletePreviewResponse{
+		var request worktreepb.DeletePreviewRequest
+		call := receiveRemoteGeneratedCall(t, ws, "DeletePreviewService", "Get", &request)
+		response := &worktreepb.DeletePreviewSuccess{
 			Worktree:         entry,
 			DeletionSelector: "/repo/other",
-			Cleanliness:      clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean},
+			Cleanliness:      &worktreepb.DirtyState{Kind: worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN},
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
-			t.Errorf("send delete preview response: %v", err)
-		}
+		sendRemoteGeneratedResult(t, ws, call, &worktreepb.DeletePreviewResult{
+			Outcome: &worktreepb.DeletePreviewResult_Success{Success: response},
+		})
 	})
 	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
 	if err != nil {
@@ -208,8 +193,8 @@ func TestRemotePreviewWorktreeDeleteRejectsMismatchedResponseSelector(t *testing
 	}
 	defer func() { _ = remote.Close() }()
 
-	_, err = remote.PreviewWorktreeDelete(context.Background(), serverapi.WorktreeDeletePreviewRequest{
-		SessionID: "session-1",
+	_, err = remote.PreviewWorktreeDelete(context.Background(), &worktreepb.DeletePreviewRequest{
+		SessionId: "session-1",
 		Selector:  "external",
 	})
 	if err == nil {
@@ -471,6 +456,61 @@ func acceptRemoteHandshake(t *testing.T, ws *websocket.Conn) protocol.Request {
 	return protocol.Request{}
 }
 
+func receiveRemoteGeneratedCall(
+	t *testing.T,
+	ws *websocket.Conn,
+	serviceName string,
+	methodName string,
+	request proto.Message,
+) *sharedpb.Call {
+	t.Helper()
+	var encoded []byte
+	if err := websocket.Message.Receive(ws, &encoded); err != nil {
+		t.Fatalf("receive generated call: %v", err)
+	}
+	envelope, err := protoapi.DecodeEnvelope(encoded)
+	if err != nil {
+		t.Fatalf("decode generated call envelope: %v", err)
+	}
+	call := envelope.GetCall()
+	if call == nil {
+		t.Fatal("generated frame is not a call")
+	}
+	method := worktreeMethod(protoreflect.Name(serviceName), protoreflect.Name(methodName))
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil {
+		t.Fatalf("%s.%s operation: %v", serviceName, methodName, err)
+	}
+	if call.Operation != operation.Name {
+		t.Fatalf("operation = %q, want %q", call.Operation, operation.Name)
+	}
+	if err := protoapi.Decode(call.Payload, request); err != nil {
+		t.Fatalf("decode generated request: %v", err)
+	}
+	return call
+}
+
+func sendRemoteGeneratedResult(t *testing.T, ws *websocket.Conn, call *sharedpb.Call, result proto.Message) {
+	t.Helper()
+	payload, err := protoapi.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal generated result: %v", err)
+	}
+	encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+		Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+			Operation:   call.Operation,
+			Correlation: call.Correlation,
+			Payload:     payload,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode generated result envelope: %v", err)
+	}
+	if err := websocket.Message.Send(ws, encoded); err != nil {
+		t.Fatalf("send generated result: %v", err)
+	}
+}
+
 func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		acceptRemoteHandshake(t, ws)
@@ -501,9 +541,8 @@ func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-1",
-		SessionID:       "session-1",
-		Input:           "visible draft",
+		SessionID: "session-1",
+		Input:     "visible draft",
 	})
 	if err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -822,36 +861,27 @@ func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombinatio
 }
 
 func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Fatalf("receive worktree delete: %v", err)
-		}
-		if req.Method != protocol.MethodWorktreeDelete {
-			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeDelete)
-		}
-		var params serverapi.WorktreeDeleteRequest
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			t.Fatalf("unmarshal delete params: %v", err)
-		}
-		if params.OperationID != operationID ||
+		acceptRemoteHandshake(t, ws)
+		var params worktreepb.DeleteRequest
+		call := receiveRemoteGeneratedCall(t, ws, "TransitionService", "Delete", &params)
+		if params.SessionId != "session-1" ||
 			params.Selector != "wt-1" ||
-			params.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
-			t.Fatalf("unexpected delete params: %+v", params)
+			params.BranchCleanupPolicy != worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE {
+			t.Fatalf("unexpected delete params: session=%q selector=%q cleanup=%v", params.GetSessionId(), params.GetSelector(), params.GetBranchCleanupPolicy())
+		}
+		if params.ProtoReflect().Descriptor().Fields().ByName("operation_id") != nil {
+			t.Fatal("delete request unexpectedly contains operation_id")
 		}
 		branchName := "feature-a"
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResult{
-			Kind: serverapi.WorktreeDeleteResultKindCompleted,
-			Completed: &serverapi.WorktreeDeleteCompletedResult{
-				Cleanup: serverapi.WorktreeBranchCleanupOutcome{
-					Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
+		sendRemoteGeneratedResult(t, ws, call, &worktreepb.DeleteResult{
+			Outcome: &worktreepb.DeleteResult_Success{Success: &worktreepb.DeleteSuccess{
+				Cleanup: &worktreepb.BranchCleanupOutcome{
+					Kind:       worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_DELETED,
 					BranchName: &branchName,
 				},
-			},
-		})); err != nil {
-			t.Fatalf("send delete response: %v", err)
-		}
+			}},
+		})
 	})
 
 	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
@@ -860,43 +890,37 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: operationID,
-			SessionID:   "session-1",
-		},
+	resp, err := remote.DeleteWorktree(context.Background(), &worktreepb.DeleteRequest{
+		SessionId:           "session-1",
 		Selector:            "wt-1",
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
+		BranchCleanupPolicy: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if resp.Completed == nil || resp.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
+	if resp.Cleanup.Kind != worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_DELETED {
 		t.Fatalf("unexpected delete response: %+v", resp)
 	}
 }
 
 func TestRemoteResolveWorktreeCreateTargetCarriesMethodAndPayload(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Fatalf("receive worktree resolve: %v", err)
+		acceptRemoteHandshake(t, ws)
+		var params worktreepb.CreateTargetResolveRequest
+		call := receiveRemoteGeneratedCall(t, ws, "CreateTargetService", "Resolve", &params)
+		if params.SessionId != "session-1" || params.Target != "HEAD~1" {
+			t.Fatalf("unexpected resolve params: session=%q target=%q", params.GetSessionId(), params.GetTarget())
 		}
-		if req.Method != protocol.MethodWorktreeCreateTargetResolve {
-			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeCreateTargetResolve)
-		}
-		var params serverapi.WorktreeCreateTargetResolveRequest
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			t.Fatalf("unmarshal resolve params: %v", err)
-		}
-		if params.SessionID != "session-1" || params.Target != "HEAD~1" {
-			t.Fatalf("unexpected resolve params: %+v", params)
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeCreateTargetResolveResponse{
-			Resolution: serverapi.WorktreeCreateTargetResolution{Input: "HEAD~1", Kind: serverapi.WorktreeCreateTargetResolutionKindDetachedRef, ResolvedRef: "abc123"},
-		})); err != nil {
-			t.Fatalf("send resolve response: %v", err)
-		}
+		resolvedRef := "abc123"
+		sendRemoteGeneratedResult(t, ws, call, &worktreepb.CreateTargetResolveResult{
+			Outcome: &worktreepb.CreateTargetResolveResult_Success{Success: &worktreepb.CreateTargetResolveSuccess{
+				Resolution: &worktreepb.CreateTargetResolution{
+					Input:       "HEAD~1",
+					Kind:        worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF,
+					ResolvedRef: &resolvedRef,
+				},
+			}},
+		})
 	})
 
 	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
@@ -905,56 +929,36 @@ func TestRemoteResolveWorktreeCreateTargetCarriesMethodAndPayload(t *testing.T) 
 	}
 	defer func() { _ = remote.Close() }()
 
-	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), serverapi.WorktreeCreateTargetResolveRequest{SessionID: "session-1", Target: "HEAD~1"})
+	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), &worktreepb.CreateTargetResolveRequest{SessionId: "session-1", Target: "HEAD~1"})
 	if err != nil {
 		t.Fatalf("ResolveWorktreeCreateTarget: %v", err)
 	}
-	if resp.Resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindDetachedRef || resp.Resolution.ResolvedRef != "abc123" {
+	if resp.Resolution.Kind != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF || resp.Resolution.GetResolvedRef() != "abc123" {
 		t.Fatalf("unexpected resolve response: %+v", resp)
 	}
 }
 
 func TestRemoteCreateWorktreeUsesOnlySetupOperationIdentity(t *testing.T) {
-	setupID := serverapi.NewWorktreeSetupOperationID()
+	setupID := worktreecontract.NewSetupOperationID().String()
 	worktree := remoteTestRegisteredWorktreeEntry(t, true)
 	var requests atomic.Int64
-	target := clientui.SessionExecutionTarget{
-		WorkspaceID:           "workspace",
-		WorkspaceName:         "Workspace",
-		WorkspaceRoot:         "/repo",
-		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
-		CwdRelpath:            ".",
-		EffectiveWorkdir:      "/repo",
-	}
+	target := remoteTestWorktreeExecutionTarget()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		req := acceptRemoteHandshake(t, ws)
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			t.Fatalf("receive worktree create: %v", err)
-		}
+		acceptRemoteHandshake(t, ws)
 		requests.Add(1)
-		if req.Method != protocol.MethodWorktreeCreate {
-			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeCreate)
+		var params worktreepb.CreateRequest
+		call := receiveRemoteGeneratedCall(t, ws, "CreateService", "Create", &params)
+		if params.ProtoReflect().Descriptor().Fields().ByName("client_request_id") != nil {
+			t.Fatal("create request retained generic identity")
 		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(req.Params, &fields); err != nil {
-			t.Fatalf("unmarshal create fields: %v", err)
+		if params.SetupOperationId != setupID || params.SessionId != "session-1" {
+			t.Fatalf("create params: setup operation=%q session=%q", params.GetSetupOperationId(), params.GetSessionId())
 		}
-		if _, exists := fields["client_request_id"]; exists {
-			t.Fatalf("create request retained generic identity: %s", req.Params)
-		}
-		var params serverapi.WorktreeCreateRequest
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			t.Fatalf("unmarshal create params: %v", err)
-		}
-		if params.SetupOperationID != setupID || params.SessionID != "session-1" {
-			t.Fatalf("create params = %+v", params)
-		}
-		if err := websocket.JSON.Send(
-			ws,
-			protocol.NewSuccessResponse(req.ID, serverapi.WorktreeCreateResponse{Target: target, Worktree: worktree}),
-		); err != nil {
-			t.Fatalf("send create response: %v", err)
-		}
+		sendRemoteGeneratedResult(t, ws, call, &worktreepb.CreateResult{
+			Outcome: &worktreepb.CreateResult_Success{Success: &worktreepb.CreateSuccess{
+				Target: target, Worktree: worktree,
+			}},
+		})
 	})
 
 	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
@@ -962,10 +966,11 @@ func TestRemoteCreateWorktreeUsesOnlySetupOperationIdentity(t *testing.T) {
 		t.Fatalf("DialRemote: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	response, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
-		SetupOperationID: setupID,
-		SessionID:        "session-1",
-		BaseRef:          "feature",
+	baseRef := "feature"
+	response, err := remote.CreateWorktree(context.Background(), &worktreepb.CreateRequest{
+		SetupOperationId: setupID,
+		SessionId:        "session-1",
+		Spec:             &worktreepb.CreateSpec{BaseRef: &baseRef},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
@@ -984,50 +989,77 @@ func TestRemoteWorktreeProjectedResponsesRejectContradictoryScope(t *testing.T) 
 	workspaceEntry := remoteTestRegisteredWorktreeEntry(t, false)
 	tests := []struct {
 		name     string
-		response any
+		service  string
+		method   string
+		request  proto.Message
+		response proto.Message
 		call     func(context.Context, *Remote) error
 	}{
 		{
-			name:     "session list",
-			response: serverapi.WorktreeListResponse{Worktrees: []serverapi.WorktreeListEntry{workspaceEntry}},
+			name:    "session list",
+			service: "ListService",
+			method:  "List",
+			request: &worktreepb.ListRequest{},
+			response: &worktreepb.ListResult{
+				Outcome: &worktreepb.ListResult_Success{Success: &worktreepb.ListSuccess{
+					Target: remoteTestWorktreeExecutionTarget(), Worktrees: []*worktreepb.ListEntry{workspaceEntry},
+				}},
+			},
 			call: func(ctx context.Context, remote *Remote) error {
-				_, err := remote.ListWorktrees(ctx, serverapi.WorktreeListRequest{SessionID: "session"})
+				_, err := remote.ListWorktrees(ctx, &worktreepb.ListRequest{SessionId: "session"})
 				return err
 			},
 		},
 		{
-			name: "workspace list",
-			response: serverapi.WorktreeWorkspaceListResponse{
-				WorkspaceID: "workspace",
-				Worktrees:   []serverapi.WorktreeListEntry{sessionEntry},
+			name:    "workspace list",
+			service: "ListService",
+			method:  "ListWorkspace",
+			request: &worktreepb.WorkspaceListRequest{},
+			response: &worktreepb.WorkspaceListResult{
+				Outcome: &worktreepb.WorkspaceListResult_Success{Success: &worktreepb.WorkspaceListSuccess{
+					WorkspaceId: "workspace",
+					Worktrees:   []*worktreepb.ListEntry{sessionEntry},
+				}},
 			},
 			call: func(ctx context.Context, remote *Remote) error {
-				_, err := remote.ListWorkspaceWorktrees(ctx, serverapi.WorktreeWorkspaceListRequest{
-					ProjectID:   "project",
-					WorkspaceID: "workspace",
+				_, err := remote.ListWorkspaceWorktrees(ctx, &worktreepb.WorkspaceListRequest{
+					ProjectId:   "project",
+					WorkspaceId: "workspace",
 				})
 				return err
 			},
 		},
 		{
-			name:     "selector resolution",
-			response: serverapi.WorktreeSelectorPreviewResponse{Worktree: workspaceEntry},
+			name:    "selector resolution",
+			service: "SelectorService",
+			method:  "Resolve",
+			request: &worktreepb.SelectorResolveRequest{},
+			response: &worktreepb.SelectorResolveResult{
+				Outcome: &worktreepb.SelectorResolveResult_Success{Success: &worktreepb.SelectorResolveSuccess{Worktree: workspaceEntry}},
+			},
 			call: func(ctx context.Context, remote *Remote) error {
-				_, err := remote.ResolveWorktreeSelector(ctx, serverapi.WorktreeSelectorPreviewRequest{
-					SessionID: "session",
+				_, err := remote.ResolveWorktreeSelector(ctx, &worktreepb.SelectorResolveRequest{
+					SessionId: "session",
 					Selector:  branchName,
 				})
 				return err
 			},
 		},
 		{
-			name:     "create",
-			response: serverapi.WorktreeCreateResponse{Worktree: workspaceEntry},
+			name:    "create",
+			service: "CreateService",
+			method:  "Create",
+			request: &worktreepb.CreateRequest{},
+			response: &worktreepb.CreateResult{
+				Outcome: &worktreepb.CreateResult_Success{Success: &worktreepb.CreateSuccess{
+					Target: remoteTestWorktreeExecutionTarget(), Worktree: workspaceEntry,
+				}},
+			},
 			call: func(ctx context.Context, remote *Remote) error {
-				_, err := remote.CreateWorktree(ctx, serverapi.WorktreeCreateRequest{
-					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-					SessionID:        "session",
-					BaseRef:          branchName,
+				_, err := remote.CreateWorktree(ctx, &worktreepb.CreateRequest{
+					SetupOperationId: worktreecontract.NewSetupOperationID().String(),
+					SessionId:        "session",
+					Spec:             &worktreepb.CreateSpec{BaseRef: &branchName},
 				})
 				return err
 			},
@@ -1036,13 +1068,9 @@ func TestRemoteWorktreeProjectedResponsesRejectContradictoryScope(t *testing.T) 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				req := acceptRemoteHandshake(t, ws)
-				if err := websocket.JSON.Receive(ws, &req); err != nil {
-					t.Fatalf("receive request: %v", err)
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, test.response)); err != nil {
-					t.Fatalf("send response: %v", err)
-				}
+				acceptRemoteHandshake(t, ws)
+				call := receiveRemoteGeneratedCall(t, ws, test.service, test.method, test.request)
+				sendRemoteGeneratedResult(t, ws, call, test.response)
 			})
 			defer server.Close()
 			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
@@ -1057,49 +1085,91 @@ func TestRemoteWorktreeProjectedResponsesRejectContradictoryScope(t *testing.T) 
 	}
 }
 
-func remoteTestRegisteredWorktreeEntry(t *testing.T, sessionScoped bool) serverapi.WorktreeListEntry {
+func remoteTestRegisteredWorktreeEntry(t *testing.T, sessionScoped bool) *worktreepb.ListEntry {
 	t.Helper()
 	branchName := "feature"
-	entry, err := serverapi.ProjectWorktreeListEntry(serverapi.WorktreeTopologyEntry{
-		Variant: serverapi.WorktreeTopologyVariantRegistered,
-		Registered: &serverapi.WorktreeRegisteredFacts{
-			Git: serverapi.WorktreeGitFacts{
-				CanonicalRoot: "/repo/feature",
-				HeadObject:    "abc123",
-				BranchName:    &branchName,
-				PathAvailable: true,
-			},
-			Kent: serverapi.WorktreeKentFacts{
-				WorktreeID:    "worktree-id",
-				CanonicalRoot: "/repo/feature",
-				DisplayName:   "feature",
+	entry := &worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_Registered{
+				Registered: remoteTestRegisteredWorktreeFacts(),
 			},
 		},
-	}, branchName, false, sessionScoped)
-	if err != nil {
-		t.Fatalf("ProjectWorktreeListEntry: %v", err)
+		Projection: &worktreepb.ListProjection{Selector: branchName},
+	}
+	if sessionScoped {
+		entry.Projection.Switch = &worktreepb.SwitchOperation{
+			Kind:     worktreepb.SwitchOperationKind_WORKTREE_SWITCH_OPERATION_ENTER,
+			Selector: &branchName,
+		}
+		entry.Projection.DeletePreview = &worktreepb.DeletePreviewOperation{Selector: "worktree-id"}
+	}
+	if err := protoapi.Validate(entry); err != nil {
+		t.Fatalf("validate Worktree list entry: %v", err)
 	}
 	return entry
 }
 
+func remoteTestWorktreeExecutionTarget() *worktreepb.SessionExecutionTarget {
+	return &worktreepb.SessionExecutionTarget{
+		WorkspaceId:           "workspace",
+		WorkspaceName:         "Workspace",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE,
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo",
+	}
+}
+
 func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		code int
-		want error
+		name   string
+		decode func() error
+		want   error
 	}{
-		{name: "prompt not found", code: protocol.ErrCodePromptNotFound, want: serverapi.ErrPromptNotFound},
-		{name: "prompt resolved", code: protocol.ErrCodePromptResolved, want: serverapi.ErrPromptAlreadyResolved},
-		{name: "prompt unsupported", code: protocol.ErrCodePromptUnsupported, want: serverapi.ErrPromptUnsupported},
-		{name: "method not found", code: protocol.ErrCodeMethodNotFound, want: serverapi.ErrMethodNotFound},
-		{name: "workflow task not found", code: protocol.ErrCodeWorkflowTaskNotFound, want: serverapi.ErrWorkflowTaskNotFound},
-		{name: "workflow completion ambiguous", code: protocol.ErrCodeWorkflowTaskCompleteAmbiguous, want: serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous},
-		{name: "workflow completion target missing", code: protocol.ErrCodeWorkflowTaskCompleteNotFound, want: serverapi.ErrWorkflowTaskCompleteTargetNotFound},
-		{name: "auth required", code: protocol.ErrCodeAuthRequired, want: serverapi.ErrServerAuthRequired},
-		{name: "runtime unavailable", code: protocol.ErrCodeRuntimeUnavailable, want: serverapi.ErrRuntimeUnavailable},
+		{name: "prompt not found", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptNotFound, Message: "prompt not found"})
+		}, want: serverapi.ErrPromptNotFound},
+		{name: "prompt resolved", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptResolved, Message: "prompt resolved"})
+		}, want: serverapi.ErrPromptAlreadyResolved},
+		{name: "prompt unsupported", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptUnsupported, Message: "prompt unsupported"})
+		}, want: serverapi.ErrPromptUnsupported},
+		{name: "method not found", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodeMethodNotFound, Message: "method not found"})
+		}, want: serverapi.ErrMethodNotFound},
+		{name: "workflow task not found", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskNotFound, Message: "workflow task not found"})
+		}, want: serverapi.ErrWorkflowTaskNotFound},
+		{name: "workflow completion ambiguous", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskCompleteAmbiguous, Message: "workflow completion ambiguous"})
+		}, want: serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous},
+		{name: "workflow completion target missing", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskCompleteNotFound, Message: "workflow completion target missing"})
+		}, want: serverapi.ErrWorkflowTaskCompleteTargetNotFound},
+		{
+			name: "auth required",
+			decode: func() error {
+				_, err := decodeGeneratedResult(
+					worktreeMethod("ListService", "List"),
+					&worktreepb.ListResult{
+						Outcome: &worktreepb.ListResult_Error{Error: &worktreepb.ListError{
+							Code:   "auth_required",
+							Detail: &worktreepb.ListError_AuthRequired{AuthRequired: &authpb.AuthRequiredDetails{}},
+						}},
+					},
+					worktreeError[*worktreepb.ListError],
+				)
+				return err
+			},
+			want: serverapi.ErrServerAuthRequired,
+		},
+		{name: "runtime unavailable", decode: func() error {
+			return protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeUnavailable, Message: "runtime unavailable"})
+		}, want: serverapi.ErrRuntimeUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := protocolError(&protocol.ResponseError{Code: tc.code, Message: tc.name}); !errors.Is(err, tc.want) {
+			if err := tc.decode(); !errors.Is(err, tc.want) {
 				t.Fatalf("protocol error = %v, want %v", err, tc.want)
 			}
 		})
@@ -1278,9 +1348,8 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "request-1",
-		SessionID:       source.SessionID,
-		WorkspaceRoot:   source.TargetRoot,
+		SessionID:     source.SessionID,
+		WorkspaceRoot: source.TargetRoot,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }
@@ -1302,17 +1371,12 @@ func assertRemoteSessionRetargetError(t *testing.T, err error, source *serverapi
 }
 
 func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
-	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
-		t.Run(source.Error(), func(t *testing.T) {
+	for _, test := range remoteTestWorktreeStructuredErrors() {
+		t.Run(test.name, func(t *testing.T) {
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-				req := acceptRemoteHandshake(t, ws)
-				if err := websocket.JSON.Receive(ws, &req); err != nil {
-					t.Fatalf("receive worktree request: %v", err)
-				}
-				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), mustRPCErrorData(t, source))); err != nil {
-					t.Fatalf("send structured worktree error: %v", err)
-				}
+				acceptRemoteHandshake(t, ws)
+				call := receiveRemoteGeneratedCall(t, ws, test.service, test.method, test.request)
+				sendRemoteGeneratedResult(t, ws, call, test.result)
 			})
 			defer server.Close()
 
@@ -1322,102 +1386,180 @@ func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
 			}
 			defer func() { _ = remote.Close() }()
 
-			_, err = remote.ListWorktrees(context.Background(), serverapi.WorktreeListRequest{SessionID: "session"})
-			assertRemoteWorktreeStructuredError(t, err, source, operationID)
+			err = test.call(context.Background(), remote)
+			test.assert(t, err)
 		})
 	}
 }
 
-func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
-	return []protocol.StructuredRPCError{
-		&serverapi.WorktreeSelectorError{
-			Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
-			Input: "feature",
-			Candidates: []serverapi.WorktreeSelectorCandidate{{
-				Variant:          serverapi.WorktreeTopologyVariantExternal,
-				Selector:         "feature",
-				FallbackIdentity: "/repo/feature",
-			}},
-		},
-		&serverapi.WorktreeTransitionPendingError{
-			SessionID:          "session",
-			PendingOperationID: operationID,
-		},
-		serverapi.NewWorktreeImmediateTransitionError(
-			serverapi.WorktreeImmediateTransitionOriginInactive,
-			errors.New("originating model step ended"),
-		),
-		&serverapi.WorktreeSetupRetainedError{
-			Worktree: serverapi.WorktreeTopologyEntry{
-				Variant: serverapi.WorktreeTopologyVariantRegistered,
-				Registered: &serverapi.WorktreeRegisteredFacts{
-					Git: serverapi.WorktreeGitFacts{CanonicalRoot: "/repo/feature", HeadObject: "abc123", PathAvailable: true},
-					Kent: serverapi.WorktreeKentFacts{
-						WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
-						CanonicalRoot: "/repo/feature",
-						DisplayName:   "feature",
-					},
+type remoteTestWorktreeStructuredError struct {
+	name    string
+	service string
+	method  string
+	request proto.Message
+	result  proto.Message
+	call    func(context.Context, *Remote) error
+	assert  func(*testing.T, error)
+}
+
+func remoteTestWorktreeStructuredErrors() []remoteTestWorktreeStructuredError {
+	selectorDetails := &worktreepb.SelectorErrorDetails{
+		Kind:  worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_AMBIGUOUS,
+		Input: "feature",
+		Candidates: []*worktreepb.SelectorCandidate{{
+			Variant:          worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_EXTERNAL,
+			Selector:         "feature",
+			FallbackIdentity: "/repo/feature",
+		}},
+	}
+	retainedWorktree := remoteTestRegisteredWorktreeEntryWithoutProjection()
+	dirtyFileCount := int32(2)
+	createDiagnostic := errors.Join(
+		errors.New("worktree path already exists"),
+		errors.New("cleanup failed"),
+	).Error()
+	return []remoteTestWorktreeStructuredError{
+		{
+			name:    "selector error",
+			service: "SelectorService",
+			method:  "Resolve",
+			request: &worktreepb.SelectorResolveRequest{},
+			result: &worktreepb.SelectorResolveResult{Outcome: &worktreepb.SelectorResolveResult_Error{
+				Error: &worktreepb.SelectorResolveError{
+					Code:   "selector_error",
+					Detail: &worktreepb.SelectorResolveError_SelectorError{SelectorError: selectorDetails},
 				},
+			}},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.ResolveWorktreeSelector(ctx, &worktreepb.SelectorResolveRequest{
+					SessionId: "session", Selector: "feature",
+				})
+				return err
 			},
-			ScriptPath: "/repo/scripts/setup.sh",
-			Diagnostic: "setup failed",
-		},
-		&serverapi.WorktreeDeletePreconditionError{
-			DirtyState: clientui.WorktreeDirtyState{
-				Kind:           clientui.WorktreeDirtyStateDirty,
-				DirtyFileCount: remoteTestIntPointer(2),
+			assert: func(t *testing.T, err error) {
+				var decoded *worktreecontract.SelectorError
+				if !errors.As(err, &decoded) || len(decoded.Details.Candidates) != 1 ||
+					decoded.Details.Candidates[0].FallbackIdentity != "/repo/feature" {
+					t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
+				}
 			},
 		},
-		&serverapi.WorktreeCreateError{
-			Owner: serverapi.WorktreeCreateErrorOwnerForm,
-			Diagnostic: errors.Join(
-				errors.New("worktree path already exists"),
-				errors.New("cleanup failed"),
-			).Error(),
+		{
+			name:    "setup retained",
+			service: "CreateService",
+			method:  "Create",
+			request: &worktreepb.CreateRequest{},
+			result: &worktreepb.CreateResult{Outcome: &worktreepb.CreateResult_Error{
+				Error: &worktreepb.CreateError{
+					Code: "setup_retained",
+					Detail: &worktreepb.CreateError_SetupRetained{SetupRetained: &worktreepb.SetupRetainedDetails{
+						Worktree:   retainedWorktree,
+						ScriptPath: "/repo/scripts/setup.sh",
+						Diagnostic: "setup failed",
+					}},
+				},
+			}},
+			call: func(ctx context.Context, remote *Remote) error {
+				baseRef := "feature"
+				_, err := remote.CreateWorktree(ctx, &worktreepb.CreateRequest{
+					SetupOperationId: worktreecontract.NewSetupOperationID().String(),
+					SessionId:        "session",
+					Spec:             &worktreepb.CreateSpec{BaseRef: &baseRef},
+				})
+				return err
+			},
+			assert: func(t *testing.T, err error) {
+				var decoded *worktreecontract.SetupRetainedError
+				if !errors.As(err, &decoded) || decoded.Details.Worktree.Kent.DisplayName != "feature" {
+					t.Fatalf("decoded retained setup = %+v (%v)", decoded, err)
+				}
+			},
+		},
+		{
+			name:    "delete precondition",
+			service: "TransitionService",
+			method:  "Delete",
+			request: &worktreepb.DeleteRequest{},
+			result: &worktreepb.DeleteResult{Outcome: &worktreepb.DeleteResult_Error{
+				Error: &worktreepb.DeleteError{
+					Code: "delete_precondition",
+					Detail: &worktreepb.DeleteError_DeletePrecondition{DeletePrecondition: &worktreepb.DeletePreconditionDetails{
+						DirtyState: &worktreepb.DirtyState{
+							Kind:           worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY,
+							DirtyFileCount: &dirtyFileCount,
+						},
+					}},
+				},
+			}},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.DeleteWorktree(ctx, &worktreepb.DeleteRequest{
+					SessionId:           "session",
+					Selector:            "feature",
+					BranchCleanupPolicy: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN,
+				})
+				return err
+			},
+			assert: func(t *testing.T, err error) {
+				var decoded *worktreecontract.DeletePreconditionError
+				if !errors.As(err, &decoded) || decoded.Details.DirtyState.DirtyFileCount == nil ||
+					*decoded.Details.DirtyState.DirtyFileCount != 2 {
+					t.Fatalf("decoded delete precondition = %+v (%v)", decoded, err)
+				}
+			},
+		},
+		{
+			name:    "create error",
+			service: "CreateService",
+			method:  "Create",
+			request: &worktreepb.CreateRequest{},
+			result: &worktreepb.CreateResult{Outcome: &worktreepb.CreateResult_Error{
+				Error: &worktreepb.CreateError{
+					Code: "create_failed",
+					Detail: &worktreepb.CreateError_CreateFailed{CreateFailed: &worktreepb.CreateFailureDetails{
+						Owner:      worktreepb.CreateErrorOwner_WORKTREE_CREATE_ERROR_OWNER_FORM,
+						Diagnostic: createDiagnostic,
+					}},
+				},
+			}},
+			call: func(ctx context.Context, remote *Remote) error {
+				baseRef := "feature"
+				_, err := remote.CreateWorktree(ctx, &worktreepb.CreateRequest{
+					SetupOperationId: worktreecontract.NewSetupOperationID().String(),
+					SessionId:        "session",
+					Spec:             &worktreepb.CreateSpec{BaseRef: &baseRef},
+				})
+				return err
+			},
+			assert: func(t *testing.T, err error) {
+				var decoded *worktreecontract.CreateError
+				if !errors.As(err, &decoded) || decoded.Owner != worktreecontract.CreateErrorOwnerForm ||
+					decoded.Diagnostic != createDiagnostic {
+					t.Fatalf("decoded create error = %+v (%v)", decoded, err)
+				}
+			},
 		},
 	}
 }
 
-func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, operationID serverapi.WorktreeOperationID) {
-	t.Helper()
-	switch source.(type) {
-	case *serverapi.WorktreeSelectorError:
-		var decoded *serverapi.WorktreeSelectorError
-		if !errors.As(err, &decoded) || len(decoded.Candidates) != 1 || decoded.Candidates[0].FallbackIdentity != "/repo/feature" {
-			t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeTransitionPendingError:
-		var decoded *serverapi.WorktreeTransitionPendingError
-		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
-			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeImmediateTransitionError:
-		var decoded *serverapi.WorktreeImmediateTransitionError
-		if !errors.As(err, &decoded) || decoded.Kind != serverapi.WorktreeImmediateTransitionOriginInactive {
-			t.Fatalf("decoded immediate transition = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeSetupRetainedError:
-		var decoded *serverapi.WorktreeSetupRetainedError
-		if !errors.As(err, &decoded) || decoded.Worktree.Registered == nil || decoded.Worktree.Registered.Kent.DisplayName != "feature" {
-			t.Fatalf("decoded retained setup = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeDeletePreconditionError:
-		var decoded *serverapi.WorktreeDeletePreconditionError
-		if !errors.As(err, &decoded) || decoded.DirtyState.DirtyFileCount == nil || *decoded.DirtyState.DirtyFileCount != 2 {
-			t.Fatalf("decoded delete precondition = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeCreateError:
-		var decoded *serverapi.WorktreeCreateError
-		if !errors.As(err, &decoded) || decoded.Owner != source.(*serverapi.WorktreeCreateError).Owner || decoded.Diagnostic != source.(*serverapi.WorktreeCreateError).Diagnostic {
-			t.Fatalf("decoded create error = %+v (%v)", decoded, err)
-		}
-	default:
-		t.Fatalf("unsupported structured worktree error %T", source)
-	}
+func remoteTestRegisteredWorktreeEntryWithoutProjection() *worktreepb.RegisteredFacts {
+	return remoteTestRegisteredWorktreeFacts()
 }
 
-func remoteTestIntPointer(value int) *int {
-	return &value
+func remoteTestRegisteredWorktreeFacts() *worktreepb.RegisteredFacts {
+	branchName := "feature"
+	return &worktreepb.RegisteredFacts{
+		Git: &worktreepb.GitFacts{
+			CanonicalRoot: "/repo/feature",
+			HeadObject:    "abc123",
+			BranchName:    &branchName,
+			PathAvailable: true,
+		},
+		Kent: &worktreepb.KentFacts{
+			WorktreeId:    "worktree-id",
+			CanonicalRoot: "/repo/feature",
+			DisplayName:   "feature",
+		},
+	}
 }
 
 func remoteTestStringPointer(value string) *string {
@@ -1476,6 +1618,105 @@ func TestProtocolErrorMapsEquivalentRuntimeSentinel(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesPendingWorkNotPending(t *testing.T) {
+	id := runtimeids.NewQueueItemID()
+	source := &serverapi.PendingWorkNotPendingError{ItemID: id}
+	decoded := protocolError(&protocol.ResponseError{Code: source.RPCErrorCode(), Message: source.Error(), Data: source.RPCErrorData()})
+	var typed *serverapi.PendingWorkNotPendingError
+	if !errors.Is(decoded, serverapi.ErrPendingWorkNotPending) || !errors.As(decoded, &typed) || typed.ItemID != id {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	if err := serverapi.DecodePendingWorkNotPendingError((&serverapi.PendingWorkNotPendingError{}).RPCErrorData()); err == nil {
+		t.Fatal("invalid internal item id encoded as typed not-pending")
+	}
+}
+
+func TestProtocolErrorDecodesPendingWorkCapacityDirectly(t *testing.T) {
+	source := &serverapi.PendingWorkCapacityError{}
+	decoded := protocolError(&protocol.ResponseError{
+		Code:    source.RPCErrorCode(),
+		Message: source.Error(),
+		Data:    source.RPCErrorData(),
+	})
+	var typed *serverapi.PendingWorkCapacityError
+	if !errors.Is(decoded, serverapi.ErrPendingWorkCapacity) || !errors.As(decoded, &typed) {
+		t.Fatalf("decoded = %T %v, want typed Pending Work capacity", decoded, decoded)
+	}
+	if err := serverapi.DecodePendingWorkCapacityError(json.RawMessage(`{"reason":"other"}`)); err == nil {
+		t.Fatal("invalid Pending Work capacity reason decoded as typed capacity")
+	}
+}
+
+func TestRemotePendingWorkContractsPreserveTypedResults(t *testing.T) {
+	guidance, exact := "keep details", " /compact   keep details "
+	requestID := runtimeids.NewCompactionRequestID()
+	wire := mustJSON(t, serverapi.RuntimeCompactContextRequest{
+		SessionID: "session-1", RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{Guidance: &guidance, RestorationInput: exact}})
+	var compactRequest serverapi.RuntimeCompactContextRequest
+	if err := json.Unmarshal(wire, &compactRequest); err != nil {
+		t.Fatal(err)
+	}
+	if compactRequest.RequestID != requestID ||
+		compactRequest.Admission.Guidance == nil ||
+		*compactRequest.Admission.Guidance != guidance ||
+		compactRequest.Admission.RestorationInput != exact {
+		t.Fatalf("compact request = %+v", compactRequest)
+	}
+	id := runtimeids.NewQueueItemID()
+	list := serverapi.RuntimeListPendingWorkResponse{PendingWork: serverapi.PendingWork{Items: []serverapi.PendingWorkItem{{
+		ID: id, Lane: serverapi.PendingWorkLaneSteer, Kind: serverapi.PendingWorkItemKindManualCompaction,
+		State: serverapi.PendingWorkItemStatePending, ManualCompaction: &serverapi.PendingWorkManualCompaction{
+			Guidance: &guidance, RestorationInput: exact},
+	}}}}
+	removed := serverapi.RuntimeRemovePendingWorkResponse{Restoration: serverapi.PendingWorkRestoration{
+		Kind:             serverapi.PendingWorkItemKindManualCompaction,
+		ManualCompaction: &serverapi.PendingWorkManualCompactionRestoration{Input: exact},
+	}}
+	invalid := list
+	invalid.PendingWork.Items = []serverapi.PendingWorkItem{list.PendingWork.Items[0]}
+	invalid.PendingWork.Items[0].ManualCompaction = nil
+	methods := []string{protocol.MethodRuntimeListPendingWork, protocol.MethodRuntimeRemovePendingWork, protocol.MethodRuntimeListPendingWork}
+	responses := []any{list, removed, invalid}
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		for index, response := range responses {
+			var request protocol.Request
+			if err := websocket.JSON.Receive(ws, &request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Method != methods[index] {
+				t.Fatalf("method = %q, want %q", request.Method, methods[index])
+			}
+			if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = remote.Close() }()
+	gotList, err := remote.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compaction := gotList.PendingWork.Items[0].ManualCompaction
+	if compaction == nil || compaction.Guidance == nil || *compaction.Guidance != guidance || compaction.RestorationInput != exact {
+		t.Fatalf("listed compaction = %+v", compaction)
+	}
+	gotRemoval, err := remote.RemovePendingWork(context.Background(), serverapi.RuntimeRemovePendingWorkRequest{SessionID: "session-1", ItemID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRemoval.Restoration.ManualCompaction == nil || gotRemoval.Restoration.ManualCompaction.Input != exact {
+		t.Fatalf("removal = %+v", gotRemoval.Restoration)
+	}
+	if _, err := remote.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{SessionID: "session-1"}); err == nil {
+		t.Fatal("invalid list response was accepted")
+	}
+}
 func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 	command := runtimeinput.PromptCommandReviewName
 	promptCause := &serverapi.PromptCommandError{
@@ -1515,6 +1756,12 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 		{name: "runtime unavailable", cause: serverapi.ErrRuntimeUnavailable, check: func(t *testing.T, err error) {
 			if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 				t.Fatalf("decoded cause = %v, want runtime unavailable", err)
+			}
+		}},
+		{name: "Pending Work capacity", cause: &serverapi.PendingWorkCapacityError{}, check: func(t *testing.T, err error) {
+			var typed *serverapi.PendingWorkCapacityError
+			if !errors.Is(err, serverapi.ErrPendingWorkCapacity) || !errors.As(err, &typed) {
+				t.Fatalf("decoded cause = %T %v, want typed Pending Work capacity", err, err)
 			}
 		}},
 	} {

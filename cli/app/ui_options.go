@@ -27,6 +27,7 @@ type UITransition struct {
 	TargetSessionID              string
 	ForkRollbackTargetID         string
 	PreviousSessionID            *runtimeids.SessionID
+	SessionRetargeted            bool
 }
 
 const (
@@ -103,6 +104,18 @@ func WithUITheme(theme string) UIOption {
 	return func(m *uiModelConstruction) {
 		m.theme = strings.TrimSpace(theme)
 		m.rebuildTranscriptView()
+	}
+}
+
+func WithUINativeProgressBar(enabled bool) UIOption {
+	return func(m *uiModelConstruction) {
+		m.tuiNativeProgressBar = enabled
+	}
+}
+
+func WithUITerminalOutput(output *uiTerminalOutput) UIOption {
+	return func(m *uiModelConstruction) {
+		m.terminalOutput = output
 	}
 }
 

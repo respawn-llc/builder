@@ -158,7 +158,7 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 		     completion_mode = '',
 		     script_path = 'scripts/branch'
 		 WHERE id = ?`,
-		testGraphEntityBlob(t, string(workflow.NodeIDOf(driftingBranch))),
+		string(workflow.NodeIDOf(driftingBranch)),
 	); err != nil {
 		t.Fatalf("change competing branch kind: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 		`UPDATE workflow_edges
 		 SET prompt_template = ''
 		 WHERE target_node_id = ?`,
-		testGraphEntityBlob(t, string(workflow.NodeIDOf(driftingBranch))),
+		string(workflow.NodeIDOf(driftingBranch)),
 	); err != nil {
 		t.Fatalf("change competing branch prompt: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestManualMoveExecutableRejectsConcurrentScriptPathDriftWithoutMutation(t *
 	if _, err := writer.ExecContext(
 		ctx,
 		`UPDATE workflow_nodes SET script_path = 'scripts/missing' WHERE id = ?`,
-		testGraphEntityBlob(t, string(workflow.NodeIDOf(target))),
+		string(workflow.NodeIDOf(target)),
 	); err != nil {
 		t.Fatalf("change competing script path: %v", err)
 	}

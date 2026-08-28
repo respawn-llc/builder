@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
+	"core/cli/app/internal/projectbinding"
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	tuitest "core/internal/testharness/pty"
@@ -91,7 +93,7 @@ func TestStartupMarkdownHeadersUseCurrentSurfaceWidths(t *testing.T) {
 				model := newProjectBindingPickerModel(nil, "dark", projectPickerOptions{
 					HeaderMarkdown: source,
 					HeaderFallback: "fallback",
-				})
+				}, projectbinding.ProjectPickerSnapshot{})
 				model.width = width
 				return model.renderHeader()
 			},
@@ -99,7 +101,12 @@ func TestStartupMarkdownHeadersUseCurrentSurfaceWidths(t *testing.T) {
 		{
 			name: "workspace picker",
 			render: func() string {
-				model := newProjectWorkspacePickerModel(nil, "dark")
+				model := &projectWorkspacePickerModel{
+					width:    width,
+					theme:    "dark",
+					styles:   newSessionPickerStyles("dark"),
+					headerMD: newStartupMarkdownRendererWithWordWrap("dark"),
+				}
 				model.width = width
 				return model.renderHeader()
 			},
@@ -286,7 +293,15 @@ func TestGoalMarkdownLinksStayBoundedAndDoNotReachPadding(t *testing.T) {
 					WithUIMarkdownLinkPresentation(presentation.links),
 				)
 				m.theme = theme
-				m.goal.goal = goalCoreFromRuntimeGoal(runtimeClientTestRuntimeGoal(runtimeClientTestGoal("", "[PR #456](https://github.com/org/repo/pull/456)", clientui.RuntimeGoalStatusActive), false))
+				m.goal.goal = &clientui.RuntimeGoal{
+					Goal: &clientui.Goal{
+						ID:        "goal-1",
+						Objective: "[PR #456](https://github.com/org/repo/pull/456)",
+						Status:    clientui.RuntimeGoalStatusActive,
+						CreatedAt: time.Unix(1, 0).UTC(),
+						UpdatedAt: time.Unix(1, 0).UTC(),
+					},
+				}
 
 				var linked strings.Builder
 				for _, line := range m.layout().goalOverlayContentLines(12) {

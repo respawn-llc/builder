@@ -4,19 +4,20 @@
 
 - Kent does not virtualize or sandbox command execution. Isolation requires running Kent on a remote machine or in Docker.
 - The server is the single authority for tool calls, session and other durable data, agent execution, and provider communication. CLI and GUI clients control and observe that authority; they do not own parallel local state or execution.
-- Client connection changes are transport-only. They never change server work, and server event publication never depends on subscriber count.
+- Client presence and connection lifecycle are transport-only and are never server-work authority. Connecting, disconnecting, canceling or closing a client request, reconnecting, changing subscriber count, navigating away, or closing a UI may stop that client's observation or delivery only; it never starts, stops, pauses, cancels, retries, replays, duplicates, authorizes, or otherwise changes server-owned work. Server event publication never depends on subscriber count.
 - A completed live execution has one server-authoritative terminal result: status, result kind, reason that no final answer exists, final assistant message, runtime error, timestamps, and whether work was performed. Work was performed when a completed step observed at least two tool-start events, including events emitted during recovery.
 - Terminal-result delivery is best-effort and never delays execution completion, waiting callers, queued work, interruption, or successor scheduling.
 - Each controlling TUI may run its configured read-only lifecycle command after it accepts a lifecycle event. Desktop, headless, subagent, and server-only use never run it. The server neither supplies nor overrides the command.
 - Each client transcript subscription is ordered and sequence-numbered. Hydration is the first message. Every later update has the next per-subscription sequence number; each update contains the required content, tool completions appear in committed order, and committed assistant entries retain the identity of their streamed output. Clients apply every received message once and in order. Clients receive neither total transcript counts nor absolute offsets or revisions.
 - Opening or reopening Chat obtains an ordered, sequence-numbered transcript hydration and independently loads the latest completed server-owned projections for RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state.
 - The non-transcript projections may be stale and may represent different completed moments. Server authority identifies the owner of each fact and does not promise read freshness or a cross-owner snapshot.
+- A live Runtime may also report current Reviewer activity as best-effort state without reconstructing an earlier review from transcript history or promising that reconnect observes it.
+- Feed delivery state never replaces authoritative Session facts.
 - Transcript delivery does not promise lossless continuity across subscription establishment, disconnection, process failure, or recovery. When a client detects discontinuity, it reopens the ordered transcript subscription and reissues the independent owner reads instead of relying on cached feed state.
 - A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; Kent does not fabricate a target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
-- A failure to clear PendingModelRecovery remains live operational feedback. TUI and Desktop surface it through their typed operational-diagnostic or status-notice owner; it is neither persisted nor projected as committed transcript history.
-- The server owns exact Session-resource admission, Runtime Command ordering, dormant Goal commands, domain-operation ordering, idempotency, server work queues, execution lifecycle, reconciliation, and persistence disposition.
-- Transport preserves request identity for request/response correlation. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and cancel and drain connection-bound request handling when that connection closes. These connection mechanics never order domain operations, retain server work after request handling, or decide idempotency, execution, reconciliation, or persistence outcomes.
+- Active Session Runtime mutation and model-loop ownership follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification. Dormant Session mutations and long-running operations remain with their concrete domain owners.
+- Transport may correlate one request with one response, sequence connection setup, bound concurrent handling on one connection, apply socket backpressure, and stop connection-bound waiting and delivery when that connection closes. Transport teardown never cancels or drains the underlying server operation. Transport correlation is not a product identity, replay key, domain order, or server-work owner.
 
 ## Skills And Generated Assets
 
@@ -28,32 +29,62 @@
 - If generated content is edited, deleted, renamed, linked, or invalid, Kent moves the generated tree to `<persistence-root>/recovered/<UTC timestamp>/.generated` and recreates it. A non-empty recovered directory causes each new session to show a user-only warning to clean recovered files and not edit `.generated`.
 - Generated skills are always seeded; `[skills]` settings only control their model visibility. Empty files, invalid frontmatter, duplicate names, symlinks, and non-regular generated entries are rejected.
 
-## Core Tools And Ordered Runtime Behavior
+## Core Tools And Runtime Integration
 
-- The core model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
+- The core model tools are `exec_command`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
 - Kent does not expose model-callable Goal, worktree, Task, or Workflow tools outside Workflow-controlled Sessions. Adding a tool requires explicit human approval and a spec update.
-- Tool definitions advertise one canonical tool name and canonical parameter names, and their schemas remain closed to unrecognized parameters. Kent separately maintains common tool-name and parameter-name aliases that remain hidden from the advertised definition but are accepted when supplied. A canonical parameter takes priority over its aliases when both are supplied; when only multiple aliases are supplied, their precedence is unspecified. When a tool call reaches Kent, unrecognized parameters are ignored.
-- One ordered runtime authority owns all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
-- `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn.
-- A human steer remains a user message. Pending human steers become one user message, with submissions separated by blank lines.
-- Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The sole exception is line-by-line Markdown streaming of agent commentary and final answers.
+- Model/transcript-visible Session mutations follow the Active Session Runtime's accepted mutation order unless the Runtime Steering specification assigns the operation to an exact or direct owner.
+- Tool definitions advertise one canonical tool name and canonical parameter names, and their schemas remain closed to unrecognized parameters. Kent accepts the hidden aliases below only for incoming model tool calls, and they do not expand accepted configuration names.
+- Kent normalizes every accepted alias to its canonical tool and parameter names before execution, persistence, presentation, or later model context.
+- Kent checks exact canonical spelling, listed semantic aliases in order, canonical camelCase forms, semantic-alias camelCase forms, and then case-insensitive forms. Every listed multiword canonical name and semantic alias also accepts its explicit kebab-case companion. Kent does not perform generic punctuation or fuzzy normalization.
+- Canonical parameters and their accepted casing or separator forms take priority over semantic aliases. Precedence among multiple semantic aliases is unspecified. Unrecognized parameters are ignored when a call reaches Kent.
+- An active tool whose published name exactly matches the incoming spelling takes priority over a hidden alias. `patch` and `edit` are mutually exclusive: `edit` aliases `patch` when `patch` is active and remains canonical when `edit` is active.
+- Kent panics during startup in development and production when hidden aliases resolve one spelling to different tools, or parameter aliases within one tool resolve one spelling to different canonical parameters.
+- Tool aliases are `exec_command`: `shell`, `bash`, `exec`, `run_command`, `shell_command`, `run_shell`, `bash_command`; `write_stdin`: none; `view_image`: `read_image`, `open_image`, `inspect_image`, `vision`, `read_pdf`, `open_pdf`, `inspect_pdf`; `patch`: `apply_patch`, `edit`; `ask_question`: `question`, `ask_user_question`, `request_user_input`, `ask`, `ask_user`, `ask_human`, `help`, `say`; `trigger_handoff`: `handoff`, `compact`, `request_handoff`; and `edit`: `edit_file`, `str_replace_editor`, `replace`, `string_replace`, `replace_text`, `write`.
+- Parameter aliases are `exec_command`: `cmd` from `command`, `script`; `workdir` from `cwd`, `working_directory`, `working_dir`; `shell` from `shell_path`, `interpreter`; `login` from `login_shell`; `tty` from `pty`, `use_tty`; `raw` from `raw_output`; `yield_time_ms` from `yield_ms`, `wait_ms`; `max_output_tokens` from `max_tokens`, `output_token_limit`; `write_stdin`: `session_id` from `process_id`, `shell_id`; `chars` from `input`, `stdin`, `text`; `yield_time_ms` from `yield_ms`, `wait_ms`; `max_output_tokens` from `max_tokens`, `output_token_limit`; `view_image`: `path` from `file_path`, `image_path`, `file`, `pdf_path`, `filename`; `raw` from `raw_output`, `unoptimized`, `disable_optimization`, `original_quality`; `patch`: `patch` from `diff`, `patch_text`, `content`, `patch_content`, `input`; `edit`: `path` from `file_path`, `file`; `old_string` from `old_text`, `find`, `search`; `new_string` from `new_text`, `replacement`, `replace`; `replace_all` from `all`, `global`; `ask_question`: `question` from `prompt`, `message`, `text`; `suggestions` from `options`, `choices`, `answers`; `recommended_option_index` from `recommended_index`, `suggested_option_index`, `default_index`; and `trigger_handoff`: `summarizer_prompt` from `summary_prompt`, `handoff_prompt`, `compaction_prompt`; `future_agent_message` from `next_agent_message`, `handoff_message`, `continuation_message`.
+- The canonical parameter `yield_time_ms` also accepts the mixed separator form `yield-time_ms`, its full-kebab form `yield-time-ms`, and its generated camelCase form `yieldTimeMs`.
+- `steer` applies submitted input through that accepted mutation order.
+- `queue` remains the separate post-turn user Queue.
+- A human steer remains one user message and applies as one first-in, first-out Session mutation.
+- A `kent run steer` invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
+- A `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
+- A steer issued from another Session contains exactly:
+
+```text
+Agent from session <source-session-id> said:
+> <submitted steer text>
+
+To respond, run: kent run steer <source-session-id> "message"
+```
+
+- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
+- The message includes the source Session ID and omits its name.
+- A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
+- Prompt history stores the complete wrapped message.
+- Tool lifecycle effects, Runtime notices, additions after history replacement, and other model/transcript-visible results enter through the owning Agent Step or accepted Session mutation order.
+- Line-by-line Markdown streaming remains transient presentation rather than a committed Runtime mutation.
 - A Kent-executed tool call is durable before Kent begins its execution. Provider-hosted work may already be complete when Kent receives its outcome; that outcome follows the same compatible Result Group durability as Kent-executed results. Kent commits compatible complete tool results from one Agent Step in one or more ordered Result Groups; an Agent Turn is never a Result Group. Each result keeps its completion, model-visible output, and attached operator diagnostic together, whether it reports success or error.
 - Result Groups preserve provider-required order and otherwise the Agent Step's stable result order. Clients and later model requests see no part of a Result Group before the complete Result Group is durable.
 - A dormant Goal command is the sole persisted-transcript exception outside an Active Session Runtime: the server atomically confirms that no current agent resource owns the Session, then persists the durable Goal transition and one Goal notice without creating a runtime, live event, transaction, rollback, repair, retry, or extra admission lock. A concurrent live release surfaces its error rather than re-admitting.
 - Runtime notices that are not model-visible remain in the transcript. A client never replays a Runtime Command after it loses the result or reconnects. After reconnect, the client reissues Session reads and subscriptions. A later explicit user submission creates a new Runtime Command.
 - Input accepted before workflow completion becomes final supersedes that pending completion and continues the same Exact Execution Scope. Input submitted after that point, or while the scope is closing, receives a retryable rejection so the client restores its draft; it never reaches a successor Node or Session.
 - History replacement is atomic from the model's perspective: replacement content and its new context become the next ordered conversation state together. Persisted transcript order never changes.
+- Instant Stop, pending-input disposition, Runtime retirement, and loss behavior follow the Runtime Steering specification.
 
 ## Command Execution
 
-- `shell` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
+- `exec_command` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
 - Before launching a command, Kent must resolve a non-empty selected Working Directory to a normalized absolute path and verify that the path exists and is a directory.
 - If a non-empty selected Working Directory does not exist, Kent must not launch the command and must return `<normalized absolute path> does not exist, so the shell command was not executed. Please select an existing working directory`.
 - If a non-empty selected Working Directory exists but is not a directory, Kent must not launch the command and must return `<normalized absolute path> is not a directory, so the shell command was not executed. Please select an existing working directory`.
 - An empty selected Working Directory retains the shell manager's existing validation behavior and never falls back to Kent's server process working directory.
-- A `shell` failure never adds the `exec_command failed:` prefix to its model-visible error.
+- An `exec_command` failure never adds the `exec_command failed:` prefix to its model-visible error.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
 - Kent does not limit concurrent command processes, including background processes visible through `/ps`.
+- A foreground command may run while later short Session settings, human input, and model-visible notices are accepted and applied.
+- Kent applies a foreground command's terminal output or typed failure before another provider request starts.
+- After a command moves to the background, it no longer blocks unrelated provider or tool work.
+- The process owner later records and delivers the background terminal result when the Session can still receive it.
 - A model output check requesting less than 15 seconds fails with `Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry`. One requesting more than 24 hours fails with `This poll is too long. Consider using system cron jobs and \`kent run\` headless runs for tasks that require such long wait periods`. Sending input is not subject to those limits.
 - A non-zero command exit is recoverable and does not abort the model turn. Launch failures are not retried automatically. Interruption sends `SIGINT`, then `SIGKILL` after 10 seconds.
 - `[shell].postprocessing_mode` accepts only `none`, `builtin`, `user`, or `all`; omission selects the built-in default, while an empty or unknown value is an error. `[shell].postprocess_hook` is optional; absence is `null`, and a present empty or whitespace-only value is invalid.
@@ -61,23 +92,21 @@
 - Except in `none` and `raw` modes, generic command-output sanitization runs before built-ins and the optional hook. Built-ins run before the hook; a built-in halt stops only later built-ins. In `user` and `all` modes, Kent runs the user-hook stage only when `[shell].postprocess_hook` is configured; an omitted hook silently skips that stage. A user hook receives JSON on stdin containing the original sanitized and current processed output, and returns JSON on stdout. If a configured hook executable is missing, times out, exits nonzero, or returns invalid JSON, Kent preserves the current model-facing output and reports a warning.
 - `/ps` can show and operate on background processes from other sessions in the same app instance.
 - Background process IDs are unique for one server lifetime. Their Session association controls notices and history, not access.
-- Kent exposes at most 1,000 completed background processes per server lifetime. Completing another process removes the least recently directly accessed completed process from `/ps` and process controls.
+- Kent exposes at most 1,000 completed background processes per server lifetime. Completing another process removes the least recently directly accessed completed process and its retained log and completion output from `/ps` and process controls.
+- Kent performs terminal event creation, delivery/finalization, and only then retention eviction and artifact cleanup.
 - Direct process access refreshes completed-process recency. Listing `/ps` does not refresh recency.
 - The completed-process retention limit never removes a running process.
 - Accessing an unknown or removed process returns the same shell-result-unavailable error.
+- Artifact-cleanup failures remain shell-owner operator diagnostics. Runtime Steering does not own or retry that cleanup.
 
 ## Patch And Image Tools
 
 - `patch` applies atomically: malformed or conflicting patches leave files unchanged. It supports add, update, move, and delete; resolves real paths before validating targets; has no timeout; and is not retried automatically.
-- Native file operations within the Session's Execution Target Root do not require approval. When ordinary policy would require outside-workspace approval, Kent first checks authoritative Project metadata for an attached Workspace containing the canonical target.
-- A target inside an attached Workspace proceeds without approval. Kent caches the broadest attached Workspace root containing that target, together with its authoritative metadata, and later operations inside that root require no metadata check.
-- A Session Runtime caches successful attached-Workspace checks only. It retains each learned root until retirement without eviction or reconciliation, so detaching a learned Workspace does not revoke access from that Runtime.
-- A target outside the Execution Target Root and every learned or attached Workspace follows the ordinary approval policy. `patch` and `edit` require approval unless `allow_non_cwd_edits=true`, while `view_image` follows the same rule for reads.
-- `patch`, `edit`, and `view_image` allow targets under the operating system's temporary roots and their canonical platform aliases without approval; Kent recognizes aliases such as `/tmp` and `/private/tmp` and `/var/tmp` and `/private/var/tmp` where those paths exist. The temporary-root allowance does not establish an attached Workspace, override path-deny rules, or permit direct edits to another Kent-managed Worktree. The default for `allow_non_cwd_edits` is `false`. A denied edit returns an explicit error telling the model not to circumvent the decision and to request manual user edits when essential.
-- Metadata contention keeps the file operation pending instead of producing a busy or locked failure. An unavailable metadata store terminates Kent immediately in debug and production.
+- Native file operations within the Session's Execution Target Root or any Workspace included in the Session's Project Workspace collection do not require approval. Attached Workspaces omitted by the Project Workspace collection limit use the ordinary approval policy. Outside that boundary, `patch` and `edit` require approval unless `allow_non_cwd_edits=true`, while `view_image` follows the same rule for reads. All three tools also allow targets under the operating system's temporary roots and their canonical platform aliases without approval; Kent recognizes aliases such as `/tmp` and `/private/tmp` and `/var/tmp` and `/private/var/tmp` where those paths exist. The temporary-root allowance does not add those paths to the Project Workspace collection, override path-deny rules, or permit direct edits to another Kent-managed Worktree. The default for `allow_non_cwd_edits` is `false`. A denied edit returns an explicit error telling the model not to circumvent the decision and to request manual user edits when essential.
 - An edit that targets another Kent-managed Worktree is forbidden even when that Worktree belongs to a Workspace attached to the same Project.
-- `patch` and `edit` deny every target under the global `worktrees.base_dir` loaded at server startup unless the target is inside the Session's current Worktree. This denial applies to a sibling Worktree created after the Session starts, and it occurs before any outside-Workspace approval.
-- `view_image` resolves absolute canonical paths before checking access. Workspace checks happen after symlink resolution, so symlink escapes outside the Session's Execution Target Root and learned attached Workspace roots remain outside the trusted boundary until the authoritative Project check succeeds. Image reads use the same Project boundary and approval policy as edits.
+- `patch` and `edit` deny every target under the Worktree Base Dir loaded at server startup unless the target is inside the Session's current Worktree. This denial applies to a sibling Worktree created after the Session starts, and it occurs before any outside-Workspace approval.
+- `view_image` resolves absolute canonical paths before checking access. Workspace checks happen after symlink resolution, so symlink escapes outside the Session's Execution Target Root and the Workspaces included in the Session's Project Workspace collection remain outside the trusted boundary. Image reads use the same Project boundary and approval policy as edits.
+- A Session Runtime prepares its Project Workspace collection once. Native file tools do not query Project metadata for each target because file operations must not add metadata contention.
 - Approved outside-workspace image reads appear in run logs with the requested and resolved paths.
 - `view_image` opens and reads each local file in an isolated worker. Kent terminates the worker and returns a recoverable tool error when opening or reading takes longer than 10 seconds or the Agent Step is interrupted.
 - When a successful patch cannot accurately describe its whole-file deletion count, Kent never invents a count or reverses the filesystem change. Debug mode fails fast with diagnostics. Production preserves the successful path-only result, records an operator diagnostic excluded from model context, and continues.
@@ -100,12 +129,11 @@
 - An invalid background-completion state fails fast with diagnostics in debug mode. Production preserves the terminal process facts, records the diagnostic, and reports an explicit Kent error instead of inventing successful or empty output.
 - Transient model-step failures retry after `1s`, `2s`, `4s`, `8s`, and `16s`. Ongoing mode shows concise model/API errors; detail and logs retain full details.
 - After a provider HTTP 400, Kent may append error results for tool calls that were interrupted without output only when no matching live operation remains, rebuild the request, and retry. Each synthetic error uses the original call's output kind and states that the call was interrupted with no output. Kent never rewrites or removes history, never fabricates success, and leaves matching live operations alone. A 400 without missing outputs surfaces unchanged. Each live repair records a user-only warning with the number of closed calls.
-- Before the next provider request, Agent Step completion or cancellation, history replacement or compaction, rollback, or any operation that consumes durable transcript state, every compatible complete result available in stable order is durable. Before a Question, Approval, or Workflow effect, Kent durably flushes the compatible stable prefix that has reached the ordered runtime authority before the barrier. A sibling result that reaches that authority after the flush may remain non-durable until its next ordered delivery boundary even when the effect has begun; process loss may recover that result as having no committed output. A delayed background result becomes durable at its own ordered delivery boundary rather than as part of an unrelated Agent Step.
+- Before another provider request, Agent Step completion, history replacement, compaction, Question, Approval, or Workflow effect, every compatible complete tool result already owned by the current Agent Step is durable. A delayed background result becomes durable through its own Steering delivery rather than as part of an unrelated Agent Step.
 - Interruption, user cancellation, provider failure, validation failure, and other recoverable errors still finish the Agent Step. Kent makes their honest interruption or error results, notices, and warnings durable before it exposes committed transcript entries or terminal presentation for that outcome.
 - A persistence failure before a Result Group becomes durable leaves that Result Group absent from the committed transcript and from committed client presentation. Kent surfaces the persistence error, ends the Exact Execution Scope, and neither retries that persistence operation nor retains a new pending-persistence state. It does not invent a semantic terminal transcript outcome for the absent group.
 - Once a Result Group is durable, later persistence observation or live-delivery failure never rolls it back or causes Kent to append it again. Reconnect and reopen hydration restore the authoritative committed Result Group.
 - A failure while making an effect barrier durable blocks its pending Question, Approval, or Workflow effect and ends the Exact Execution Scope. Any already-durable Result Group remains authoritative and is never appended again.
-- Before a fresh Session resource becomes ready, Kent closes every durable tool call without a committed result using the same execution-status-neutral recovery error, whether the call remained after process death, a pre-commit Result Group failure, or a commit-certain effect-barrier failure. The model-visible recovery output remains the ordinary missing-durable-output message: it reports only that no committed output is available, does not expose or infer the failure cause or whether execution finished, and never re-executes the tool. A committed Result Group is restored once before this recovery completes.
 - A failure that prevents a model turn from starting is persisted as a user-visible developer diagnostic. Local command and validation failures that do not block a turn remain ordinary errors.
 
 ## Questions And Approvals
@@ -114,10 +142,12 @@
 - The model can ask ordinary freeform or suggested questions only. Internal approvals are not model-callable.
 - Suggested questions support freeform commentary and use one-based `recommended_option_index`. In the TUI, `Tab` switches between suggestions and freeform editing. A recommendation uses a Success-colored marker and a faint recommended note; selecting that row also applies the ordinary selected-row style. Choosing empty freeform opens editing, and a freeform answer cannot be empty. Returning to suggestions preserves an unsent freeform draft.
 - Internal approvals carry ordered typed options whose labels are authoritative. Outside-workspace access ordinarily offers `Allow once`, `Allow for this session`, and `Deny`, but clients render the labels in the live request and never reconstruct them from decisions. TUI Approval-commentary delivery follows `tui-ask-prompts.md` and `tui-chat-core.md`; the Question CLI passes optional commentary directly through the existing Approval answer.
-- A Question or Approval is not presented when its preceding durability barrier fails. A later fresh-resource recovery closes its durable tool call through the ordinary execution-status-neutral missing-durable-output outcome without replaying the blocked interaction.
+- A Question or Approval is not presented when its preceding durability barrier fails. Kent surfaces the failure, ends the affected exact execution, and does not replay the blocked interaction.
+- A live Agent execution waiting for a Question or Approval remains interruptible.
+- Interrupt cancels the pending prompt through the ordinary exact-execution outcome.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
-- Single-prompt answers are submitted and delivered in strict FIFO order and are not retained across restart. A submission has an immutable answer payload; an editable retry draft after failed delivery affects only a later submission. Supported post-answer actions validate their inputs.
-- When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO.
+- A prompt answer goes directly to its exact pending-prompt owner and is not a Steering Intent. Single-prompt answers follow prompt order and are not retained across restart. A submitted answer payload is immutable; an editable draft after failed delivery affects only a later explicit submission. Supported post-answer actions validate their inputs.
+- When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO. A single-prompt answer remains in flight until a later prepared Question becomes pending or the same Exact Execution Scope closes. Clients keep the accepted Question visible but disabled until authoritative prompt state replaces or removes it.
 - A typed prompt-answer batch uses the Step identity as its only batch identity. It has no client request identity or replay memo. Each submitted entry is an answered Question, an answered Approval, or a declined prompt.
 - Kent validates the complete typed batch before resolving any prompt. A malformed entry rejects the batch without resolving valid siblings.
 - The order of submitted batch entries has no meaning. Kent resolves submitted prompts that remain pending for that Step in server prompt order. Ordinary Questions retain model tool-call order. Approval order follows server materialization order and has no product guarantee.
@@ -143,7 +173,7 @@
 ## Sessions, Location, And Transcript Bounds
 
 - Sessions can stop and resume. The persistence root is configurable and defaults to `~/.kent`; their durable location model is Project, Workspace, then Worktree.
-- Moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
+- Except for an active agent rebinding its own Session under the self-agent rule below, moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
 - An accepted cross-Project move retires an idle Active Session Runtime before moving the Session. Opening the Session in the destination Project creates a fresh learned-Workspace cache.
 - Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, or when the Question-history command performs its explicitly requested backward history read.
 - Transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
@@ -158,7 +188,7 @@
 - A session selected for an interactive workspace prompts to rebind only when its attached workspace differs from the open workspace. Detached historical locations neither trigger nor supply a rebind. Attached location has one authority; a detached historical location is not an execution fallback.
 - Interactive Sessions are created lazily, at the first trigger that needs model work.
 - Immediately before a Session's first model request, and after every compaction before subsequent model work, Kent locks or refreshes the model/provider setup, generation parameters, effective tool declarations and enabled tool set, system and developer context, skills, workspace information, current model-facing date/time, and conversation context for the current Session Contract. The main prompt-cache key remains the Kent Session ID throughout.
-- Transcript order is immutable for prompt-cache stability. Except for a Result Group persistence failure before commit, an operation that does not take effect makes no visible state change and remains retryable. A pre-commit Result Group persistence failure ends the Exact Execution Scope, makes no visible transcript change, and is not retried. An operation that takes effect does so exactly once and is never retried because a later notification fails. Crash-loss tolerance is at most one model step.
+- Transcript order is immutable for prompt-cache stability. A pre-commit Result Group persistence failure ends the Exact Execution Scope and makes no committed transcript change. Kent does not replay or reconcile a lost Session operation; a later explicit invocation is a new operation. Process death may lose the current Agent Step and process-local pending Steering as defined by the Runtime Steering specification.
 
 ## Authentication And Configuration
 
@@ -184,47 +214,56 @@
 
 ## Model Requests And Cache Continuity
 
+- Every model generation request uses the provider's streaming response protocol. Kent has no non-streaming generation or fallback path.
+- Callers that expose only a completed response consume the generation stream internally and return the assembled response only after the stream completes successfully.
+- One generation-stream contract carries assistant output, reasoning output, provider-hosted output, and stream activity.
 - Every generation request has a required tool-choice mode: automatic or required. Missing or unknown modes are invalid.
 - Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
-- Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity.
-- When an accepted OpenAI-compatible Responses result reports its served model, Kent compares that model exactly with the model in the Session Contract.
-- The standard response model is authoritative when present. A provider-specific routed-model report supplies the served model only when the standard response model is absent.
-- When the served model differs from the Session Contract model, Kent commits one durable provider-model mismatch warning for the Agent Step without changing the Session Contract.
-- The provider-model mismatch warning carries the Session Contract model and the served model as typed facts.
-- The provider-model mismatch warning is user-only and never enters provider history.
-- A missing served model is a match and creates no warning.
-- A failed provider attempt creates no provider-model mismatch warning.
-- When an accepted response explicitly reports that provider usage already includes past reasoning, Kent excludes that already-accounted reasoning from the context estimate layered on the provider usage checkpoint.
-- An absent, false, or malformed reasoning-included report means that provider usage does not include past reasoning.
-- Past reasoning for this accounting rule consists only of encrypted reasoning items strictly before the latest ordinary user instruction or typed Agent Steer in the accepted request. Reasoning after that boundary belongs to the current Agent Step and is not layered onto provider usage again.
-- After an accepted response, failure to persist either the provider-model mismatch warning or the adjusted usage checkpoint does not prevent Kent from attempting to persist the other. Each result known to be committed remains authoritative. If both persistence operations fail, Kent surfaces both failures. Kent does not roll back or retry either operation and adds no repair or recovery guarantee for this failure.
-- Reasoning-included metadata never changes transcript content or the history sent to the provider.
-- Provider-model and reasoning-included response metadata are supported for authenticated ChatGPT, API-key OpenAI, and OpenAI-compatible Responses providers.
-- Kent sends none of these response metadata values to the provider.
-- An authentication failure preserves a provider-supplied authorization diagnostic and its correlated provider request ID when present.
-- The existing actionable authentication error surfaces the provider authorization diagnostic and correlated provider request ID when present while preserving its authentication classification.
-- A provider-supplied authorization diagnostic never changes authentication state by itself.
+- Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity. Exact counting of a built request preserves its tool mode and complete tool set; standalone estimation uses automatic choice.
 
-OpenAI-family request identity, ChatGPT Codex routing, and provider turn state are defined in [OpenAI Provider Dispatch](openai-provider-dispatch.md).
+## Fast Mode And Context Usage
+
+- Fast Mode is a persisted Session Chat setting when the active provider supports first-party Responses priority service.
+- Changing Fast Mode during an Agent Step affects the next provider or compaction request and never changes the request already running.
+- A supported request uses the provider's priority service tier when Fast Mode is enabled.
+- Disabled Fast Mode omits the provider's priority service tier.
+- Enabling Fast Mode for an unsupported provider fails without changing the Session setting.
+- Reopening a Session restores its effective Fast Mode setting.
+- Fast Mode does not create another Session Contract generation or prompt-cache identity.
+- Reviewer and compaction requests inherit the Session's effective Fast Mode when their provider supports it.
+- Context usage uses current provider-reported usage when available and Kent's established current-context estimate otherwise.
+- Compaction selection compares current usage with the configured thresholds.
+- Kent does not predict future token growth from earlier turns or maintain a separate adaptive compaction policy.
 
 ## Compaction
 
 - Compaction starts a new bounded active conversation from compacted output while retaining the full durable session history. The compacted output and all new generation context are committed atomically before later model work.
-- Fresh main hydration, reviewer reconstruction, and post-compaction hydration share one canonical stable prefix: applicable Headless context, Subagents, Skills, Worktree context, Agents.md instructions, then active Goal continuation or Workflow context. Fresh and reviewer hydration append Environment after that stable prefix. Post-compaction hydration inserts compacted or handoff output and manual user carryover before the same Environment suffix. Handoff output includes the user-authored future-agent message in the atomic history replacement. Goal and Workflow remain alternative Session-mode context in their respective slots. Outside Workflow execution, Kent includes an active Goal continuation only for an active Goal; paused, completed, cleared, or absent Goals omit it. Opening or resuming a Session without replacement does not add that continuation.
+- Fresh main hydration, Reviewer request construction, and post-compaction hydration share one canonical stable prefix: applicable Headless context, Subagents, Skills, Worktree context, Agents.md instructions, then active Goal continuation or Workflow context.
+- Fresh main and Reviewer requests append Environment after that stable prefix.
+- Post-compaction hydration inserts compacted or handoff output and manual user carryover before the same Environment suffix.
+- Handoff output includes the user-authored future-agent message in the atomic history replacement.
+- Goal and Workflow remain alternative Session-mode context in their respective slots.
+- Outside Workflow execution, Kent includes an active Goal continuation only for an active Goal.
+- Paused, completed, cleared, or absent Goals omit Goal continuation from model context.
+- Opening or resuming a Session without replacement does not add Goal continuation.
 - A resumed non-Workflow Session carries its active Goal verbatim into new model context with the ordinary Goal work and completion guidance, without referring to compaction.
 - If a later notification fails, compaction remains complete, Kent reports the failure, and does not repeat compaction.
 - Kent may compact before a queued user prompt when configured context usage indicates that prompt would likely require it. The trigger is `context_compaction_threshold_tokens - pre_submit_compaction_lead_tokens`. Normal and pre-submit compaction thresholds must be at least 50% of `model_context_window`; invalid settings fail startup.
 - When automatic compaction is enabled, Kent eagerly compacts an eligible non-Workflow Session after any successfully completed agent/model turn with a nonblank final answer when authoritative context usage is at least 88% of that Session's actual model context window. Eligible paths include direct and queued user-message turns, Agent Steer turns, Goal Loops, and background continuations. Workflow turns are excluded. Main and subagent Sessions are eligible in both interactive and Headless modes. Interrupted turns, failed turns, turns waiting for a user answer, and no-final or silent-final outcomes are ineligible.
-- Before reserved eager work dispatches compaction, Kent revalidates the Session's current automatic-compaction enablement and consumed-only 88% threshold. If either condition no longer holds, Kent releases and skips the reserved work without a provider call or history replacement. This check occurs before compaction starts and does not cancel or reconcile active compaction.
+- Before automatic compaction starts, Kent revalidates the Session's current automatic-compaction enablement and consumed-only 88% threshold.
+- If either automatic-compaction condition no longer holds, Kent skips compaction without a provider call or history replacement.
 - A user message submitted while eager compaction is running waits behind that compaction and is then processed against the compacted context.
 - Eager compaction is speculative. Its failure does not change the preceding successful turn, retains the uncompacted context, uses the ordinary diagnostic reporting, and is not retried automatically.
 - `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface.
-- A manual compact request starts immediately when no Agent Step is active and server admission succeeds.
-- A manual compact request made during an Agent Step becomes typed Steer work. It executes after that Agent Step reaches its boundary and before any later Agent Step. It never waits for the turn to finish and never becomes model-visible user text.
-- Repeated manual compact requests remain distinct pending Steer items. Clients do not coalesce them. The server admits or rejects each request independently when it reaches the execution boundary.
-- Only one compaction may run at a time. Manual, automatic, pre-submit, and handoff compaction must never overlap. A manual compact request that reaches admission while compaction is active fails with a typed rejection.
+- A manual compact request follows the Session's accepted mutation order.
+- Compaction is an Agent Step selected after earlier accepted short mutations apply according to the Runtime Steering specification.
+- A manual compact request is never model-visible user text.
+- Repeated manual compact requests remain distinct.
+- Clients do not coalesce manual compact requests.
+- Each manual compact request receives its own typed outcome.
+- Agent Steps do not overlap, so manual, automatic, pre-submit, and handoff compaction cannot overlap another compaction Agent Step.
 - Manual compaction requires at least one Agent Step boundary since Session creation or the latest successful compaction. The active Agent Step satisfies this requirement when its boundary is reached. A rejected request starts no provider call and commits no history replacement.
-- Disabled-policy, active-compaction, and too-soon manual-compaction failures are typed server-owned outcomes shared by every client.
+- Disabled-policy and too-soon manual-compaction failures are typed server-owned outcomes shared by every client.
 - Human-facing text calls this operation `compact`; model-facing context calls it `handoff`. Manual compaction carries the last visible user prompt. Agent handoff may carry a future-agent message visible only in detail.
 - The main-agent prompt-cache key is always the Kent Session ID. Compaction and Session Contract changes add no cache-key suffix, namespace, or generation. Reviewer requests remain under the Session's reviewer key.
 - The compaction request uses the pre-compaction locked contract. After compaction completes, the next model request refreshes and locks effective model/provider settings, enabled tools, and system/reviewer prompts. Changed prompt-facing content naturally invalidates the changed request prefix while the prompt-cache key remains the Session ID.
@@ -239,25 +278,58 @@ OpenAI-family request identity, ChatGPT Codex routing, and provider turn state a
 - Goal inspection reads the durable session goal and does not require an Active Session Runtime. Running and dormant sessions return the same goal result; a valid session with no goal returns no goal, while unknown or inaccessible sessions remain errors.
 - Goal inspection excludes runtime-local goal-loop suspension. Live clients derive suspension from runtime status.
 - Successful goal mutations through an Active Session Runtime emit typed goal-status updates carrying the projected goal status state so frontends can update from goal SSOT instead of inferring status from transcript feedback or run lifecycle. Set, pause, resume, complete, and clear emit updates; show/read-only operations do not. A dormant mutation has no live feed: its command response and subsequent session/runtime snapshots project the durable goal state.
-- Goal mutation responses and typed goal-status updates carry Goal availability when the Session Contract can derive it. Malformed Goal-availability data does not reject or roll back an otherwise accepted mutation; the response or update omits availability, and authoritative Goal reads surface the contract error.
-- When a Set or replacement request is accepted while an Agent Step is active and its durable Goal is not applied yet, the mutation result includes the requested objective and status without a Goal identity or timestamps. This pending result is command feedback only; authoritative Goal reads, snapshots, and typed status updates use the canonical durable Goal state.
-- A successful Goal mutation response contains an authoritative Goal, a queued Set or replacement preview, or neither. Neither means acceptance without an authoritative Goal-state change and never means structural Clear; attached clients wait for the ordinary Goal update, while dormant Clear is established by later Goal inspection or a Session snapshot.
-- `/goal <objective>` (TUI slash command or GUI path) submits a Runtime Command that sets/replaces the session goal and starts or continues model work. It must be accepted while a model turn is running and ordered with other model-visible commands.
+- `/goal <objective>` (TUI slash command or GUI path) submits a typed Session mutation that sets or replaces the Session Goal.
+- Goal behavior owns whether a Goal mutation starts or continues model work.
 - `/goal resume` on a completed goal reopens it as active.
 - `/goal resume` on an already-active goal is no-op and does not emit any model-facing messages.
 - Goal mode requires `ask_question` in the locked tool surface for active model loops. Validate parity at model-work startup and surface a normal runtime error if violated. This parity is enforced inside workflow-controlled Sessions too, so a Goal set there requires `ask_question` visibility as well.
 - Lock: `ask_question` visibility and `/questions` state are separate contracts. Missing `ask_question` from the locked tool surface blocks goal model loops; `/questions off` only makes `ask_question` calls return the questions-disabled tool result and must not stop, suspend, or block active goal execution.
-- A retained Workflow activation rejects user Goal mutations that require a new ordinary execution. Goal inspection and dormant Goal mutation remain available without that retained activation.
-- Goal admission uses authoritative current Exact Execution ownership. If admission conflicts before execution begins, the Goal command may be re-evaluated once against the Exact Execution that won ownership; after execution begins, an accepted Goal mutation and its result are never replayed or re-evaluated.
+- During live Workflow exact execution, user and agent Goal mutations follow the ordinary Goal rules while Goal continuation remains passive.
+- A retained Workflow control-only Runtime accepts a user Goal mutation only when it is a no-op, does not require starting new ordinary Goal execution, or is already owned by the current Exact Execution Scope.
+- A retained Workflow control-only Runtime rejects a user Goal mutation that requires starting new ordinary Goal execution before Steering acceptance through ordinary Goal mutation error feedback.
 - While an Exact Execution Scope drives the Session for Workflow Execution, the Goal is a passive objective: no separate Goal Continuation Loop operates, and the active Goal's reminder is folded into the Workflow's invalid-completion nudge.
 - Outside workflow-controlled execution, active-Goal continuation after history replacement is a Markdown-backed developer initialization message. It begins `Heads up: this session has an active goal. Goal text:`, inserts the exact Goal verbatim between the ordinary nudge's `<goal>` markers, says `Continue working towards the goal from the resumed state.`, and then reuses the ordinary Goal nudge's shared `Work mode` and `Completion discipline` guidance. Agent-facing continuation text never mentions compaction.
 - A valid terminal workflow completion soft-cascades an active goal to complete (actor=system) in the same step, across structured-output, unstructured-output, tool, and shell-command completion intents. A valid completion is never blocked by a still-active goal; paused goals are left intact. The cascade is conditional on the same goal still being active when it commits, and for tool-mode completion it is emitted after the terminal tool result is persisted so it never interleaves a non-tool item between a tool call and its result.
-- The server owns Goal mutation commands. With an Active Session Runtime, Runtime Command owns overwrite validation, ordered in-memory application, status publication, persistence, and model awareness. Without an Active Session Runtime, the dormant Goal-command use case persists the durable Goal update and then persists the corresponding model-facing Goal notice directly into the session transcript without starting a runtime.
+- That terminal cascade observes only the Goal already durable when completion commits. Goal Steering accepted during the same Agent Step applies later in FIFO order whether it was admitted before or after completion.
+- A same-Step Goal mutation that leaves an active Goal after terminal Workflow completion does not start Goal continuation from that completion boundary. The Goal remains active and idle until later explicit human input starts ordinary work.
+- With an Active Session Runtime, Goal mutation follows accepted Session mutation order.
+- Without an Active Session Runtime, the dormant Goal owner persists the durable Goal update and corresponding model-facing notice without starting a Runtime.
+- A human Goal mutation may wait for its applied result. An allowed agent `goal set` or confirmed `goal complete` uses one exact admission that validates the current Exact Execution Scope, Run, and Agent Step and accepts the Steering mutation together.
+- If the originating Agent Step ends first, the agent Goal mutation rejects without acceptance. If admission completes first, it returns an immediate scheduled Goal projection and applies only after the originating Agent Step ends. Terminal Workflow completion earlier in that still-open Step does not by itself reject or revoke the Goal admission.
+- After terminal Workflow completion commits, exact Goal admission remains available only for that same still-open Scope, Run, and Agent Step. Stop, prompt answers, exact steer, and duplicate Workflow completion remain unavailable while caused tool/results finish.
+- The scheduled projection folds the durable Goal and every earlier accepted Goal mutation in FIFO order. It is not confirmation that the Goal is durable or that later application will change state.
+- A stale agent execution rejects before acceptance. A later application failure appears as Runtime/model-visible Goal failure feedback before another provider request; Kent does not rewrite the completed shell result or replay the mutation.
 - An effective set/replace, pause, resume/reopen, complete, or clear mutation persists one model-facing goal notice in both live and dormant sessions. A no-op mutation persists no notice.
-- On the dormant path, the durable goal update is authoritative and is persisted before its model-facing notice. If the later notice persistence fails, the goal update remains committed and the error is surfaced; no cross-resource transaction, rollback, automatic repair, retry, or extra admission lock is required.
-- Replaying the same client request after the durable goal update commits returns the original response/error and does not apply the goal transition or append the notice again.
+- On the dormant path, the durable goal update is authoritative and is persisted before its model-facing notice. If the later notice persistence fails, the goal update remains committed and the error is surfaced; no cross-resource rollback, automatic repair, or retry is required.
+- Each Goal mutation invocation is a new operation. A repeated invocation follows the current Goal state and the ordinary validation and no-op rules; Kent does not replay an earlier response or error.
+- Goal CLI never mutates Session storage directly. It submits the Goal operation to the server, which selects the live Steering path or dormant Store path.
+- Any `kent service` commands that affect the server state (restart, stop, start it) detect invocation by kent itself and refuse to run, being human-only.
 - Ctrl+C during active goal work keeps persisted status `active` and creates runtime-local suspension only. The next user message auto-resumes the suspended goal loop after its turn completes (no `/goal resume` needed); an explicit `/goal pause` is still the hard pause. A user turn that is itself interrupted leaves the loop suspended.
 - The goal status-line indicator in TUI shows the animated spinner only while a goal run is executing; when the goal is `active` but idle (e.g. after Ctrl+C), it shows the idle status dot.
+
+## Reviewer
+
+- Post-turn Reviewer exists behind config and defaults to `reviewer.frequency = "edits"`.
+- Reviewer runs only after an eligible completed assistant answer.
+- Kent captures Reviewer input from that answer boundary before later Session changes can alter it.
+- The main answer commits and becomes visible without waiting for Reviewer.
+- User input and ordinary main-model and tool work may continue while Reviewer runs.
+- Only one Reviewer request may be active for a Session.
+- Another eligible answer is skipped rather than queued while review is active.
+- The Reviewer receives shorter tool output than the main agent and returns minimal JSON `{"suggestions":["..."]}`.
+- Invalid Reviewer payloads are ignored non-fatally.
+- A Reviewer generation failure creates one later Reviewer error row when the Runtime can still receive it.
+- Reviewer phase changes and completion create no transcript row.
+- Nonempty suggestions create one later Reviewer feedback row and request one ordinary main-agent follow-up at the next available model boundary.
+- A follow-up that returns a nonblank final answer reports the suggestions as applied.
+- An explicitly blank silent follow-up reports that no changes were applied.
+- `reviewer.verbose_output` controls only the TUI's initial feedback presentation.
+- `reviewer.verbose_output` never controls whether feedback exists.
+- If Kent cannot apply issued nonempty feedback, the feedback remains visible and the Session follows its ordinary Runtime failure behavior.
+- Reviewer runs once and does not review its own follow-up.
+- Live Reviewer activity follows the phase contract in the Runtime Steering specification.
+- Live Reviewer activity is not persisted or reconstructed from transcript history.
+- Persistent Reviewer activity across later lifecycle boundaries, Runtime replacement, reconnect, or restart is outside this specification.
 
 ## Headless Mode And Shared Control
 
@@ -268,12 +340,24 @@ OpenAI-family request identity, ChatGPT Codex routing, and provider turn state a
 - `[workflow] subagents` is TOML-only and defaults to `false`. Workflow-agent use of custom roles requires `agent_callable=true`, `[workflow] subagents = true`, and effective `workflow_subagent=true`. `workflow_subagent=false` excludes a role only from Workflow-agent delegation, not human headless use or direct Workflow-node assignment.
 - A live internal access Approval, including an outside-workspace patch request, is an access-request Question for `kent question` and wait/watch presentation. Each authoritative ordered option carries its display label and typed allow-once, allow-session, or deny decision. A durable Workflow Transition Approval is a separate concept and is never a Question or wait/watch outcome.
 - The [CLI Commands](cli-commands.md) specification owns the Question and Run wait/watch command contracts, including presentation, accepted flags, machine-readable output, and exit codes.
-- All attached clients have equal full control of one active Session: transcript and status, steering and queued input, question and approval answers, and every control operate on the same live execution. A busy execution applies input at its next allowed boundary or returns the same retryable completion rejection described above. Clients report server-authoritative live activity and do not infer busy state locally; an attached idle runtime accepts idle operations.
+- All attached clients have equal full control of one active Session across transcript and status, steering and queued input, Question and Approval answers, and every other control.
+- Valid human input remains accepted while internal Runtime work is active and follows the Runtime Steering ordering contract.
+- Clients report server-authoritative live activity and do not infer busy state locally.
 - A client does not consider a question or approval answered until the server accepts the answer and returns or publishes the resolved shared state.
-- A running Workflow Task is steerable from every attached client, including chat, queued input, settings, compaction, worktree, and process controls. Goal mutation follows the retained-activation rule above. The model may not submit a structured final answer invalid for the current Node. Inability to reach active execution is a runtime-unavailable error.
+- A running Workflow Task is steerable from every attached client, including chat, queued input, Goal control, settings, compaction, worktree, and process controls. The model may not submit a structured final answer invalid for the current Node. Inability to reach active execution is a runtime-unavailable error.
 - Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
-- Entering, leaving, or deleting a worktree when it switches the calling Session is scheduled for the next between-step idle point before queued user work. The command returns an accepted result without waiting for the current step. If no model step is active, the transition may apply immediately but retains its scheduled reminder behavior. At most one such transition can be pending per Exact Execution Scope; a matching retry returns the original result and a different transition is rejected.
-- Later failure does not alter the accepted worktree command result; attached clients receive completion or failure, and the affected Session receives a failure notice when it can accept one. A successful target change becomes authoritative only when its ordinary worktree reminder arrives. Pending transitions are lost on restart rather than resumed.
+- Entering or leaving a Worktree for an Active Session Runtime accepts one Session mutation carrying the domain Worktree Operation identity.
+- Acceptance starts the independent Worktree transition and returns the established acknowledgement without waiting for completion.
+- The Worktree owner later applies the target, Working Directory, tool environment, and reminder or failure.
+- Each explicit Worktree transition is an independent domain operation. Kent does not return an earlier result for a matching retry, reject a different transition merely because another is pending, replay an ambiguous operation, or resume process-local pending transitions after restart.
+- Worktree deletion follows the concrete multi-Session and process blockers in the Runtime Steering and Workflow specifications.
+- Worktree deletion never joins Session mutation ordering.
+- When the active agent invokes rebind for its own Session, Kent accepts the move only for that Exact Execution Scope and applies it at the next between-Agent-Step boundary before queued user work. A required cross-Project Runtime retirement fails queued input owned by that retiring Runtime with `runtime_unavailable`; Kent does not transfer it to the fresh destination Runtime.
+- Human and startup rebinds remain synchronous.
+- A self-agent rebind ignores Session-owned background commands. Existing commands continue in the directories where they started, and commands started after the move use the new Working Directory.
+- A Session rebind sets the Working Directory to the target Workspace root.
+- A Session rebind either applies its Project, Workspace, artifact location, Working Directory, and successful reminder together or leaves the previous location unchanged.
+- A successful self-agent rebind or its authoritative failure notice is included in the next naturally occurring model step. Rebind does not start a model step.
 - Resuming a Session reapplies its recorded subagent role, including a role that is no longer available in the catalog. If no role was recorded, explicit continuation does not block. After the Session Contract is locked, a later role selection does not replace the retained role.
 
 ## Provider Stream Completion

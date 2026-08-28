@@ -9,8 +9,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 const subagentSessionSuffix = "subagent"
@@ -30,7 +28,6 @@ func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Op
 	}
 	callerSessionID := runPromptCallerSessionID(opts, caller)
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: uuid.NewString(),
 		Intent:          intent,
 		CallerSessionID: callerSessionID,
 		Prompt:          prompt,

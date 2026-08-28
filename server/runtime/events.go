@@ -4,7 +4,11 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/transcript"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,8 +33,7 @@ const (
 	EventToolCallStarted            EventKind = "tool_call_started"
 	EventToolCallCompleted          EventKind = "tool_call_completed"
 	EventToolCallAborted            EventKind = "tool_call_aborted"
-	EventReviewerStarted            EventKind = "reviewer_started"
-	EventReviewerCompleted          EventKind = "reviewer_completed"
+	EventRuntimeActivityChanged     EventKind = "runtime_activity_changed"
 	EventInFlightClearFailed        EventKind = "in_flight_clear_failed"
 	EventCompactionStarted          EventKind = "context_compaction_started"
 	EventCompactionCompleted        EventKind = "context_compaction_completed"
@@ -45,6 +48,8 @@ const (
 	EventProviderTurnStateInvalid   EventKind = "provider_turn_state_invalid"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+	EventPendingWorkReplaced        EventKind = "pending_work_replaced"
+	EventHumanInputInterrupted      EventKind = "human_input_interrupted"
 	EventLiveRunFinished            EventKind = "live_run_finished"
 
 	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
@@ -80,26 +85,32 @@ const (
 	QueuedUserMessageFailureClosing                    QueuedUserMessageFailureReason = "closing"
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
-	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 )
 
 type QueuedUserMessageStatusEvent struct {
-	SessionID       string
-	QueueItemID     string
-	ClientRequestID string
-	Status          QueuedUserMessageStatus
-	FailureReason   QueuedUserMessageFailureReason
-	RestoreText     string
+	SessionID     string
+	QueueItemID   string
+	Status        QueuedUserMessageStatus
+	FailureReason QueuedUserMessageFailureReason
+	Text          string
 }
 
 type QueuedUserMessageIdentity struct {
-	QueueItemID     string
-	ClientRequestID string
+	QueueItemID string
+}
+
+type InterruptedHumanInput struct {
+	QueueItemID string
+	Text        string
+}
+
+type HumanInputInterruptedEvent struct {
+	Items []InterruptedHumanInput
 }
 
 type Event struct {
 	Kind                         EventKind
-	StepID                       string
+	StepID                       *string
 	CommittedTranscriptChanged   bool
 	TranscriptRevision           int64
 	CommittedEntryCount          int
@@ -123,7 +134,6 @@ type Event struct {
 	ToolCall                     *llm.ToolCall
 	ToolResult                   *tools.Result
 	ToolAbortReason              string
-	Reviewer                     *ReviewerStatus
 	Compaction                   *CompactionStatus
 	CacheWarning                 *transcript.CacheWarning
 	CacheWarningVisibility       transcript.EntryVisibility
@@ -134,13 +144,49 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *GoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
+	PendingWork                  *runtimeinput.PendingWork
+	HumanInputInterrupted        *HumanInputInterruptedEvent
 	LiveRunResult                *LiveRunResult
 }
 
+func exactStepIDPointer(stepID string) *string {
+	normalized := strings.TrimSpace(stepID)
+	if normalized == "" {
+		panic("Step identity must not be empty")
+	}
+	return &normalized
+}
+
+func cloneOptionalStepID(stepID *string) *string {
+	if stepID == nil {
+		return nil
+	}
+	return exactStepIDPointer(*stepID)
+}
+
+func (event Event) withStepID(stepID *string) Event {
+	if event.StepID == nil {
+		event.StepID = cloneOptionalStepID(stepID)
+	} else {
+		event.StepID = cloneOptionalStepID(event.StepID)
+	}
+	return event
+}
+
+func requireStepID(stepID *string, operation string) (string, error) {
+	if stepID == nil {
+		return "", fmt.Errorf("%s requires Step identity", operation)
+	}
+	normalized := strings.TrimSpace(*stepID)
+	if normalized == "" {
+		return "", fmt.Errorf("%s received an empty Step identity", operation)
+	}
+	return normalized, nil
+}
+
 type GoalStatusUpdate struct {
-	State        session.GoalState
-	Availability *session.GoalAvailability
-	Cleared      bool
+	State   session.GoalState
+	Cleared bool
 }
 
 type RunState struct {
@@ -189,6 +235,7 @@ type ModelResponseTrace struct {
 
 type CompactionStatus struct {
 	Mode              string
+	RequestID         *runtimeids.CompactionRequestID
 	Engine            string
 	Provider          string
 	TrimmedItemsCount *int

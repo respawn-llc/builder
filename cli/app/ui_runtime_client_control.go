@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -82,46 +83,51 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: c.sessionID, Objective: objective, Actor: "user"})
 	})
-	return clientui.GoalMutationResult(resp), err
+	return runtimeGoalMutationFromResponse(resp), err
 }
 
 func (c *sessionRuntimeClient) PauseGoal() (clientui.GoalMutationResult, error) {
-	return c.setGoalStatus(func(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return c.setGoalStatus(func(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.PauseGoal(ctx, req)
 	})
 }
 
 func (c *sessionRuntimeClient) ResumeGoal() (clientui.GoalMutationResult, error) {
-	return c.setGoalStatus(func(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return c.setGoalStatus(func(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.ResumeGoal(ctx, req)
 	})
 }
 
 func (c *sessionRuntimeClient) CompleteGoal() (clientui.GoalMutationResult, error) {
-	return c.setGoalStatus(func(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return c.setGoalStatus(func(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.CompleteGoal(ctx, req)
 	})
 }
 
 func (c *sessionRuntimeClient) ClearGoal() (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
 	})
-	return clientui.GoalMutationResult(resp), err
+	return runtimeGoalMutationFromResponse(resp), err
 }
 
-func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)) (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
+func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)) (clientui.GoalMutationResult, error) {
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
 		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
 	})
-	return clientui.GoalMutationResult(resp), err
+	return runtimeGoalMutationFromResponse(resp), err
 }
 
 func runtimeGoalFromResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
 	return &clientui.RuntimeGoal{Goal: resp.Goal, Availability: &resp.Availability}
+}
+
+func runtimeGoalMutationFromResponse(resp serverapi.RuntimeGoalShowResponse) clientui.GoalMutationResult {
+	availability := resp.Availability
+	return clientui.GoalMutationResult{Goal: resp.Goal, Availability: &availability}
 }
 
 func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
@@ -154,7 +160,7 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 	if err := req.Validate(); err != nil {
 		return clientui.UserTurnSubmission{}, err
 	}
-	requestID := req.ClientRequestID.String()
+	requestID := req.ClientRequestID
 	resp, err := runtimeRequestCallWithID(ctx, c, true, requestID, func(ctx context.Context, id string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{
 			ClientRequestID: id,
@@ -220,13 +226,21 @@ func (c *sessionRuntimeClient) interruptRuntimeCandidate() (runtimeTupleCandidat
 }
 
 func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, QueueItemID: queueItemID})
+	pendingWork, ok := c.controls.(apicontract.RuntimePendingWorkService)
+	if !ok {
+		return false
+	}
+	itemID, err := runtimeids.ParseQueueItemID(queueItemID)
+	if err != nil {
+		return false
+	}
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context, _ string) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+		return pendingWork.RemovePendingWork(ctx, serverapi.RuntimeRemovePendingWorkRequest{SessionID: c.sessionID, ItemID: itemID})
 	})
 	if err != nil {
 		return false
 	}
-	return resp.Discarded
+	return resp.Restoration.Message != nil
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {
