@@ -20,7 +20,7 @@ import (
 
 type sessionLaunchRuntimeClient struct{}
 
-func (sessionLaunchRuntimeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (sessionLaunchRuntimeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, nil
 }
 

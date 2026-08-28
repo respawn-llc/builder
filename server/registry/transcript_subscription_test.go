@@ -39,11 +39,13 @@ func transcriptBrokerHydration(t *testing.T) clientui.TranscriptEvent {
 			CompactionMode:    "auto",
 		},
 		RuntimeReadModelUpdate: clientui.RuntimeReadModelUpdate{
-			Version:  version,
-			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},
+			Version: version,
+			Activity: clientui.RuntimeActivity{
+				State:    clientui.RuntimeActivityUnavailable,
+				Reviewer: clientui.ReviewerActivityInactive,
+			},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
-		GoalStatus:    &clientui.TranscriptGoalStatus{Availability: func() *clientui.GoalAvailability { value := clientui.GoalAvailabilityAvailable; return &value }()},
 	}
 	return clientui.NewTranscriptEvent(hydration)
 }
@@ -62,6 +64,12 @@ func mustRegistryStepID(t *testing.T) runtimeids.StepID {
 		t.Fatalf("ParseStepID: %v", err)
 	}
 	return stepID
+}
+
+func mustRegistryStepIDPointer(t *testing.T) *runtimeids.StepID {
+	t.Helper()
+	stepID := mustRegistryStepID(t)
+	return &stepID
 }
 
 func TestTranscriptSubscriptionBrokerSequencesEachSubscriberFromHydration(t *testing.T) {
@@ -159,7 +167,7 @@ func TestTranscriptSubscriptionBrokerPanicsOnContractViolationInTestMode(t *test
 	broker.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
 		Visibility: clientui.EntryVisibilityDetail,
 		Kind:       clientui.TranscriptRowTool,
-		Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepID(t), ToolCallID: ""},
+		Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepIDPointer(t), ToolCallID: ""},
 	})})
 }
 
@@ -344,7 +352,7 @@ func TestTranscriptSubscriptionBrokerClosesOnContractViolationWhenPanicDisabled(
 	broker.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
 		Visibility: clientui.EntryVisibilityDetail,
 		Kind:       clientui.TranscriptRowTool,
-		Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepID(t), ToolCallID: ""},
+		Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepIDPointer(t), ToolCallID: ""},
 	})})
 	_, err = sub.Next(context.Background())
 	if err == nil {
@@ -362,7 +370,7 @@ func TestTranscriptSubscriptionBoundaryValidatesCommittedRowIntegrity(t *testing
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowUser,
 		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
-		User:       &clientui.TranscriptUserRow{StepID: mustRegistryStepID(t), Text: "valid"},
+		User:       &clientui.TranscriptUserRow{StepID: mustRegistryStepIDPointer(t), Text: "valid"},
 	}
 	if err := validateCommittedRow(valid); err != nil {
 		t.Fatalf("zero-value valid integrity was rejected: %v", err)
@@ -486,7 +494,7 @@ func transcriptBrokerCommittedRow(t *testing.T, locator transcript.CommittedRowL
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowUser,
 		Locator:    locator,
-		User:       &clientui.TranscriptUserRow{StepID: mustRegistryStepID(t), Text: "row"},
+		User:       &clientui.TranscriptUserRow{StepID: mustRegistryStepIDPointer(t), Text: "row"},
 	}
 }
 

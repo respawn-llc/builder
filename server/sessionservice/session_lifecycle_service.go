@@ -8,13 +8,13 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 var errSessionWorkspaceRetargeterRequired = errors.New("session workspace retargeter is required")
@@ -27,8 +27,6 @@ type SessionLifecycleService struct {
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
 	persisted       session.PersistedSessionResolver
-	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
-	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
 }
 
 func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *SessionLifecycleService {
@@ -38,18 +36,9 @@ func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.
 	return s
 }
 
-type sessionDraftMemoRequest struct {
-	SessionID string
-	Input     string
-}
-
-type sessionTransitionMemoRequest struct {
-	SessionID  string
-	Transition serverapi.SessionTransition
-}
-
 type sessionWorkspaceRetargeter interface {
 	RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
+	ScheduleWorkspaceRetarget(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest, origin serverapi.RuntimeStepOrigin, operationID worktreecontract.OperationID) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error)
 }
 
 type sessionNavigationTargetResolver interface {
@@ -61,8 +50,6 @@ func NewSessionLifecycleService(persistenceRoot string, authority *sessionruntim
 		containerDir: strings.TrimSpace(persistenceRoot),
 		authority:    authority,
 		authManager:  authManager,
-		drafts:       requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](),
-		transitions:  requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse](),
 	}
 }
 
@@ -71,8 +58,6 @@ func NewGlobalSessionLifecycleService(persistenceRoot string, authority *session
 		persistenceRoot: strings.TrimSpace(persistenceRoot),
 		authority:       authority,
 		authManager:     authManager,
-		drafts:          requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](),
-		transitions:     requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse](),
 	}
 }
 
@@ -139,13 +124,10 @@ func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req ser
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionPersistInputDraftResponse{}, err
 	}
-	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input}
-	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(runCtx context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
-		err := s.withStore(runCtx, req.SessionID, func(_ context.Context, store *session.Store) error {
-			return persistSessionInputDraft(store, req.Input)
-		})
-		return serverapi.SessionPersistInputDraftResponse{}, err
+	err := s.withStore(ctx, req.SessionID, func(_ context.Context, store *session.Store) error {
+		return persistSessionInputDraft(store, req.Input)
 	})
+	return serverapi.SessionPersistInputDraftResponse{}, err
 }
 
 func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
@@ -155,16 +137,29 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 	if s == nil || s.retargeter == nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, errSessionWorkspaceRetargeterRequired
 	}
-	result, err := s.retargeter.RetargetWorkspace(ctx, metadata.SessionWorkspaceRetargetRequest{
+	retargetRequest := metadata.SessionWorkspaceRetargetRequest{
 		SessionID:     req.SessionID,
 		WorkspaceRoot: req.WorkspaceRoot,
 		ProjectID:     req.ProjectID,
-	})
+	}
+	if req.Origin != nil {
+		acknowledgement, err := s.retargeter.ScheduleWorkspaceRetarget(
+			ctx,
+			retargetRequest,
+			*req.Origin,
+			worktreecontract.NewOperationID(),
+		)
+		if err != nil {
+			return serverapi.SessionRetargetWorkspaceResponse{}, err
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{Scheduled: &acknowledgement}, nil
+	}
+	result, err := s.retargeter.RetargetWorkspace(ctx, retargetRequest)
 	if err != nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
 	binding := result.Binding
-	return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{
+	bindingResponse := serverapi.ProjectBinding{
 		ProjectID:       binding.ProjectID,
 		ProjectKey:      binding.ProjectKey,
 		ProjectName:     binding.ProjectName,
@@ -172,38 +167,18 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 		CanonicalRoot:   binding.CanonicalRoot,
 		WorkspaceName:   binding.WorkspaceName,
 		WorkspaceStatus: binding.WorkspaceStatus,
-	}, WorkspaceBindingCreated: result.WorkspaceBindingCreated}, nil
+	}
+	return serverapi.SessionRetargetWorkspaceResponse{
+		Binding:                 &bindingResponse,
+		WorkspaceBindingCreated: result.WorkspaceBindingCreated,
+	}, nil
 }
 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
-	if req.Transition.Action != serverapi.SessionTransitionActionForkRollback {
-		return s.resolveTransitionOnce(ctx, req)
-	}
-	memoReq := sessionTransitionMemoRequest{
-		SessionID:  strings.TrimSpace(req.SessionID),
-		Transition: req.Transition,
-	}
-	return s.transitions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTransitionMemoRequest, func(context.Context) (serverapi.SessionResolveTransitionResponse, error) {
-		return s.resolveTransitionOnce(ctx, req)
-	})
-}
-
-func sameSessionTransitionMemoRequest(a sessionTransitionMemoRequest, b sessionTransitionMemoRequest) bool {
-	return a.SessionID == b.SessionID &&
-		a.Transition.Action == b.Transition.Action &&
-		a.Transition.InitialPrompt == b.Transition.InitialPrompt &&
-		a.Transition.InitialPromptHistoryRecorded == b.Transition.InitialPromptHistoryRecorded &&
-		textutil.EqualOptional(a.Transition.InitialInput, b.Transition.InitialInput) &&
-		a.Transition.TargetSessionID == b.Transition.TargetSessionID &&
-		a.Transition.ForkRollbackTargetID == b.Transition.ForkRollbackTargetID &&
-		textutil.EqualOptional(a.Transition.PreviousSessionID, b.Transition.PreviousSessionID)
-}
-
-func sameSessionDraftMemoRequest(a sessionDraftMemoRequest, b sessionDraftMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Input == b.Input
+	return s.resolveTransitionOnce(ctx, req)
 }
 
 func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

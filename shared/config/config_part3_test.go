@@ -29,6 +29,38 @@ func TestLoadShellOutputMaxCharsPrecedenceAndValidation(t *testing.T) {
 	assertConfigEnvRejected(t, workspace, "KENT_SHELL_OUTPUT_MAX_CHARS", "0")
 }
 
+func TestLoadTUINativeProgressBarUsesFileOnlyPrecedence(t *testing.T) {
+	home, workspace := newConfigTestEnv(t)
+	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
+	if !cfg.Settings.TUINativeProgressBar {
+		t.Fatal("TUI native progress bar default = false, want true")
+	}
+	assertConfigSource(t, cfg, "tui_native_progress_bar", "default")
+
+	globalPath := filepath.Join(home, ConfigDirName, "config.toml")
+	writeConfigTestFile(t, globalPath, "tui_native_progress_bar = false\n")
+	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
+	if cfg.Settings.TUINativeProgressBar {
+		t.Fatal("global tui_native_progress_bar = true, want false")
+	}
+	assertConfigSource(t, cfg, "tui_native_progress_bar", "file")
+
+	workspacePath := filepath.Join(workspace, ConfigDirName, "config.toml")
+	writeConfigTestFile(t, workspacePath, "tui_native_progress_bar = true\n")
+	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
+	if !cfg.Settings.TUINativeProgressBar {
+		t.Fatal("workspace tui_native_progress_bar = false, want true")
+	}
+	assertConfigSource(t, cfg, "tui_native_progress_bar", "file")
+
+	t.Setenv("KENT_TUI_NATIVE_PROGRESS_BAR", "false")
+	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
+	if !cfg.Settings.TUINativeProgressBar {
+		t.Fatal("environment changed file-only tui_native_progress_bar")
+	}
+	assertConfigSource(t, cfg, "tui_native_progress_bar", "file")
+}
+
 func TestLoadMinimumExecToBgSecondsPrecedenceAndValidation(t *testing.T) {
 	workspace := assertConfigPrecedence(t, configPrecedenceCase[int]{
 		fileContents: "minimum_exec_to_bg_seconds = 21\n",

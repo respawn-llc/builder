@@ -318,6 +318,8 @@ In Desktop, the route-scoped `Unblocked` chip shows Tasks with zero unsatisfied 
 
 Desktop boards sort each column by Updated, Created, Labels, or Short ID. The default is Updated descending; sorting is applied per column after active Labels and Unblocked filters, and Labels follow the Project catalog order.
 
+Project Tasks sort Active, Backlog, and Done together by Updated, Created, Status, Title, Labels, or Short ID. The default is Updated descending, and sort changes apply immediately while the server preserves the selected order.
+
 The CLI manages the same Project catalog with `kent task label create`, `list`, `move`, `rename`, and `delete`. `move` accepts exactly one placement: first, last, before another label, or after another label. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 
 ### CLI Workflow And Task Scope
@@ -413,17 +415,6 @@ kent task search "retry policy" --project . --status backlog,running
 
 Run `kent task search --help` for matching modes, filters, result pagination, output contracts, and validation behavior.
 
-### Inspect Task Sessions
-
-`kent task sessions <short-id-or-task-id>` lists retained agent Sessions for a Task, including parallel branches. Use `--project` to select the Project for a Task Short ID. Results use zero-based `--offset` pagination; `--limit` defaults to 100 and accepts at most 100.
-
-Sessions are ordered as Running, Question, then Idle, with newer Sessions first within each status. Running covers active runtime work, Question covers waits for a question, Approval, or both, and Idle means the retained Session has no live runtime activity.
-
-```bash
-kent task sessions KENT-123 --project .
-kent task sessions KENT-123 --project . --offset 100 --limit 100 --json
-```
-
 ### Manually Move A Task
 
 Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require `--transition` with the authored Transition key. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
@@ -440,7 +431,7 @@ Desktop shows the server's Transition choices and required values, including exp
 
 ### Complete Work From The CLI
 
-An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity supplied to the agent.
+An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity plus the `KENT_RUN_ID` and `KENT_STEP_ID` values supplied to the active Agent Step. Missing or stale execution identity rejects completion without changing the Workflow.
 
 Human-forced completion requires exactly one selector: a Session, or a Task with one unambiguous idle executable Current Node.
 

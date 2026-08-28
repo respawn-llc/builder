@@ -16,11 +16,10 @@ import (
 	"core/shared/serverapi"
 )
 
-type remoteSubscription[Wire any, Event any] struct {
-	conn  rpcwire.Conn
-	route rpccontract.Route
-	event func(Wire) (Event, error)
-	once  sync.Once
+type remoteSubscription[Event any] struct {
+	conn rpcwire.Conn
+	next func(context.Context, rpcwire.Conn) (Event, error)
+	once sync.Once
 }
 
 func (c *Remote) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
@@ -188,48 +187,6 @@ func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serv
 	return decoded, nil
 }
 
-func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
-	conn, route, err := c.subscribeRPC(ctx, protocol.MethodWorktreeSetupSubscribe, "subscribe-worktree-setup", req, "", false)
-	if err != nil {
-		return nil, err
-	}
-	return newRemoteSubscriptionWithError(conn, route, func(params protocol.WorktreeSetupEventParams) (serverapi.WorktreeSetupEvent, error) {
-		id, err := serverapi.ParseWorktreeSetupOperationID(params.Event.SetupOperationID)
-		if err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
-		}
-		decoded := serverapi.WorktreeSetupEvent{
-			SetupOperationID: id,
-			Phase:            serverapi.WorktreeSetupPhase(params.Event.Phase),
-		}
-		decodePayload := func(raw json.RawMessage, target any) error {
-			if len(raw) == 0 {
-				return nil
-			}
-			if err := protocol.DecodeStrictJSON([]byte(raw), target); err != nil {
-				return err
-			}
-			return nil
-		}
-		if err := decodePayload(params.Event.Started, &decoded.Started); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
-		}
-		if err := decodePayload(params.Event.Completed, &decoded.Completed); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
-		}
-		if err := decodePayload(params.Event.NotRequired, &decoded.NotRequired); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
-		}
-		if err := decodePayload(params.Event.Failed, &decoded.Failed); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
-		}
-		if err := decoded.Validate(); err != nil {
-			return serverapi.WorktreeSetupEvent{}, err
-		}
-		return decoded, nil
-	}), nil
-}
-
 func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID string, req any, sessionID string, attachSession bool) (rpcwire.Conn, rpccontract.Route, error) {
 	route := mustRemoteRoute(method)
 	var additionalAttachmentIntent *remoteAttachmentIntent
@@ -262,14 +219,19 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 	return conn, route, nil
 }
 
-func newRemoteSubscription[Wire any, Event any](conn rpcwire.Conn, route rpccontract.Route, event func(Wire) Event) *remoteSubscription[Wire, Event] {
+func newRemoteSubscription[Wire any, Event any](conn rpcwire.Conn, route rpccontract.Route, event func(Wire) Event) *remoteSubscription[Event] {
 	return newRemoteSubscriptionWithError(conn, route, func(wire Wire) (Event, error) {
 		return event(wire), nil
 	})
 }
 
-func newRemoteSubscriptionWithError[Wire any, Event any](conn rpcwire.Conn, route rpccontract.Route, event func(Wire) (Event, error)) *remoteSubscription[Wire, Event] {
-	return &remoteSubscription[Wire, Event]{conn: conn, route: route, event: event}
+func newRemoteSubscriptionWithError[Wire any, Event any](conn rpcwire.Conn, route rpccontract.Route, event func(Wire) (Event, error)) *remoteSubscription[Event] {
+	return &remoteSubscription[Event]{
+		conn: conn,
+		next: func(ctx context.Context, conn rpcwire.Conn) (Event, error) {
+			return nextJSONSubscriptionEvent(ctx, conn, route, event)
+		},
+	}
 }
 
 func mustRemoteRoute(method string) rpccontract.Route {
@@ -280,8 +242,13 @@ func mustRemoteRoute(method string) rpccontract.Route {
 	return route
 }
 
-func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, error) {
-	frame, err := receiveFrame(ctx, s.conn)
+func nextJSONSubscriptionEvent[Wire any, Event any](
+	ctx context.Context,
+	conn rpcwire.Conn,
+	route rpccontract.Route,
+	event func(Wire) (Event, error),
+) (Event, error) {
+	frame, err := receiveFrame(ctx, conn)
 	if err != nil {
 		var zero Event
 		return zero, serverapi.NormalizeStreamError(err)
@@ -292,25 +259,25 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 		return zero, errors.Join(serverapi.ErrStreamFailed, err)
 	}
 	switch message.Method {
-	case s.route.EventMethod:
+	case route.EventMethod:
 		var params Wire
 		if err := json.Unmarshal(message.Params, &params); err != nil {
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
-		event, err := s.event(params)
+		decoded, err := event(params)
 		if err != nil {
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
-		return event, nil
-	case s.route.CompleteMethod:
+		return decoded, nil
+	case route.CompleteMethod:
 		var params protocol.StreamCompleteParams
 		if err := json.Unmarshal(message.Params, &params); err != nil {
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
-		_ = s.Close()
+		_ = conn.Close()
 		var zero Event
 		if params.Code == 0 && strings.TrimSpace(params.Message) == "" {
 			return zero, io.EOF
@@ -326,7 +293,15 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 	}
 }
 
-func (s *remoteSubscription[Wire, Event]) Close() error {
+func (s *remoteSubscription[Event]) Next(ctx context.Context) (Event, error) {
+	event, err := s.next(ctx, s.conn)
+	if errors.Is(err, io.EOF) {
+		_ = s.Close()
+	}
+	return event, err
+}
+
+func (s *remoteSubscription[Event]) Close() error {
 	if s == nil {
 		return nil
 	}

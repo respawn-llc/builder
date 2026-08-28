@@ -10,6 +10,7 @@ import (
 	remoteclient "core/shared/client"
 	"core/shared/config"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"net/http/httptest"
@@ -235,7 +236,7 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	if _, err := remote.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: foreignResult.SessionID, MaxChars: 128}); err == nil {
 		t.Fatal("expected foreign process inline output to be rejected")
 	}
-	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: "kill-foreign", ProcessID: foreignResult.SessionID}); err == nil {
+	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err == nil {
 		t.Fatal("expected foreign process kill to be rejected")
 	}
 	if _, err := remote.GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: ownResult.SessionID}); err != nil {
@@ -259,17 +260,17 @@ func TestGatewayRemoteResolveWorktreeCreateTarget(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), serverapi.WorktreeCreateTargetResolveRequest{
-		SessionID: store.Meta().SessionID,
+	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), &worktreepb.CreateTargetResolveRequest{
+		SessionId: store.Meta().SessionID,
 		Target:    "HEAD",
 	})
 	if err != nil {
 		t.Fatalf("ResolveWorktreeCreateTarget: %v", err)
 	}
-	if resp.Resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindDetachedRef {
+	if resp.Resolution.Kind != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF {
 		t.Fatalf("resolution kind = %q, want detached_ref", resp.Resolution.Kind)
 	}
-	if strings.TrimSpace(resp.Resolution.ResolvedRef) == "" {
+	if strings.TrimSpace(resp.Resolution.GetResolvedRef()) == "" {
 		t.Fatalf("expected resolved ref oid, got %+v", resp.Resolution)
 	}
 }

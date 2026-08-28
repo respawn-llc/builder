@@ -42,7 +42,11 @@ func TestWorkflowCacheFriendlyCompletionModesKeepRequestMetadataStableAcrossCont
 			if err != nil {
 				t.Fatalf("build before request: %v", err)
 			}
-			eng.cfg.CurrentNodeExecution.Contract.Transitions[0].Parameters = []workflow.Parameter{{Key: "different", Description: "Changed transition output."}}
+			execution, active := eng.currentNodeExecutionConfig()
+			if !active {
+				t.Fatal("published Workflow execution is absent")
+			}
+			execution.Contract.Transitions[0].Parameters = []workflow.Parameter{{Key: "different", Description: "Changed transition output."}}
 			reqAfter, err := eng.buildRequest(context.Background(), "step-after", true)
 			if err != nil {
 				t.Fatalf("build after request: %v", err)
@@ -115,40 +119,6 @@ func TestPromptCacheLineageExcludesToolChoiceMode(t *testing.T) {
 	}
 }
 
-func TestPromptCacheLineageSerializesPreparedProviderSchemas(t *testing.T) {
-	request := llm.Request{
-		Model:          "gpt-5",
-		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		Tools: []llm.Tool{{
-			Name:   "shell",
-			Schema: mustTestFunctionSchema(t),
-		}},
-		StructuredOutput: &llm.StructuredOutput{
-			Name:   "reviewer_suggestions",
-			Schema: mustReviewerSuggestionsContract(t),
-		},
-	}
-	chunks, err := promptCacheChunks(request)
-	if err != nil {
-		t.Fatalf("promptCacheChunks: %v", err)
-	}
-	if len(chunks) == 0 {
-		t.Fatal("prompt cache metadata chunk is missing")
-	}
-	var metadata promptCacheMetadata
-	if err := json.Unmarshal(chunks[0], &metadata); err != nil {
-		t.Fatalf("decode prompt cache metadata: %v", err)
-	}
-	if len(metadata.Tools) != 1 || metadata.Tools[0].Schema == "" {
-		t.Fatalf("prompt cache tool metadata omitted prepared schema: %+v", metadata.Tools)
-	}
-	if metadata.StructuredOutput == nil ||
-		metadata.StructuredOutput.Schema == "" ||
-		!metadata.StructuredOutput.Strict {
-		t.Fatalf("prompt cache structured output omitted prepared strict schema: %+v", metadata.StructuredOutput)
-	}
-}
-
 func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -163,13 +133,20 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			events := make([]Event, 0, 1)
 			store := mustCreateTestSession(t)
-			eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 				CacheWarningMode: tt.mode,
 				OnEvent: func(evt Event) {
 					events = append(events, evt)
 				},
 			})
-			if err := eng.steer("cache-step", steerCacheWarningIntent(transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonReuseDropped}, cacheWarningEntryVisibility(tt.mode), true)); err != nil {
+			if err := steerTestActiveStep(eng, "cache-step", steerCacheWarningIntent(
+				transcript.CacheWarning{
+					Scope:  transcript.CacheWarningScopeConversation,
+					Reason: transcript.CacheWarningReasonReuseDropped,
+				},
+				cacheWarningEntryVisibility(tt.mode),
+				true,
+			)); err != nil {
 				t.Fatalf("steer cache warning: %v", err)
 			}
 			snapshot := eng.ChatSnapshot()
@@ -194,7 +171,7 @@ func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
 	observerErr := errors.New("cache response observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeOff,
 	})
@@ -207,9 +184,11 @@ func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
 	}}
 	gate.FailNext(observerErr)
 
-	err := eng.observePromptCacheResponse("step-1", prepared, llm.Usage{
-
-		CachedInputTokens: textutil.Value(7),
+	stepID := runtimeTestStepID("step-1")
+	err := runTestActiveStep(eng, stepID, func() error {
+		return eng.observePromptCacheResponse(stepID, prepared, llm.Usage{
+			CachedInputTokens: textutil.Value(7),
+		})
 	})
 	if !errors.Is(err, observerErr) {
 		t.Fatalf("cache response error = %v, want observer error", err)
@@ -264,7 +243,7 @@ func (transportStaticAuth) AuthorizationHeader(context.Context) (string, error) 
 func newCacheWarningTestEngine(t *testing.T, client llm.Client, mode config.CacheWarningMode) (*session.Store, *Engine) {
 	t.Helper()
 	store := mustCreateTestSession(t)
-	return store, mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{CacheWarningMode: mode})
+	return store, mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{CacheWarningMode: mode})
 }
 
 func TestGenerateWithRetryClient_PersistsExactNonPostfixCacheWarningInDefaultMode(t *testing.T) {
@@ -272,13 +251,13 @@ func TestGenerateWithRetryClient_PersistsExactNonPostfixCacheWarningInDefaultMod
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(7)}}, {Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(0)}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
 	if warnings := persistedCacheWarnings(t, store); len(warnings) != 0 {
 		t.Fatalf("warning count after baseline success = %d, want 0", len(warnings))
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest("cache-key-1", "beta")); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
@@ -302,10 +281,10 @@ func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWhenProviderReu
 	}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest("cache-key-1", "beta")); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
@@ -325,10 +304,10 @@ func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWithoutProvider
 	}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest("cache-key-1", "beta")); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
@@ -340,7 +319,7 @@ func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWithoutProvider
 func TestNew_RejectsInvalidCacheWarningMode(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningMode("bogus")}); err == nil {
+	if _, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningMode("bogus")}); err == nil {
 		t.Fatal("expected invalid cache_warning_mode to fail")
 	}
 }
@@ -350,10 +329,10 @@ func TestGenerateWithRetryClient_OffModeSuppressesExactNonPostfixWarning(t *test
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(7)}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeOff)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest("cache-key-1", "beta")); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
@@ -368,14 +347,14 @@ func TestGenerateWithRetryClient_FailedRequestDoesNotAdvanceLineage(t *testing.T
 
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
 	failingClient := failingCacheClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", &failingClient, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err == nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", &failingClient, testPromptCacheRequest("cache-key-1", "beta")); err == nil {
 		t.Fatal("expected failed generate")
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-3", client, testPromptCacheRequest("cache-key-1", "alpha", "omega"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-3", client, testPromptCacheRequest("cache-key-1", "alpha", "omega")); err != nil {
 		t.Fatalf("third generate: %v", err)
 	}
 	warnings := persistedCacheWarnings(t, store)
@@ -389,10 +368,10 @@ func TestGenerateWithRetryClient_PersistsVerboseReuseDropWarning(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(4)}}, {Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(0)}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest("cache-key-1", "alpha", "omega"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest("cache-key-1", "alpha", "omega")); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
@@ -413,10 +392,10 @@ func TestGenerateWithRetryClient_DoesNotWarnAcrossDistinctCacheKeys(t *testing.T
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest("cache-key-2", "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest("cache-key-2", "beta")); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
@@ -430,7 +409,7 @@ func TestBuildRequest_SkipsPromptCacheKeyForUnsupportedProvider(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -447,7 +426,7 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -467,7 +446,7 @@ func TestBuildRequest_KeepsPromptCacheKeyWithRequestSessionIDAfterCompaction(t *
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.compactionRuntimeState().SetCount(1)
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
@@ -497,7 +476,7 @@ func TestBuildRequest_KeepsPromptCacheKeyFromPersistedCompactionOnReopen(t *test
 		t.Fatalf("reopen store: %v", err)
 	}
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
-	eng := mustNewTestEngine(t, reopened, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -524,15 +503,10 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 	if err != nil {
 		t.Fatalf("build compaction instructions input: %v", err)
 	}
-	err = eng.stepLifecycle.Run(
-		context.Background(),
-		exclusiveStepOptions{ActiveKind: ActiveKindCompaction},
-		func(ctx context.Context, _ string) error {
-			_, summaryErr := eng.localCompactionSummary(ctx, input, compactionInstructions(instructionsInput), compactionModeManual)
-			return summaryErr
-		},
-	)
-	if err != nil {
+	if err := runTestActiveStep(eng, "local-compaction", func() error {
+		_, summaryErr := eng.localCompactionSummary(context.Background(), input, compactionInstructions(instructionsInput), compactionModeManual)
+		return summaryErr
+	}); err != nil {
 		t.Fatalf("local compaction summary: %v", err)
 	}
 	if len(client.calls) != 1 {
@@ -593,8 +567,8 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 			payload:   payload,
 		}
 		capturedRequests = append(capturedRequests, captured)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\ndata: [DONE]\n\n"))
 	}))
 	defer server.Close()
 
@@ -602,9 +576,10 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	transport.BaseURL = server.URL + "/v1"
 	transport.Client = server.Client()
 	transport.ProviderCapabilitiesOverride = &llm.ProviderCapabilities{
-		ProviderID:             "openai-compatible",
+		ProviderID:             "openai",
 		SupportsResponsesAPI:   true,
 		SupportsPromptCacheKey: true,
+		IsOpenAIFirstParty:     true,
 	}
 	openAIClient := llm.NewOpenAIClient(transport)
 
@@ -617,7 +592,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	send := func(req llm.Request) capturedRequest {
 		t.Helper()
 		before := len(capturedRequests)
-		if _, err := openAIClient.Generate(context.Background(), req); err != nil {
+		if _, err := openAIClient.Generate(context.Background(), req, llm.StreamCallbacks{}); err != nil {
 			t.Fatalf("transport generate: %v", err)
 		}
 		if len(capturedRequests) != before+1 {
@@ -705,8 +680,8 @@ func TestReviewerSuggestions_SkipsPromptCacheKeyForUnsupportedProvider(t *testin
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
 	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}}}
-	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
-	if _, err := runReviewerSuggestionsInActiveTestRun(t, eng, reviewerClient); err != nil {
+	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	if _, err := runReviewerSuggestionsTestActiveStep(context.Background(), eng, "step-1", reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	if len(reviewerClient.calls) != 1 {
@@ -731,9 +706,9 @@ func TestReviewerSuggestions_UsesReviewerClientPromptCacheCapability(t *testing.
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}},
 	}
-	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	eng.compactionRuntimeState().SetCount(1)
-	if _, err := runReviewerSuggestionsInActiveTestRun(t, eng, reviewerClient); err != nil {
+	if _, err := runReviewerSuggestionsTestActiveStep(context.Background(), eng, "step-1", reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	if len(reviewerClient.calls) != 1 {
@@ -770,8 +745,8 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}},
 	}
-	eng := mustNewTestEngine(t, reopened, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
-	if _, err := runReviewerSuggestionsInActiveTestRun(t, eng, reviewerClient); err != nil {
+	eng := mustNewTestEngine(t, reopened, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	if _, err := runReviewerSuggestionsTestActiveStep(context.Background(), eng, "step-1", reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	if len(reviewerClient.calls) != 1 {
@@ -795,16 +770,16 @@ func TestGenerateWithRetryClient_KeepsReviewerLineageIndependent(t *testing.T) {
 	}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("conversation first generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testReviewerPromptCacheRequest("cache-key-1/supervisor", "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testReviewerPromptCacheRequest("cache-key-1/supervisor", "beta")); err != nil {
 		t.Fatalf("reviewer first generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-3", client, testPromptCacheRequest("cache-key-1", "alpha", "omega"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-3", client, testPromptCacheRequest("cache-key-1", "alpha", "omega")); err != nil {
 		t.Fatalf("conversation postfix generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-4", client, testReviewerPromptCacheRequest("cache-key-1/supervisor", "gamma"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-4", client, testReviewerPromptCacheRequest("cache-key-1/supervisor", "gamma")); err != nil {
 		t.Fatalf("reviewer non-postfix generate: %v", err)
 	}
 
@@ -826,16 +801,20 @@ func TestGenerateWithRetryClient_CompactionKeepsConversationCacheKeyWithoutWarni
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 	cacheKey := eng.SessionID()
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest(cacheKey, "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}})); err != nil {
+	compactionStepID := runtimeTestStepID("step-compact")
+	if err := runTestActiveStep(eng, compactionStepID, func() error {
+		_, err := newCompactionPersistence(eng).replaceHistory(compactionStepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}))
+		return err
+	}); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if len(persistedCacheWarnings(t, store)) != 0 {
 		t.Fatal("expected compaction to avoid warnings before the next same-key request")
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-2", client, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest(cacheKey, "beta")); err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
 
@@ -856,24 +835,25 @@ func TestGenerateWithRetryClient_CompactionResetsConversationAndReviewerCacheBas
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 	cacheKey := eng.SessionID()
 	reviewerKey := reviewerSessionID(cacheKey)
+	compactionStepID := runtimeTestStepID("step-compact")
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "main-before", client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-before"), client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("main baseline generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "reviewer-before", client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-before"), client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer baseline generate: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
+	if _, err := newCompactionPersistence(eng).replaceHistory(compactionStepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
 		Role:        llm.RoleAssistant,
 		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
 		Content:     textutil.Value("summary"),
 	}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "main-after", client, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-after"), client, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
 		t.Fatalf("main post-compaction generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "reviewer-after", client, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-after"), client, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer post-compaction generate: %v", err)
 	}
 	if warnings := persistedCacheWarnings(t, store); len(warnings) != 0 {
@@ -890,14 +870,15 @@ func TestGenerateWithRetryClient_ReplayedCompactionResetsConversationAndReviewer
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 	cacheKey := eng.SessionID()
 	reviewerKey := reviewerSessionID(cacheKey)
+	compactionStepID := runtimeTestStepID("step-compact")
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "main-before", client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-before"), client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("main baseline generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "reviewer-before", client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-before"), client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer baseline generate: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
+	if _, err := newCompactionPersistence(eng).replaceHistory(compactionStepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
 		Role:        llm.RoleAssistant,
 		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
 		Content:     textutil.Value("summary"),
@@ -918,10 +899,10 @@ func TestGenerateWithRetryClient_ReplayedCompactionResetsConversationAndReviewer
 		Reviewer:         ReviewerConfig{Model: "gpt-5"},
 		CacheWarningMode: config.CacheWarningModeDefault,
 	})
-	if _, err := replayed.generateWithRetryClient(context.Background(), "main-after", replayClient, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
+	if _, err := replayed.generateWithRetryClient(context.Background(), runtimeTestStepID("main-after"), replayClient, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
 		t.Fatalf("main replay generate: %v", err)
 	}
-	if _, err := replayed.generateWithRetryClient(context.Background(), "reviewer-after", replayClient, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
+	if _, err := replayed.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-after"), replayClient, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer replay generate: %v", err)
 	}
 	if warnings := persistedCacheWarnings(t, reopened); len(warnings) != 0 {
@@ -946,8 +927,8 @@ func TestGenerateWithRetryClient_RestoreIgnoresRequestObservationWithoutResponse
 		t.Fatalf("reopen store: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 12}}}}
-	eng := mustNewTestEngine(t, reopened, client, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeDefault})
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha", "omega"), nil, nil, nil); err != nil {
+	eng := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeDefault})
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha", "omega")); err != nil {
 		t.Fatalf("generate after reopen: %v", err)
 	}
 	warnings := persistedCacheWarnings(t, reopened)
@@ -960,7 +941,7 @@ type failingCacheClient struct {
 	caps llm.ProviderCapabilities
 }
 
-func (f *failingCacheClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (f *failingCacheClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{}, context.DeadlineExceeded
 }
 
@@ -973,10 +954,14 @@ func TestGenerateWithRetryClient_RestorePreservesRotatedCompactionKeyWithoutWarn
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}})); err != nil {
+	compactionStepID := runtimeTestStepID("step-compact")
+	if err := runTestActiveStep(eng, compactionStepID, func() error {
+		_, err := newCompactionPersistence(eng).replaceHistory(compactionStepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}))
+		return err
+	}); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if err := eng.Close(); err != nil {
@@ -988,9 +973,9 @@ func TestGenerateWithRetryClient_RestorePreservesRotatedCompactionKeyWithoutWarn
 		t.Fatalf("reopen store: %v", err)
 	}
 	reopenedClient := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 12}}}}
-	reopenedEng := mustNewTestEngine(t, reopened, reopenedClient, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeVerbose})
+	reopenedEng := mustNewTestEngine(t, reopened, reopenedClient, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeVerbose})
 
-	if _, err := reopenedEng.generateWithRetryClient(context.Background(), "step-2", reopenedClient, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err != nil {
+	if _, err := generateTestActiveStep(context.Background(), reopenedEng, "step-2", reopenedClient, testPromptCacheRequest("cache-key-1", "beta")); err != nil {
 		t.Fatalf("generate after reopen: %v", err)
 	}
 

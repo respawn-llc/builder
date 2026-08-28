@@ -56,7 +56,7 @@ func TestGenerateChatGPTCodexCompressesLargeResponsesBodyWithZstd(t *testing.T) 
 		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
-	})
+	}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -90,8 +90,7 @@ func TestGenerateOpenAIAPIKeyLeavesLargeResponsesBodyUncompressed(t *testing.T) 
 	var requestEncoding string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestEncoding = r.Header.Get("Content-Encoding")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"response-1","object":"response","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+		writeCompletedResponseSSE(w)
 	}))
 	defer server.Close()
 
@@ -107,7 +106,7 @@ func TestGenerateOpenAIAPIKeyLeavesLargeResponsesBodyUncompressed(t *testing.T) 
 		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
-	}); err != nil {
+	}, StreamCallbacks{}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if requestEncoding != "" {
@@ -134,7 +133,7 @@ func TestGenerateExplicitLocalOAuthCompatibleEndpointLeavesResponsesBodyUncompre
 		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
-	}); err != nil {
+	}, StreamCallbacks{}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if requestEncoding != "" {
@@ -142,7 +141,7 @@ func TestGenerateExplicitLocalOAuthCompatibleEndpointLeavesResponsesBodyUncompre
 	}
 }
 
-func TestGenerateStreamChatGPTCodexCompressesResponsesBody(t *testing.T) {
+func TestGenerateChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	var requestEncoding string
 	var requestBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +157,7 @@ func TestGenerateStreamChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	transport.BaseURL = server.URL
 	transport.BaseURLExplicit = false
 	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+	_, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		SessionID:      sessionID,
 		CodexDispatch:  dispatch,
@@ -166,7 +165,7 @@ func TestGenerateStreamChatGPTCodexCompressesResponsesBody(t *testing.T) {
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}, StreamCallbacks{})
 	if err != nil {
-		t.Fatalf("GenerateStreamWithEvents: %v", err)
+		t.Fatalf("Generate: %v", err)
 	}
 	if requestEncoding != "zstd" {
 		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
@@ -202,8 +201,8 @@ func TestCompactChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	if requestEncoding != "zstd" {
 		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
 	}
-	if len(requestBody) == 0 || len(response.OutputItems) != 1 {
-		t.Fatalf("compact request/response = body=%d output_items=%d", len(requestBody), len(response.OutputItems))
+	if len(requestBody) == 0 || response.Checkpoint.Type != ResponseItemTypeCompaction {
+		t.Fatalf("compact request/response = body=%d checkpoint=%+v", len(requestBody), response.Checkpoint)
 	}
 }
 
@@ -236,10 +235,10 @@ func TestGenerateLogicalRetrySendsCompressedSemanticEquivalents(t *testing.T) {
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}
-	if _, err := transport.Generate(context.Background(), request); err == nil {
+	if _, err := transport.Generate(context.Background(), request, StreamCallbacks{}); err == nil {
 		t.Fatal("first Generate unexpectedly succeeded")
 	}
-	if _, err := transport.Generate(context.Background(), request); err != nil {
+	if _, err := transport.Generate(context.Background(), request, StreamCallbacks{}); err != nil {
 		t.Fatalf("retry Generate: %v", err)
 	}
 	mu.Lock()

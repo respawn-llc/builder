@@ -8,23 +8,22 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type completeNodeBarrierController struct {
 	fakeWorkflowController
 	beforeComplete func()
 	completeError  error
-	committedError error
 	completeCalls  atomic.Int32
 }
 
-func (c *completeNodeBarrierController) CompleteCurrentNode(
+func (c *completeNodeBarrierController) CompleteAgentCurrentNode(
 	_ context.Context,
-	_ workflowruntime.CompletionRequest,
+	req workflowruntime.AgentCompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
 	c.completeCalls.Add(1)
 	if c.beforeComplete != nil {
@@ -33,10 +32,18 @@ func (c *completeNodeBarrierController) CompleteCurrentNode(
 	if c.completeError != nil {
 		return workflowruntime.CompletionResult{}, c.completeError
 	}
-	return workflowruntime.CompletionResult{
+	return applyWorkflowCompletionForTest(c.engine, req, workflowruntime.CompletionResult{
 		TransitionID: "done",
 		State:        workflowruntime.CompletionStateApplied,
-	}, c.committedError
+	})
+}
+
+func (c *completeNodeBarrierController) CompleteScriptCurrentNode(
+	context.Context,
+	workflowruntime.ScriptCompletionRequest,
+) (workflowruntime.CompletionResult, error) {
+	err := errors.New("unexpected Script completion")
+	return workflowruntime.CompletionResult{}, err
 }
 
 func completeNodeBarrierAcceptedCalls(input json.RawMessage) acceptedResponseCalls {
@@ -52,9 +59,7 @@ func completeNodeBarrierAcceptedCalls(input json.RawMessage) acceptedResponseCal
 func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing.T) {
 	store := mustCreateTestSession(t)
 	flushes := &resultGroupFlushRecorder{}
-	var events []Event
-	diagnostic := errors.New("successor assignment observer failed")
-	controller := &completeNodeBarrierController{committedError: diagnostic}
+	controller := &completeNodeBarrierController{}
 	var (
 		engine                  *Engine
 		mutatedBeforeDurability atomic.Bool
@@ -68,18 +73,25 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
-			Model:                "gpt-5",
-			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
-			DurabilityObserver:   flushes,
-			OnEvent:              func(event Event) { events = append(events, event) },
+			Model:              "gpt-5",
+			DurabilityObserver: flushes,
 		},
 	)
+	workflowConfig := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
+	publishTestWorkflowExecution(t, engine, workflowConfig)
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{
+		snapshot: &RunSnapshot{
+			RunID:  "11111111-1111-4111-8111-111111111111",
+			StepID: "22222222-2222-4222-8222-222222222222",
+		},
+		activeStepID: "22222222-2222-4222-8222-222222222222",
+	}
 
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"step",
+		"22222222-2222-4222-8222-222222222222",
 		completeNodeBarrierAcceptedCalls(
 			json.RawMessage(`{"summary":"done"}`),
 		),
@@ -99,14 +111,6 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 		!results[0].Terminal {
 		t.Fatalf("complete_node results = %+v, want one terminal success", results)
 	}
-	var output map[string]any
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatalf("decode complete_node output: %v", err)
-	}
-	if _, present := output["diagnostic"]; present {
-		t.Fatalf("complete_node output exposed a diagnostic field: %s", results[0].Output)
-	}
-	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
 	observations := flushes.snapshot()
 	if len(observations) != 2 ||
 		observations[0].Reason != ResultGroupFlushCompleteNode ||
@@ -119,24 +123,6 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 	}
 }
 
-func assertWorkflowCompletionOperatorDiagnostic(
-	t *testing.T,
-	events []Event,
-	diagnostic error,
-) {
-	t.Helper()
-	for _, event := range events {
-		if event.Kind == EventLocalEntryAdded &&
-			event.CommittedTranscriptChanged &&
-			event.LocalEntry != nil &&
-			event.LocalEntry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) &&
-			event.LocalEntry.Text == diagnostic.Error() {
-			return
-		}
-	}
-	t.Fatal("typed workflow completion operator diagnostic was not published")
-}
-
 func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {
 	flushes := &resultGroupFlushRecorder{}
 	controller := &completeNodeBarrierController{}
@@ -144,17 +130,20 @@ func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
-			Model:                "gpt-5",
-			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
-			DurabilityObserver:   flushes,
+			Model:              "gpt-5",
+			DurabilityObserver: flushes,
 		},
 	)
+	publishTestWorkflowExecution(t, engine, testWorkflowConfig(controller, config.WorkflowCompletionModeTool))
+	stepID := runtimeTestStepID("step")
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"step",
+		stepID,
 		completeNodeBarrierAcceptedCalls(
 			json.RawMessage(`{"summary":""}`),
 		),
@@ -181,5 +170,40 @@ func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {
 			"invalid complete_node flushes = %+v, want only Step Boundary close",
 			observations,
 		)
+	}
+}
+
+func TestCompleteNodeOperationalFailureDoesNotConsumeProtocolBudget(t *testing.T) {
+	failure := errors.New("workflow store unavailable")
+	controller := &completeNodeBarrierController{completeError: failure}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	publishTestWorkflowExecution(t, engine, testWorkflowConfig(controller, config.WorkflowCompletionModeTool))
+	stepID := "22222222-2222-4222-8222-222222222222"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
+
+	result, err := (&defaultToolExecutor{engine: engine}).executeCompleteNodeTool(
+		context.Background(),
+		stepID,
+		llm.ToolCall{
+			ID:    "complete-node",
+			Name:  string(toolspec.ToolCompleteNode),
+			Input: json.RawMessage(`{"summary":"done"}`),
+		},
+	)
+	if !errors.Is(err, failure) {
+		t.Fatalf("complete_node error = %v, want %v", err, failure)
+	}
+	if !result.IsError || !result.Terminal {
+		t.Fatalf("complete_node operational result = %+v, want terminal error", result)
+	}
+	if controller.violations.Load() != 0 {
+		t.Fatalf("operational complete_node failure consumed %d protocol violations", controller.violations.Load())
 	}
 }

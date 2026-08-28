@@ -479,14 +479,15 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	}}
 
 	eng := mustNewExecTestEngine(t, store, client, Config{
-		Temperature:   1,
-		ThinkingLevel: "xhigh",
-		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand},
+		Temperature:             1,
+		ThinkingLevel:           "xhigh",
+		SupportedThinkingValues: []string{"low", "xhigh"},
+		EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	if err := eng.SetThinkingLevel("low"); err != nil {
+	if err := eng.SetThinkingLevel(t.Context(), "low"); err != nil {
 		t.Fatalf("set thinking level: %v", err)
 	}
 	if _, err := eng.SubmitUserMessage(context.Background(), "again"); err != nil {
@@ -518,8 +519,9 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
 		Config{
-			Model:         "gpt-5.3-codex",
-			ThinkingLevel: "high",
+			Model:                   "gpt-5.3-codex",
+			ThinkingLevel:           "high",
+			SupportedThinkingValues: []string{"low", "medium", "high", "xhigh"},
 			Reviewer: ReviewerConfig{
 				Frequency:     "off",
 				Model:         "gpt-5",
@@ -529,11 +531,24 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 	)
 
 	t.Run("blank thinking level", func(t *testing.T) {
-		if err := eng.SetThinkingLevel(" "); err == nil {
+		if err := eng.SetThinkingLevel(t.Context(), " "); err == nil {
 			t.Fatal("expected blank thinking level error")
 		}
 		if got := eng.ThinkingLevel(); got != "high" {
 			t.Fatalf("thinking level after blank set = %q, want high", got)
+		}
+	})
+
+	t.Run("provider-specific thinking level", func(t *testing.T) {
+		if err := eng.SetThinkingLevel(t.Context(), " provider-specific-depth "); err != nil {
+			t.Fatalf("set provider-specific thinking level: %v", err)
+		}
+		if got := eng.ThinkingLevel(); got != "provider-specific-depth" {
+			t.Fatalf("thinking level = %q, want provider-specific-depth", got)
+		}
+		meta := eng.store.Meta()
+		if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
+			t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
 		}
 	})
 
@@ -573,7 +588,7 @@ func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
 			SupportsResponsesAPI: true,
 			IsOpenAIFirstParty:   false,
 		}},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:           "gpt-5.3-codex",
 			FastModeEnabled: true,
@@ -596,7 +611,7 @@ func TestNewRejectsUnavailableProviderCapabilities(t *testing.T) {
 		store,
 		mustMaterializeTestEventLog(t, store),
 		&fakeClient{capsErr: capabilityErr},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	if !errors.Is(err, capabilityErr) {
@@ -703,26 +718,43 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
+func TestSetAutoCompactionEnabledPersistsSessionSetting(t *testing.T) {
 	store := mustCreateTestSession(t)
-	cfg := Config{Model: "gpt-5"}
-	eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
+	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
+	if err != nil {
+		t.Fatalf("disable auto-compaction: %v", err)
+	}
 	if !changed || enabled {
 		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
 	}
 	if got := eng.AutoCompactionEnabled(); got {
 		t.Fatalf("expected runtime auto-compaction disabled, got %v", got)
 	}
-
-	restarted := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
-	if got := restarted.AutoCompactionEnabled(); !got {
-		t.Fatalf("expected auto-compaction enabled after restart, got %v", got)
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction {
+		t.Fatalf("Session Auto-compaction override = %+v, want false", meta.ChatSettings)
 	}
 }
 
-func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurrentRun(t *testing.T) {
+func TestSetAutoCompactionEnabledRejectsAfterClose(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close engine: %v", err)
+	}
+	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
+	if !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("disable auto-compaction after close error = %v, want ErrEngineClosed", err)
+	}
+	if changed || !enabled {
+		t.Fatalf("setting after close = changed %v, enabled %v; want unchanged and enabled", changed, enabled)
+	}
+}
+
+func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -740,9 +772,10 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 		},
 		compactionResponses: []llm.CompactionResponse{
 			{
-				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
-					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               textutil.Value("cmp_1"),
+					EncryptedContent: textutil.Value("enc_1"),
 				},
 				Usage: llm.Usage{InputTokens: 8000, OutputTokens: 500, WindowTokens: 400000},
 			},
@@ -767,14 +800,32 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for tool call to start")
 	}
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
-	if !changed || enabled {
-		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
+	type settingResult struct {
+		changed bool
+		enabled bool
+		err     error
+	}
+	settingDone := make(chan settingResult, 1)
+	go func() {
+		changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
+		settingDone <- settingResult{changed: changed, enabled: enabled, err: err}
+	}()
+	select {
+	case result := <-settingDone:
+		t.Fatalf("setting applied during protected Step: %+v", result)
+	case <-time.After(50 * time.Millisecond):
 	}
 	close(release)
 
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit while disabling auto-compaction: %v", err)
+	}
+	result := <-settingDone
+	if result.err != nil {
+		t.Fatalf("disable auto-compaction: %v", result.err)
+	}
+	if !result.changed || result.enabled {
+		t.Fatalf("setting result = %+v, want changed and disabled", result)
 	}
 	if got := len(client.compactionCalls); got != 0 {
 		t.Fatalf("expected no compaction call for in-flight run after disabling auto-compaction, got %d", got)

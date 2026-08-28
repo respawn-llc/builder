@@ -11,14 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -154,6 +153,14 @@ func rebindSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, formatSessionRetargetCommandError(remaining[1], err))
 		return 1
 	}
+	if response.Scheduled != nil {
+		_, _ = fmt.Fprintln(stdout, "Session rebind scheduled for the agent's next step.")
+		return 0
+	}
+	if response.Binding == nil {
+		fmt.Fprintln(stderr, "session rebind response omitted its result")
+		return 1
+	}
 	_, _ = fmt.Fprintln(stdout, response.Binding.WorkspaceID)
 	if response.WorkspaceBindingCreated {
 		_, _ = fmt.Fprintf(
@@ -234,7 +241,29 @@ func rebindWorkspaceWithTimeout(ctx context.Context, remote apicontract.ProjectV
 }
 
 func retargetSessionWorkspace(ctx context.Context, remote apicontract.SessionLifecycleService, sessionID string, workspaceRoot string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	return remote.RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: sessionID, WorkspaceRoot: workspaceRoot, ProjectID: projectID})
+	origin, err := sessionRetargetRuntimeOrigin(sessionID)
+	if err != nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, err
+	}
+	return remote.RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{
+		SessionID:     sessionID,
+		WorkspaceRoot: workspaceRoot,
+		ProjectID:     projectID,
+		Origin:        origin,
+	})
+}
+
+func sessionRetargetRuntimeOrigin(sessionID string) (*serverapi.RuntimeStepOrigin, error) {
+	currentSessionID, ok := sessionenv.LookupSessionID(os.LookupEnv)
+	if !ok || currentSessionID != strings.TrimSpace(sessionID) {
+		return nil, nil
+	}
+	runID, stepID := sessionenv.LookupRunStepID(os.LookupEnv)
+	if runID == "" && stepID == "" {
+		return nil, nil
+	}
+	origin := &serverapi.RuntimeStepOrigin{RunID: runID, StepID: stepID}
+	return origin, origin.Validate()
 }
 
 func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {

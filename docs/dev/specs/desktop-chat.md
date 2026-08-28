@@ -45,7 +45,7 @@
 - If Kent cannot apply issued Reviewer feedback in the follow-up turn, Kent preserves the feedback row and fails the engine and Session through the existing error path. It adds no retry, rollback, or recovery guarantee for that failure.
 - Pending Questions and Approvals appear only in their prompt controls. A completed Question creates exactly one expanded Ask Question row. Approval has no separate decision-history row: its associated tool item owns the request and outcome.
 - A tool-associated prompt has one prompt control and one associated tool item; it is never duplicated as another transcript row.
-- Runtime lifecycle, active-work changes, compaction lifecycle, Goal lifecycle, unavailable runtime, accepted or discarded Pending Work, Queue failure, and input-operation reconciliation do not create transcript rows. Their controls or notifications own feedback.
+- Runtime lifecycle, active-work changes, compaction lifecycle, Goal lifecycle, unavailable Runtime, accepted or discarded Pending Work, and Queue failure do not create transcript rows. Their controls or notifications own feedback.
 - User interruption creates no transcript row. Runtime error feedback and committed error items remain visible where supplied by the server.
 - Background activity and controls appear in Processes, while committed Background process results remain in transcript order. Worktree control outcomes, sleep-guard failures, and prompt-history failures use notifications and create no transcript row.
 - Thinking Status, Context, Goal, and Pending Work are the only live-control areas defined here. Session name stays in application chrome. Transient status-line notices and errors use notifications rather than feature-specific status surfaces.
@@ -60,6 +60,10 @@
 - A later Agent Step starts fresh at `Working…`. Desktop does not morph Thinking Status into an assistant message.
 - Thinking Status is non-interactive. It has no disclosure, Copy action, hover detail, or link to a Reasoning Trace.
 - While the Reviewer model request is processing, the same transient presentation shows a spinner and `Reviewing…`. Reviewer completion removes it and creates no completed-review marker.
+- The main answer is committed and displayed before Reviewer finishes.
+- The composer remains available, and later user or main-model work may proceed while review runs.
+- Reviewer activity is best-effort live state.
+- Desktop does not reconstruct an earlier review from transcript history or require it to survive reconnect, Runtime replacement, or restart.
 - Main-agent Thinking Status takes precedence over Reviewer activity. If a main-agent follow-up starts while Reviewer activity is still represented, the fresh ordinary `Working…` and Thinking Status presentation replaces `Reviewing…`.
 - While a Question or Approval waits for the operator, Thinking Status is absent. The prompt picker alone owns the waiting state.
 - When answering or external resolution resumes main-agent work, Desktop starts fresh at `Working…`.
@@ -76,13 +80,6 @@
 - Malformed user, assistant, tool, or notice items are contract failures, not display variants: development builds fail immediately; production uses the transcript contract-failure recovery path. Chat never substitutes placeholder content or roles.
 - Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. The identity is a Session-scoped locator composed of the durable event sequence and a one-based ordinal among committed rows projected from that event, after filtering, in deterministic projection order.
 - Both locator components are positive and required on every committed row. Provisional and other non-committed row shapes omit the whole locator. Desktop does not infer row identity from display text, role, position, or transport order.
-- Kent assigns committed time to newly created user or assistant transcript content when the server commits its ordinary Session event.
-- Newly timestamped events committed together share one committed time. History copied into another Session preserves its source committed times instead of receiving the replay operation's time.
-- Kent persists committed time as an absolute instant with each new event that commits user or assistant message rows.
-- Persisted and client/server transcript contracts represent a present committed time as Unix epoch milliseconds. Valid values range inclusively from `-8640000000000000` through `8640000000000000`; zero and pre-epoch values are valid, and only omission represents absence. An invalid present value is a transcript contract failure; Kent does not repair it or treat it as absent.
-- A compaction history-replacement event has one committed time when it projects at least one eligible user or assistant message row. Every user or assistant message row projected from that timestamped event shares its compaction commit time; Kent does not retain each row's pre-compaction time.
-- Only committed user and assistant message rows expose and display committed time. Tools, Reasoning Traces, notices, Reviewer rows, hidden items, provisional rows, and transient controls do not.
-- Committed time is informational. The committed-row locator remains the sole identity and transcript-order authority. Kent never uses committed time for sorting, cursors, deduplication, or reconciliation.
 - Duplicate locators are contract failures within one bounded page and within one continuous subscription generation after applying hydration and live committed rows. After hydration, live committed rows advance by durable event sequence; rows from one event are contiguous and use gapless one-based ordinals in deterministic projection order. Regression, repetition, an ordinal gap, or a live event sequence that is not newer than the greatest hydrated event sequence is a contract failure.
 - The locator-order contract applies only to committed rows in one subscription generation. The same locator may recur across independent reads, page responses, replacement hydration generations, reconnects, and separate clients or surfaces.
 - Opening, reopening, and transcript recovery use ordered transcript hydration and independently load the latest completed projections from each server owner. Non-transcript projections may be stale or represent different completed moments, and cached feed-ordering state does not replace them.
@@ -104,10 +101,6 @@
 ## Transcript History And Live Output
 
 - Transcript history uses server-authoritative infinite scroll. The desktop never loads or retains the complete transcript.
-- Bounded transcript pages, initial hydration, and live committed delivery carry the same committed time from its Session event on eligible user and assistant message rows. They do not derive, look up, sort by, or reconcile through time.
-- Historical Session events without committed time remain readable. Kent does not synthesize or migrate their missing time.
-- New eligible message events written to an existing historical Session include committed time; earlier events remain unchanged. Committed time is an optional fact only because those earlier events may lack it.
-- The client/server protocol introduces committed time as a hard version cutover. Mismatched older clients are rejected through the existing protocol handshake; Kent provides no timestamp capability negotiation or fallback.
 - The visible transcript retains the newest segment and at most one adjacent segment. Loading an adjacent segment occurs at that transcript edge without replacing visible content or the viewport. Failure replaces only that boundary row with an actionable Retry for the same opaque cursor. At the oldest edge, no start-of-session marker is shown.
 - Every Chat entry opens at the newest transcript content and composer, never at a specific message, Question, Approval, tool, or workflow event. Reopening a Chat begins at the newest content; Chat has no durable read state or saved scroll position.
 - When the operator has scrolled away from the tail, incoming content preserves the viewport. A `Jump to latest` control appears when a newer server segment exists or when the viewport is more than 80px from the end of the loaded newest segment. The control has no unseen count. Activating it fetches the newest segment in one request when necessary and never walks intermediate segments.
@@ -127,11 +120,6 @@
 - Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
 - User messages longer than 10 rendered lines begin collapsed to 10 lines with a fade and accessible Expand action. Expansion is one-way until the row leaves the viewport. Assistant messages stay expanded.
 - Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. Eligible user messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Edit is the only fork action.
-- A committed user or assistant message with committed time shows the client machine's locale-formatted hour and minute in its footer.
-- Timestamp presentation uses the client machine's local time zone and 12-hour or 24-hour convention.
-- Hover, focus, and assistive technology expose the full locale-formatted local date and time, including seconds.
-- Desktop does not show relative age or refresh timestamp labels on a timer.
-- A committed message without committed time omits the timestamp without a placeholder or warning.
 - A live assistant message has no footer. The committed message receives Copy when it resolves.
 - Consecutive user or assistant messages use tighter spacing and a compact adjacent corner on their matching side. Messages remain separate islands.
 - Tools, diagnostics, context, and notices use flat transcript rows rather than message islands. Transcript content opens no duplicate detail surfaces; its full content is available through expansion.
@@ -144,7 +132,6 @@
 - Edit follows the TUI admission boundary. It is unavailable while authoritative runtime input is blocked or while the ordinary composer draft is nonblank. The server enforces active-work admission; the client does not become the sole blocker.
 - Activating Edit immediately resolves the ordinary fork/rollback transition. It does not wait for the edited text to be submitted.
 - The server creates one durable main child Session whose copied history ends immediately before the selected user message. The selected message and all later parent history are absent from the child, and the parent Session remains unchanged.
-- Copied history preserves each source event's committed time. Source history without committed time remains without it, and copied compaction replacement history retains its compaction time. Only messages newly committed in the child receive a new committed time.
 - The child inherits the TUI fork contract: execution context, locked contract, continuation context, worktree-reminder state, previous-Session lineage, and parent-agent ancestry. Goal inheritance follows the Rollback Picker contract.
 - The server owns the child name using its existing `<parent name or Session ID> → edit u<N>` convention. Desktop adds no naming field.
 - After creation, Chat navigates to the child Session at latest, places the selected original user-message text in its ordinary composer draft, and focuses the composer. Editing and submission then use the normal child-Session composer flow.
@@ -167,6 +154,8 @@
 - Supervisor has exactly `Off`, `After edits`, and `Always`, with descriptions `No automatic review`, `Review turns that changed files`, and `Review every completed turn`.
 - Thinking follows the server-provided ordered values. Enumerated values use a stepped control and display the exact chosen value; Low is gray, Medium and High use the primary tone, and Xhigh, Max, and Ultra use the secondary tone. Unsupported Thinking is omitted. A supported non-enumerated value uses an input and Apply action. Rejected input remains entered and shows notification feedback.
 - Fast mode is omitted when unsupported. Questions remains visible and editable as a persisted on/off policy when the selected Agent lacks `ask_question`; the unavailable capability still means that Agent cannot call the tool. Required Auto-compaction remains on and unavailable. When compaction is disabled by Session policy, Auto-compaction shows its stored value but is unavailable.
+- A successful Fast Mode change persists with the Session and affects the next provider or compaction request, never work already running.
+- Reopening the Session restores its Fast Mode setting.
 - Before a new Session's first prompt, all settings and message text are one draft. An untouched New Chat uses the same effective Agent and setting selection as Session launch for its Project workspace. The server persists a pre-Session draft when its message contains nonblank content or at least one setting differs from the current authoritative defaults. Saving a blank message with all current defaults removes that artifact. The first approved action materializes the complete draft atomically into a durable Session. Materialization does not start an Agent Turn or validate provider or runtime readiness. The triggering text, prompt command, or Goal operation then runs as a separate ordinary Session operation. When materialization cannot complete, New Chat keeps the exact workspace draft and shows the failure. When materialization succeeds but the triggering operation fails or is not received, the Session remains with its composer draft and Kent does not automatically replay the trigger. After a connection interruption, Chat refreshes server state and continues from the authoritative workspace draft or a Session whose identity it already received. If a committed materialization response is lost, the Session remains in the Session browser while the lazy route refreshes to a new empty Chat; Desktop does not infer the Session, switch to it, retry materialization, or replay the trigger. Materialization does not lock Agent; Agent remains editable until the first model request, and other changes apply through normal runtime controls.
 - Requested setting values appear immediately and reject repeat activation while pending. On failure, the control returns to the latest server value and shows notification feedback. Other non-Agent settings remain available while work runs and affect only later applicable work, never work already in flight.
 - Sending remains available during a pending setting change. Server operation order determines whether it observes the old or requested value.
@@ -179,25 +168,29 @@
 
 ## Composer And Pending Work
 
-- Send starts a user turn while idle and Steers the active turn while work is running. A Steer takes effect at the next safe step boundary. Queue is a separate action that starts after active work completes; when idle, queued work starts immediately.
+- Send, Steer, the separate post-turn Queue, human-input acceptance, and Step-boundary timing follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
 - `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
 - `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
-- When no Agent Step is active, `/compact` requests compaction immediately.
-- During an Agent Step, `/compact` enters the ordinary Steer path. Pending Work shows the exact slash form, including guidance, and the typed compaction intent executes after the current Agent Step and before the next Agent Step. It does not wait for turn completion and is never sent to the model.
+- `/compact` enters Pending Work in accepted Session mutation order.
+- Pending Work shows the exact slash form, including guidance.
+- Compaction is selected as an Agent Step only after earlier accepted short mutations apply and is never sent to the model as user text.
 - Ctrl+C is never a Desktop Stop shortcut.
 - On macOS, Command-period stops the current Session's stoppable active work immediately.
 - On Windows and Linux, an Escape handled by the current temporary surface performs only that surface's local action. The first otherwise-unhandled Escape arms Stop for two seconds. A second otherwise-unhandled Escape within that window stops the current Session's stoppable active work.
 - The Windows/Linux Stop arm has no visual or notification feedback. Timeout, any non-Escape keyboard or pointer action, route or focus change, disconnection, or work completion clears it.
 - Queue has no visible button. While work is running and an empty composer can queue work, its placeholder is `Ctrl+Enter to queue`.
-- While work runs, an icon-only Stop action is visible beside Send/Steer. Stop clears all Queue and Steer items.
+- While work runs, an icon-only Stop action is visible beside Send/Steer. Stop clears pending human Send/Steer and post-turn Queue messages for the stopped execution. Typed controls and domain operations remain accepted.
 - The composer grows to one-third of available Chat height, then scrolls internally. Up and Down recall prompt history only at whole-buffer boundaries; returning below the newest history item restores the pre-history draft, and editing recalled text detaches it from history.
 - `@` path suggestions search the Session effective working directory. They include files, derived directories, and hidden paths; exclude `.git`; preserve server fuzzy order; and never scan the desktop filesystem or transfer the whole repository.
 - At most seven path suggestions are visible. Up and Down select them; Enter, Tab, or pointer activation inserts the exact `@`-prefixed repository-relative path, with `/` for a directory, without sending. Escape hides suggestions until the query changes.
 - Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in first-in-first-out order, then Steer items in first-in-first-out order. Each item shows no more than two lines and has an accessible Discard action.
-- Manual compaction requested during an Agent Step is an ordinary Steer item in this sheet. Repeated requests remain separate items and Desktop does not deduplicate them.
-- Discarding or stopping a pending compaction restores its exact displayed slash command to the initiating composer, including optional guidance. Button-origin compaction restores `/compact`. Other clients observe only the authoritative removal.
+- Normal human-message and manual-compaction admission rejects with a typed capacity failure when the server independently observes at least 100 combined pending Queue and Steer items. Rejection changes no Pending Work membership and leaves the initiating input unchanged.
+- Concurrent normal admissions may pass below the limit and temporarily exceed 100 items. Restoring definitely uncommitted human input may also exceed 100 items. Kent never evicts accepted work to enforce the limit, and later normal admission rejects while the independently observed total remains at least 100.
+- Manual compaction is an ordinary Steer item in this sheet. Repeated requests remain separate items and Desktop does not deduplicate them.
+- Discarding a pending compaction restores its exact displayed slash command to the initiating composer, including optional guidance. Button-origin compaction restores `/compact`. Other clients observe only the authoritative removal.
 - Pending Work has no edit, reorder, submit-now, clear-all, full-text preview, or secondary detail view. On successful discard, text returns only to the initiating client's composer: verbatim into an empty composer, otherwise after one newline. Failed discard leaves both item and composer unchanged and shows notification feedback.
-- The Pending Work sheet preserves its position while inspecting older items and follows additions only at its newest edge. Stop restores cleared items only to the initiating composer, in displayed order separated by one newline; other clients see only their removal.
+- The Pending Work sheet preserves its position while inspecting older items and follows additions only at its newest edge.
+- When Desktop observes the source-agnostic interruption event defined by the Runtime Steering specification, it restores the listed removed human message text in server order and then appends its current composer text. Every observing live Desktop does this independently; a disconnected, closed, or otherwise non-observing Desktop loses the stopped pending text.
 
 ## Context And Compaction
 
@@ -226,13 +219,15 @@
 - The progress bar never recolors its complete fill when usage crosses a threshold.
 - Authoritative usage changes animate the progress value. Reduced motion applies the new value immediately.
 - The pop-up has no compaction-guidance field. Its `Compact` action is equivalent to `/compact` with no guidance.
-- Activating `Compact` closes the Context pop-up and uses the same immediate-or-Steer flow as `/compact`. Every other transient surface that initiates manual compaction also closes after accepting the action.
+- Activating `Compact` closes the Context pop-up and uses the same Session mutation behavior as `/compact`.
+- Every other transient surface that initiates manual compaction also closes after accepting the action.
 - Manual compaction guidance is available only through `/compact <guidance>`.
 - While any compaction is active, the compact Context meter replaces its ordinary percentage and ring with a secondary-tone spinner and `Compacting` in the same trigger footprint.
 - The compacting Context trigger remains interactive and can open the Context pop-up. The pop-up keeps the last authoritative usage values visible until new usage arrives.
 - Automatic compaction does not close an already-open Context pop-up. While compaction remains active, an open pop-up keeps its usage details visible and disables `Compact`.
-- Desktop never starts or queues another compaction after it knows compaction is active. A raced button activation or `/compact` request still reaches the server admission contract and surfaces its typed rejection.
-- Repeated manual compaction requests made before the first request starts remain separate Steer items. When those items drain, the first eligible request may compact and every later ineligible request fails independently.
+- Desktop may accept another manual-compaction request while compaction is active; it remains distinct and receives its own later typed outcome.
+- Repeated manual compaction requests remain separate Steer items.
+- Each manual compaction request is evaluated independently in accepted order.
 - A failed pending or immediate manual-compaction request leaves no pending item. Desktop shows a Sonner error unless an authoritative durable transcript error is explicitly reported as the owner of that failure; Desktop never synthesizes a transcript row.
 - Desktop keeps no local post-compaction cooldown or Agent-Step counter. The server rejects a manual compaction before an Agent Step boundary has occurred since Session creation or the latest successful compaction, and Desktop surfaces that typed error.
 - Successful user-requested compaction is silent while the Desktop window is focused.
@@ -257,7 +252,6 @@
 - Every successful Save uses set-or-replace semantics: the resulting Goal is active and Goal work starts or continues, including when the previous Goal was paused or complete.
 - Goal management offers Pause or Resume when applicable and an error-colored outline Clear action.
 - Goal remains visible and inspectable when the selected Agent lacks the locked `ask_question` tool. In that state, Save and Resume are unavailable with `Unavailable for this Agent`; Pause and Clear remain available.
-- Whenever a Session Contract generation is not yet locked, Goal is available a priori. After that generation locks, an attached Desktop may retain the previous availability until the next ordinary Goal update or authoritative Goal read or rehydration; the server remains authoritative for any raced Goal mutation. For lazy New Chat, Goal availability follows the effective selected Agent and updates with ordinary draft responses after Agent changes.
 - The Questions toggle being off does not make Goal unavailable. The server owns final Goal-loop admission, and a raced rejected request uses ordinary Goal mutation error feedback.
 - Clear applies immediately in every Goal state. Desktop shows no confirmation and offers no undo.
 - Pause or Resume preserves any dirty objective draft. Clear resets the sidebar to blank creation state and discards any dirty objective draft.
@@ -274,7 +268,7 @@
 - While the sidebar remains open after a successful read, ordinary Goal broadcasts update clean authoritative state. Desktop adds no Goal polling loop or timer-based server refresh.
 - If an authoritative Goal broadcast arrives after an open read starts but before its response is applied, the broadcast state wins and Desktop discards the late read response. Desktop adds no retry, revision, timestamp-ordering, or polling mechanism for this race.
 - Goal objective drafting copies Task Description reconciliation and destination lifetime. A clean draft follows authoritative Goal broadcasts. A dirty draft remains unchanged while the Goal sidebar destination stays alive. Save replaces the latest authoritative Goal. Closing or navigating away from the sidebar or relaunching Desktop discards an unsaved Goal draft; Desktop adds no server-owned Goal-editor draft.
-- Workflow-controlled Sessions use the same Goal affordance and sidebar as every other Session. Goal mutation admission follows the retained-Workflow rule in [Core Runtime Tools](core-runtime-tools.md).
+- Workflow-controlled Sessions use the same Goal affordance, sidebar, and mutation controls as every other Session. Workflow ownership does not hide Goal, make it read-only, or restrict user Goal mutations.
 - In untouched lazy New Chat, Goal Save is the first agentic trigger and may materialize the Session before Goal validation or admission completes.
 - If Goal validation or admission then fails, the newly materialized Session remains. Desktop keeps the complete dirty Goal draft in the open sidebar, starts no Goal work for the rejected request, and uses ordinary Goal mutation error feedback.
 - After Goal acceptance starts work, later provider, tool, or runtime failure follows ordinary Session failure behavior and leaves the Session and Goal intact.
@@ -321,22 +315,26 @@
 - Successful Worktree creation, switching, and deletion refresh the list. Manual Refresh discovers out-of-band Git topology changes.
 - Desktop adds no Worktree-list polling loop or timer-based refresh.
 - After reconnection, Desktop reissues the current-target and open Worktree-list reads.
-- Desktop does not reconstruct, retain, or retry a pending Worktree target change that the server lost during shutdown or restart.
+- Desktop does not reconstruct, retain, or retry unapplied Worktree transition Steering that the server lost during shutdown or restart.
 - Reconnection shows no speculative warning for an absent pending Worktree operation. Mutation admission remains authoritative if the operator acts on a stale Worktree projection.
-- If connection loss interrupts creation or setup, Desktop does not retry the Create request or keep waiting for its old result.
-- After reconnection, an open Worktree surface returns to its list and performs another server-owned read. A worktree retained by the interrupted operation appears when a read or update observes it.
-- Desktop performs the automatic Switch only after it receives a successful Create result. An interrupted Create request does not infer success from list topology.
+- If connection loss ends Desktop's observation of creation or setup, the server operation continues independently. Desktop does not retry the Create request or keep waiting for its old result.
+- After reconnection, an open Worktree surface returns to its list and performs another server-owned read. The completed or still-running server operation is reflected only through server-owned reads and updates.
+- Desktop performs the automatic Switch only after it receives a successful Create result. A Create whose result was not observed does not infer success from list topology.
 - The list contains the server's complete worktree topology in authoritative order without pagination.
 - The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
-- Switch copies the TUI lifecycle. Desktop waits only for the immediate scheduling request and acknowledgement. It never keeps a loading state open until the current Agent Step finishes or the target change applies.
+- Switch copies the TUI lifecycle. Desktop waits only for the Worktree Operation acknowledgement. It never keeps a loading state open until the current Agent Step finishes or the target change applies.
 - While the immediate Switch request is pending, Desktop disables Worktree switching and uses only the action's ordinary request-scoped pending affordance.
 - The Worktree sidebar remains dismissible while the immediate Switch request is pending.
 - Dismissing the sidebar does not cancel the Switch request.
 - A successful Switch acknowledgement closes the Worktree sidebar immediately.
 - Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
-- If an Agent Step is active, the server queues the target change for its ordinary safe boundary before queued user work. Desktop adds no second waiting state for that queued transition.
-- A Scheduled acknowledgement and a later successful transition completion show no Toast or other success notice.
+- For an Active Session Runtime, the server accepts the target change without waiting for it to finish.
+- Desktop adds no second waiting state for an accepted target change.
+- Accepted human messages retain their own first-in, first-out order, but a Worktree transition takes the next eligible boundary before human model work that is still queued and has not started.
+- A Worktree transition never preempts an Agent Step already running.
+- Human messages remain accepted while a Worktree transition is in progress.
+- The Worktree Operation acknowledgement and a later successful transition completion show no Toast or other success notice.
 - A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic through Sonner, and follows the server's existing model-visible failure-Steer behavior.
 - The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
 - Each Worktree row uses the display name as its title.
@@ -363,20 +361,18 @@
 - Confirming after a Dirty or Unknown preview authorizes force folder removal in the same click. Confirming after a Clean preview does not authorize force folder removal.
 - Deletion rechecks current state. The preview does not reserve the target, lock its state, or guarantee later deletion.
 - If a Clean preview races with the target becoming Dirty or Unknown, the server rejects that deletion. Desktop refreshes the preview in the same popup and requires a new informed confirmation.
-- If deletion fails before returning Completed or Scheduled for another reason, the popup stays open and shows the authoritative diagnostic in error-colored plain text.
+- If deletion fails for another reason, the popup stays open and shows the authoritative diagnostic in error-colored plain text.
 - After an immediate deletion failure, the existing confirmation actions become available again. Repeating Confirm is the retry after the operator addresses the failure.
 - Immediate deletion failure shows no separate Retry action and no Sonner while the popup remains open.
 - The delete popup remains dismissible while a Delete request is pending.
 - Dismissing the popup does not cancel the Delete request.
 - If a Delete request fails after its popup was dismissed, Desktop shows the authoritative diagnostic through Sonner and does not reopen the popup.
 - A clean-to-dirty rejection received after dismissal also uses Sonner. Reopening the delete flow starts a new preview.
-- Delete copies the TUI's two typed outcomes. The delete popup shows its ordinary request-scoped loading state only until the server returns Completed or Scheduled.
-- A Completed result closes the popup and refreshes the list.
-- A Scheduled result closes the popup back to the refreshed list. Desktop does not wait for current-Session retargeting or Git removal to finish.
-- Completed deletion, Scheduled deletion, and later successful transition completion show no Toast or other success notice.
-- If a Completed result reports that requested branch cleanup was retained or that a filesystem root remains, Desktop shows one warning Sonner with the typed branch or root fact and the authoritative diagnostic.
+- The delete popup shows its ordinary request-scoped loading state until the server finishes Session retargeting and Worktree removal.
+- A successful deletion closes the popup and refreshes the list.
+- Successful deletion shows no Toast or other success notice.
+- If the deletion result reports that requested branch cleanup was retained or that a filesystem root remains, Desktop shows one warning Sonner with the typed branch or root fact and the authoritative diagnostic.
 - Incomplete cleanup does not reopen the delete popup.
-- The later authoritative transition outcome refreshes target and list state and surfaces final failure through Sonner. Desktop adds no long-lived scheduled-deletion spinner.
 - A Missing row cannot switch and shows only its trash action. Deleting it applies the server's stale-record cleanup and current-Session retargeting behavior.
 - A detached available row can switch and shows its trash action, but its delete popup has no branch-cleanup item.
 - Worktree creation uses a focused child state within the same Worktree sidebar destination.
@@ -399,7 +395,7 @@
 - Every Base-ref validation or operational error appears beneath the `Base ref` field in error-colored plain text.
 - Desktop uses typed error ownership to distinguish a Base-ref error from another creation failure. It never parses diagnostic text to choose error placement.
 - An empty Base ref sends no creation request and shows `Base ref is required`.
-- The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
+- The creation state has no custom filesystem-path field. Kent uses the Worktree Base Dir.
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
@@ -428,6 +424,9 @@
 
 - An active Question or Approval replaces the normal text-editor area inside the same composer island. The ordinary message/settings draft remains preserved but hidden. Settings, Context, and Stop remain available.
 - The ordinary status line and bottom action row stay present beneath the picker. Stop remains visible while the runtime awaits prompts.
+- Stop uses the same server-authoritative Instant Stop path as ordinary running work.
+- A live Question or Approval remains interruptible.
+- Desktop never cancels only its local prompt picker.
 - Questions and Approvals use one shared prompt-picker interaction and visual language. Their server-provided option kinds differ, but Desktop does not create separate form architectures.
 - The picker shows one pending prompt at a time. It has no tabs, question-title synthesis, or duplicated question previews.
 - The current question is Markdown above a compact navigation line. The line has previous/next chevrons around the current question position. Answer options appear below the navigation line.

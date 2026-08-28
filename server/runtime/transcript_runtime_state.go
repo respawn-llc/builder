@@ -141,13 +141,6 @@ func (s *transcriptRuntimeState) ToolCallSnapshot(callID string) (llm.ToolCall, 
 	return llm.ToolCall{}, false
 }
 
-func (s *transcriptRuntimeState) AbortLiveTools() []TranscriptLiveToolStart {
-	if ledger := s.liveToolLedger(); ledger != nil {
-		return ledger.AbortAll()
-	}
-	return nil
-}
-
 func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {
 	if s == nil {
 		return nil
@@ -468,11 +461,11 @@ func (s *transcriptRuntimeState) ToolCompletionCount() int {
 	return 0
 }
 
-func (s *transcriptRuntimeState) ValidateMessage(stepID string, msg llm.Message) error {
+func (s *transcriptRuntimeState) ValidateMessage(stepID *string, msg llm.Message) error {
 	return s.chatProjection().validateMessage(stepID, msg)
 }
 
-func (s *transcriptRuntimeState) AppendMessage(stepID string, msg llm.Message, provenances ...*TranscriptCommittedRowProvenance) error {
+func (s *transcriptRuntimeState) AppendMessage(stepID *string, msg llm.Message, provenances ...*TranscriptCommittedRowProvenance) error {
 	return s.chatProjection().appendMessage(stepID, msg, provenances...)
 }
 
@@ -509,7 +502,7 @@ func (s *transcriptRuntimeState) RestoreToolCompletionRecord(record session.Tool
 }
 
 func (s *transcriptRuntimeState) ReplaceHistoryAtCommittedEntryStart(
-	stepID string,
+	stepID *string,
 	items []llm.ResponseItem,
 	committedEntryStart *int,
 	projectedEntries []ChatEntry,

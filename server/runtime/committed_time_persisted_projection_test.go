@@ -67,7 +67,7 @@ func TestOrdinaryCommittedTimePersistsAcrossPageRestartAndLiveProjection(t *test
 		}
 		facts := TranscriptCommittedRowFactsFromEvent(Event{
 			Kind:                fixture.kind,
-			StepID:              "step",
+			StepID:              textutil.Value("step"),
 			Message:             message,
 			CommittedProvenance: &provenance,
 		})

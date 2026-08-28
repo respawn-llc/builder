@@ -82,10 +82,6 @@ func (r QuerySourceRenderer) RenderTaskSearchSchemaContract() ([]byte, error) {
 	return r.renderTaskSearchQuery("taskSearchSchemaContract", false)
 }
 
-func (r QuerySourceRenderer) RenderWorkflowSessionDependencyInvalidation() ([]byte, error) {
-	return r.renderNamedQuery("workflowSessionDependencyInvalidation", renderData{})
-}
-
 type taskLabelFilterTemplateData struct {
 	FilterKind       string
 	FilterMode       string

@@ -205,7 +205,8 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	}
 
 	recorder, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeStream,
+		ResponsePhase: blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)
@@ -280,7 +281,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	if err != nil {
 		t.Fatalf("create generation dispatch identity: %v", err)
 	}
-	if _, err := mainClient.Generate(context.Background(), request); err != nil {
+	if _, err := mainClient.Generate(context.Background(), request, llm.StreamCallbacks{}); err != nil {
 		t.Fatalf("generate through resumed main client: %v", err)
 	}
 

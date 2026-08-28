@@ -64,14 +64,6 @@ func (h TranscriptHydration) Validate() error {
 			return fmt.Errorf("transcript hydration active step is not started")
 		}
 	}
-	if h.ActiveReviewer != nil {
-		if err := h.ActiveReviewer.Validate(); err != nil {
-			return fmt.Errorf("validate transcript hydration active reviewer: %w", err)
-		}
-		if h.ActiveReviewer.State != ReviewerStateRunning {
-			return fmt.Errorf("transcript hydration reviewer is not running")
-		}
-	}
 	if h.ActiveCompaction != nil {
 		if err := h.ActiveCompaction.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration active compaction: %w", err)
@@ -83,8 +75,8 @@ func (h TranscriptHydration) Validate() error {
 	if err := validateHydrationTools(h.InFlightTools); err != nil {
 		return err
 	}
-	if err := validateHydrationQueuedMessages(h.QueuedMessages); err != nil {
-		return err
+	if err := h.PendingWork.Validate(); err != nil {
+		return fmt.Errorf("validate transcript hydration Pending Work: %w", err)
 	}
 	if err := validateHydrationPrompts(h.PendingPrompts); err != nil {
 		return err
@@ -100,11 +92,10 @@ func (h TranscriptHydration) Validate() error {
 			return fmt.Errorf("validate transcript hydration context usage: %w", err)
 		}
 	}
-	if h.GoalStatus == nil || h.GoalStatus.Availability == nil {
-		return fmt.Errorf("validate transcript hydration goal status: goal status and availability are required")
-	}
-	if err := h.GoalStatus.Validate(); err != nil {
-		return fmt.Errorf("validate transcript hydration goal status: %w", err)
+	if h.GoalStatus != nil {
+		if err := h.GoalStatus.Validate(); err != nil {
+			return fmt.Errorf("validate transcript hydration goal status: %w", err)
+		}
 	}
 	return nil
 }
@@ -141,11 +132,6 @@ func (h TranscriptHydration) validateActiveOwnership() error {
 	}
 	for index, trace := range h.ActiveReasoningTraces {
 		if err := validateHydrationStepOwner(fmt.Sprintf("active reasoning trace %d", index), trace.StepID, activeStep); err != nil {
-			return err
-		}
-	}
-	if h.ActiveReviewer != nil {
-		if err := validateHydrationStepOwner("active reviewer", h.ActiveReviewer.StepID, activeStep); err != nil {
 			return err
 		}
 	}
@@ -200,28 +186,6 @@ func validateHydrationTools(tools []TranscriptToolStart) error {
 			return fmt.Errorf("transcript hydration repeats tool call id %q", tool.ToolCallID)
 		}
 		seen[tool.ToolCallID] = struct{}{}
-	}
-	return nil
-}
-
-func validateHydrationQueuedMessages(messages []TranscriptQueuedMessageState) error {
-	seenRequests := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(messages))
-	seenItems := make(map[runtimeids.QueueItemID]struct{}, len(messages))
-	for index, message := range messages {
-		if err := message.Validate(); err != nil {
-			return fmt.Errorf("validate transcript hydration queued message %d: %w", index, err)
-		}
-		if message.Status != QueuedUserMessageAccepted {
-			return fmt.Errorf("transcript hydration queued message %d is not accepted", index)
-		}
-		if _, exists := seenRequests[message.ClientRequestID]; exists {
-			return fmt.Errorf("transcript hydration repeats queued client request id %q", message.ClientRequestID.String())
-		}
-		seenRequests[message.ClientRequestID] = struct{}{}
-		if _, exists := seenItems[message.QueueItemID]; exists {
-			return fmt.Errorf("transcript hydration repeats queue item id %q", message.QueueItemID.String())
-		}
-		seenItems[message.QueueItemID] = struct{}{}
 	}
 	return nil
 }

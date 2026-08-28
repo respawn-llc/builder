@@ -14,6 +14,7 @@ import (
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -24,7 +25,7 @@ import (
 
 type exactScopeTaskWakeClient struct{}
 
-func (exactScopeTaskWakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (exactScopeTaskWakeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
@@ -109,11 +110,12 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+	attachment, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   "exact-scope-test",
 		Runtime:   &plan,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
 	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
@@ -129,11 +131,6 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		WorkflowID:  runtimeids.NewWorkflowID(),
 		CurrentNode: node,
 	}
-	lease, err := authority.NewWorkflowExecutionLease(workflowRef)
-	if err != nil {
-		t.Fatalf("new workflow lease: %v", err)
-	}
-	lease.Release()
 	request := askquestion.AskQuestionRequest{
 		ID:       "ask-exact-scope",
 		StepID:   registryTestStepID,
@@ -151,8 +148,16 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 	workflowHandle, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
 		Runtime:    &plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: workflowRef,
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Instructions: workflowruntime.TaskInstructions{
+					CurrentNode: workflowRef.CurrentNode,
+					WorkflowID:  workflowRef.WorkflowID,
+				},
+			},
+		},
+		Resource: sessionruntime.OpenAgentResource{},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 			err := registry.PromptPendingScope(scope, request, time.Now().UTC())
 			workflowPromptDone <- err
@@ -203,6 +208,9 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 	defer cancelStop()
 	if err := workflowHandle.Stop(stopCtx); err != nil {
 		t.Fatalf("stop workflow execution: %v", err)
+	}
+	if _, err := attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose); err != nil {
+		t.Fatalf("close workflow runtime: %v", err)
 	}
 
 	nonWorkflowRequest := request

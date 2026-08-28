@@ -187,7 +187,29 @@ func (d CurrentNodeInterruptionDetail) SetupOperationID() (*uuid.UUID, error) {
 	return &value, nil
 }
 
-type CurrentNodeSetupRecoveryDetail = worktreecontract.SetupRecoveryDetail[uuid.UUID, ExecutionTargetSelection]
+type CurrentNodeSetupRecoveryDetail struct {
+	SetupOperationID         uuid.UUID                         `json:"setup_operation_id"`
+	Cause                    worktreecontract.SetupFailureKind `json:"cause"`
+	Diagnostic               string                            `json:"diagnostic"`
+	ScriptPath               *string                           `json:"script_path"`
+	SetupRequirement         worktreecontract.SetupRequirement `json:"setup_requirement"`
+	ExecutionTarget          ExecutionTargetSelection          `json:"execution_target"`
+	RetainedWorktree         *CurrentNodeRetainedWorktree      `json:"retained_worktree"`
+	RetainedPreviousWorktree *CurrentNodeRetainedWorktree      `json:"retained_previous_worktree"`
+}
+
+func (d CurrentNodeSetupRecoveryDetail) Validate() error {
+	return worktreecontract.SetupRecoveryDetail[uuid.UUID, ExecutionTargetSelection]{
+		SetupOperationID:         d.SetupOperationID,
+		Cause:                    d.Cause,
+		Diagnostic:               d.Diagnostic,
+		ScriptPath:               d.ScriptPath,
+		SetupRequirement:         d.SetupRequirement,
+		ExecutionTarget:          d.ExecutionTarget,
+		RetainedWorktree:         d.RetainedWorktree.domain(),
+		RetainedPreviousWorktree: d.RetainedPreviousWorktree.domain(),
+	}.Validate()
+}
 
 type CurrentNodeSetupRecoveryCause = worktreecontract.SetupFailureKind
 
@@ -202,7 +224,21 @@ const (
 	CurrentNodeSetupRequirementAlreadyCompleted    = worktreecontract.SetupRequirementAlreadyCompleted
 )
 
-type CurrentNodeRetainedWorktree = worktreecontract.RetainedWorktree
+type CurrentNodeRetainedWorktree struct {
+	WorktreeID string `json:"worktree_id"`
+	Root       string `json:"root"`
+}
+
+func (w *CurrentNodeRetainedWorktree) domain() *worktreecontract.RetainedWorktree {
+	if w == nil {
+		return nil
+	}
+	return &worktreecontract.RetainedWorktree{WorktreeID: w.WorktreeID, Root: w.Root}
+}
+
+func (w CurrentNodeRetainedWorktree) Validate() error {
+	return w.domain().Validate()
+}
 
 const CurrentNodeInterruptionDiagnosticField = "error"
 

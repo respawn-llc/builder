@@ -18,7 +18,6 @@ import (
 	"core/shared/protoapi"
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -154,7 +153,6 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		enabledToolIDs = append(enabledToolIDs, string(toolID))
 	}
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:       runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:             plan.Plan.SessionId,
 		ActiveSettings:        activeSettings,
 		EnabledToolIDs:        enabledToolIDs,
@@ -165,19 +163,16 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
-	submitID := runtimeids.NewRuntimeClientRequestID()
 	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: submitID.String(),
-		SessionID:       plan.Plan.SessionId,
-		Input:           runtimeinput.Command("prompt:remote_demo", "hello world"),
+		SessionID: plan.Plan.SessionId,
+		Input:     runtimeinput.Command("prompt:remote_demo", "hello world"),
 	}); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 	_, _ = remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		Attachment:      attachment.Attachment,
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		Attachment:  attachment.Attachment,
+		DropOwner:   true,
+		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
 	var body json.RawMessage
 	testsetup.RequireUntil(t, time.Now().Add(10*time.Second), 10*time.Millisecond, func() bool {

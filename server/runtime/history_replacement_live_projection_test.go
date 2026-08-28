@@ -7,59 +7,53 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
 func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T) {
 	t.Parallel()
+	const preservedUserMessage = "input"
 	store := mustCreateTestSession(t)
 	var events []Event
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
-		OutputItems: []llm.ResponseItem{
-			{
-				Type:    llm.ResponseItemTypeMessage,
-				Role:    textutil.Value(llm.RoleUser),
-				Content: textutil.Value("provider-preserved prompt"),
-			},
-			{
-				Type:             llm.ResponseItemTypeCompaction,
-				ID:               textutil.Value("checkpoint"),
-				EncryptedContent: textutil.Value("encrypted"),
-			},
+		Checkpoint: llm.ResponseItem{
+			Type:             llm.ResponseItemTypeCompaction,
+			ID:               textutil.Value("checkpoint"),
+			EncryptedContent: textutil.Value("encrypted"),
 		},
 		Usage: llm.Usage{InputTokens: 100, WindowTokens: 200_000},
 	}}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "native",
 		OnEvent:        func(event Event) { events = append(events, event) },
 	})
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"input",
 		steerMessagesWithPersistenceIntent(
 			steeringPriorityNormal,
 			steeringMessageEventNone,
 			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(preservedUserMessage)}},
 		),
 	); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact remote context: %v", err)
-	}
+	scheduleManualCompactionAndWait(t, engine)
 
 	liveFacts := make([]TranscriptCommittedRowFact, 0)
 	for _, event := range events {
 		liveFacts = append(liveFacts, TranscriptCommittedRowFactsFromEvent(event)...)
 	}
-	assertSingleCompactionSummaryAndPreservedUserFact(t, liveFacts)
+	assertSingleCompactionSummaryAndPreservedUserFact(t, liveFacts, preservedUserMessage)
 
 	page := mustEngineNewestSegmentPage(t, engine)
 	assertSingleCompactionSummaryAndPreservedUserFact(
 		t,
 		TranscriptCommittedRowFactsFromSnapshot(page.Snapshot),
+		preservedUserMessage,
 	)
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close live engine: %v", err)
@@ -70,13 +64,14 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		t,
 		reopenedStore,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
 	assertSingleCompactionSummaryAndPreservedUserFact(
 		t,
 		TranscriptCommittedRowFactsFromSnapshot(reopenedPage.Snapshot),
+		preservedUserMessage,
 	)
 
 	eventLog := mustMaterializeTestEventLog(t, reopenedStore)
@@ -93,14 +88,20 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 	assertSingleCompactionSummaryAndPreservedUserFact(
 		t,
 		TranscriptCommittedRowFactsFromSnapshot(scan.CollectedPageSnapshot()),
+		preservedUserMessage,
 	)
 }
 
 func assertSingleCompactionSummaryAndPreservedUserFact(
 	t *testing.T,
 	facts []TranscriptCommittedRowFact,
+	wantPreservedUserMessage string,
 ) {
 	t.Helper()
+	wantMessage, ok := compactionPreservedUserMessage(wantPreservedUserMessage)
+	if !ok || wantMessage.Content == nil {
+		t.Fatalf("invalid expected preserved user message %q", wantPreservedUserMessage)
+	}
 	summaries := 0
 	preservedUsers := 0
 	for _, fact := range facts {
@@ -116,9 +117,14 @@ func assertSingleCompactionSummaryAndPreservedUserFact(
 		case llm.MessageTypeCompactionSummary:
 			summaries++
 		case llm.MessageTypeCompactionPreservedUserMessage:
-			if fact.Notice.DiagnosticDetail == "provider-preserved prompt" {
-				preservedUsers++
+			if fact.Notice.DiagnosticDetail != *wantMessage.Content {
+				t.Fatalf(
+					"preserved user detail = %q, want %q",
+					fact.Notice.DiagnosticDetail,
+					*wantMessage.Content,
+				)
 			}
+			preservedUsers++
 		}
 	}
 	if summaries != 1 || preservedUsers != 1 {
@@ -139,7 +145,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		store,
 		&fakeClient{},
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -159,7 +165,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		},
 	})
 
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"compaction",
 		steerHistoryReplacementIntent("local", compactionModeAuto, 1, nil, items),
 	); err != nil {
@@ -186,11 +192,6 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	}
 	if len(live) != 4 {
 		t.Fatalf("projected transcript facts = %+v, want summary, two preserved messages, and environment", live)
-	}
-	for index, fact := range live {
-		if fact.Provenance == nil || fact.Provenance.CommittedAtUnixMs != nil {
-			t.Fatalf("ineligible replacement fact %d provenance = %+v", index, fact.Provenance)
-		}
 	}
 	wantMessageTypes := []llm.MessageType{
 		llm.MessageTypeCompactionSummary,
@@ -243,7 +244,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		mustOpenTestSession(t, store.Dir()),
 		providerClient,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
@@ -267,7 +268,6 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		}
 	}
 }
-
 func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjection(t *testing.T) {
 	t.Parallel()
 	var events []Event
@@ -299,7 +299,8 @@ func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjecti
 			Content:     textutil.Value("replacement summary"),
 		},
 	})
-	if err := engine.steer(
+	if err := steerTestActiveStep(
+		engine,
 		"eligible replacement",
 		steerHistoryReplacementIntent("local", compactionModeAuto, 1, nil, items),
 	); err != nil {

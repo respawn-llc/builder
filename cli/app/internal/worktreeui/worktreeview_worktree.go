@@ -7,14 +7,15 @@ import (
 	"strings"
 	"unicode"
 
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 var ErrMainWorkspaceNotDeletable = errors.New("main workspace is not deletable")
 
 type Item struct {
-	Entry         serverapi.WorktreeListEntry
+	Entry         *worktreepb.ListEntry
 	DisplayName   string
 	CanonicalRoot string
 	WorktreeID    *string
@@ -26,7 +27,7 @@ type Item struct {
 	CreatedBranch bool
 }
 
-func ProjectItems(entries []serverapi.WorktreeListEntry) ([]Item, error) {
+func ProjectItems(entries []*worktreepb.ListEntry) ([]Item, error) {
 	out := make([]Item, 0, len(entries))
 	for _, entry := range entries {
 		item, err := ProjectItem(entry)
@@ -38,44 +39,47 @@ func ProjectItems(entries []serverapi.WorktreeListEntry) ([]Item, error) {
 	return out, nil
 }
 
-func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
-	if err := entry.Validate(); err != nil {
-		return Item{}, err
+func ProjectItem(entry *worktreepb.ListEntry) (Item, error) {
+	if entry == nil || entry.Topology == nil || entry.Projection == nil {
+		return Item{}, errors.New("worktree list entry is incomplete")
 	}
 	item := Item{Entry: entry, IsCurrent: entry.Projection.IsCurrent}
-	switch entry.Topology.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
-		git := entry.Topology.Registered.Git
-		kent := entry.Topology.Registered.Kent
+	switch {
+	case entry.Topology.GetRegistered() != nil:
+		git := entry.Topology.GetRegistered().Git
+		kent := entry.Topology.GetRegistered().Kent
 		item.DisplayName = kent.DisplayName
 		item.CanonicalRoot = git.CanonicalRoot
-		item.WorktreeID = textutil.OptionalTrimmedString(kent.WorktreeID)
+		item.WorktreeID = textutil.OptionalTrimmedString(kent.WorktreeId)
 		item.BranchName = git.BranchName
 		item.Detached = git.Detached
 		item.IsMain = git.IsMain
 		item.Managed = kent.Managed
 		item.CreatedBranch = kent.CreatedBranch
-	case serverapi.WorktreeTopologyVariantExternal:
-		git := entry.Topology.External.Git
+	case entry.Topology.GetExternal() != nil:
+		git := entry.Topology.GetExternal().Git
 		item.DisplayName = filepath.Base(git.CanonicalRoot)
 		item.CanonicalRoot = git.CanonicalRoot
 		item.BranchName = git.BranchName
 		item.Detached = git.Detached
 		item.IsMain = git.IsMain
-	case serverapi.WorktreeTopologyVariantMissing:
-		kent := entry.Topology.Missing.Kent
+	case entry.Topology.GetMissing() != nil:
+		kent := entry.Topology.GetMissing().Kent
 		item.DisplayName = kent.DisplayName
 		item.CanonicalRoot = kent.CanonicalRoot
-		item.WorktreeID = textutil.OptionalTrimmedString(kent.WorktreeID)
+		item.WorktreeID = textutil.OptionalTrimmedString(kent.WorktreeId)
 		item.Managed = kent.Managed
 		item.CreatedBranch = kent.CreatedBranch
 	default:
-		return Item{}, fmt.Errorf("unsupported worktree topology variant %q", entry.Topology.Variant)
+		return Item{}, errors.New("unsupported worktree topology variant")
 	}
 	return item, nil
 }
 
-func ProjectSelectorPreview(response serverapi.WorktreeSelectorPreviewResponse) (Item, error) {
+func ProjectSelectorPreview(response *worktreepb.SelectorResolveSuccess) (Item, error) {
+	if response == nil {
+		return Item{}, errors.New("worktree selector response is empty")
+	}
 	return ProjectItem(response.Worktree)
 }
 
@@ -150,5 +154,5 @@ func ResolveCurrentDeletionTarget(entries []Item) (Item, error) {
 			return item, nil
 		}
 	}
-	return Item{}, serverapi.ErrWorktreeNotFound
+	return Item{}, worktreecontract.ErrWorktreeNotFound
 }

@@ -60,7 +60,7 @@ func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(
 
 	_, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 		BranchName:       &branchName,
 	})
 
@@ -153,7 +153,7 @@ func TestServiceConcurrentTaskResumeNoOpDoesNotReplacePendingBranch(t *testing.T
 	go func() {
 		response, resumeErr := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 			TaskID:           task.Task.ID,
-			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 			BranchName:       &firstBranch,
 		})
 		firstResponse <- response
@@ -171,7 +171,7 @@ func TestServiceConcurrentTaskResumeNoOpDoesNotReplacePendingBranch(t *testing.T
 	go func() {
 		response, resumeErr := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 			TaskID:           task.Task.ID,
-			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 			BranchName:       &secondBranch,
 		})
 		secondResponse <- response
@@ -261,7 +261,7 @@ func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurr
 
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 		BranchName:       &branchName,
 	})
 	if err != nil {
@@ -404,7 +404,7 @@ func TestServiceTaskResumePreflightsLockedBranchBeforeAsynchronousRestoration(t 
 	}
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 		BranchName:       &requestedBranchName,
 	})
 	var mismatch *serverapi.WorkflowTaskInitialBranchError
@@ -441,7 +441,7 @@ func TestServiceTaskResumePreflightsLockedBranchBeforeAsynchronousRestoration(t 
 	targets.initialBranchAssertionErr = nil
 	response, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 	})
 	if err != nil {
 		t.Fatalf("ResumeWorkflowTask: %v", err)

@@ -5,8 +5,8 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
+	"core/cli/app/internal/projectbinding"
 	serverstartup "core/server/startup"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -38,8 +38,8 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 		runProjectBindingPickerFlow = originalPicker
 		runProjectNamePromptFlow = originalPrompt
 	})
-	runProjectBindingPickerFlow = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
-		return projectBindingPickerResult{CreateNew: true}, nil
+	runProjectBindingPickerFlow = func(context.Context, []clientui.ProjectSummary, string, projectbinding.ProjectPickerSnapshot) (projectBindingPickerResult, error) {
+		return projectbinding.ProjectPickerCreateNew{}, nil
 	}
 	runProjectNamePromptFlow = func(defaultName string, theme string) (string, error) {
 		return "Remote No Auth Project", nil
@@ -66,12 +66,12 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	}
 	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after rebound no auth")
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if submission.Message == nil || *submission.Message != "rebound no-auth reply" {
-		t.Fatalf("assistant message = %v, want rebound no-auth reply", submission.Message)
-	}
+	requireQueuedAppTestUserTurn(t, submission, err)
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		runtimePlan.Wiring.eventDispatcher.transcriptEvents,
+		"rebound no-auth reply",
+	)
 	runtimePlan.Close()
 	if hits.Load() != 1 {
 		t.Fatalf("expected fake LLM call once, got %d", hits.Load())
@@ -118,16 +118,12 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	}
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive override")
-	message := ""
-	if submission.Message != nil {
-		message = *submission.Message
-	}
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "interactive daemon override" {
-		t.Fatalf("assistant message = %q, want %q", message, "interactive daemon override")
-	}
+	requireQueuedAppTestUserTurn(t, submission, err)
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		runtimePlan.Wiring.eventDispatcher.transcriptEvents,
+		"interactive daemon override",
+	)
 	if overrideHits.Load() != 1 {
 		t.Fatalf("expected override llm call once, got %d", overrideHits.Load())
 	}
@@ -163,6 +159,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, runtimePlan.Wiring.runtimeClient, "start prompt round trip")
+	requireQueuedAppTestRuntimeSubmission(t, submissionDone)
 	askPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.eventDispatcher.transcriptEvents, "ask-1", submissionFailed)
 	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Pick one" {
 		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
@@ -182,15 +179,10 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 			Commentary: "trusted",
 		},
 	})
-	select {
-	case result := <-submissionDone:
-		if result.err != nil {
-			t.Fatalf("SubmitUserMessage: %v", result.err)
-		}
-		if result.submission.Message == nil || *result.submission.Message != "prompt round trip complete" {
-			t.Fatalf("assistant message = %v", result.submission.Message)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for prompt round trip")
-	}
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		runtimePlan.Wiring.eventDispatcher.transcriptEvents,
+		"prompt round trip complete",
+		submissionFailed,
+	)
 }

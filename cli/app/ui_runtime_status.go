@@ -90,7 +90,7 @@ func (m *uiModel) statusLinePhase() statusLinePhase {
 	if m.isCompacting() {
 		return statusLinePhaseSecondary
 	}
-	if m.isReviewerRunning() {
+	if m.isReviewerActive() {
 		return statusLinePhaseSuccess
 	}
 	if m.rollback.isActive() {
@@ -112,7 +112,7 @@ func (m *uiModel) statusLineLabel() string {
 	if m.isCompacting() {
 		return "compacting"
 	}
-	if m.isReviewerRunning() {
+	if m.isReviewerActive() {
 		return "review"
 	}
 	if m.rollback.isActive() {
@@ -132,7 +132,7 @@ func (m *uiModel) statusLineSpinning() bool {
 		return false
 	}
 	return (m.runtimeActivityBusy() && m.activity != uiActivityQuestion) ||
-		m.runtimeLifecycle.Reviewer.IsRunning()
+		m.isReviewerActive()
 }
 
 func (m *uiModel) setRuntimeContextUsage(sessionID string, usage clientui.RuntimeContextUsage) {

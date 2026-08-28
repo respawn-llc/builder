@@ -12,8 +12,13 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
+	"core/shared/worktreecontract"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 const worktreeCommandTimeout = 5 * time.Second
@@ -64,17 +69,22 @@ func worktreeStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	return withWorktreeCommandRemote(stderr, sessionID, func(remote apicontract.WorktreeService) int {
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
 		defer cancel()
-		status, err := remote.GetWorktreeStatus(ctx, serverapi.WorktreeStatusRequest{SessionID: sessionID})
+		status, err := remote.GetWorktreeStatus(ctx, &worktreepb.StatusRequest{SessionId: sessionID})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, status)
+			return writeWorktreeProtoJSON(stdout, stderr, status)
 		}
-		fmt.Fprintln(stdout, status.Worktree.RecordedRoot)
+		fmt.Fprintln(stdout, status.GetWorktree().GetRecordedRoot())
 		for _, problem := range status.Problems {
-			fmt.Fprintln(stdout, problem.Kind)
+			kind, err := worktreeStatusProblemKindJSON(problem.Kind)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			fmt.Fprintln(stdout, kind)
 		}
 		return 0
 	})
@@ -95,13 +105,13 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		return withWorktreeCommandRemote(stderr, *sessionID, func(remote apicontract.WorktreeService) int {
 			ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
 			defer cancel()
-			response, err := remote.ListWorktrees(ctx, serverapi.WorktreeListRequest{SessionID: *sessionID})
+			response, err := remote.ListWorktrees(ctx, &worktreepb.ListRequest{SessionId: *sessionID})
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
 			if *jsonOut {
-				return writeCommandJSON(stdout, stderr, response)
+				return writeWorktreeProtoJSON(stdout, stderr, response)
 			}
 			writeWorktreeList(stdout, response.Worktrees, true)
 			return 0
@@ -115,32 +125,37 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 	defer func() { _ = remote.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
 	defer cancel()
-	response, err := remote.ListWorkspaceWorktrees(ctx, serverapi.WorktreeWorkspaceListRequest{
-		ProjectID:   binding.ProjectID,
-		WorkspaceID: binding.WorkspaceID,
+	response, err := remote.ListWorkspaceWorktrees(ctx, &worktreepb.WorkspaceListRequest{
+		ProjectId:   binding.ProjectID,
+		WorkspaceId: binding.WorkspaceID,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	if *jsonOut {
-		return writeCommandJSON(stdout, stderr, response)
+		return writeWorktreeProtoJSON(stdout, stderr, response)
 	}
 	writeWorktreeList(stdout, response.Worktrees, false)
 	return 0
 }
 
-func writeWorktreeList(stdout io.Writer, worktrees []serverapi.WorktreeListEntry, showCurrent bool) {
+func writeWorktreeList(stdout io.Writer, worktrees []*worktreepb.ListEntry, showCurrent bool) {
 	for _, entry := range worktrees {
+		variant, err := worktreeTopologyVariantJSON(entry.GetTopology())
+		if err != nil {
+			fmt.Fprintln(stdout, err)
+			continue
+		}
 		if !showCurrent {
-			fmt.Fprintf(stdout, "%s\t%s\n", entry.Projection.Selector, entry.Topology.Variant)
+			fmt.Fprintf(stdout, "%s\t%s\n", entry.GetProjection().GetSelector(), variant)
 			continue
 		}
 		current := " "
-		if entry.Projection.IsCurrent {
+		if entry.GetProjection().GetIsCurrent() {
 			current = "*"
 		}
-		fmt.Fprintf(stdout, "%s %s\t%s\n", current, entry.Projection.Selector, entry.Topology.Variant)
+		fmt.Fprintf(stdout, "%s %s\t%s\n", current, entry.GetProjection().GetSelector(), variant)
 	}
 }
 
@@ -169,8 +184,8 @@ func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	}
 	return withWorktreeCommandRemote(stderr, sessionID, func(remote apicontract.WorktreeService) int {
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
-		resolution, err := remote.ResolveWorktreeCreateTarget(resolveCtx, serverapi.WorktreeCreateTargetResolveRequest{
-			SessionID: sessionID,
+		resolution, err := remote.ResolveWorktreeCreateTarget(resolveCtx, &worktreepb.CreateTargetResolveRequest{
+			SessionId: sessionID,
 			Target:    target,
 		})
 		resolveCancel()
@@ -178,24 +193,29 @@ func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		request := serverapi.WorktreeCreateRequest{
-			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-			SessionID:        sessionID,
-			RootPath:         rootPath,
+		request := &worktreepb.CreateRequest{
+			SetupOperationId: worktreecontract.NewSetupOperationID().String(),
+			SessionId:        sessionID,
+			Spec:             &worktreepb.CreateSpec{},
 		}
-		switch resolution.Resolution.Kind {
-		case serverapi.WorktreeCreateTargetResolutionKindNewBranch:
-			request.BaseRef = strings.TrimSpace(*baseRef)
-			request.CreateBranch = true
-			request.BranchName = target
-		case serverapi.WorktreeCreateTargetResolutionKindExistingBranch,
-			serverapi.WorktreeCreateTargetResolutionKindDetachedRef:
-			request.BaseRef = strings.TrimSpace(resolution.Resolution.ResolvedRef)
-			if request.BaseRef == "" {
-				request.BaseRef = target
+		if rootPath != "" {
+			request.RootPath = &rootPath
+		}
+		switch resolution.GetResolution().GetKind() {
+		case worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH:
+			base := strings.TrimSpace(*baseRef)
+			request.Spec.BaseRef = &base
+			request.Spec.CreateBranch = true
+			request.Spec.BranchName = &target
+		case worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH,
+			worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF:
+			base := strings.TrimSpace(resolution.GetResolution().GetResolvedRef())
+			if base == "" {
+				base = target
 			}
+			request.Spec.BaseRef = &base
 		default:
-			fmt.Fprintf(stderr, "unsupported worktree target resolution: %s\n", resolution.Resolution.Kind)
+			fmt.Fprintf(stderr, "unsupported worktree target resolution: %s\n", resolution.GetResolution().GetKind())
 			return 1
 		}
 		response, err := remote.CreateWorktree(context.Background(), request)
@@ -204,14 +224,15 @@ func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, response)
+			return writeWorktreeProtoJSON(stdout, stderr, response)
 		}
-		if response.Worktree.Topology.Variant != serverapi.WorktreeTopologyVariantRegistered || response.Worktree.Topology.Registered == nil {
+		registered := response.GetWorktree().GetTopology().GetRegistered()
+		if registered == nil {
 			fmt.Fprintln(stderr, "create returned a non-registered worktree")
 			return 1
 		}
-		fmt.Fprintln(stdout, response.Worktree.Topology.Registered.Git.CanonicalRoot)
-		fmt.Fprintf(stdout, "Enter with: %s worktree enter %s\n", config.Command, response.Worktree.Projection.Selector)
+		fmt.Fprintln(stdout, registered.GetGit().GetCanonicalRoot())
+		fmt.Fprintf(stdout, "Enter with: %s worktree enter %s\n", config.Command, response.GetWorktree().GetProjection().GetSelector())
 		return 0
 	})
 }
@@ -232,15 +253,12 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	header, err := newWorktreeCommandTransitionHeader(sessionID)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "enter", func(ctx context.Context, remote apicontract.WorktreeService) (serverapi.WorktreeScheduledAcknowledgement, error) {
-		return remote.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
-			WorktreeTransitionHeader: header,
-			Selector:                 strings.TrimSpace(fs.Args()[0]),
+	operationID := worktreecontract.NewOperationID()
+	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "enter", func(ctx context.Context, remote apicontract.WorktreeService) (*worktreepb.ScheduledAcknowledgement, error) {
+		return remote.EnterWorktree(ctx, &worktreepb.EnterRequest{
+			OperationId: operationID.String(),
+			SessionId:   sessionID,
+			Selector:    strings.TrimSpace(fs.Args()[0]),
 		})
 	})
 }
@@ -261,14 +279,11 @@ func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	header, err := newWorktreeCommandTransitionHeader(sessionID)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "leave", func(ctx context.Context, remote apicontract.WorktreeService) (serverapi.WorktreeScheduledAcknowledgement, error) {
-		return remote.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
-			WorktreeTransitionHeader: header,
+	operationID := worktreecontract.NewOperationID()
+	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "leave", func(ctx context.Context, remote apicontract.WorktreeService) (*worktreepb.ScheduledAcknowledgement, error) {
+		return remote.LeaveWorktree(ctx, &worktreepb.LeaveRequest{
+			OperationId: operationID.String(),
+			SessionId:   sessionID,
 		})
 	})
 }
@@ -298,62 +313,51 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	header, err := newWorktreeCommandTransitionHeader(sessionID)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
 	return withWorktreeCommandRemote(stderr, sessionID, func(remote apicontract.WorktreeService) int {
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeMutationTimeout)
 		defer cancel()
-		result, err := remote.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			WorktreeTransitionHeader: header,
-			Selector:                 strings.TrimSpace(fs.Args()[0]),
-			ForceFolderRemoval:       *force,
-			BranchCleanupPolicy:      policy,
+		result, err := remote.DeleteWorktree(ctx, &worktreepb.DeleteRequest{
+			SessionId:           sessionID,
+			Selector:            strings.TrimSpace(fs.Args()[0]),
+			ForceFolderRemoval:  *force,
+			BranchCleanupPolicy: policy,
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, result)
+			return writeWorktreeProtoJSON(stdout, stderr, result)
 		}
-		if result.Kind == serverapi.WorktreeDeleteResultKindScheduled {
-			fmt.Fprintf(stdout, "Scheduled deletion: %s\n", result.Scheduled.OperationID.String())
-		} else {
-			fmt.Fprintln(stdout, "Deleted worktree")
-			if result.Completed != nil {
-				if result.Completed.Cleanup.Kind == serverapi.WorktreeBranchCleanupOutcomeRetained {
-					fmt.Fprintf(stdout, "Kept branch %s", *result.Completed.Cleanup.BranchName)
-					if result.Completed.Cleanup.Diagnostic != nil {
-						fmt.Fprintf(stdout, ": %s", *result.Completed.Cleanup.Diagnostic)
-					}
-					fmt.Fprintln(stdout)
-				}
-				if result.Completed.LeftoverRoot != nil {
-					fmt.Fprintf(stdout, "Left folder untouched: %s\n", *result.Completed.LeftoverRoot)
-				}
+		fmt.Fprintln(stdout, "Deleted worktree")
+		if result.GetCleanup().GetKind() == worktreepb.BranchCleanupOutcomeKind_WORKTREE_BRANCH_CLEANUP_OUTCOME_RETAINED {
+			fmt.Fprintf(stdout, "Kept branch %s", result.GetCleanup().GetBranchName())
+			if result.GetCleanup().Diagnostic != nil {
+				fmt.Fprintf(stdout, ": %s", result.GetCleanup().GetDiagnostic())
 			}
+			fmt.Fprintln(stdout)
+		}
+		if result.LeftoverRoot != nil {
+			fmt.Fprintf(stdout, "Left folder untouched: %s\n", result.GetLeftoverRoot())
 		}
 		return 0
 	})
 }
 
-func worktreeBranchCleanupPolicy(deleteBranch bool, forceDeleteBranch bool, inAgentShell bool) (serverapi.WorktreeBranchCleanupMode, error) {
+func worktreeBranchCleanupPolicy(deleteBranch bool, forceDeleteBranch bool, inAgentShell bool) (worktreepb.BranchCleanupMode, error) {
 	if forceDeleteBranch && !deleteBranch {
-		return "", errors.New("--force-delete-branch requires --delete-branch")
+		return worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_UNSPECIFIED, errors.New("--force-delete-branch requires --delete-branch")
 	}
 	if inAgentShell && deleteBranch {
-		return "", errors.New("agent worktree deletion always retains branches; --delete-branch is not allowed inside Kent shell commands")
+		return worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_UNSPECIFIED, errors.New("agent worktree deletion always retains branches; --delete-branch is not allowed inside Kent shell commands")
 	}
 	if forceDeleteBranch {
-		return serverapi.WorktreeBranchCleanupModeDeleteForce, nil
+		return worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_FORCE, nil
 	}
 	if deleteBranch {
-		return serverapi.WorktreeBranchCleanupModeDeleteSafe, nil
+		return worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE, nil
 	}
-	return serverapi.WorktreeBranchCleanupModeRetain, nil
+	return worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN, nil
 }
 
 func runScheduledWorktreeCommand(
@@ -362,7 +366,7 @@ func runScheduledWorktreeCommand(
 	sessionID string,
 	jsonOut bool,
 	action string,
-	call func(context.Context, apicontract.WorktreeService) (serverapi.WorktreeScheduledAcknowledgement, error),
+	call func(context.Context, apicontract.WorktreeService) (*worktreepb.ScheduledAcknowledgement, error),
 ) int {
 	return withWorktreeCommandRemote(stderr, sessionID, func(remote apicontract.WorktreeService) int {
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
@@ -373,11 +377,53 @@ func runScheduledWorktreeCommand(
 			return 1
 		}
 		if jsonOut {
-			return writeCommandJSON(stdout, stderr, ack)
+			return writeWorktreeProtoJSON(stdout, stderr, ack)
 		}
 		fmt.Fprintf(stdout, "Worktree %s scheduled for the agent's next step. This usually takes a few seconds.\n", action)
 		return 0
 	})
+}
+
+func writeWorktreeProtoJSON(stdout io.Writer, stderr io.Writer, message proto.Message) int {
+	data, err := protojson.Marshal(message)
+	if err == nil {
+		_, err = fmt.Fprintln(stdout, string(data))
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func worktreeTopologyVariantJSON(topology *worktreepb.TopologyEntry) (string, error) {
+	switch topology.GetTopology().(type) {
+	case *worktreepb.TopologyEntry_Registered:
+		return "registered", nil
+	case *worktreepb.TopologyEntry_External:
+		return "external", nil
+	case *worktreepb.TopologyEntry_Missing:
+		return "missing", nil
+	default:
+		return "", errors.New("worktree topology is missing")
+	}
+}
+
+func worktreeStatusProblemKindJSON(kind worktreepb.StatusProblemKind) (string, error) {
+	switch kind {
+	case worktreepb.StatusProblemKind_WORKTREE_STATUS_PROBLEM_ROOT_MISSING:
+		return "root_missing", nil
+	case worktreepb.StatusProblemKind_WORKTREE_STATUS_PROBLEM_ROOT_INACCESSIBLE:
+		return "root_inaccessible", nil
+	case worktreepb.StatusProblemKind_WORKTREE_STATUS_PROBLEM_GIT_BINDING_MISSING:
+		return "git_binding_missing", nil
+	case worktreepb.StatusProblemKind_WORKTREE_STATUS_PROBLEM_GIT_BINDING_MISMATCHED:
+		return "git_binding_mismatched", nil
+	case worktreepb.StatusProblemKind_WORKTREE_STATUS_PROBLEM_RECORDED_REF_MISSING:
+		return "recorded_ref_missing", nil
+	default:
+		return "", fmt.Errorf("unsupported worktree status problem %s", kind)
+	}
 }
 
 func withWorktreeCommandRemote(stderr io.Writer, sessionID string, fn func(apicontract.WorktreeService) int) int {
@@ -405,28 +451,6 @@ func resolveOptionalWorktreeCommandSession(sessionFlag string) *string {
 		return &trimmed
 	}
 	return nil
-}
-
-func worktreeCommandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
-	runID, hasRunID := os.LookupEnv(sessionenv.RunIDEnv)
-	stepID, hasStepID := os.LookupEnv(sessionenv.StepIDEnv)
-	if !hasRunID && !hasStepID {
-		return nil, nil
-	}
-	origin := &serverapi.RuntimeStepOrigin{RunID: strings.TrimSpace(runID), StepID: strings.TrimSpace(stepID)}
-	return origin, origin.Validate()
-}
-
-func newWorktreeCommandTransitionHeader(sessionID string) (serverapi.WorktreeTransitionHeader, error) {
-	origin, err := worktreeCommandRuntimeOrigin()
-	if err != nil {
-		return serverapi.WorktreeTransitionHeader{}, err
-	}
-	return serverapi.WorktreeTransitionHeader{
-		OperationID: serverapi.NewWorktreeOperationID(),
-		SessionID:   sessionID,
-		Origin:      origin,
-	}, nil
 }
 
 func openWorktreeCommandRemote(ctx context.Context, sessionID string) (*client.Remote, error) {

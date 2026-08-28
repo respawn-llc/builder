@@ -39,12 +39,6 @@ func normalizeToolCallForTranscript(call llm.ToolCall, workingDir string) llm.To
 	return normalized
 }
 
-func prepareRawToolCallForTranscript(raw, executable llm.ToolCall, workingDir string) llm.ToolCall {
-	prepared := raw
-	prepared.Presentation = normalizeToolCallForTranscript(executable, workingDir).Presentation
-	return prepared
-}
-
 func transcriptToolCallMeta(call llm.ToolCall, workingDir string) *transcript.ToolCallMeta {
 	if meta := decodeToolCallMeta(call); meta != nil {
 		return meta

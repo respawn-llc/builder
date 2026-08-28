@@ -38,6 +38,7 @@ import (
 	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -107,6 +108,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
 	var workflowController *workflowexecution.CurrentNodeController
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		Debug:           cfg.Settings.Debug,
 		PersistenceRoot: cfg.PersistenceRoot,
 		AuthManager:     authSupport.AuthManager,
 		Background:      runtimeSupport.Background,
@@ -122,11 +124,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			if workflowController != nil {
-				workflowController.ExecutionFinalized(scope)
-			}
-		}),
 	})
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		if publishErr := runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
@@ -233,11 +230,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		}
 	}
 	workflowRoleResolver := configRoleResolver{settings: cfg.Settings}
-	workflowStore, err := workflowstore.New(
-		metadataStore,
-		workflowstore.WithRoleResolver(workflowRoleResolver),
-		workflowstore.WithDebug(cfg.Settings.Debug),
-	)
+	workflowStore, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflowRoleResolver))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: store: %w", err)
@@ -299,6 +292,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
+	runtimeControlService.WithWorkflowSessionReactivator(workflowController)
+	runtimeControlService.WithWorkflowSessionPreparationReader(workflowController)
 	if _, err := workflowController.Recover(context.Background()); err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
@@ -509,9 +504,9 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 		}
 		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
 	}
-	var retainedWorktree *serverapi.WorktreeTopologyEntry
+	var retainedWorktree *worktreepb.RegisteredFacts
 	if prepared.Materialization != nil {
-		retainedWorktree = &prepared.Materialization.Worktree
+		retainedWorktree = prepared.Materialization.Worktree.GetRegistered()
 	}
 	return workflowsvc.ExecutionTargetMaterialization{
 		RetainedRoot:             prepared.Root.Managed,

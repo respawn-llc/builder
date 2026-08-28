@@ -651,16 +651,16 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	transport.BaseURL = stub.URL()
 	transport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
 	var deltas []string
-	response, err := transport.GenerateStream(context.Background(), llm.OpenAIRequest{
+	response, err := transport.Generate(context.Background(), llm.OpenAIRequest{
 		Model:          "gpt-5",
 		SessionID:      textutil.Value("session-1"),
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(probe)}}),
-	}, func(delta string) {
-		deltas = append(deltas, delta)
-	})
+	}, llm.StreamCallbacks{OnAssistantDelta: func(delta llm.AssistantDelta) {
+		deltas = append(deltas, delta.Text)
+	}})
 	if err != nil {
-		t.Fatalf("GenerateStream: %v", err)
+		t.Fatalf("Generate: %v", err)
 	}
 	if response.AssistantText == nil || *response.AssistantText != output {
 		t.Fatalf("assistant text = %#v, want %q", response.AssistantText, output)

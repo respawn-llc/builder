@@ -42,7 +42,8 @@ func transcriptUserRowEqual(left, right *clientui.TranscriptUserRow) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
-	return left.Text == right.Text &&
+	return textutil.EqualOptional(left.StepID, right.StepID) &&
+		left.Text == right.Text &&
 		textutil.EqualOptional(left.CondensedText, right.CondensedText) &&
 		textutil.EqualOptional(left.RollbackTargetID, right.RollbackTargetID)
 }
@@ -61,7 +62,8 @@ func transcriptToolRowEqual(left, right *clientui.TranscriptToolRow) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
-	return left.ToolCallID == right.ToolCallID &&
+	return textutil.EqualOptional(left.StepID, right.StepID) &&
+		left.ToolCallID == right.ToolCallID &&
 		left.ToolName == right.ToolName &&
 		left.Text == right.Text &&
 		left.IsError == right.IsError &&
@@ -87,7 +89,6 @@ func transcriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
 		transcriptWorktreeContextEqual(left.Worktree, right.Worktree) &&
 		textutil.EqualOptional(left.CacheWarning, right.CacheWarning) &&
 		textutil.EqualOptional(left.ToolOutputRepair, right.ToolOutputRepair) &&
-		textutil.EqualOptional(left.ProviderModelMismatch, right.ProviderModelMismatch) &&
 		textutil.EqualOptional(left.Diagnostic, right.Diagnostic) &&
 		textutil.EqualOptional(left.Background, right.Background) &&
 		textutil.EqualOptional(left.CondensedText, right.CondensedText) &&

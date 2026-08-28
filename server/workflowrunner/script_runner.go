@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"core/server/sessionruntime"
 	tools "core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
@@ -22,15 +24,67 @@ const (
 	ReasonScriptCompletionFailed = "workflow_script_completion_failed"
 )
 
-func (s *Starter) startCurrentNodeScript(
+type currentNodeScriptPublication struct {
+	detached *sessionruntime.DetachedScriptExecution
+}
+
+func (p *currentNodeScriptPublication) Publish(
 	ctx context.Context,
-	input workflowstore.CurrentNodeStartContext,
-	lease sessionruntime.WorkflowExecutionLease,
+	admit func() error,
+	published func(sessionruntime.ExecutionHandle),
+) (sessionruntime.ExecutionHandle, func(), error) {
+	if p == nil || p.detached == nil {
+		return nil, nil, errors.New("detached Script publication is required")
+	}
+	return p.detached.Publish(ctx, admit, published)
+}
+
+func (p *currentNodeScriptPublication) Cancel() {
+	if p != nil && p.detached != nil {
+		p.detached.Cancel()
+	}
+}
+
+func (s *Starter) PrepareScriptPublication(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
 	controller workflowruntime.Controller,
-) error {
+) (workflowexecution.CurrentNodeScriptPublication, error) {
+	if s.closed.Load() {
+		return nil, errors.New("workflow runtime starter closed")
+	}
+	input, err := s.store.ResolveCurrentNodeStartContext(ctx, reference)
+	if err != nil {
+		return nil, err
+	}
+	if input.Node.Kind != workflow.NodeKindScript {
+		return nil, nil
+	}
+	command, err := currentNodeScriptCommand(input)
+	if err != nil {
+		return nil, err
+	}
+	detached, err := s.runtimeAuthority.PrepareDetachedScriptExecution(ctx, sessionruntime.DetachedScriptExecutionRequest{
+		Workflow: sessionruntime.WorkflowExecutionRef{
+			ProjectID:   input.Task.ProjectID,
+			WorkflowID:  input.Workflow.ID,
+			CurrentNode: input.CurrentNode.Reference,
+		},
+		Command: command,
+		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
+			return s.finalizeCurrentNodeScript(finalizeCtx, controller, input, scope, result, runErr)
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &currentNodeScriptPublication{detached: detached}, nil
+}
+
+func currentNodeScriptCommand(input workflowstore.CurrentNodeStartContext) (sessionruntime.ScriptCommand, error) {
 	executionRoot, err := requireCurrentNodeExecutionRoot(input)
 	if err != nil {
-		return err
+		return sessionruntime.ScriptCommand{}, err
 	}
 	resolvedPath, err := workflowscript.ResolveExecutable(workflowscript.ValidationRequest{
 		RawPath:     input.Node.ScriptPath,
@@ -38,11 +92,11 @@ func (s *Starter) startCurrentNodeScript(
 		RequireRoot: true,
 	})
 	if err != nil {
-		return err
+		return sessionruntime.ScriptCommand{}, err
 	}
 	stdin, err := currentNodeScriptStdin(input)
 	if err != nil {
-		return err
+		return sessionruntime.ScriptCommand{}, err
 	}
 	env := tools.EnrichShellEnv(os.Environ())
 	env = append(env,
@@ -54,64 +108,50 @@ func (s *Starter) startCurrentNodeScript(
 	if branchKey, branchScoped := input.CurrentNode.Reference.TransitionBranchKey(); branchScoped {
 		env = append(env, "KENT_WORKFLOW_TRANSITION_BRANCH_KEY="+string(branchKey))
 	}
-	_, err = s.runtimeAuthority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command: sessionruntime.ScriptCommand{
-			Path:    resolvedPath,
-			Workdir: stringPointer(executionRoot.EffectiveRoot()),
-			Env:     env,
-			Stdin:   stdin,
-		},
-		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
-			if runErr != nil || result.Canceled || result.StdoutOverflow {
-				return s.failCurrentNodeScope(
-					finalizeCtx,
-					controller,
-					scope,
-					ReasonScriptExecutionFailed,
-					scriptExecutionFailure(result, runErr),
-				)
-			}
-			contract, err := workflowruntime.NewCompletionContract(
-				workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
-			)
-			if err != nil {
-				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
-			}
-			parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
-			if err != nil {
-				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
-			}
-			_, err = controller.CompleteCurrentNode(finalizeCtx, workflowruntime.CompletionRequest{
-				ScopeID:      scope.ID(),
-				TransitionID: parsed.TransitionID,
-				OutputValues: parsed.OutputValues,
-				Commentary:   parsed.Commentary,
-			})
-			if err != nil {
-				var unresolved workflow.LegacyContinuationSourceUnresolvedError
-				if errors.As(err, &unresolved) {
-					finalizer, ok := controller.(workflowruntime.OperationalCompletionBlockFinalizer)
-					if !ok {
-						return errors.Join(
-							err,
-							errors.New("workflow controller cannot finalize an operational completion block"),
-						)
-					}
-					return errors.Join(
-						err,
-						finalizer.FinalizeCurrentNodeOperationalCompletionBlock(
-							finalizeCtx,
-							scope.ID(),
-						),
-					)
-				}
-				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
-			}
-			return nil
-		},
+	return sessionruntime.ScriptCommand{
+		Path: resolvedPath, Workdir: stringPointer(executionRoot.EffectiveRoot()),
+		Env: env, Stdin: stdin,
+	}, nil
+}
+
+func (s *Starter) finalizeCurrentNodeScript(
+	ctx context.Context,
+	controller workflowruntime.Controller,
+	input workflowstore.CurrentNodeStartContext,
+	scope sessionruntime.ExecutionScope,
+	result sessionruntime.ScriptResult,
+	runErr error,
+) error {
+	if runErr != nil || result.Canceled || result.StdoutOverflow {
+		return s.failCurrentNodeScope(
+			ctx, controller, scope, ReasonScriptExecutionFailed,
+			scriptExecutionFailure(result, runErr),
+		)
+	}
+	contract := workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)}
+	parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
+	if err != nil {
+		return s.failCurrentNodeScope(ctx, controller, scope, ReasonScriptCompletionFailed, err)
+	}
+	outcome, err := controller.CompleteScriptCurrentNode(ctx, workflowruntime.ScriptCompletionRequest{
+		ScopeID: scope.ID(), TransitionID: parsed.TransitionID,
+		OutputValues: parsed.OutputValues, Commentary: parsed.Commentary,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if !outcome.IsApplied() {
+		return errors.New("Script completion returned without an applied result")
+	}
+	if outcome.Diagnostic != nil {
+		slog.Error(
+			"Workflow Script completion committed with a diagnostic",
+			"task_id", input.Task.ID,
+			"node_id", input.Node.ID,
+			"error", outcome.Diagnostic,
+		)
+	}
+	return controller.ContinueCurrentNode(context.WithoutCancel(ctx), outcome.CommittedResult)
 }
 
 func scriptExecutionFailure(result sessionruntime.ScriptResult, runErr error) error {

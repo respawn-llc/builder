@@ -6,13 +6,9 @@ import (
 	"core/shared/runtimeids"
 )
 
-func TestTranscriptUserFlushCarriesTypedQueuedMessageIdentity(t *testing.T) {
+func TestTranscriptUserFlushCarriesStepIdentity(t *testing.T) {
 	flushed := TranscriptUserMessageFlushed{
-		StepID: transcriptTestStepID(t),
-		Messages: []QueuedUserMessageIdentity{{
-			ClientRequestID: transcriptTestClientRequestID(t),
-			QueueItemID:     transcriptTestQueueItemID(t),
-		}},
+		StepID: transcriptTestStepIDPointer(t),
 	}
 	if err := flushed.Validate(); err != nil {
 		t.Fatalf("validate user-message flush: %v", err)
@@ -22,16 +18,15 @@ func TestTranscriptUserFlushCarriesTypedQueuedMessageIdentity(t *testing.T) {
 func TestTranscriptQueuedMessageStateUsesTypedTerminalFields(t *testing.T) {
 	text := "queued input"
 	accepted := TranscriptQueuedMessageState{
-		ClientRequestID: transcriptTestClientRequestID(t),
-		QueueItemID:     transcriptTestQueueItemID(t),
-		Status:          QueuedUserMessageAccepted,
-		Text:            &text,
+		QueueItemID: transcriptTestQueueItemID(t),
+		Status:      QueuedUserMessageAccepted,
+		Text:        &text,
 	}
 	if err := accepted.Validate(); err != nil {
 		t.Fatalf("validate accepted queued-message state: %v", err)
 	}
 
-	reason := QueuedUserMessageFailureStopped
+	reason := QueuedUserMessageFailureRuntimeUnavailable
 	failed := accepted
 	failed.Status = QueuedUserMessageFailed
 	failed.FailureReason = &reason
@@ -40,48 +35,40 @@ func TestTranscriptQueuedMessageStateUsesTypedTerminalFields(t *testing.T) {
 	}
 }
 
-func TestTranscriptInputFactsRejectMissingOrDuplicateQueuedMessageIdentity(t *testing.T) {
-	identity := QueuedUserMessageIdentity{
-		ClientRequestID: transcriptTestClientRequestID(t),
-		QueueItemID:     transcriptTestQueueItemID(t),
+func TestTranscriptHumanInputInterruptedPreservesServerOrderAndVerbatimText(t *testing.T) {
+	first := transcriptTestQueueItemID(t)
+	second, err := runtimeids.ParseQueueItemID("66666666-6666-4666-8666-666666666666")
+	if err != nil {
+		t.Fatalf("ParseQueueItemID: %v", err)
 	}
-	tests := []TranscriptUserMessageFlushed{
-		{StepID: transcriptTestStepID(t)},
-		{
-			StepID: transcriptTestStepID(t),
-			Messages: []QueuedUserMessageIdentity{
-				identity,
-				identity,
-			},
-		},
-		{
-			StepID: transcriptTestStepID(t),
-			Messages: []QueuedUserMessageIdentity{
-				identity,
-				{
-					ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-					QueueItemID:     identity.QueueItemID,
-				},
-			},
-		},
-		{
-			StepID: transcriptTestStepID(t),
-			Messages: []QueuedUserMessageIdentity{{
-				ClientRequestID: transcriptTestClientRequestID(t),
-			}},
-		},
+	event := TranscriptHumanInputInterrupted{Items: []TranscriptInterruptedHumanInputItem{
+		{QueueItemID: first, Text: "  first\nline\t "},
+		{QueueItemID: second, Text: "\tsecond  "},
+	}}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
-	for _, flushed := range tests {
-		if err := flushed.Validate(); err == nil {
-			t.Fatalf("accepted invalid user-message flush: %+v", flushed)
-		}
+	if event.Items[0].QueueItemID != first || event.Items[1].QueueItemID != second {
+		t.Fatalf("items reordered: %+v", event.Items)
+	}
+	if event.Items[0].Text != "  first\nline\t " || event.Items[1].Text != "\tsecond  " {
+		t.Fatalf("text changed: %+v", event.Items)
+	}
+}
+
+func TestTranscriptInputFactsAllowRuntimeFlushAndRejectInvalidIdentityOrStaleText(t *testing.T) {
+	if err := (TranscriptUserMessageFlushed{}).Validate(); err != nil {
+		t.Fatalf("rejected Runtime user-message flush without exact Step provenance: %v", err)
+	}
+	zeroStepID := runtimeids.StepID{}
+	if err := (TranscriptUserMessageFlushed{StepID: &zeroStepID}).Validate(); err == nil {
+		t.Fatal("accepted user-message flush with invalid present Step identity")
 	}
 
 	submittedWithText := TranscriptQueuedMessageState{
-		ClientRequestID: transcriptTestClientRequestID(t),
-		QueueItemID:     transcriptTestQueueItemID(t),
-		Status:          QueuedUserMessageSubmitted,
-		Text:            func() *string { text := "stale"; return &text }(),
+		QueueItemID: transcriptTestQueueItemID(t),
+		Status:      QueuedUserMessageSubmitted,
+		Text:        func() *string { text := "stale"; return &text }(),
 	}
 	if err := submittedWithText.Validate(); err == nil {
 		t.Fatal("accepted submitted queued-message state with stale text")

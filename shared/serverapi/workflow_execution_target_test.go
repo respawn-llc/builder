@@ -17,8 +17,8 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 	valid := WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeCustomRef, CustomRef: &customRef}
 
 	for _, request := range []interface{ Validate() error }{
-		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
-		WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
+		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), ExecutionTarget: &valid},
+		WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), ExecutionTarget: &valid},
 		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &valid},
 	} {
 		if err := request.Validate(); err != nil {
@@ -33,10 +33,10 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 		{Mode: WorkflowExecutionTargetModeHead, CustomRef: &customRef},
 		{Mode: WorkflowExecutionTargetMode("future")},
 	} {
-		if err := (WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
+		if err := (WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
 			t.Fatalf("selection %#v validated", selection)
 		}
-		if err := (WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
+		if err := (WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorkflowSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
 			t.Fatalf("resume selection %#v validated", selection)
 		}
 		if err := (WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &selection}).Validate(); err == nil {
@@ -51,7 +51,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskStartRequest{
 			TaskID:            "task",
 			InvokingSessionID: &sessionID,
-			SetupOperationID:  NewWorktreeSetupOperationID(),
+			SetupOperationID:  NewWorkflowSetupOperationID(),
 		},
 		WorkflowTaskApproveRequest{
 			ApprovalID:        "approval",
@@ -65,7 +65,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &sessionID,
-			SetupOperationID:  NewWorktreeSetupOperationID(),
+			SetupOperationID:  NewWorkflowSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",
@@ -82,7 +82,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskStartRequest{
 			TaskID:            "task",
 			InvokingSessionID: &zero,
-			SetupOperationID:  NewWorktreeSetupOperationID(),
+			SetupOperationID:  NewWorkflowSetupOperationID(),
 		},
 		WorkflowTaskApproveRequest{
 			ApprovalID:        "approval",
@@ -96,7 +96,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &zero,
-			SetupOperationID:  NewWorktreeSetupOperationID(),
+			SetupOperationID:  NewWorkflowSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",
@@ -258,9 +258,9 @@ func TestWorkflowTaskActionResponseValidatesDependencyConfirmationOutcome(t *tes
 func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) {
 	target := WorkflowExecutionTarget{
 		Mode:         WorkflowExecutionTargetModeCustomRef,
-		RequestedRef: stringPointer("release/v1"),
-		ResolvedRef:  stringPointer("refs/remotes/origin/release/v1"),
-		CommitOID:    stringPointer("0123456789abcdef"),
+		RequestedRef: stringPointerForTest("release/v1"),
+		ResolvedRef:  stringPointerForTest("refs/remotes/origin/release/v1"),
+		CommitOID:    stringPointerForTest("0123456789abcdef"),
 		Provenance:   WorkflowExecutionTargetProvenanceResolved,
 	}
 	if err := target.Validate(); err != nil {
@@ -321,8 +321,8 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 func TestWorkflowExecutionTargetContainsOnlyDurableFacts(t *testing.T) {
 	target := WorkflowExecutionTarget{
 		Mode:         WorkflowExecutionTargetModeHead,
-		RequestedRef: stringPointer("HEAD"),
-		CommitOID:    stringPointer("0123456789abcdef"),
+		RequestedRef: stringPointerForTest("HEAD"),
+		CommitOID:    stringPointerForTest("0123456789abcdef"),
 		Provenance:   WorkflowExecutionTargetProvenanceResolved,
 	}
 	if err := target.Validate(); err != nil {
@@ -413,7 +413,7 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	invalid := valid
 	invalid.Task.ExecutionTarget = &WorkflowExecutionTarget{
 		Mode:         WorkflowExecutionTargetModeHead,
-		RequestedRef: stringPointer("HEAD"),
+		RequestedRef: stringPointerForTest("HEAD"),
 		Provenance:   WorkflowExecutionTargetProvenanceResolved,
 	}
 	if err := invalid.Validate(); err == nil {

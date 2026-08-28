@@ -232,12 +232,12 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	}
 	_, firstRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, firstServer, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote no-auth runtime")
 	firstSubmission, err := submitRuntimeClientForTest(t, firstRuntimePlan.Wiring.runtimeClient, "hello after no auth")
-	if err != nil {
-		t.Fatalf("first SubmitUserMessage: %v", err)
-	}
-	if firstSubmission.Message == nil || *firstSubmission.Message != "first no-auth reply" {
-		t.Fatalf("first assistant message = %v, want first no-auth reply", firstSubmission.Message)
-	}
+	requireQueuedAppTestUserTurn(t, firstSubmission, err)
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		firstRuntimePlan.Wiring.eventDispatcher.transcriptEvents,
+		"first no-auth reply",
+	)
 	closeRuntimeLaunchPlan(t, firstRuntimePlan)
 	if err := firstServer.Close(); err != nil {
 		t.Fatalf("first server close: %v", err)
@@ -260,12 +260,12 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	t.Cleanup(func() { closeInteractiveSessionServer(t, secondServer) })
 	_, secondRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, secondServer, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote persisted no-auth runtime")
 	secondSubmission, err := submitRuntimeClientForTest(t, secondRuntimePlan.Wiring.runtimeClient, "hello after persisted no auth")
-	if err != nil {
-		t.Fatalf("second SubmitUserMessage: %v", err)
-	}
-	if secondSubmission.Message == nil || *secondSubmission.Message != "second no-auth reply" {
-		t.Fatalf("second assistant message = %v, want second no-auth reply", secondSubmission.Message)
-	}
+	requireQueuedAppTestUserTurn(t, secondSubmission, err)
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		secondRuntimePlan.Wiring.eventDispatcher.transcriptEvents,
+		"second no-auth reply",
+	)
 	closeRuntimeLaunchPlan(t, secondRuntimePlan)
 	if hits.Load() != 2 {
 		t.Fatalf("expected fake LLM calls twice, got %d", hits.Load())
@@ -403,16 +403,12 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive daemon")
-	message := ""
-	if submission.Message != nil {
-		message = *submission.Message
-	}
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "interactive daemon reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "interactive daemon reply")
-	}
+	requireQueuedAppTestUserTurn(t, submission, err)
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		runtimePlan.Wiring.eventDispatcher.transcriptEvents,
+		"interactive daemon reply",
+	)
 	if hits.Load() != 1 {
 		t.Fatalf("expected daemon-backed llm call once, got %d", hits.Load())
 	}
@@ -473,6 +469,7 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		t.Fatalf("expected second client to attach same session, a=%q b=%q", fixture.planA.SessionID, fixture.planB.SessionID)
 	}
 	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, fixture.runtimePlanA.Wiring.runtimeClient, "start prompt flow")
+	requireQueuedAppTestRuntimeSubmission(t, submissionDone)
 	askPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.eventDispatcher.transcriptEvents, "ask-race-1", submissionFailed)
 	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Who answers first?" {
 		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
@@ -511,17 +508,12 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		t.Fatalf("AnswerPromptBatch Approval from attached client B: %v", err)
 	}
 
-	select {
-	case result := <-submissionDone:
-		if result.err != nil {
-			t.Fatalf("SubmitUserMessage: %v", result.err)
-		}
-		if result.submission.Message == nil || *result.submission.Message != "multi-client prompt flow complete" {
-			t.Fatalf("assistant message = %v", result.submission.Message)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for model turn completion")
-	}
+	waitForRemoteTranscriptAssistantFinal(
+		t,
+		fixture.runtimePlanA.Wiring.eventDispatcher.transcriptEvents,
+		"multi-client prompt flow complete",
+		submissionFailed,
+	)
 }
 
 type remoteMultiClientRuntimeFixture struct {

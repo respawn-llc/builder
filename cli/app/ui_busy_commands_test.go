@@ -5,7 +5,9 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -253,14 +255,8 @@ func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 
 	next, cmd := updated.Update(submitDoneMsg{message: "done"})
 	updated = next.(*uiModel)
-	if cmd == nil || updated.isCompacting() || updated.postTurnCompactionsInFlight != 1 || len(updated.queued) != 0 {
-		t.Fatalf(
-			"compact drain = cmd %v, compacting %t, blockers %d, queued %+v",
-			cmd,
-			updated.isCompacting(),
-			updated.postTurnCompactionsInFlight,
-			updated.queued,
-		)
+	if cmd == nil || updated.isBusy() || updated.isCompacting() || len(updated.queued) != 0 {
+		t.Fatalf("compact drain = cmd %v, busy %t, compacting %t, queued %+v", cmd, updated.isBusy(), updated.isCompacting(), updated.queued)
 	}
 }
 
@@ -269,8 +265,23 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 	model := newProjectedTestUIModel(client)
 	model.startupCmds = nil
 
-	if cmd := model.inputController().startCompactionWithOrigin("/compact", "", uiCompactionOriginManual); cmd == nil {
+	if cmd := model.inputController().startCompaction("  /compact   tighten  summary  ", "tighten  summary"); cmd == nil {
 		t.Fatal("expected compaction command")
+	}
+	requestID := runtimeids.NewCompactionRequestID()
+	_ = model.inputController().compactCmd(requestID, "  /compact   tighten  summary  ", "tighten  summary")()
+	if client.compactRequest.RequestID != requestID {
+		t.Fatalf("compaction request id = %s, want %s", client.compactRequest.RequestID, requestID)
+	}
+	if client.compactRequest.Admission.Guidance == nil ||
+		*client.compactRequest.Admission.Guidance != "tighten  summary" ||
+		client.compactRequest.Admission.RestorationInput != "  /compact   tighten  summary  " {
+		t.Fatalf("compaction admission = %+v", client.compactRequest.Admission)
+	}
+	buttonClient := &runtimeControlFakeClient{}
+	_ = newProjectedTestUIModel(buttonClient).inputController().compactCmd(runtimeids.NewCompactionRequestID(), "", "")()
+	if buttonClient.compactRequest.Admission.RestorationInput != "/compact" {
+		t.Fatal("button compaction restoration input")
 	}
 	if model.isCompacting() || model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {
 		t.Fatalf("compaction state = compacting %t, blocked %t, prefix %q", model.isCompacting(), model.blocksRuntimeInput(), model.layout().mainInputPrefix())
@@ -290,6 +301,23 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 			updated.injectedQueue,
 			updated.isCompacting(),
 		)
+	}
+}
+
+func TestRejectedCompactionAtPendingWorkCapacityRestoresVerbatimInput(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		err: serverapi.NewRuntimeCommandNotAcceptedError(&serverapi.PendingWorkCapacityError{}),
+	}
+	model := newProjectedTestUIModel(client)
+	submittedText := "  /compact   preserve guidance  "
+
+	cmd := model.inputController().startCompaction(submittedText, "preserve guidance")
+	for _, msg := range collectCmdMessages(t, cmd) {
+		model = updateUIModel(t, model, msg)
+	}
+
+	if got := testMainInput(model); got != submittedText {
+		t.Fatalf("restored composer = %q, want verbatim %q", got, submittedText)
 	}
 }
 

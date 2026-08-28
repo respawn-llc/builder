@@ -267,15 +267,16 @@ func (c *ongoingTranscriptController) applyState(message clientui.TranscriptMess
 func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.TranscriptMessage) bool {
 	switch message.Kind() {
 	case clientui.TranscriptMessageStepState,
-		clientui.TranscriptMessageReviewerState,
 		clientui.TranscriptMessageRuntimeReadModelUpdate:
 		// Canonical runtime state is represented by the app status line.
 	case clientui.TranscriptMessageUserMessageFlushed:
 		// The state observer owns input reconciliation. Re-render the client-local
 		// queue after it removes the flushed operation identities.
 	case clientui.TranscriptMessageQueuedMessageState:
-		payload := message.Payload().(clientui.TranscriptQueuedMessageState)
-		c.liveReadModel.applyQueuedOrSteered(&payload)
+		// Queue lifecycle is reconciled by the state observer. Pending Work is
+		// the sole server membership projection.
+	case clientui.TranscriptMessagePendingWorkReplaced:
+		c.liveReadModel.applyPendingWork(message.Payload().(clientui.TranscriptPendingWorkReplaced).PendingWork)
 		return true
 	case clientui.TranscriptMessageSessionStatus:
 		// Session status is already represented by the app status line.
@@ -319,12 +320,8 @@ func (c *ongoingTranscriptController) applyHydrationAppOwnedFacts(hydration *cli
 		}
 		changed = true
 	}
-	if len(hydration.QueuedMessages) > 0 {
-		for _, state := range hydration.QueuedMessages {
-			c.liveReadModel.applyQueuedOrSteered(&state)
-		}
-		changed = true
-	}
+	c.liveReadModel.applyPendingWork(hydration.PendingWork)
+	changed = changed || len(hydration.PendingWork.Items) > 0
 	if len(hydration.PendingPrompts) > 0 {
 		for _, prompt := range hydration.PendingPrompts {
 			c.liveReadModel.applyPendingPrompt(&prompt)
@@ -450,9 +447,9 @@ func humanizeTranscriptFact(value string) string {
 func isAppOwnedOngoingMessage(kind clientui.TranscriptMessageKind) bool {
 	switch kind {
 	case clientui.TranscriptMessageStepState,
-		clientui.TranscriptMessageReviewerState,
 		clientui.TranscriptMessageRuntimeReadModelUpdate,
 		clientui.TranscriptMessageQueuedMessageState,
+		clientui.TranscriptMessagePendingWorkReplaced,
 		clientui.TranscriptMessageUserMessageFlushed,
 		clientui.TranscriptMessageSessionStatus,
 		clientui.TranscriptMessageSessionIdentity,

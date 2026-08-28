@@ -28,7 +28,11 @@ func MainViewFromRuntimeActivity(
 		return clientui.RuntimeMainView{}, err
 	}
 	if err := activity.Validate(); err != nil {
-		activity = clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true}
+		activity = clientui.RuntimeActivity{
+			State:              clientui.RuntimeActivityUnavailable,
+			Reviewer:           clientui.ReviewerActivityInactive,
+			DiagnosticRecovery: true,
+		}
 	}
 	return clientui.RuntimeMainView{
 		Version:  version,

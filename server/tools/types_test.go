@@ -27,6 +27,10 @@ type staticContractTestInput struct {
 	Value string `json:"value"`
 }
 
+type canonicalPriorityTestInput struct {
+	Cmd string `json:"cmd"`
+}
+
 func staticContractTestSources() []StaticContractSource {
 	ids := []toolspec.ID{
 		toolspec.ToolExecCommand,
@@ -160,6 +164,43 @@ func TestRegistryPrepareInputUsesRegisteredPreparedContract(t *testing.T) {
 	}
 }
 
+func TestRegistryPrepareInputPrefersExactCanonicalParameterSpelling(t *testing.T) {
+	contracts, err := NewStaticToolContracts(
+		jsoncontract.NewPreparer(false),
+		StaticContractSource{
+			ID:    toolspec.ToolExecCommand,
+			Input: canonicalPriorityTestInput{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("prepare static tool contracts: %v", err)
+	}
+	r, err := NewStaticToolRegistry(contracts, handlerRegistration(toolspec.ToolExecCommand))
+	if err != nil {
+		t.Fatalf("NewStaticToolRegistry: %v", err)
+	}
+	prepared, err := r.PrepareInput(
+		toolspec.ToolExecCommand,
+		json.RawMessage(`{"CMD":"danger","cmd":"safe"}`),
+	)
+	if err != nil {
+		t.Fatalf("PrepareInput: %v", err)
+	}
+	if string(prepared) != `{"cmd":"safe"}` {
+		t.Fatalf("prepared input = %s, want exact canonical value", prepared)
+	}
+}
+
+func TestRegistryPanicsWhenPatchAndEditAreRegisteredTogether(t *testing.T) {
+	assertToolsPanic(t, func() {
+		_, _ = NewStaticToolRegistry(
+			staticContractTestOwner(t),
+			handlerRegistration(toolspec.ToolPatch),
+			handlerRegistration(toolspec.ToolEdit),
+		)
+	})
+}
+
 func TestCompleteNodeDefinitionIsSchemaFreeMetadata(t *testing.T) {
 	definition, ok := DefinitionFor(toolspec.ToolCompleteNode)
 	if !ok {
@@ -228,6 +269,16 @@ func TestDefaultEnabledToolIDsIncludesStableTools(t *testing.T) {
 	if !enabled[toolspec.ToolTriggerHandoff] {
 		t.Fatalf("expected %s to be default-enabled", toolspec.ToolTriggerHandoff)
 	}
+}
+
+func assertToolsPanic(t *testing.T, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("function did not panic")
+		}
+	}()
+	fn()
 }
 
 func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {

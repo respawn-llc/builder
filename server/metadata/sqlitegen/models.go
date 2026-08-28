@@ -179,18 +179,14 @@ type Session struct {
 type SessionPromptHistoryEntry struct {
 	Sequence        int64
 	SessionID       string
-	SourceID        string
 	Text            string
 	CreatedAtUnixMs int64
 }
 
 type SessionWorkflowNodeAssociation struct {
-	TaskID              string
 	SessionID           string
-	NodeID              sql.RawBytes
+	NodeID              string
 	TransitionBranchKey sql.NullString
-	AssociationStatus   string
-	SourceSessionID     sql.NullString
 	AssociatedAtUnixMs  int64
 }
 
@@ -227,13 +223,10 @@ type TaskActiveFanout struct {
 }
 
 type TaskActiveFanoutBranch struct {
-	TaskID                      string
-	TransitionBranchKey         string
-	ArrivalState                string
-	ArrivalValuesJson           sql.NullString
-	ContinuationSourceKind      sql.NullString
-	ContinuationSourceSessionID sql.NullString
-	LegacyMaterialized          int64
+	TaskID              string
+	TransitionBranchKey string
+	ArrivalState        string
+	ArrivalValuesJson   sql.NullString
 }
 
 type TaskComment struct {
@@ -247,23 +240,20 @@ type TaskComment struct {
 }
 
 type TaskCurrentNode struct {
-	TaskID                      string
-	NodeID                      sql.RawBytes
-	TransitionBranchKey         sql.NullString
-	CurrentInputValuesJson      string
-	PriorNodeValuesJson         string
-	SessionID                   sql.NullString
-	SchedulingState             sql.NullString
-	InterruptionReason          sql.NullString
-	InterruptionDetailJson      sql.NullString
-	InterruptedAtUnixMs         sql.NullInt64
-	EnteredByEdgeID             sql.RawBytes
-	EffectiveAssignee           sql.NullString
-	EffectiveThinking           sql.NullString
-	AssigneeOrigin              sql.NullString
-	ContinuationSourceKind      sql.NullString
-	ContinuationSourceSessionID sql.NullString
-	LegacyMaterialized          int64
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    sql.NullString
+	CurrentInputValuesJson string
+	PriorNodeValuesJson    string
+	SessionID              sql.NullString
+	SchedulingState        sql.NullString
+	InterruptionReason     sql.NullString
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
+	EnteredByEdgeID        sql.NullString
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
 }
 
 type TaskDependency struct {
@@ -279,7 +269,7 @@ type TaskLabelAssignment struct {
 type TaskPendingApproval struct {
 	ID                        string
 	SourceTaskID              string
-	SourceNodeID              sql.RawBytes
+	SourceNodeID              string
 	SourceTransitionBranchKey sql.NullString
 	SourceSessionID           sql.NullString
 	WorkflowVersion           int64
@@ -359,10 +349,10 @@ type Workflow struct {
 }
 
 type WorkflowEdge struct {
-	ID                     sql.RawBytes
-	TransitionGroupID      sql.RawBytes
+	ID                     string
+	TransitionGroupID      string
 	EdgeKey                string
-	TargetNodeID           sql.RawBytes
+	TargetNodeID           string
 	RequiresApproval       int64
 	ContextMode            string
 	InputBindingsJson      string
@@ -377,13 +367,13 @@ type WorkflowEdge struct {
 }
 
 type WorkflowNode struct {
-	ID                     sql.RawBytes
+	ID                     string
 	WorkflowID             runtimeids.WorkflowID
 	NodeKey                string
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	GroupID                sql.RawBytes
+	GroupID                sql.NullString
 	SortOrder              int64
 	JoinInputProvidersJson string
 	CompletionMode         string
@@ -391,7 +381,7 @@ type WorkflowNode struct {
 }
 
 type WorkflowNodeGroup struct {
-	ID          sql.RawBytes
+	ID          string
 	WorkflowID  runtimeids.WorkflowID
 	GroupKey    string
 	DisplayName string
@@ -408,8 +398,8 @@ type WorkflowTaskStatusRecord struct {
 }
 
 type WorkflowTransitionGroup struct {
-	ID           sql.RawBytes
-	SourceNodeID sql.RawBytes
+	ID           string
+	SourceNodeID string
 	TransitionID string
 	DisplayName  string
 	SortOrder    int64

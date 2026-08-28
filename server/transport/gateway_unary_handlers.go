@@ -28,26 +28,12 @@ func gatewayClientCallNoResponse[C any, Req any](getClient func(GatewayDependenc
 	}
 }
 
-func (g *Gateway) authorizeChatSettingsTarget(
-	ctx context.Context,
-	state *connectionState,
-	target serverapi.ChatSettingsReadTarget,
-) error {
-	switch target.TargetKind {
-	case serverapi.ChatSettingsReadTargetLazy:
-		activeProjectID, err := g.activeProjectID(ctx, state)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(*target.ProjectID) != strings.TrimSpace(activeProjectID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-	case serverapi.ChatSettingsReadTargetSession:
-		return g.requireSessionInActiveProject(ctx, state, target.Session.String())
-	default:
-		return errors.New("Chat settings target kind is invalid")
+func runtimePendingWorkClient(deps GatewayDependencies) apicontract.RuntimePendingWorkService {
+	client, ok := deps.RuntimeControlClient().(apicontract.RuntimePendingWorkService)
+	if !ok {
+		panic("Runtime Pending Work service is unavailable")
 	}
-	return nil
+	return client
 }
 
 var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
@@ -172,8 +158,25 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowTaskObserve:            gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ObserveWorkflowTask),
 	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
-			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
-				return serverapi.ChatSettingsReadResponse{}, err
+			switch params.Target.TargetKind {
+			case serverapi.ChatSettingsReadTargetLazy:
+				activeProjectID, err := g.activeProjectID(ctx, state)
+				if err != nil {
+					return serverapi.ChatSettingsReadResponse{}, err
+				}
+				if strings.TrimSpace(*params.Target.ProjectID) != strings.TrimSpace(activeProjectID) {
+					return serverapi.ChatSettingsReadResponse{}, serverapi.ErrWorkspaceNotRegistered
+				}
+			case serverapi.ChatSettingsReadTargetSession:
+				if err := g.requireSessionInActiveProject(
+					ctx,
+					state,
+					params.Target.Session.String(),
+				); err != nil {
+					return serverapi.ChatSettingsReadResponse{}, err
+				}
+			default:
+				return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
 			}
 			response, err := g.deps.ChatSettingsClient().ReadChatSettings(ctx, params)
 			if err != nil {
@@ -181,21 +184,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			}
 			if err := response.ValidateForTarget(params.Target); err != nil {
 				return serverapi.ChatSettingsReadResponse{}, err
-			}
-			return response, nil
-		})
-	},
-	protocol.MethodChatSettingsMutate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
-			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
-				return serverapi.ChatSettingsMutationResponse{}, err
-			}
-			response, err := g.deps.ChatSettingsClient().MutateChatSettings(ctx, params)
-			if err != nil {
-				return serverapi.ChatSettingsMutationResponse{}, err
-			}
-			if err := response.ValidateForTarget(params.Target); err != nil {
-				return serverapi.ChatSettingsMutationResponse{}, err
 			}
 			return response, nil
 		})
@@ -214,20 +202,10 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		}
 		return protocol.NewSuccessResponse(req.ID, response)
 	},
-	protocol.MethodSessionGetInitialInput:      gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.GetInitialInput),
-	protocol.MethodSessionPersistInputDraft:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.PersistInputDraft),
-	protocol.MethodSessionRetargetWorkspace:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.RetargetSessionWorkspace),
-	protocol.MethodSessionResolveTransition:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.ResolveTransition),
-	protocol.MethodWorktreeStatus:              gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.GetWorktreeStatus),
-	protocol.MethodWorktreeList:                gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorktrees),
-	protocol.MethodWorktreeWorkspaceList:       gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorkspaceWorktrees),
-	protocol.MethodWorktreeSelectorResolve:     gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeSelector),
-	protocol.MethodWorktreeDeletePreview:       gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.PreviewWorktreeDelete),
-	protocol.MethodWorktreeCreateTargetResolve: gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeCreateTarget),
-	protocol.MethodWorktreeCreate:              gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.CreateWorktree),
-	protocol.MethodWorktreeEnter:               gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.EnterWorktree),
-	protocol.MethodWorktreeLeave:               gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeLeaveRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.LeaveWorktree),
-	protocol.MethodWorktreeDelete:              gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.DeleteWorktree),
+	protocol.MethodSessionGetInitialInput:   gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.GetInitialInput),
+	protocol.MethodSessionPersistInputDraft: gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.PersistInputDraft),
+	protocol.MethodSessionRetargetWorkspace: gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.RetargetSessionWorkspace),
+	protocol.MethodSessionResolveTransition: gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.ResolveTransition),
 	protocol.MethodSessionRuntimeActivate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
@@ -263,14 +241,15 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeLiveStop:                       gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveStop),
 	protocol.MethodRuntimeLiveWait:                       gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveWait),
 	protocol.MethodRuntimeLiveWatch:                      gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveWatch),
-	protocol.MethodRuntimeDiscardQueuedUserMessage:       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.DiscardQueuedUserMessage),
+	protocol.MethodRuntimeListPendingWork:                gatewayClientCall[apicontract.RuntimePendingWorkService, serverapi.RuntimeListPendingWorkRequest, serverapi.RuntimeListPendingWorkResponse](runtimePendingWorkClient, apicontract.RuntimePendingWorkService.ListPendingWork),
+	protocol.MethodRuntimeRemovePendingWork:              gatewayClientCall[apicontract.RuntimePendingWorkService, serverapi.RuntimeRemovePendingWorkRequest, serverapi.RuntimeRemovePendingWorkResponse](runtimePendingWorkClient, apicontract.RuntimePendingWorkService.RemovePendingWork),
 	protocol.MethodRuntimeRecordPromptHistory:            gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeRecordPromptHistoryRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.RecordPromptHistory),
 	protocol.MethodRuntimeGoalShow:                       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ShowGoal),
-	protocol.MethodRuntimeGoalSet:                        gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetGoal),
-	protocol.MethodRuntimeGoalPause:                      gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.PauseGoal),
-	protocol.MethodRuntimeGoalResume:                     gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ResumeGoal),
-	protocol.MethodRuntimeGoalComplete:                   gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.CompleteGoal),
-	protocol.MethodRuntimeGoalClear:                      gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ClearGoal),
+	protocol.MethodRuntimeGoalSet:                        gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetGoal),
+	protocol.MethodRuntimeGoalPause:                      gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.PauseGoal),
+	protocol.MethodRuntimeGoalResume:                     gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ResumeGoal),
+	protocol.MethodRuntimeGoalComplete:                   gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.CompleteGoal),
+	protocol.MethodRuntimeGoalClear:                      gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ClearGoal),
 	protocol.MethodProcessList: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
 			resp, err := g.deps.ProcessViewClient().ListProcesses(ctx, params)

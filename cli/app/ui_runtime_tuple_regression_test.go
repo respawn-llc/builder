@@ -44,6 +44,24 @@ func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T
 	}
 }
 
+func TestRuntimeTupleEqualityIncludesReviewerActivity(t *testing.T) {
+	inactive := runtimeTupleTestIdleActivity()
+	running := inactive
+	running.Reviewer = clientui.ReviewerActivityInvoking
+
+	if runtimeActivitiesEqual(inactive, running) {
+		t.Fatal("runtime activities with different Reviewer state compared equal")
+	}
+	addressing := inactive
+	addressing.Reviewer = clientui.ReviewerActivityAddressingFeedback
+	if err := addressing.Reviewer.Validate(); err != nil {
+		t.Fatalf("addressing-feedback Reviewer activity failed validation: %v", err)
+	}
+	if runtimeActivitiesEqual(running, addressing) {
+		t.Fatal("runtime activities with different Reviewer phases compared equal")
+	}
+}
+
 func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing.T) {
 	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity())
 	v10.Status = clientui.RuntimeStatus{
@@ -186,12 +204,17 @@ func runtimeTupleTestUpdateMessage(
 }
 
 func runtimeTupleTestIdleActivity() clientui.RuntimeActivity {
-	return clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true}
+	return clientui.RuntimeActivity{
+		State:          clientui.RuntimeActivityRegisteredIdle,
+		Reviewer:       clientui.ReviewerActivityInactive,
+		QueueAccepting: true,
+	}
 }
 
 func runtimeTupleTestRunningActivity() clientui.RuntimeActivity {
 	return clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRunning,
+		Reviewer:       clientui.ReviewerActivityInactive,
 		QueueAccepting: true,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID:      ongoingTestRunID(),

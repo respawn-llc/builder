@@ -18,6 +18,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -97,23 +98,6 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, activeRoute, serverapi.SessionMainViewRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign session unexpectedly allowed")
 	}
-	deletePreviewRoute := routeForTest(t, protocol.MethodWorktreeDeletePreview)
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		deletePreviewRoute,
-		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.ownSessionID, Selector: "feature"},
-	); err != nil {
-		t.Fatalf("active project own delete preview: %v", err)
-	}
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		deletePreviewRoute,
-		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.foreignSessionID, Selector: "feature"},
-	); err == nil {
-		t.Fatal("active project foreign delete preview unexpectedly allowed")
-	}
 	transcriptPageRoute := routeForTest(t, protocol.MethodSessionGetTranscriptPage)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.ownSessionID}); err != nil {
 		t.Fatalf("active project own transcript page: %v", err)
@@ -127,6 +111,48 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, latestFinalRoute, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign latest final answer unexpectedly allowed")
+	}
+	draftRoute := routeForTest(t, protocol.MethodSessionPersistInputDraft)
+	reboundSessionID, err := runtimeids.ParseSessionID(fixture.reboundSessionID)
+	if err != nil {
+		t.Fatalf("parse rebound Session ID: %v", err)
+	}
+	draftState := &connectionState{
+		attachedProject: fixture.bindingA.ProjectID,
+		attachedSession: &reboundSessionID,
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		draftState,
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			SessionID: fixture.reboundSessionID,
+			Input:     "preserved draft",
+		},
+	); err != nil {
+		t.Fatalf("rebind source project draft handoff: %v", err)
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			SessionID: fixture.reboundSessionID,
+			Input:     "must remain inaccessible",
+		},
+	); err == nil {
+		t.Fatal("detached source-project draft mutation unexpectedly allowed")
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		draftState,
+		draftRoute,
+		serverapi.SessionPersistInputDraftRequest{
+			SessionID: fixture.foreignSessionID,
+			Input:     "must remain inaccessible",
+		},
+	); err == nil {
+		t.Fatal("unrelated foreign-project draft mutation unexpectedly allowed")
 	}
 	typedSessionID, err := runtimeids.ParseSessionID(fixture.ownSessionID)
 	if err != nil {
@@ -194,6 +220,26 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	}
 }
 
+func TestRoutePolicyAllowsRuntimeReleaseAfterSessionMovesProjects(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	// The handler injects the connection-owned runtime owner ID; Project scope
+	// must not reject the release before Runtime authority validates that owner.
+	err := newRoutePolicyExecutor(fixture.gateway).authorizeScope(
+		context.Background(),
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		routeForTest(t, protocol.MethodSessionRuntimeRelease),
+		serverapi.SessionRuntimeReleaseRequest{
+			Attachment: serverapi.SessionRuntimeAttachment{
+				SessionID:  fixture.foreignSessionID,
+				Generation: 1,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("authorize moved Session runtime release: %v", err)
+	}
+}
+
 func TestRoutePolicyAuthorizesGoalExceptionWithoutWebSocket(t *testing.T) {
 	appCore, server := newUnboundGatewayTestServer(t)
 	server.Close()
@@ -228,9 +274,8 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	stopRoute := routeForTest(t, protocol.MethodRuntimeLiveStop)
 
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       fixture.ownSessionID,
-		Text:            "steer",
+		SessionID: fixture.ownSessionID,
+		Text:      "steer",
 	}); err != nil {
 		t.Fatalf("live steer root-scoped existing session: %v", err)
 	}
@@ -239,15 +284,13 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	}
 	missing := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
-		Text:            "steer",
+		SessionID: missing,
+		Text:      "steer",
 	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		t.Fatalf("missing required live session error = %v, want ErrRuntimeUnavailable", err)
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{}, stopRoute, serverapi.RuntimeLiveStopRequest{
-		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
-		SessionID:       missing,
+		SessionID: missing,
 	}); err != nil {
 		t.Fatalf("optional live stop missing session: %v", err)
 	}
@@ -404,25 +447,36 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	); err != nil {
 		t.Fatalf("workspace Chat materialization with attached project: %v", err)
 	}
-	workspaceListRoute := routeForTest(t, protocol.MethodWorktreeWorkspaceList)
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
-		workspaceListRoute,
-		serverapi.WorktreeWorkspaceListRequest{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingA.WorkspaceID},
-	); err != nil {
-		t.Fatalf("workspace list with matching project/workspace: %v", err)
+	workspaceListMethod := worktreepb.File_kent_api_worktree_worktree_proto.Services().
+		ByName("ListService").Methods().ByName("ListWorkspace")
+	workspaceListOperation, err := protoapi.OperationFromDescriptor(workspaceListMethod)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, request := range []serverapi.WorktreeWorkspaceListRequest{
-		{ProjectID: fixture.bindingB.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
-		{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
-	} {
-		if err := executor.authorizeScope(
+	authorizeWorkspaceList := func(request *worktreepb.WorkspaceListRequest) error {
+		scopeParams, err := worktreeWorkspaceScope(request)
+		if err != nil {
+			return err
+		}
+		return executor.authorizeScopeFacts(
 			ctx,
 			&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
-			workspaceListRoute,
-			request,
-		); err == nil {
+			routeScopePolicy(workspaceListOperation.Options.ScopePolicy),
+			workspaceListOperation.Name,
+			scopeParams,
+		)
+	}
+	if err := authorizeWorkspaceList(&worktreepb.WorkspaceListRequest{
+		ProjectId:   fixture.bindingA.ProjectID,
+		WorkspaceId: fixture.bindingA.WorkspaceID,
+	}); err != nil {
+		t.Fatalf("workspace list with matching project/workspace: %v", err)
+	}
+	for _, request := range []*worktreepb.WorkspaceListRequest{
+		{ProjectId: fixture.bindingB.ProjectID, WorkspaceId: fixture.bindingB.WorkspaceID},
+		{ProjectId: fixture.bindingA.ProjectID, WorkspaceId: fixture.bindingB.WorkspaceID},
+	} {
+		if err := authorizeWorkspaceList(request); err == nil {
 			t.Fatalf("foreign workspace list unexpectedly allowed: %+v", request)
 		}
 	}
@@ -459,6 +513,7 @@ type routePolicyFixture struct {
 	bindingB         metadata.Binding
 	ownSessionID     string
 	foreignSessionID string
+	reboundSessionID string
 	workspaceB       string
 }
 
@@ -514,6 +569,17 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 	if err := foreignStore.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable foreign: %v", err)
 	}
+	reboundStore, err := session.Create(
+		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
+		"workspace-b",
+		resolvedB.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create rebound: %v", err)
+	}
+	if err := reboundStore.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable rebound: %v", err)
+	}
 	gateway, err := NewGateway(appCore, gatewayTestIdentity())
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -525,6 +591,7 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 		bindingB:         bindingB,
 		ownSessionID:     ownStore.Meta().SessionID,
 		foreignSessionID: foreignStore.Meta().SessionID,
+		reboundSessionID: reboundStore.Meta().SessionID,
 		workspaceB:       resolvedB.Config.WorkspaceRoot,
 	}
 }

@@ -4,11 +4,6 @@ import "fmt"
 
 type RuntimeClientRequestID struct{ uuidv4Value }
 
-func ParseRuntimeClientRequestID(raw string) (RuntimeClientRequestID, error) {
-	id, err := parseUUIDv4Value(raw, "client_request_id")
-	return RuntimeClientRequestID{uuidv4Value: id}, err
-}
-
 func NewRuntimeClientRequestID() RuntimeClientRequestID {
 	return RuntimeClientRequestID{uuidv4Value: newUUIDv4Value()}
 }
@@ -128,6 +123,17 @@ type StepID struct{ uuidv4Value }
 func ParseStepID(raw string) (StepID, error) {
 	id, err := parseUUIDv4Value(raw, "step_id")
 	return StepID{uuidv4Value: id}, err
+}
+
+type CompactionRequestID struct{ uuidv4Value }
+
+func NewCompactionRequestID() CompactionRequestID {
+	return CompactionRequestID{uuidv4Value: newUUIDv4Value()}
+}
+
+func ParseCompactionRequestID(raw string) (CompactionRequestID, error) {
+	id, err := parseUUIDv4Value(raw, "compaction_request_id")
+	return CompactionRequestID{uuidv4Value: id}, err
 }
 
 type AssistantStreamID struct{ uuidv4Value }

@@ -1,6 +1,7 @@
 package runtimeview
 
 import (
+	"strings"
 	"testing"
 
 	"core/server/session"
@@ -9,6 +10,14 @@ import (
 )
 
 var runtimeViewTestPersistence = sessiontest.NewPersistence()
+
+func runtimeStepIDPointer(raw string) *string {
+	normalized := strings.TrimSpace(raw)
+	if normalized == "" {
+		panic("runtime test Step identity must not be empty")
+	}
+	return &normalized
+}
 
 func newRuntimeViewSession(t *testing.T, containerDir, containerName, workspaceRoot string) *session.Store {
 	t.Helper()

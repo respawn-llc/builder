@@ -19,6 +19,7 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/serverjsoncontract"
+
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -705,64 +706,19 @@ func (c *Remote) PersistInputDraft(ctx context.Context, req serverapi.SessionPer
 }
 
 func (c *Remote) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	return callUnscopedRPC[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](c, ctx, protocol.MethodSessionRetargetWorkspace, req)
+	response, err := callUnscopedRPC[serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](c, ctx, protocol.MethodSessionRetargetWorkspace, req)
+	if err != nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, invalidResponseError("session retarget", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 	var resp serverapi.SessionResolveTransitionResponse
 	return resp, c.call(ctx, protocol.MethodSessionResolveTransition, req, &resp)
-}
-
-func (c *Remote) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](c, ctx, protocol.MethodWorktreeList, req)
-}
-
-func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](c, ctx, protocol.MethodWorktreeWorkspaceList, req)
-}
-
-func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
-	var resp serverapi.WorktreeStatusResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeStatus, req, &resp)
-}
-
-func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](c, ctx, protocol.MethodWorktreeSelectorResolve, req)
-}
-
-func (c *Remote) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
-	var resp serverapi.WorktreeDeletePreviewResponse
-	if err := c.call(ctx, protocol.MethodWorktreeDeletePreview, req, &resp); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
-	}
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, fmt.Errorf("validate worktree delete preview response: %w", err)
-	}
-	return resp, nil
-}
-
-func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
-	var resp serverapi.WorktreeCreateTargetResolveResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeCreateTargetResolve, req, &resp)
-}
-
-func (c *Remote) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	return callValidatedRPC[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](c, ctx, protocol.MethodWorktreeCreate, req)
-}
-
-func (c *Remote) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	var resp serverapi.WorktreeScheduledAcknowledgement
-	return resp, c.call(ctx, protocol.MethodWorktreeEnter, req, &resp)
-}
-
-func (c *Remote) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	var resp serverapi.WorktreeScheduledAcknowledgement
-	return resp, c.call(ctx, protocol.MethodWorktreeLeave, req, &resp)
-}
-
-func (c *Remote) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
-	var resp serverapi.WorktreeDeleteResult
-	return resp, c.call(ctx, protocol.MethodWorktreeDelete, req, &resp)
 }
 
 func (c *Remote) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
@@ -846,8 +802,26 @@ func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRe
 	return response, nil
 }
 
-func (c *Remote) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-	return callControlRPC[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](c, ctx, protocol.MethodRuntimeDiscardQueuedUserMessage, req)
+func (c *Remote) ListPendingWork(ctx context.Context, req serverapi.RuntimeListPendingWorkRequest) (serverapi.RuntimeListPendingWorkResponse, error) {
+	response, err := callControlRPC[serverapi.RuntimeListPendingWorkRequest, serverapi.RuntimeListPendingWorkResponse](c, ctx, protocol.MethodRuntimeListPendingWork, req)
+	if err != nil {
+		return serverapi.RuntimeListPendingWorkResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeListPendingWorkResponse{}, invalidResponseError("runtime pending work list", err)
+	}
+	return response, nil
+}
+
+func (c *Remote) RemovePendingWork(ctx context.Context, req serverapi.RuntimeRemovePendingWorkRequest) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+	response, err := callControlRPC[serverapi.RuntimeRemovePendingWorkRequest, serverapi.RuntimeRemovePendingWorkResponse](c, ctx, protocol.MethodRuntimeRemovePendingWork, req)
+	if err != nil {
+		return serverapi.RuntimeRemovePendingWorkResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeRemovePendingWorkResponse{}, invalidResponseError("runtime pending work removal", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
@@ -858,24 +832,24 @@ func (c *Remote) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequ
 	return callValidatedControlRPC[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalShow, req)
 }
 
-func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
+func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
 }
 
-func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
+func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
 }
 
-func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
+func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
 }
 
-func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
+func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
 }
 
-func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callValidatedControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
+func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return callValidatedControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
 }
 
 func callValidatedControlRPC[Request any, Response interface{ Validate() error }](c *Remote, ctx context.Context, method string, req Request) (Response, error) {

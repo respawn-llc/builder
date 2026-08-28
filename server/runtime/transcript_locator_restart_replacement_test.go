@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -13,7 +14,7 @@ func TestHistoryReplacementLocatorsSurviveReopenAsOneBoundedBatch(t *testing.T) 
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 16)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
@@ -22,7 +23,7 @@ func TestHistoryReplacementLocatorsSurviveReopenAsOneBoundedBatch(t *testing.T) 
 		{Role: llm.RoleUser, Content: textutil.Value("preserved")},
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment")},
 	})
-	if err := engine.steer("compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, nil, items)); err != nil {
+	if err := steerTestActiveStep(engine, "compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, nil, items)); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}
 
@@ -65,7 +66,7 @@ func TestHistoryReplacementLocatorsSurviveReopenAsOneBoundedBatch(t *testing.T) 
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)
 	}
-	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	reopenedFacts := TranscriptCommittedRowFactsFromSnapshot(mustEngineNewestSegmentPage(t, reopened).Snapshot)
 	if len(reopenedFacts) != len(live) {
 		t.Fatalf("reopened facts = %+v, live facts = %+v", reopenedFacts, live)
@@ -92,7 +93,7 @@ func TestHistoryReplacementLocatorsSkipFilteredToolCallEntries(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 16)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
@@ -108,7 +109,7 @@ func TestHistoryReplacementLocatorsSkipFilteredToolCallEntries(t *testing.T) {
 		},
 		{Role: llm.RoleUser, Content: textutil.Value("visible user")},
 	})
-	if err := engine.steer("compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, nil, items)); err != nil {
+	if err := steerTestActiveStep(engine, "compaction", steerHistoryReplacementIntent("local", compactionModeManual, 1, nil, items)); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}
 
@@ -133,12 +134,12 @@ func TestHistoryReplacementLocatorsSkipFilteredToolCallEntries(t *testing.T) {
 }
 
 func TestHistoryReplacementEmissionReturnsMissingOrdinalError(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	err := engine.emitProjectedHistoryReplacementEntriesRaw(
-		"step-1",
+		runtimeTestStepID("step-1"),
 		0,
 		[]ChatEntry{{
-			StepID:     "step-1",
+			StepID:     exactStepIDPointer(runtimeTestStepID("step-1")),
 			Role:       "user",
 			Text:       "private transcript text",
 			Visibility: transcript.EntryVisibilityOngoing,

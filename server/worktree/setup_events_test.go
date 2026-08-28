@@ -2,32 +2,31 @@ package worktree
 
 import (
 	"context"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/worktreecontract"
 	"sync"
 	"testing"
-
-	"core/shared/serverapi"
 )
 
 func TestSetupEventBrokerPublishCloseConcurrent(t *testing.T) {
 	broker := newSetupEventBroker()
-	setupID := serverapi.NewWorktreeSetupOperationID()
+	setupID := worktreecontract.NewSetupOperationID()
 	const subscribers = 64
-	subs := make([]serverapi.WorktreeSetupSubscription, 0, subscribers)
+	subs := make([]SetupSubscription, 0, subscribers)
 	for i := 0; i < subscribers; i++ {
-		sub, err := broker.Subscribe(serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+		sub, err := broker.Subscribe(&worktreepb.SetupSubscribeRequest{SetupOperationId: setupID.String()})
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
 		subs = append(subs, sub)
 	}
-	evt := serverapi.WorktreeSetupEvent{
-		SetupOperationID: setupID,
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
+	evt := &worktreepb.SetupEvent{
+		SetupOperationId: setupID.String(),
+		Phase: &worktreepb.SetupEvent_Started{Started: &worktreepb.SetupStarted{
 			SourceWorkspaceRoot: "/source",
 			WorktreeRoot:        "/worktree",
 			ScriptPath:          "/source/setup.sh",
-		},
+		}},
 	}
 	var wg sync.WaitGroup
 	for _, sub := range subs {
@@ -49,26 +48,25 @@ func TestSetupEventBrokerPublishCloseConcurrent(t *testing.T) {
 
 func TestSetupEventBrokerUsesTypedSetupOperationIDKey(t *testing.T) {
 	broker := newSetupEventBroker()
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := broker.Subscribe(serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+	setupID := worktreecontract.NewSetupOperationID()
+	sub, err := broker.Subscribe(&worktreepb.SetupSubscribeRequest{SetupOperationId: setupID.String()})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer func() { _ = sub.Close() }()
-	broker.Publish(serverapi.WorktreeSetupEvent{
-		SetupOperationID: setupID,
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
+	broker.Publish(&worktreepb.SetupEvent{
+		SetupOperationId: setupID.String(),
+		Phase: &worktreepb.SetupEvent_Started{Started: &worktreepb.SetupStarted{
 			SourceWorkspaceRoot: "/source",
 			WorktreeRoot:        "/worktree",
 			ScriptPath:          "/source/setup.sh",
-		},
+		}},
 	})
 	evt, err := sub.Next(context.Background())
 	if err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if evt.SetupOperationID != setupID {
-		t.Fatalf("setup operation id = %s, want %s", evt.SetupOperationID, setupID)
+	if evt.SetupOperationId != setupID.String() {
+		t.Fatalf("setup operation id = %s, want %s", evt.SetupOperationId, setupID)
 	}
 }

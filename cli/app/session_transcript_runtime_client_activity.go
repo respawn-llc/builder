@@ -157,6 +157,9 @@ func runtimeContextUsageFromTranscript(usage clientui.TranscriptContextUsage) cl
 }
 
 func runtimeGoalFromTranscript(status clientui.TranscriptGoalStatus) *clientui.RuntimeGoal {
+	if status.Goal == nil && status.Availability == nil {
+		return nil
+	}
 	goal := &clientui.RuntimeGoal{Availability: status.Availability}
 	if status.Goal != nil {
 		goal.Goal = status.Goal.Goal

@@ -9,8 +9,9 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/sessioncontract"
+	"core/shared/worktreecontract"
 	"encoding/json"
 	"errors"
 	"os"
@@ -30,7 +31,7 @@ func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.
 	env.processes.snapshots = []shelltool.Snapshot{{ID: "proc-1", Command: "sleep 30", Workdir: filepath.Join(busy.CanonicalRoot, "tmp"), Running: true}}
 
 	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, busy.WorktreeID))
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+	if !errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
 	}
 	snapshots := env.processes.CurrentSnapshots()
@@ -40,7 +41,7 @@ func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.
 	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
 
 	result, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, unrelated.WorktreeID))
-	if err != nil || result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+	if err != nil {
 		t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result, err)
 	}
 }
@@ -330,7 +331,7 @@ func waitForFileLines(t *testing.T, path string) []string {
 	return strings.Split(text, "\n")
 }
 
-func nextSetupTerminalEvent(t *testing.T, sub serverapi.WorktreeSetupSubscription) serverapi.WorktreeSetupEvent {
+func nextSetupTerminalEvent(t *testing.T, sub SetupSubscription) *worktreepb.SetupEvent {
 	t.Helper()
 	deadline, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -339,7 +340,7 @@ func nextSetupTerminalEvent(t *testing.T, sub serverapi.WorktreeSetupSubscriptio
 		if err != nil {
 			t.Fatalf("setup event: %v", err)
 		}
-		if evt.Phase == serverapi.WorktreeSetupPhaseCompleted || evt.Phase == serverapi.WorktreeSetupPhaseFailed {
+		if evt.GetCompleted() != nil || evt.GetFailed() != nil {
 			return evt
 		}
 	}
@@ -381,12 +382,16 @@ type serviceTestWorktree struct {
 
 func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) serviceTestWorktree {
 	t.Helper()
-	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "HEAD",
-		CreateBranch:     true,
-		BranchName:       branchName,
+	setupOperationID := worktreecontract.NewSetupOperationID()
+	baseRef := "HEAD"
+	resp, err := env.service.CreateWorktree(env.ctx, &worktreepb.CreateRequest{
+		SetupOperationId: setupOperationID.String(),
+		SessionId:        env.session.Meta().SessionID,
+		Spec: &worktreepb.CreateSpec{
+			BaseRef:      &baseRef,
+			CreateBranch: true,
+			BranchName:   &branchName,
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree(%s): %v", branchName, err)
@@ -394,14 +399,11 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 	return worktreeViewFromListEntryForTest(resp.Worktree)
 }
 
-func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) serverapi.WorktreeDeleteRequest {
-	return serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) *worktreepb.DeleteRequest {
+	return &worktreepb.DeleteRequest{
+		SessionId:           env.session.Meta().SessionID,
 		Selector:            worktreeID,
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+		BranchCleanupPolicy: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN,
 	}
 }
 
@@ -416,16 +418,16 @@ func updateServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, sessionID
 	}
 }
 
-func mustListWorktrees(t *testing.T, env *serviceTestEnv) serverapi.WorktreeListResponse {
+func mustListWorktrees(t *testing.T, env *serviceTestEnv) *worktreepb.ListSuccess {
 	t.Helper()
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
+	resp, err := env.service.ListWorktrees(env.ctx, &worktreepb.ListRequest{SessionId: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
 	return resp
 }
 
-func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeListEntry, worktreeID string) serviceTestWorktree {
+func findWorktreeByID(t *testing.T, worktrees []*worktreepb.ListEntry, worktreeID string) serviceTestWorktree {
 	t.Helper()
 	for _, entry := range worktrees {
 		if worktreeIDFromListEntry(entry) == worktreeID {
@@ -436,49 +438,47 @@ func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeListEntry, wor
 	return serviceTestWorktree{}
 }
 
-func worktreeIDFromListEntry(entry serverapi.WorktreeListEntry) string {
-	switch entry.Topology.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
-		return entry.Topology.Registered.Kent.WorktreeID
-	case serverapi.WorktreeTopologyVariantMissing:
-		return entry.Topology.Missing.Kent.WorktreeID
-	default:
-		return ""
+func worktreeIDFromListEntry(entry *worktreepb.ListEntry) string {
+	if registered := entry.GetTopology().GetRegistered(); registered != nil {
+		return registered.GetKent().GetWorktreeId()
 	}
+	if missing := entry.GetTopology().GetMissing(); missing != nil {
+		return missing.GetKent().GetWorktreeId()
+	}
+	return ""
 }
 
-func worktreeViewFromListEntryForTest(entry serverapi.WorktreeListEntry) serviceTestWorktree {
-	view := serviceTestWorktree{IsCurrent: entry.Projection.IsCurrent}
-	switch entry.Topology.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
-		git := entry.Topology.Registered.Git
-		kent := entry.Topology.Registered.Kent
-		view.WorktreeID = kent.WorktreeID
-		view.DisplayName = kent.DisplayName
-		view.CanonicalRoot = git.CanonicalRoot
-		view.BranchRef = pointerValue(git.BranchRef)
-		view.BranchName = pointerValue(git.BranchName)
-		view.Detached = git.Detached
-		view.IsMain = git.IsMain
-		view.Managed = kent.Managed
-		view.CreatedBranch = kent.CreatedBranch
-		view.OriginSessionID = pointerValue(kent.OriginSessionID)
-	case serverapi.WorktreeTopologyVariantExternal:
-		git := entry.Topology.External.Git
-		view.CanonicalRoot = git.CanonicalRoot
-		view.DisplayName = filepath.Base(git.CanonicalRoot)
-		view.BranchRef = pointerValue(git.BranchRef)
-		view.BranchName = pointerValue(git.BranchName)
-		view.Detached = git.Detached
-		view.IsMain = git.IsMain
-	case serverapi.WorktreeTopologyVariantMissing:
-		kent := entry.Topology.Missing.Kent
-		view.WorktreeID = kent.WorktreeID
-		view.DisplayName = kent.DisplayName
-		view.CanonicalRoot = kent.CanonicalRoot
-		view.Managed = kent.Managed
-		view.CreatedBranch = kent.CreatedBranch
-		view.OriginSessionID = pointerValue(kent.OriginSessionID)
+func worktreeViewFromListEntryForTest(entry *worktreepb.ListEntry) serviceTestWorktree {
+	view := serviceTestWorktree{IsCurrent: entry.GetProjection().GetIsCurrent()}
+	if registered := entry.GetTopology().GetRegistered(); registered != nil {
+		git := registered.GetGit()
+		kent := registered.GetKent()
+		view.WorktreeID = kent.GetWorktreeId()
+		view.DisplayName = kent.GetDisplayName()
+		view.CanonicalRoot = git.GetCanonicalRoot()
+		view.BranchRef = git.GetBranchRef()
+		view.BranchName = git.GetBranchName()
+		view.Detached = git.GetDetached()
+		view.IsMain = git.GetIsMain()
+		view.Managed = kent.GetManaged()
+		view.CreatedBranch = kent.GetCreatedBranch()
+		view.OriginSessionID = kent.GetOriginSessionId()
+	} else if external := entry.GetTopology().GetExternal(); external != nil {
+		git := external.GetGit()
+		view.CanonicalRoot = git.GetCanonicalRoot()
+		view.DisplayName = filepath.Base(git.GetCanonicalRoot())
+		view.BranchRef = git.GetBranchRef()
+		view.BranchName = git.GetBranchName()
+		view.Detached = git.GetDetached()
+		view.IsMain = git.GetIsMain()
+	} else if missing := entry.GetTopology().GetMissing(); missing != nil {
+		kent := missing.GetKent()
+		view.WorktreeID = kent.GetWorktreeId()
+		view.DisplayName = kent.GetDisplayName()
+		view.CanonicalRoot = kent.GetCanonicalRoot()
+		view.Managed = kent.GetManaged()
+		view.CreatedBranch = kent.GetCreatedBranch()
+		view.OriginSessionID = kent.GetOriginSessionId()
 	}
 	return view
 }

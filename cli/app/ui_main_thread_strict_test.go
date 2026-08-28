@@ -8,8 +8,8 @@ import (
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -78,9 +78,8 @@ func (c *strictRuntimeClient) SubmitRuntimeInput(_ context.Context, request clie
 	c.submitCalls++
 	return clientui.UserTurnSubmission{
 		Queued: clientui.QueuedUserMessage{
-			ID:              c.submitQueuedID,
-			Text:            runtimeSubmitInputText(request),
-			ClientRequestID: request.ClientRequestID.String(),
+			ID:   c.submitQueuedID,
+			Text: runtimeSubmitInputText(request),
 		},
 	}, nil
 }
@@ -170,9 +169,9 @@ type strictWorktreeClient struct {
 	enterCalls int
 }
 
-func (c *strictWorktreeClient) EnterWorktree(_ context.Context, request serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+func (c *strictWorktreeClient) EnterWorktree(_ context.Context, request *worktreepb.EnterRequest) (*worktreepb.ScheduledAcknowledgement, error) {
 	c.enterCalls++
-	return serverapi.WorktreeScheduledAcknowledgement{OperationID: request.OperationID}, nil
+	return &worktreepb.ScheduledAcknowledgement{OperationId: request.OperationId}, nil
 }
 
 func TestTUIStrictIOWorktreeSwitchRunsAsCommand(t *testing.T) {
@@ -207,7 +206,8 @@ func setStrictTestRuntimeBusy(t *testing.T, m *uiModel) {
 		t.Fatalf("parse step id: %v", err)
 	}
 	if err := m.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
+		State:    clientui.RuntimeActivityRunning,
+		Reviewer: clientui.ReviewerActivityInactive,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID: runID, StepID: stepID, ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 		},

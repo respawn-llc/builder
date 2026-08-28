@@ -32,13 +32,14 @@ func (s *testServer) BindProjectWorkspace(_ context.Context, projectID string, w
 }
 
 type testProjectViewClient struct {
-	plan       projectpb.PlanWorkspaceBindingSuccess
-	create     projectpb.CreateProjectSuccess
-	attach     projectpb.AttachWorkspaceSuccess
-	overview   projectpb.GetOverviewSuccess
-	createReq  *projectpb.CreateProjectRequest
-	attachReq  *projectpb.AttachWorkspaceRequest
-	planCalled bool
+	plan          projectpb.PlanWorkspaceBindingSuccess
+	create        projectpb.CreateProjectSuccess
+	attach        projectpb.AttachWorkspaceSuccess
+	overview      projectpb.GetOverviewSuccess
+	createReq     *projectpb.CreateProjectRequest
+	attachReq     *projectpb.AttachWorkspaceRequest
+	planCalled    bool
+	overviewCalls int
 }
 
 func (c *testProjectViewClient) ListProjects(context.Context, *emptypb.Empty) (*projectpb.ProjectListSuccess, error) {
@@ -69,6 +70,7 @@ func (c *testProjectViewClient) RebindWorkspace(context.Context, *projectpb.Rebi
 	return &projectpb.RebindWorkspaceSuccess{}, nil
 }
 func (c *testProjectViewClient) GetProjectOverview(context.Context, *projectpb.GetOverviewRequest) (*projectpb.GetOverviewSuccess, error) {
+	c.overviewCalls++
 	return &c.overview, nil
 }
 func (c *testProjectViewClient) ListSessionPage(context.Context, *projectpb.SessionPageRequest) (*projectpb.SessionPageSuccess, error) {
@@ -115,8 +117,8 @@ func TestEnsureInteractiveCreatesProjectForLocalUnboundPath(t *testing.T) {
 
 	_, err := EnsureInteractive[*testServer](context.Background(), Request[*testServer]{
 		Server: server,
-		PickLocalProject: func([]clientui.ProjectSummary, string) (ProjectPickerResult, error) {
-			return ProjectPickerResult{CreateNew: true}, nil
+		PickLocalProject: func(context.Context, []clientui.ProjectSummary, string, ProjectPickerSnapshot) (ProjectPickerResult, error) {
+			return ProjectPickerCreateNew{}, nil
 		},
 		PromptProjectName: func(defaultName string, theme string) (string, error) {
 			if defaultName != "workspace" {
@@ -144,12 +146,80 @@ func TestEnsureInteractivePropagatesCanceledPicker(t *testing.T) {
 
 	_, err := EnsureInteractive[*testServer](context.Background(), Request[*testServer]{
 		Server: server,
-		PickLocalProject: func([]clientui.ProjectSummary, string) (ProjectPickerResult, error) {
-			return ProjectPickerResult{Canceled: true}, nil
+		PickLocalProject: func(context.Context, []clientui.ProjectSummary, string, ProjectPickerSnapshot) (ProjectPickerResult, error) {
+			return ProjectPickerExit{}, nil
 		},
 	})
 	if err == nil || !errors.Is(err, ErrStartupCanceledByUser) {
 		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
+func TestSelectWorkspaceForStartupUsesCatalogLoader(t *testing.T) {
+	projectClient := &testProjectViewClient{}
+	server := &testServer{client: projectClient}
+	seen := false
+	result, err := SelectWorkspaceForStartup(context.Background(), WorkspaceSelectionRequest{
+		Server:    server,
+		ProjectID: "project-1",
+		PickWorkspace: func(ctx context.Context, loader WorkspacePageLoader, projectID string, theme string) (WorkspacePickerResult, error) {
+			seen = ctx != nil && loader != nil && projectID == "project-1" && theme == "dark"
+			return WorkspacePickerSelected{Workspace: &projectpb.ProjectWorkspaceCatalogSummary{
+				WorkspaceId: "workspace-1", RootPath: "/workspace-1",
+			}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("select workspace: %v", err)
+	}
+	if !seen || projectClient.overviewCalls != 0 {
+		t.Fatalf("catalog selection used stale overview path: loader=%t overview_calls=%d", seen, projectClient.overviewCalls)
+	}
+	if selected, ok := result.(WorkspacePickerSelected); !ok || selected.Workspace.WorkspaceId != "workspace-1" {
+		t.Fatalf("selection result = %#v", result)
+	}
+}
+
+func TestEnsureServerBrowsingBindingRestoresProjectPickerSnapshotAfterWorkspaceBack(t *testing.T) {
+	projectClient := &testProjectViewClient{}
+	server := &testServer{client: projectClient}
+	pickerCalls := 0
+	var restored ProjectPickerSnapshot
+	workspaceCalls := 0
+	bound, err := ensureServerBrowsingBinding[*testServer](context.Background(), Request[*testServer]{
+		Server: server,
+		PickServerProject: func(_ context.Context, _ []clientui.ProjectSummary, _ string, snapshot ProjectPickerSnapshot) (ProjectPickerResult, error) {
+			pickerCalls++
+			if pickerCalls == 1 {
+				return ProjectPickerSelected{
+					Project:  clientui.ProjectSummary{ProjectID: "project-1"},
+					Snapshot: ProjectPickerSnapshot{Cursor: 7, Offset: 3},
+				}, nil
+			}
+			restored = snapshot
+			return ProjectPickerSelected{
+				Project:  clientui.ProjectSummary{ProjectID: "project-1"},
+				Snapshot: snapshot,
+			}, nil
+		},
+		PickWorkspace: func(context.Context, WorkspacePageLoader, string, string) (WorkspacePickerResult, error) {
+			workspaceCalls++
+			if workspaceCalls == 1 {
+				return WorkspacePickerBack{}, nil
+			}
+			return WorkspacePickerSelected{Workspace: &projectpb.ProjectWorkspaceCatalogSummary{
+				WorkspaceId: "workspace-1", RootPath: "/workspace-1",
+			}}, nil
+		},
+	}, []clientui.ProjectSummary{{ProjectID: "project-1"}})
+	if err != nil || bound != server {
+		t.Fatalf("binding after workspace back = %v/%v", bound, err)
+	}
+	if restored != (ProjectPickerSnapshot{Cursor: 7, Offset: 3}) {
+		t.Fatalf("restored project picker snapshot = %+v", restored)
+	}
+	if len(server.bindCalls) != 1 || server.bindCalls[0].WorkspaceID != "workspace-1" {
+		t.Fatalf("bind calls = %+v", server.bindCalls)
 	}
 }
 

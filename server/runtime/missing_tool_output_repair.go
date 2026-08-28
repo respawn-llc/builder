@@ -91,7 +91,16 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 		return 0, nil
 	}
 	repair := &steeringMissingToolOutputRepair{repairStepID: textutil.Pointer(repairStepID), disposition: disposition}
-	err := e.steer("", steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{missingToolOutputRepair: repair}}})
+	intent := steeringIntent{
+		priority: steeringPriorityNormal,
+		items:    []steeringItem{{missingToolOutputRepair: repair}},
+	}
+	var err error
+	if stepID, present := textutil.OptionalExact(repairStepID); present {
+		err = e.steer(stepID, intent)
+	} else {
+		err = e.steerOrdered(sessionSteeringProvenance(), intent)
+	}
 	return repair.repaired, err
 }
 
@@ -202,7 +211,7 @@ func (e *Engine) repairMissingToolOutputsByAppendingRaw(
 		projectionErr = errors.Join(
 			projectionErr,
 			e.publishCommittedFinalizedToolCompletion(
-				*dangling[index].stepID,
+				dangling[index].stepID,
 				feedbackStepID,
 				completion.completion,
 				&applied.completionProvenance,

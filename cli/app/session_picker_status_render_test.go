@@ -28,9 +28,21 @@ func newSessionPickerFailureProjection() *sessionPickerFailureProjection {
 
 func (p *sessionPickerFailureProjection) Record(failure sessionPickerStatusFailure) {
 	p.status.Record(startupPickerStatusFailure{
-		Tab: failure.Tab, Operation: failure.Operation, Generation: failure.Generation,
+		Operation: startupPickerSessionOperation{tab: failure.Tab, kind: failure.Operation}, Generation: failure.Generation,
 		Kind: failure.Kind, Diagnostic: failure.Diagnostic,
 	})
+}
+
+func sessionFailureOperation(failure *startupPickerStatusFailure) *sessionPickerOperationKind {
+	if failure == nil {
+		return nil
+	}
+	operation, ok := failure.Operation.(startupPickerSessionOperation)
+	if !ok {
+		return nil
+	}
+	kind := operation.kind
+	return &kind
 }
 
 func (p *sessionPickerFailureProjection) Clear(tab sessioncontract.SessionCategory, operation sessionPickerOperationKind, generation uint64) {
@@ -60,12 +72,14 @@ func TestSessionPickerFailureProjectionKeepsOverlappingSourcesKeyed(t *testing.T
 		Kind:       sessionPickerFailurePageRequest,
 		Diagnostic: errors.New("directional failed"),
 	})
-	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationDirectionalPage {
-		t.Fatalf("newest failure = %q, want directional page", got.Operation)
+	got := failures.Status(sessioncontract.SessionCategoryMain)
+	if kind := sessionFailureOperation(got); kind == nil || *kind != sessionPickerOperationDirectionalPage {
+		t.Fatalf("newest failure = %+v, want directional page", got)
 	}
 	failures.Clear(sessioncontract.SessionCategoryMain, sessionPickerOperationDirectionalPage, 5)
-	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationBodyPage {
-		t.Fatalf("after directional recovery = %q, want body page", got.Operation)
+	got = failures.Status(sessioncontract.SessionCategoryMain)
+	if kind := sessionFailureOperation(got); kind == nil || *kind != sessionPickerOperationBodyPage {
+		t.Fatalf("after directional recovery = %+v, want body page", got)
 	}
 	failures.Clear(sessioncontract.SessionCategoryMain, sessionPickerOperationBodyPage, 4)
 	if got := failures.Status(sessioncontract.SessionCategoryMain); got != nil {
@@ -92,11 +106,13 @@ func TestSessionPickerFailureProjectionPrefersActiveTabThenInactiveRecency(t *te
 		Diagnostic: errors.New("subagent"),
 	})
 
-	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationBodyPage {
-		t.Fatalf("active tab failure = %q, want body page", got.Operation)
+	got := failures.Status(sessioncontract.SessionCategoryMain)
+	if kind := sessionFailureOperation(got); kind == nil || *kind != sessionPickerOperationBodyPage {
+		t.Fatalf("active tab failure = %+v, want body page", got)
 	}
-	if got := failures.Status(sessioncontract.SessionCategorySubagent); got == nil || got.Operation != sessionPickerOperationDirectionalPage {
-		t.Fatalf("switched tab failure = %q, want directional page", got.Operation)
+	got = failures.Status(sessioncontract.SessionCategorySubagent)
+	if kind := sessionFailureOperation(got); kind == nil || *kind != sessionPickerOperationDirectionalPage {
+		t.Fatalf("switched tab failure = %+v, want directional page", got)
 	}
 }
 
@@ -111,8 +127,7 @@ func TestSessionPickerFailureRenderProjectionExcludesDiagnostics(t *testing.T) {
 			diagnostic := errors.New("opaque internal diagnostic /tmp/private read tcp 127.0.0.1:1")
 			status := newStartupPickerStatusModel()
 			status.Record(startupPickerStatusFailure{
-				Tab:        sessioncontract.SessionCategoryMain,
-				Operation:  sessionPickerOperationBodyPage,
+				Operation:  startupPickerSessionOperation{tab: sessioncontract.SessionCategoryMain, kind: sessionPickerOperationBodyPage},
 				Generation: 1,
 				Kind:       kind,
 				Diagnostic: diagnostic,

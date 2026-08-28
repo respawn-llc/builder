@@ -20,7 +20,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
-	"core/shared/runtimeids"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 )
@@ -37,7 +37,7 @@ func prepareManagedTaskExecutionRoot(
 	ctx context.Context,
 	service *Service,
 	taskID workflow.TaskID,
-	setupOperationID *serverapi.WorktreeSetupOperationID,
+	setupOperationID *worktreecontract.SetupOperationID,
 	resolvedTarget GitRevision,
 ) (TaskWorktreeMaterialization, error) {
 	prepared, err := service.PrepareTaskExecutionRoot(ctx, TaskExecutionRootPreparationRequest{
@@ -52,24 +52,21 @@ func prepareManagedTaskExecutionRoot(
 	return *prepared.Materialization, err
 }
 
-func newWorktreeSetupOperationIDPointer() *serverapi.WorktreeSetupOperationID {
-	value := serverapi.NewWorktreeSetupOperationID()
+func newWorktreeSetupOperationIDPointer() *worktreecontract.SetupOperationID {
+	value := worktreecontract.NewSetupOperationID()
 	return &value
 }
 
-func taskWorktreeID(entry serverapi.WorktreeTopologyEntry) string {
-	return entry.Registered.Kent.WorktreeID
+func taskWorktreeID(entry *worktreepb.TopologyEntry) string {
+	return entry.GetRegistered().GetKent().GetWorktreeId()
 }
 
-func taskWorktreeRoot(entry serverapi.WorktreeTopologyEntry) string {
-	return entry.Registered.Git.CanonicalRoot
+func taskWorktreeRoot(entry *worktreepb.TopologyEntry) string {
+	return entry.GetRegistered().GetGit().GetCanonicalRoot()
 }
 
-func taskWorktreeBranch(entry serverapi.WorktreeTopologyEntry) string {
-	if entry.Registered.Git.BranchName == nil {
-		return ""
-	}
-	return *entry.Registered.Git.BranchName
+func taskWorktreeBranch(entry *worktreepb.TopologyEntry) string {
+	return entry.GetRegistered().GetGit().GetBranchName()
 }
 
 func createExistingOutsideManagedWorktree(t *testing.T, env *serviceTestEnv, branch string) (string, GitRevision, string) {
@@ -326,10 +323,10 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutErasingBranchAuthorit
 	if restored.Created ||
 		taskWorktreeID(restored.Worktree) != worktreeID ||
 		taskWorktreeRoot(restored.Worktree) != worktreeRoot ||
-		restored.Worktree.Registered == nil ||
-		!restored.Worktree.Registered.Git.Detached ||
-		restored.Worktree.Registered.Git.BranchRef != nil ||
-		restored.Worktree.Registered.Git.BranchName != nil {
+		restored.Worktree.GetRegistered() == nil ||
+		!restored.Worktree.GetRegistered().GetGit().GetDetached() ||
+		restored.Worktree.GetRegistered().GetGit().BranchRef != nil ||
+		restored.Worktree.GetRegistered().GetGit().BranchName != nil {
 		t.Fatalf("restored worktree = %+v, want detached reuse of %q", restored, worktreeID)
 	}
 	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
@@ -374,8 +371,8 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutErasingBranchAuthorit
 	if repeated.Created ||
 		taskWorktreeID(repeated.Worktree) != worktreeID ||
 		taskWorktreeRoot(repeated.Worktree) != worktreeRoot ||
-		repeated.Worktree.Registered == nil ||
-		!repeated.Worktree.Registered.Git.Detached {
+		repeated.Worktree.GetRegistered() == nil ||
+		!repeated.Worktree.GetRegistered().GetGit().GetDetached() {
 		t.Fatalf("repeated restored worktree = %+v, want detached reuse of %q", repeated, worktreeID)
 	}
 	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
@@ -413,8 +410,8 @@ func TestPrepareTaskExecutionRootNoneTargetRetainsModifiedRoot(t *testing.T) {
 		t.Fatalf("replacement root = %+v, want source workspace", replacement.Root)
 	}
 	if replacement.RetainedPreviousWorktree == nil ||
-		replacement.RetainedPreviousWorktree.Worktree.Registered == nil ||
-		replacement.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID != first.Root.Managed.WorktreeID {
+		replacement.RetainedPreviousWorktree.GetWorktree() == nil ||
+		replacement.RetainedPreviousWorktree.GetWorktree().GetKent().GetWorktreeId() != first.Root.Managed.WorktreeID {
 		t.Fatalf("retained previous worktree = %+v, want %q", replacement.RetainedPreviousWorktree, first.Root.Managed.WorktreeID)
 	}
 	if got := waitForFileText(t, changedPath); got != "keep me" {
@@ -840,7 +837,7 @@ func TestMaterializeInitialTaskWorktreeCreatesShortIDBranchWithoutControllerLeas
 	if !resp.Created || !resp.CreatedBranch {
 		t.Fatalf("created flags = created:%t branch:%t, want true/true", resp.Created, resp.CreatedBranch)
 	}
-	if !resp.Worktree.Registered.Kent.Managed || !resp.Worktree.Registered.Kent.CreatedBranch {
+	if !resp.Worktree.GetRegistered().GetKent().GetManaged() || !resp.Worktree.GetRegistered().GetKent().GetCreatedBranch() {
 		t.Fatalf("worktree provenance = %+v, want managed created branch", resp.Worktree)
 	}
 	if taskWorktreeBranch(resp.Worktree) != task.ShortID {
@@ -1187,8 +1184,8 @@ func TestMaterializeInitialTaskWorktreeRunsSetupAndPublishesProgressBeforeReturn
 	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf started > %q\ncat > %q\nwhile [ ! -f %q ]; do sleep 0.02; done\nprintf marker > %q\n", startedPath, payloadPath, releasePath, markerPath))
 	env.service.setupScript = scriptRelpath
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+	setupID := worktreecontract.NewSetupOperationID()
+	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, &worktreepb.SetupSubscribeRequest{SetupOperationId: setupID.String()})
 	if err != nil {
 		t.Fatalf("SubscribeWorktreeSetup: %v", err)
 	}
@@ -1214,8 +1211,8 @@ func TestMaterializeInitialTaskWorktreeRunsSetupAndPublishesProgressBeforeReturn
 	if err != nil {
 		t.Fatalf("setup event: %v", err)
 	}
-	if evt.Phase != serverapi.WorktreeSetupPhaseStarted || evt.SetupOperationID != setupID ||
-		evt.Started == nil || evt.Started.ScriptPath == "" || evt.Started.WorktreeRoot == "" {
+	if evt.GetStarted() == nil || evt.GetSetupOperationId() != setupID.String() ||
+		evt.GetStarted().GetScriptPath() == "" || evt.GetStarted().GetWorktreeRoot() == "" {
 		t.Fatalf("started setup event = %+v", evt)
 	}
 	select {
@@ -1291,12 +1288,17 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 	capture := testsetup.New(t, testsetup.Options{})
 	env.service.setupScript = capture.Executable()
 
-	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "HEAD",
-		CreateBranch:     true,
-		BranchName:       "feature/session-contract",
+	setupOperationID := worktreecontract.NewSetupOperationID()
+	baseRef := "HEAD"
+	branchName := "feature/session-contract"
+	resp, err := env.service.CreateWorktree(env.ctx, &worktreepb.CreateRequest{
+		SetupOperationId: setupOperationID.String(),
+		SessionId:        env.session.Meta().SessionID,
+		Spec: &worktreepb.CreateSpec{
+			BaseRef:      &baseRef,
+			CreateBranch: true,
+			BranchName:   &branchName,
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
@@ -1400,24 +1402,24 @@ func TestPrepareTaskExecutionRootFinalSetupFailureRetainsCurrentRootAndBinding(t
 	env.service.setupScript = scriptRelpath
 
 	materialized, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
-	var retained *serverapi.WorktreeSetupRetainedError
-	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
+	var retained *worktreecontract.SetupRetainedError
+	if !errors.As(err, &retained) || retained.Details.GetWorktree() == nil {
 		t.Fatalf("PrepareTaskExecutionRoot error = %T %v, want retained setup failure", err, err)
 	}
 	if got := waitForFileText(t, countPath); got != "2" {
 		t.Fatalf("setup attempt count = %q, want 2", got)
 	}
 	if materialized.SetupResult == nil || materialized.SetupResult.Failed == nil ||
-		materialized.SetupResult.Failed.Cause.ProcessExit == nil ||
-		materialized.SetupResult.Failed.Cause.ProcessExit.ExitCode != 7 {
+		materialized.SetupResult.Failed.GetCause().GetProcessExit() == nil ||
+		materialized.SetupResult.Failed.GetCause().GetProcessExit().GetExitCode() != 7 {
 		t.Fatalf("setup result = %+v, want final process exit 7", materialized.SetupResult)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != retained.Worktree.Registered.Kent.WorktreeID {
-		t.Fatalf("retained task binding = %+v, want %q", row.ManagedWorktreeID, retained.Worktree.Registered.Kent.WorktreeID)
+	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != retained.Details.GetWorktree().GetKent().GetWorktreeId() {
+		t.Fatalf("retained task binding = %+v, want %q", row.ManagedWorktreeID, retained.Details.GetWorktree().GetKent().GetWorktreeId())
 	}
 	if row.ExecutionTargetMode.Valid {
 		t.Fatalf("failed setup locked execution target = %+v, want task remain unlocked", row.ExecutionTargetMode)
@@ -1545,13 +1547,10 @@ func TestDeleteWorktreeRecreatesNonTerminalTaskManagedWorktreeOnRestore(t *testi
 	env := newServiceTestEnv(t)
 	task, created, _ := materializeAndLockTaskWorktree(t, env)
 
-	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+	_, err := env.service.DeleteWorktree(env.ctx, &worktreepb.DeleteRequest{
+		SessionId:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+		BranchCleanupPolicy: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
@@ -1609,13 +1608,10 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
 
-	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-		},
+	_, err = env.service.DeleteWorktree(env.ctx, &worktreepb.DeleteRequest{
+		SessionId:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+		BranchCleanupPolicy: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree terminal task worktree: %v", err)
@@ -1655,43 +1651,6 @@ func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	}
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want cleared after worktree record delete", row.ManagedWorktreeID)
-	}
-}
-
-func TestDeleteTaskWorktreeRollsBackSessionTargetWhenRemovalFails(t *testing.T) {
-	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
-		TaskID:         task.ID,
-		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
-	})
-	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
-	}
-	worktreeID := taskWorktreeID(created.Worktree)
-	worktreeRoot := taskWorktreeRoot(created.Worktree)
-	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, worktreeID, ".")
-	targetBefore := mustResolveServiceTestTarget(t, env)
-	runGit(t, env.workspaceRoot, "worktree", "lock", worktreeRoot)
-	t.Cleanup(func() {
-		if _, err := os.Stat(worktreeRoot); err == nil {
-			runGit(t, env.workspaceRoot, "worktree", "unlock", worktreeRoot)
-		}
-	})
-
-	if _, err := env.service.DeleteTaskWorktree(env.ctx, DeleteTaskWorktreeRequest{TaskID: string(task.ID)}); err == nil {
-		t.Fatal("DeleteTaskWorktree succeeded for locked worktree")
-	}
-	targetAfter := mustResolveServiceTestTarget(t, env)
-	if sessionTargetWorktreeID(targetAfter) != sessionTargetWorktreeID(targetBefore) ||
-		targetAfter.EffectiveWorkdir != targetBefore.EffectiveWorkdir {
-		t.Fatalf("session target changed after failed task worktree removal: before=%+v after=%+v", targetBefore, targetAfter)
-	}
-	if _, err := os.Stat(worktreeRoot); err != nil {
-		t.Fatalf("locked task worktree root changed after failed removal: %v", err)
-	}
-	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); err != nil {
-		t.Fatalf("task worktree record changed after failed removal: %v", err)
 	}
 }
 
@@ -1807,9 +1766,9 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	agentID := workflow.NodeID(runtimeids.NewGraphEntityID())
-	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
-	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	agentID := workflow.NodeID("node-agent-" + created.ID.String())
+	startGroupID := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	doneGroupID := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	workflowfixture.SaveStoreGraph(t, env.ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := taskWorktreeNodeIDByKind(t, definition, workflow.NodeKindStart)
 		doneID := taskWorktreeNodeIDByKind(t, definition, workflow.NodeKindTerminal)
@@ -1822,8 +1781,8 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 			workflowstore.TransitionGroupRecord{ID: doneGroupID, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		request.Edges = append(request.Edges,
-			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	if _, err := store.LinkWorkflow(env.ctx, env.binding.ProjectID, created.ID, true); err != nil {

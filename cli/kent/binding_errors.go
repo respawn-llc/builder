@@ -146,6 +146,8 @@ func formatSessionRetargetCommandError(targetPath string, err error) error {
 		return fmt.Errorf("session %s is workflow-owned and cannot move across projects: %w", retargetErr.SessionID, err)
 	case serverapi.SessionRetargetBackgroundProcess:
 		return fmt.Errorf("session %s has an active background process; stop it before rebinding: %w", retargetErr.SessionID, err)
+	case serverapi.SessionRetargetRuntimeActive:
+		return fmt.Errorf("session %s is active; wait for its current work to finish before moving it across projects: %w", retargetErr.SessionID, err)
 	default:
 		return err
 	}

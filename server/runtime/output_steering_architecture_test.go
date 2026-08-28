@@ -8,6 +8,8 @@ import (
 
 func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	prepareSimpleResultGroupCall(t, engine, "step", "first")
 	prepareSimpleResultGroupCall(t, engine, "step", "second")
 	mode := session.CompactionModeWorkflowPostCompletion
@@ -16,9 +18,7 @@ func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t
 	}
 	collector := testResultGroupCollector(t, "first", "second")
 	var secondOutcome *resultGroupReportOutcome
-	if err := engine.steer(
-		"step",
-		steerResultGroupReportIntent(collector, "second", testResultGroupUnit("second"), &secondOutcome),
+	if err := engine.steer(runtimeTestStepID("step"), steerResultGroupReportIntent(collector, "second", testResultGroupUnit("second"), &secondOutcome),
 		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
 	); err != nil {
 		t.Fatalf("flush blocked later result: %v", err)
@@ -27,9 +27,7 @@ func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t
 		t.Fatal("non-committing Result Group flush consumed the boundary")
 	}
 	var firstOutcome *resultGroupReportOutcome
-	if err := engine.steer(
-		"step",
-		steerResultGroupReportIntent(collector, "first", testResultGroupUnit("first"), &firstOutcome),
+	if err := engine.steer(runtimeTestStepID("step"), steerResultGroupReportIntent(collector, "first", testResultGroupUnit("first"), &firstOutcome),
 		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
 	); err != nil {
 		t.Fatalf("flush committed Result Group: %v", err)
@@ -41,11 +39,13 @@ func TestResultGroupFlushConsumesWorkflowPostCompletionBoundaryOnlyAfterCommit(t
 
 func TestMissingToolOutputRepairConsumesWorkflowPostCompletionBoundaryOnlyAfterRepair(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	mode := session.CompactionModeWorkflowPostCompletion
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set workflow post-completion boundary: %v", err)
 	}
-	stepID := "step"
+	stepID := runtimeTestStepID("missing-output-workflow-boundary")
 	if repaired, err := engine.repairMissingToolOutputsByAppending(&stepID, missingToolOutputRepairFreshResource); err != nil || repaired != 0 {
 		t.Fatalf("no-op missing-output repair = count:%d error:%v", repaired, err)
 	}

@@ -1,6 +1,6 @@
 import type { ConnectionStore } from "./connectionStore";
 import type { JsonValue } from "./json";
-import type { DescMethod, MessageShape } from "@app/server-api-contract";
+import type { DescMessage, DescMethod, MessageShape } from "@app/server-api-contract";
 
 export type RpcEventHandler = Readonly<{
   onOpen?(): void;
@@ -11,6 +11,26 @@ export type RpcEventHandler = Readonly<{
 
 export type RpcSubscription = Readonly<{
   close(): void;
+}>;
+
+export type DescriptorSubscriptionHandler<Event, Completion> = Readonly<{
+  onOpen?(): void;
+  onEvent(event: Event): void;
+  onComplete(completion: Completion): void;
+  onError(error: Error): void;
+}>;
+
+export type DescriptorSubscriptionInput<
+  Method extends DescMethod,
+  EventDescriptor extends DescMessage,
+  CompletionDescriptor extends DescMessage,
+> = Readonly<{
+  method: Method;
+  request: MessageShape<Method["input"]>;
+  eventDescriptor: EventDescriptor;
+  completionDescriptor: CompletionDescriptor;
+  onStart(result: MessageShape<Method["output"]>): void;
+  handler: DescriptorSubscriptionHandler<MessageShape<EventDescriptor>, MessageShape<CompletionDescriptor>>;
 }>;
 
 export type RpcCallOptions = Readonly<{
@@ -42,4 +62,11 @@ export type DescriptorRpcTransport = RpcTransport &
       request: MessageShape<Method["input"]>,
       options?: RpcCallOptions,
     ): Promise<MessageShape<Method["output"]>>;
+    subscribeDescriptor<
+      Method extends DescMethod,
+      EventDescriptor extends DescMessage,
+      CompletionDescriptor extends DescMessage,
+    >(
+      input: DescriptorSubscriptionInput<Method, EventDescriptor, CompletionDescriptor>,
+    ): RpcSubscription;
   }>;

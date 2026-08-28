@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -17,7 +18,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 	t.Run("completed final answer", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		events := &liveRunEventCollector{}
-		eng := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{finalTextResponse("done")}}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{finalTextResponse("done")}}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: events.accept,
 		})
@@ -38,7 +39,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		withGenerateRetryDelays(t, nil)
 		failure := errors.New("provider failed")
 		events := &liveRunEventCollector{}
-		eng := mustNewTestEngine(t, store, &fakeClient{errors: []error{failure}}, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{errors: []error{failure}}, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: events.accept,
 		})
@@ -63,7 +64,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 				Content: textutil.Value(""),
 			},
 			Usage: llm.Usage{WindowTokens: 200_000},
-		}}}, newTestToolRegistry(t), Config{
+		}}}, tools.NewRegistry(), Config{
 			Model:        "gpt-5",
 			OnEvent:      events.accept,
 			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -94,12 +95,12 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 				Content: textutil.Value(""),
 			},
 			Usage: llm.Usage{WindowTokens: 200_000},
-		}}}, newTestToolRegistry(t), Config{
+		}}}, tools.NewRegistry(), Config{
 			Model:        "gpt-5",
 			OnEvent:      events.accept,
 			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 		})
-		if _, err := eng.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+		if _, err := eng.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser); err != nil {
 			t.Fatalf("SetGoal: %v", err)
 		}
 
@@ -119,7 +120,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		started := make(chan struct{})
 		client := &interruptibleLiveRunClient{started: started}
 		events := &liveRunEventCollector{}
-		eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 			Model:   "gpt-5",
 			OnEvent: events.accept,
 		})
@@ -160,18 +161,17 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		}
 	})
 
-	t.Run("terminal callback does not hold waiters or queued successor scheduling", func(t *testing.T) {
+	t.Run("terminal callback does not hold waiters", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		client := &fakeClient{responses: []llm.Response{
 			finalTextResponse("first"),
-			finalTextResponse("second"),
 		}}
 		stepLifecycle := newBlockingStepLifecycleSink()
 		callbackStarted := make(chan struct{})
 		releaseCallback := make(chan struct{})
 		var terminalCallbacks int
 		var callbackMu sync.Mutex
-		eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 			Model:         "gpt-5",
 			StepLifecycle: stepLifecycle,
 			OnEvent: func(event Event) {
@@ -194,29 +194,34 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 			_, err := eng.SubmitUserMessage(context.Background(), "first")
 			firstDone <- err
 		}()
+		waitActiveLiveRunGroup(t, eng, true)
+		waitHandle, err := eng.CaptureActiveRunResult(context.Background())
+		if err != nil {
+			t.Fatalf("capture active live-run waiter: %v", err)
+		}
 		select {
 		case <-stepLifecycle.endedStarted:
 		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatal("timed out waiting for step terminal publication")
 		}
-		eng.QueueUserMessage("queued successor")
+		waitDone := make(chan error, 1)
+		go func() {
+			_, err := waitHandle.Wait()
+			waitDone <- err
+		}()
 		close(stepLifecycle.releaseEnded)
 		select {
 		case <-callbackStarted:
 		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatal("timed out waiting for terminal callback")
 		}
-
-		deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
-		for {
-			calls := fakeClientCallCount(client)
-			if calls >= 2 || !time.Now().Before(deadline) {
-				if calls < 2 {
-					t.Fatal("queued successor scheduling waited for prior terminal callback")
-				}
-				break
+		select {
+		case err := <-waitDone:
+			if err != nil {
+				t.Fatalf("live-run waiter: %v", err)
 			}
-			time.Sleep(10 * time.Millisecond)
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("live-run waiter remained blocked by terminal callback")
 		}
 		close(releaseCallback)
 		if err := <-firstDone; err != nil {
@@ -266,7 +271,7 @@ type interruptibleLiveRunClient struct {
 	started chan<- struct{}
 }
 
-func (c *interruptibleLiveRunClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+func (c *interruptibleLiveRunClient) Generate(ctx context.Context, _ llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	close(c.started)
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()

@@ -30,12 +30,12 @@ func TestClientStreamsDeltasFinalResponseAndReasoning(t *testing.T) {
 
 	var assistant []llm.AssistantDelta
 	var reasoning []llm.ReasoningSummaryDelta
-	resp, err := client.GenerateStreamWithEvents(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{
+	resp, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{
 		OnAssistantDelta:        func(delta llm.AssistantDelta) { assistant = append(assistant, delta) },
 		OnReasoningSummaryDelta: func(delta llm.ReasoningSummaryDelta) { reasoning = append(reasoning, delta) },
 	})
 	if err != nil {
-		t.Fatalf("GenerateStreamWithEvents: %v", err)
+		t.Fatalf("Generate: %v", err)
 	}
 	if resp.Assistant.Content == nil || *resp.Assistant.Content != "hello" {
 		t.Fatalf("final assistant = %#v, want %q", resp.Assistant.Content, "hello")
@@ -53,7 +53,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Steps: []scriptedllm.Step{scriptedllm.ToolBatch("tools", llm.ToolCall{ID: "call_1", Name: "exec_command", Input: input})},
 	})
-	resp, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"})
+	resp, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("Generate tool call: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 			Response:            scriptedllm.FinalAnswer("done").Response,
 		}},
 	})
-	if _, err := validator.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, scriptedllm.ErrUnexpectedToolResult) {
+	if _, err := validator.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{}); !errors.Is(err, scriptedllm.ErrUnexpectedToolResult) {
 		t.Fatalf("missing tool result error = %v, want ErrUnexpectedToolResult", err)
 	}
 	successValidator := scriptedllm.NewClient(scriptedllm.Script{
@@ -79,7 +79,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 	_, err = successValidator.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model: "m",
 		Items: []llm.ResponseItem{{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call_1"), Name: textutil.Value("exec_command")}},
-	})
+	}, llm.StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("Generate with expected tool result: %v", err)
 	}
@@ -87,14 +87,12 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 
 func TestClientCompactionCapabilitiesAndContextWindow(t *testing.T) {
 	window := 128000
-	trimmed := 3
 	caps := llm.ProviderCapabilities{ProviderID: "scripted"}
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Capabilities:        &caps,
 		ContextWindowTokens: &window,
 		Compactions: []llm.CompactionResponse{{
-			OutputItems:       []llm.ResponseItem{{Type: llm.ResponseItemTypeCompaction, Content: textutil.Value("summary")}},
-			TrimmedItemsCount: &trimmed,
+			Checkpoint: llm.ResponseItem{Type: llm.ResponseItemTypeCompaction, EncryptedContent: textutil.Value("encrypted")},
 		}},
 	})
 
@@ -107,34 +105,8 @@ func TestClientCompactionCapabilitiesAndContextWindow(t *testing.T) {
 		t.Fatalf("ResolveModelContextWindow = %d, %v", resolved, err)
 	}
 	compaction, err := client.Compact(context.Background(), llm.CompactionRequest{Model: "m"})
-	if err != nil || compaction.TrimmedItemsCount == nil || *compaction.TrimmedItemsCount != 3 {
+	if err != nil || compaction.Checkpoint.Type != llm.ResponseItemTypeCompaction {
 		t.Fatalf("Compact = %+v, %v", compaction, err)
-	}
-}
-
-func TestClientCompactionPreservesReportedZeroAndUnavailableCount(t *testing.T) {
-	zero := 0
-	client := scriptedllm.NewClient(scriptedllm.Script{
-		Compactions: []llm.CompactionResponse{
-			{TrimmedItemsCount: &zero},
-			{TrimmedItemsCount: nil},
-		},
-	})
-
-	reported, err := client.Compact(context.Background(), llm.CompactionRequest{Model: "m"})
-	if err != nil {
-		t.Fatalf("Compact reported zero: %v", err)
-	}
-	if reported.TrimmedItemsCount == nil || *reported.TrimmedItemsCount != 0 {
-		t.Fatalf("reported trimmed count = %#v, want explicit zero", reported.TrimmedItemsCount)
-	}
-
-	unavailable, err := client.Compact(context.Background(), llm.CompactionRequest{Model: "m"})
-	if err != nil {
-		t.Fatalf("Compact unavailable: %v", err)
-	}
-	if unavailable.TrimmedItemsCount != nil {
-		t.Fatalf("unavailable trimmed count = %#v, want nil", unavailable.TrimmedItemsCount)
 	}
 }
 
@@ -142,10 +114,10 @@ func TestClientExhaustedCancellationAndConcurrentCallErrors(t *testing.T) {
 	client := scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{scriptedllm.Cancellation()}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := client.Generate(ctx, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, ctx.Err()) {
+	if _, err := client.Generate(ctx, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{}); !errors.Is(err, ctx.Err()) {
 		t.Fatalf("cancellation error = %v, want %v", err, ctx.Err())
 	}
-	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, scriptedllm.ErrScriptExhausted) {
+	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{}); !errors.Is(err, scriptedllm.ErrScriptExhausted) {
 		t.Fatalf("exhausted error = %v, want ErrScriptExhausted", err)
 	}
 
@@ -158,12 +130,12 @@ func TestClientExhaustedCancellationAndConcurrentCallErrors(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, _ = concurrent.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"})
+		_, _ = concurrent.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{})
 	}()
 	if err := concurrent.WaitUntilActive(context.Background()); err != nil {
 		t.Fatalf("WaitUntilActive: %v", err)
 	}
-	if _, err := concurrent.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, scriptedllm.ErrConcurrentCall) {
+	if _, err := concurrent.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{}); !errors.Is(err, scriptedllm.ErrConcurrentCall) {
 		t.Fatalf("concurrent call error = %v, want ErrConcurrentCall", err)
 	}
 	close(block)
@@ -178,9 +150,10 @@ func TestClientGenerationOutcomeReportsStepAdmission(t *testing.T) {
 	}})
 	admitted := make(chan scriptedllm.GenerationOutcome, 1)
 	go func() {
-		outcome, _ := client.GenerateWithOutcome(
+		outcome, _ := client.GenerateOutcome(
 			context.Background(),
 			llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"},
+			llm.StreamCallbacks{},
 		)
 		admitted <- outcome
 	}()
@@ -188,9 +161,10 @@ func TestClientGenerationOutcomeReportsStepAdmission(t *testing.T) {
 		t.Fatalf("WaitUntilActive: %v", err)
 	}
 
-	rejected, err := client.GenerateWithOutcome(
+	rejected, err := client.GenerateOutcome(
 		context.Background(),
 		llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"},
+		llm.StreamCallbacks{},
 	)
 	if !errors.Is(err, scriptedllm.ErrConcurrentCall) {
 		t.Fatalf("concurrent error = %v, want ErrConcurrentCall", err)
@@ -227,7 +201,7 @@ func TestClientGenerationOutcomeAdmitsEveryConsumedFailure(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			client := scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{testCase.step}})
-			outcome, err := client.GenerateWithOutcome(context.Background(), testCase.req)
+			outcome, err := client.GenerateOutcome(context.Background(), testCase.req, llm.StreamCallbacks{})
 			if err == nil {
 				t.Fatal("consumed failing step returned no error")
 			}
@@ -243,7 +217,7 @@ func TestClientGenerationOutcomeAdmitsEveryConsumedFailure(t *testing.T) {
 	streaming.StreamDeltaDelay = &delay
 	client := scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{streaming}})
 	ctx, cancel := context.WithCancel(context.Background())
-	outcome, err := client.GenerateStreamWithEventsOutcome(ctx, llm.Request{
+	outcome, err := client.GenerateOutcome(ctx, llm.Request{
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:          "m",
 	}, llm.StreamCallbacks{OnAssistantDelta: func(llm.AssistantDelta) { cancel() }})

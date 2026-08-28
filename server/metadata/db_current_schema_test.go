@@ -3,7 +3,6 @@ package metadata
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"testing"
 )
 
@@ -43,7 +42,7 @@ func requireInMemoryMetadataSQLitePragmas(t testing.TB, queryer metadataSQLitePr
 		{pragma: "foreign_keys", want: int64(1)},
 		{pragma: "journal_mode", want: "memory"},
 		{pragma: "synchronous", want: int64(1)},
-		{pragma: "busy_timeout", want: int64(5000)},
+		{pragma: "busy_timeout", want: int64(metadataSQLiteBusyTimeoutMilliseconds)},
 	} {
 		switch want := test.want.(type) {
 		case int64:
@@ -63,18 +62,5 @@ func requireInMemoryMetadataSQLitePragmas(t testing.TB, queryer metadataSQLitePr
 				t.Fatalf("%s = %q, want %q", test.pragma, got, want)
 			}
 		}
-	}
-}
-
-func TestMetadataSQLiteDSNNormalizesWindowsPaths(t *testing.T) {
-	dsn, err := metadataSQLiteDSN(`C:\Users\Nek\kent db\main ? #.sqlite3`)
-	if err != nil {
-		t.Fatalf("metadataSQLiteDSN: %v", err)
-	}
-	if !strings.HasPrefix(dsn, "file:///C:/Users/Nek/kent%20db/main%20%3F%20%23.sqlite3?") {
-		t.Fatalf("dsn = %q, want file URL with normalized Windows drive path", dsn)
-	}
-	if !strings.Contains(dsn, "_pragma=foreign_keys%281%29") {
-		t.Fatalf("dsn = %q, want pragma query values preserved", dsn)
 	}
 }

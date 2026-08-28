@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"core/server/workflow"
@@ -15,15 +14,14 @@ import (
 // non-authorizing scopes that Workflow Execution must drain once a Task-wide
 // Interrupt has been authorized.
 type WorkflowInterruptSelection struct {
-	Interruptible []ExecutionHandle
-	Queued        []ExecutionHandle
-	Finalizing    []ExecutionHandle
+	Interruptible []WorkflowExecutionSelection
+	Queued        []WorkflowExecutionSelection
 }
 
-var (
-	ErrWorkflowQuestionPending = errors.New("workflow task has a pending question")
-	ErrWorkflowApprovalPending = errors.New("workflow task has a pending session approval")
-)
+type WorkflowExecutionSelection struct {
+	Handle      ExecutionHandle
+	CurrentNode workflow.CurrentNodeReference
+}
 
 // WithWorkflowManualMoveSelection selects one Task's exact workflow executions
 // and closes Question admission without retaining Authority-wide ownership
@@ -42,16 +40,7 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		return errors.New("workflow manual move selection operation is required")
 	}
 	a.mu.Lock()
-	executions := make([]*execution, 0)
-	for _, execution := range a.byScope {
-		ref, workflowScoped := execution.scope.Workflow()
-		if workflowScoped && ref.CurrentNode.TaskID == taskID {
-			executions = append(executions, execution)
-		}
-	}
-	sort.Slice(executions, func(i, j int) bool {
-		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
-	})
+	executions := a.workflowTaskExecutionsLocked(taskID)
 	a.mu.Unlock()
 	lockExactExecutions(executions)
 	defer unlockExactExecutions(executions)
@@ -63,37 +52,28 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	locked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
 	for _, execution := range executions {
-		switch execution.phase {
-		case executionPhaseRunning:
-			selection.Interruptible = append(selection.Interruptible, executionHandle{execution: execution})
-		case executionPhaseQueued:
-			selection.Queued = append(selection.Queued, executionHandle{execution: execution})
-		case executionPhaseFinalizing:
-			selection.Finalizing = append(selection.Finalizing, executionHandle{execution: execution})
-		default:
-			panic(fmt.Sprintf("workflow execution scope %s has invalid phase", execution.scope.ID()))
+		activity, activityErr := execution.workflowActivity()
+		if activityErr != nil {
+			a.mu.Unlock()
+			panic(activityErr)
+		}
+		switch activity {
+		case workflowExecutionRunning:
+			ref, _ := execution.scope.Workflow()
+			selection.Interruptible = append(selection.Interruptible, WorkflowExecutionSelection{
+				Handle: executionHandle{execution: execution}, CurrentNode: ref.CurrentNode,
+			})
+		case workflowExecutionQueued:
+			ref, _ := execution.scope.Workflow()
+			selection.Queued = append(selection.Queued, WorkflowExecutionSelection{
+				Handle: executionHandle{execution: execution}, CurrentNode: ref.CurrentNode,
+			})
+		case workflowExecutionNotRunning:
 		}
 		execution.prompts.mu.Lock()
 		locked = append(locked, execution)
 	}
 	a.mu.Unlock()
-	hasApproval := false
-	for _, execution := range locked {
-		for _, entry := range execution.prompts.pending {
-			if entry == nil {
-				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
-			}
-			if entry.snapshot.Request.Approval {
-				hasApproval = true
-			}
-		}
-	}
-	if hasApproval {
-		for _, execution := range locked {
-			execution.prompts.mu.Unlock()
-		}
-		return ErrWorkflowApprovalPending
-	}
 	err := operation(selection)
 	if err != nil {
 		for _, execution := range locked {
@@ -126,7 +106,8 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 
 // WithWorkflowInterruptSelection linearizes Task Interrupt selection against
 // phase changes and retirement only for the selected Task's exact executions.
-// A queued scope or a scope waiting for a Question never authorizes Interrupt.
+// A queued scope never authorizes Interrupt. Pending prompts remain part of
+// their running exact execution and are closed by ordinary interruption.
 func (a *Authority) WithWorkflowInterruptSelection(
 	taskID workflow.TaskID,
 	sessionID *runtimeids.SessionID,
@@ -145,23 +126,17 @@ func (a *Authority) WithWorkflowInterruptSelection(
 		return errors.New("workflow interrupt selection operation is required")
 	}
 	a.mu.Lock()
-	executions := make([]*execution, 0)
-	for _, execution := range a.byScope {
-		ref, workflowScoped := execution.scope.Workflow()
-		if !workflowScoped || ref.CurrentNode.TaskID != taskID {
-			continue
-		}
-		if sessionID != nil {
+	executions := a.workflowTaskExecutionsLocked(taskID)
+	if sessionID != nil {
+		filtered := executions[:0]
+		for _, execution := range executions {
 			resource, agent := execution.scope.Resource()
-			if !agent || resource.SessionID() != *sessionID {
-				continue
+			if agent && resource.SessionID() == *sessionID {
+				filtered = append(filtered, execution)
 			}
 		}
-		executions = append(executions, execution)
+		executions = filtered
 	}
-	sort.Slice(executions, func(i, j int) bool {
-		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
-	})
 	a.mu.Unlock()
 	lockExactExecutions(executions)
 	defer unlockExactExecutions(executions)
@@ -173,57 +148,66 @@ func (a *Authority) WithWorkflowInterruptSelection(
 
 	promptLocked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
-	hasQuestion := false
-	hasApproval := false
 	for _, execution := range executions {
-		execution.prompts.mu.RLock()
+		execution.prompts.mu.Lock()
 		promptLocked = append(promptLocked, execution)
 		for _, entry := range execution.prompts.pending {
 			if entry == nil {
 				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
 			}
-			if !entry.snapshot.Request.Approval {
-				hasQuestion = true
-			} else {
-				hasApproval = true
-			}
 		}
-		handle := executionHandle{execution: execution}
-		switch execution.phase {
-		case executionPhaseQueued:
+		ref, _ := execution.scope.Workflow()
+		selected := WorkflowExecutionSelection{
+			Handle:      executionHandle{execution: execution},
+			CurrentNode: ref.CurrentNode,
+		}
+		activity, activityErr := execution.workflowActivity()
+		if activityErr != nil {
+			a.mu.Unlock()
+			panic(activityErr)
+		}
+		switch activity {
+		case workflowExecutionQueued:
 			if sessionID == nil {
-				selection.Queued = append(selection.Queued, handle)
+				selection.Queued = append(selection.Queued, selected)
 			}
-		case executionPhaseRunning:
-			if len(execution.prompts.pending) == 0 {
-				selection.Interruptible = append(selection.Interruptible, handle)
-			}
-		default:
-			if execution.phase != executionPhaseFinalizing {
-				panic("workflow execution has an invalid interrupt phase")
-			}
-			if sessionID == nil {
-				if execution.scope.Kind() != ExecutionScopeScript {
-					panic("workflow execution finalizing phase is not a script")
-				}
-				selection.Finalizing = append(selection.Finalizing, handle)
-			}
+		case workflowExecutionRunning:
+			selection.Interruptible = append(selection.Interruptible, selected)
+		case workflowExecutionNotRunning:
 		}
 	}
 	a.mu.Unlock()
-	defer func() {
-		for index := len(promptLocked) - 1; index >= 0; index-- {
-			promptLocked[index].prompts.mu.RUnlock()
-		}
-	}()
 	if len(selection.Interruptible) == 0 {
-		if hasQuestion {
-			return ErrWorkflowQuestionPending
-		}
-		if hasApproval {
-			return ErrWorkflowApprovalPending
+		for index := len(promptLocked) - 1; index >= 0; index-- {
+			promptLocked[index].prompts.mu.Unlock()
 		}
 		return ErrExecutionNoLongerLive
 	}
-	return operation(selection)
+	if err := operation(selection); err != nil {
+		for index := len(promptLocked) - 1; index >= 0; index-- {
+			promptLocked[index].prompts.mu.Unlock()
+		}
+		return err
+	}
+	closures := make([]struct {
+		store   *executionPromptStore
+		closure executionPromptClosure
+	}, 0, len(promptLocked))
+	for _, execution := range promptLocked {
+		closures = append(closures, struct {
+			store   *executionPromptStore
+			closure executionPromptClosure
+		}{store: &execution.prompts, closure: execution.prompts.closeLocked(context.Canceled)})
+	}
+	for index := len(promptLocked) - 1; index >= 0; index-- {
+		promptLocked[index].prompts.mu.Unlock()
+	}
+	var publicationErr error
+	for _, item := range closures {
+		publicationErr = errors.Join(publicationErr, item.store.publishClosure(item.closure))
+	}
+	for _, item := range closures {
+		item.store.releaseClosure(item.closure)
+	}
+	return publicationErr
 }

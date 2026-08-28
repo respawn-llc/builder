@@ -21,18 +21,6 @@ type TranscriptStepState struct {
 	Status     RunStatus
 }
 
-type ReviewerState string
-
-const (
-	ReviewerStateRunning   ReviewerState = "running"
-	ReviewerStateCompleted ReviewerState = "completed"
-)
-
-type TranscriptReviewerState struct {
-	StepID runtimeids.StepID
-	State  ReviewerState
-}
-
 func (s TranscriptStepState) Validate() error {
 	if s.RunID.IsZero() {
 		return fmt.Errorf("step state run id is required")
@@ -58,16 +46,4 @@ func (s TranscriptStepState) Validate() error {
 		return fmt.Errorf("unknown step lifecycle state %q", s.Lifecycle)
 	}
 	return nil
-}
-
-func (s TranscriptReviewerState) Validate() error {
-	if s.StepID.IsZero() {
-		return fmt.Errorf("reviewer state step id is required")
-	}
-	switch s.State {
-	case ReviewerStateRunning, ReviewerStateCompleted:
-		return nil
-	default:
-		return fmt.Errorf("unknown reviewer state %q", s.State)
-	}
 }

@@ -10,6 +10,5 @@ func (m *uiModel) acknowledgePendingInterrupt() tea.Cmd {
 	restoreCmd := m.inputController().restoreInterruptedInputsIntoComposer()
 	m.setPendingInterrupt(false)
 	m.activity = uiActivityInterrupted
-	m.clearReviewerState()
 	return tea.Batch(restoreCmd, m.interruptedStatusNoticeCmd())
 }

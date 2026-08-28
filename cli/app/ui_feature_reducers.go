@@ -20,6 +20,7 @@ func handledUIFeatureUpdate(model *uiModel, cmd tea.Cmd) uiFeatureUpdateResult {
 
 func (m *uiModel) reduceFeatureMessage(msg tea.Msg) uiFeatureUpdateResult {
 	reducers := []uiFeatureReducer{
+		m.reduceNativeProgressMessage,
 		m.reduceKeyMessage,
 		m.reduceWindowMessage,
 		m.reduceDispatchedEvent,

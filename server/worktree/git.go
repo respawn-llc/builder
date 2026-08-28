@@ -10,9 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 var errGitTargetNotFound = errors.New("git target not found")
@@ -987,53 +986,50 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 	if err != nil {
 		return false, err
 	}
-	normalized, err := normalizeCreateSpec(spec)
-	if err != nil {
-		return false, err
-	}
 	args := []string{"worktree", "add"}
-	if normalized.CreateBranch {
-		args = append(args, "-b", normalized.BranchName, canonicalWorktreeRoot)
-		if normalized.BaseRef != "" {
-			args = append(args, normalized.BaseRef)
+	if spec.CreateBranch {
+		args = append(args, "-b", spec.BranchName, canonicalWorktreeRoot)
+		if spec.BaseRef != "" {
+			args = append(args, spec.BaseRef)
 		}
 	} else {
-		args = append(args, canonicalWorktreeRoot, normalized.BaseRef)
+		args = append(args, canonicalWorktreeRoot, spec.BaseRef)
 	}
 	if _, err := i.runner.Output(ctx, canonicalWorkspaceRoot, args...); err != nil {
 		return false, err
 	}
-	return normalized.CreateBranch, nil
+	return spec.CreateBranch, nil
 }
 
-func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (clientui.WorktreeDirtyState, error) {
+func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (*worktreepb.DirtyState, error) {
 	if i == nil {
-		return clientui.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
+		return nil, fmt.Errorf("git inspector is required")
 	}
 	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
-		return clientui.WorktreeDirtyState{}, err
+		return nil, err
 	}
 	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return clientui.WorktreeDirtyState{}, ctxErr
+			return nil, ctxErr
 		}
 		cause := err.Error()
-		return clientui.WorktreeDirtyState{
-			Kind:         clientui.WorktreeDirtyStateUnknown,
+		return &worktreepb.DirtyState{
+			Kind:         worktreepb.DirtyStateKind_DIRTY_STATE_UNKNOWN,
 			UnknownCause: &cause,
 		}, nil
 	}
 	count := countPorcelainStatusEntries(output)
 	if count == 0 {
-		return clientui.WorktreeDirtyState{
-			Kind: clientui.WorktreeDirtyStateClean,
+		return &worktreepb.DirtyState{
+			Kind: worktreepb.DirtyStateKind_DIRTY_STATE_CLEAN,
 		}, nil
 	}
-	return clientui.WorktreeDirtyState{
-		Kind:           clientui.WorktreeDirtyStateDirty,
-		DirtyFileCount: &count,
+	dirtyFileCount := int32(count)
+	return &worktreepb.DirtyState{
+		Kind:           worktreepb.DirtyStateKind_DIRTY_STATE_DIRTY,
+		DirtyFileCount: &dirtyFileCount,
 	}, nil
 }
 
@@ -1188,13 +1184,12 @@ func (i *GitInspector) deleteBranch(ctx context.Context, workspaceRoot string, b
 	return err
 }
 
-func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {
-	baseRef := strings.TrimSpace(spec.BaseRef)
-	branchName := strings.TrimSpace(spec.BranchName)
-	if err := serverapi.ValidateWorktreeCreateSpec(baseRef, spec.CreateBranch, branchName); err != nil {
-		return CreateSpec{}, err
+func normalizeCreateSpec(spec CreateSpec) CreateSpec {
+	return CreateSpec{
+		BaseRef:      strings.TrimSpace(spec.BaseRef),
+		CreateBranch: spec.CreateBranch,
+		BranchName:   strings.TrimSpace(spec.BranchName),
 	}
-	return CreateSpec{BaseRef: baseRef, CreateBranch: spec.CreateBranch, BranchName: branchName}, nil
 }
 
 type execGitCommandRunner struct{}

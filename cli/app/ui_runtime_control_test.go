@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"core/server/llm"
 	"core/shared/clientui"
@@ -45,9 +44,7 @@ type runtimeControlFakeClient struct {
 	discardQueuedResult   bool
 	recordedPromptHistory string
 	refreshMainViewCalls  int
-	compactCalls          int
-	compactArgs           string
-	compactErr            error
+	compactRequest        clientui.RuntimeCompactRequest
 	err                   error
 	appendErr             error
 	submitErr             error
@@ -60,10 +57,7 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	blank := ""
 	blankKind := clientui.UserTurnResultKindSilentFinal
 	withBlank := userTurnSubmissionFromResponse(
-		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: blankKind},
-		"turn",
-		"request",
-	)
+		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: blankKind}, "turn")
 	if withBlank.Message == nil || *withBlank.Message != "" {
 		t.Fatalf("blank submission message = %v, want present empty message", withBlank.Message)
 	}
@@ -72,10 +66,7 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	}
 
 	withoutMessage := userTurnSubmissionFromResponse(
-		serverapi.RuntimeSubmitUserTurnResponse{},
-		"turn",
-		"request",
-	)
+		serverapi.RuntimeSubmitUserTurnResponse{}, "turn")
 	if withoutMessage.Message != nil {
 		t.Fatalf("omitted submission message = %v, want absent", withoutMessage.Message)
 	}
@@ -123,42 +114,38 @@ func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	f.showGoalCalls++
 	return cloneRuntimeGoal(f.goal), f.err
 }
-func (f *runtimeControlFakeClient) SetGoal(objective string) (clientui.GoalMutationResult, error) {
+func (f *runtimeControlFakeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
 	f.setGoalArg = objective
-	f.goal = runtimeControlTestGoal(objective, clientui.RuntimeGoalStatusActive)
-	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
+	f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: objective, Status: "active"}}
+	return cloneRuntimeGoal(f.goal), f.err
 }
-func (f *runtimeControlFakeClient) PauseGoal() (clientui.GoalMutationResult, error) {
+func (f *runtimeControlFakeClient) PauseGoal() (*clientui.RuntimeGoal, error) {
 	f.pauseGoalCalls++
 	if f.goal == nil {
-		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
+		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}}
 	}
 	f.goal.Status = "paused"
-	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
+	return cloneRuntimeGoal(f.goal), f.err
 }
-func (f *runtimeControlFakeClient) ResumeGoal() (clientui.GoalMutationResult, error) {
+func (f *runtimeControlFakeClient) ResumeGoal() (*clientui.RuntimeGoal, error) {
 	f.resumeGoalCalls++
 	if f.goal == nil {
-		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
+		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}}
 	}
 	f.goal.Status = "active"
-	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
+	return cloneRuntimeGoal(f.goal), f.err
 }
-func (f *runtimeControlFakeClient) CompleteGoal() (clientui.GoalMutationResult, error) {
+func (f *runtimeControlFakeClient) CompleteGoal() (*clientui.RuntimeGoal, error) {
 	if f.goal == nil {
-		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
+		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}}
 	}
 	f.goal.Status = "complete"
-	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
+	return cloneRuntimeGoal(f.goal), f.err
 }
-func (f *runtimeControlFakeClient) ClearGoal() (clientui.GoalMutationResult, error) {
+func (f *runtimeControlFakeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 	f.clearGoalCalls++
 	f.goal = nil
-	return clientui.GoalMutationResult{}, f.err
-}
-func runtimeControlTestGoal(objective string, status clientui.RuntimeGoalStatus) *clientui.RuntimeGoal {
-	now := time.Unix(1, 0)
-	return &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: objective, Status: status, CreatedAt: now, UpdatedAt: now}}
+	return nil, f.err
 }
 func (f *runtimeControlFakeClient) AppendCommittedEntry(role, text string) error {
 	return f.AppendCommittedEntryWithNoticeID(role, text, "")
@@ -187,9 +174,8 @@ func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req c
 	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
 		submission.Queued = clientui.QueuedUserMessage{
-			ID:              strings.TrimSpace(f.submitQueuedID),
-			Text:            text,
-			ClientRequestID: req.ClientRequestID.String(),
+			ID:   strings.TrimSpace(f.submitQueuedID),
+			Text: text,
 		}
 	}
 	return submission, err
@@ -201,15 +187,16 @@ func (f *runtimeControlFakeClient) RunUserShell(ctx context.Context, req clientu
 	return f.submitUserShellCommand(ctx, req.Command)
 }
 func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string) error {
-	f.compactCalls++
-	f.compactArgs = args
-	if f.compactErr != nil {
-		return f.compactErr
-	}
+	_ = args
 	return f.err
 }
 func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
-	return f.compactContext(ctx, req.Args)
+	f.compactRequest = req
+	args := ""
+	if req.Admission.Guidance != nil {
+		args = *req.Admission.Guidance
+	}
+	return f.compactContext(ctx, args)
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
@@ -218,7 +205,7 @@ func (f *runtimeControlFakeClient) Interrupt() error {
 	}
 	return f.err
 }
-func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
+func (f *runtimeControlFakeClient) RemovePendingWork(queueItemID string) bool {
 	f.discardQueuedCalls++
 	f.discardQueuedID = queueItemID
 	if f.discardQueuedResult {
@@ -229,6 +216,50 @@ func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) 
 func (f *runtimeControlFakeClient) RecordPromptHistory(text string) error {
 	f.recordedPromptHistory = text
 	return f.err
+}
+
+func TestGoalShowSupersededByMutationDoesNotOverwriteMutationResult(t *testing.T) {
+	m := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	m.sessionID = "session-1"
+
+	if cmd := m.goalRuntimeCommand(goalRuntimePause, ""); cmd == nil {
+		t.Fatal("initial Goal mutation did not start")
+	}
+	mutationToken := m.goalRuntimePending.token
+	if cmd := m.goalRuntimeCommand(goalRuntimeShow, ""); cmd == nil {
+		t.Fatal("Goal read did not start")
+	}
+	showToken := m.goalRuntimeToken
+	showMutationSerial := m.goalRuntimeMutationSerial
+	if cmd := m.goalRuntimeCommand(goalRuntimePause, ""); cmd != nil {
+		t.Fatal("matching Goal mutation did not coalesce")
+	}
+
+	paused := &clientui.RuntimeGoal{
+		Goal: &clientui.Goal{ID: "goal-1", Objective: "latest", Status: clientui.RuntimeGoalStatusPaused},
+	}
+	m.applyGoalRuntimeDone(goalRuntimeDoneMsg{
+		token:     mutationToken,
+		sessionID: m.sessionID,
+		operation: goalRuntimePause,
+		goal:      paused,
+	})
+	stale := &clientui.RuntimeGoal{
+		Goal: &clientui.Goal{ID: "goal-1", Objective: "stale", Status: clientui.RuntimeGoalStatusActive},
+	}
+	m.applyGoalRuntimeDone(goalRuntimeDoneMsg{
+		token:          showToken,
+		sessionID:      m.sessionID,
+		mutationSerial: showMutationSerial,
+		operation:      goalRuntimeShow,
+		goal:           stale,
+	})
+
+	if m.goal.goal == nil || m.goal.goal.Goal == nil ||
+		m.goal.goal.Goal.Objective != "latest" ||
+		m.goal.goal.Status != clientui.RuntimeGoalStatusPaused {
+		t.Fatalf("Goal projection = %+v, want latest paused mutation result", m.goal.goal)
+	}
 }
 
 func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
@@ -259,93 +290,30 @@ func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
 	}
 }
 
-func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrder(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedClosedUIModel(client)
-	steerOne := "  steer one\nline\t "
-	queueTwo := "\tqueue two  "
-	steerThree := "steer  three\n\ninside"
-	queueFour := " queue four "
-	draft := "  existing draft\t"
-	_ = m.queueInjectedInput(steerOne)
-	m.queueInput(queueTwo)
-	_ = m.queueInjectedInput(steerThree)
-	m.queueInput(queueFour)
-	stopped := clientui.QueuedUserMessageFailureStopped
-	bindSteer := func(index int) clientui.TranscriptQueuedMessageState {
-		t.Helper()
-		requestID, err := runtimeids.ParseRuntimeClientRequestID(m.injectedQueue[index].ClientRequestID)
-		if err != nil {
-			t.Fatalf("parse queued client request id: %v", err)
-		}
-		queueID := runtimeids.NewQueueItemID()
-		text := m.injectedQueue[index].Text
-		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-			ID:              queueID.String(),
-			Text:            text,
-			ClientRequestID: requestID.String(),
-		})
-		return clientui.TranscriptQueuedMessageState{
-			ClientRequestID: requestID,
-			QueueItemID:     queueID,
-			Status:          clientui.QueuedUserMessageFailed,
-			FailureReason:   &stopped,
-			Text:            &text,
-		}
+func TestInterruptedHumanInputRestoresServerOrderBeforeComposer(t *testing.T) {
+	m := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	firstID := runtimeids.NewQueueItemID()
+	secondID := runtimeids.NewQueueItemID()
+	m.injectedQueue = []injectedRuntimeQueueItem{
+		{LocalID: firstID.String(), ServerID: firstID.String(), Text: "local stale first", State: injectedRuntimeQueueEnqueued},
+		{LocalID: secondID.String(), ServerID: secondID.String(), Text: "local stale second", State: injectedRuntimeQueueEnqueued},
 	}
-	firstFailure := bindSteer(0)
-	secondFailure := bindSteer(1)
-	testSetMainInput(m, draft)
-	activeText := "active turn already visible in the transcript"
-	m.activeSubmit = activeSubmitState{
-		token:  1,
-		text:   activeText,
-		origin: activeSubmitOriginQueued,
-	}
-	m.setPendingInterrupt(true)
+	testSetMainInput(m, "composer")
 
-	next, interruptedCmd := m.inputController().handleSubmitDone(newSubmitDoneMsg(1, "", activeText, context.Canceled))
-	m = next.(*uiModel)
-	for _, msg := range collectCmdMessages(t, interruptedCmd) {
-		m = updateUIModel(t, m, msg)
+	cmd := m.applyTranscriptHumanInputInterrupted(clientui.TranscriptHumanInputInterrupted{
+		Items: []clientui.TranscriptInterruptedHumanInputItem{
+			{QueueItemID: firstID, Text: "  server first  "},
+			{QueueItemID: secondID, Text: "server second\nline"},
+		},
+	})
+	if cmd == nil {
+		t.Fatal("interruption event returned no status command")
 	}
-	if got := testMainInput(m); got != draft {
-		t.Fatalf("interrupted active Submit changed composer before interrupt response = %q", got)
-	}
-	if len(m.injectedQueue) != 2 || len(m.queued) != 2 {
-		t.Fatalf("interrupted active Submit consumed pending inputs before response: injected=%d queued=%d", len(m.injectedQueue), len(m.queued))
-	}
-	if client.discardQueuedCalls != 0 {
-		t.Fatalf("interrupted active Submit dispatched %d queued-message discards before response", client.discardQueuedCalls)
-	}
-	stoppedCmd := m.applyTranscriptQueuedMessageState(firstFailure)
-	if stoppedCmd == nil {
-		t.Fatal("stopped queue event did not acknowledge the observed interruption")
-	}
-	for _, msg := range collectCmdMessages(t, stoppedCmd) {
-		m = updateUIModel(t, m, msg)
-	}
-
-	want := strings.Join([]string{steerOne, queueTwo, steerThree, queueFour, draft}, "\n\n")
-	if got := testMainInput(m); got != want {
-		t.Fatalf("restored composer = %q, want %q", got, want)
-	}
-	if len(m.injectedQueue) != 0 || len(m.queued) != 0 {
-		t.Fatalf("pending input state remained after restoration: injected=%+v queued=%+v", m.injectedQueue, m.queued)
-	}
-	if m.hasPendingInterrupt() {
-		t.Fatal("interrupt remained pending after local restoration")
-	}
-	accepted := secondFailure
-	accepted.Status = clientui.QueuedUserMessageAccepted
-	accepted.FailureReason = nil
-	m.applyTranscriptQueuedMessageState(accepted)
-	m.applyTranscriptQueuedMessageState(secondFailure)
-	if got := testMainInput(m); got != want {
-		t.Fatalf("late queue events duplicated restored composer = %q, want %q", got, want)
+	if got, want := testMainInput(m), "  server first  \n\nserver second\nline\n\ncomposer"; got != want {
+		t.Fatalf("composer = %q, want %q", got, want)
 	}
 	if len(m.injectedQueue) != 0 {
-		t.Fatalf("late queue events recreated interrupted state: injected=%+v", m.injectedQueue)
+		t.Fatalf("interrupted items remain queued: %+v", m.injectedQueue)
 	}
 }
 

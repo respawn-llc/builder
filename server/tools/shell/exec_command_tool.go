@@ -34,10 +34,6 @@ func ExecCommandStaticContractSource() tools.StaticContractSource {
 	return tools.StaticContractSource{
 		ID:    toolspec.ToolExecCommand,
 		Input: execCommandInput{},
-		Aliases: []tools.InputAliases{{
-			Canonical: "cmd",
-			Aliases:   []string{"command"},
-		}},
 	}
 }
 
@@ -98,9 +94,6 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		return tools.ErrorResultWith(c, fmt.Sprintf("invalid input: %v", err), marshalNoHTMLEscape), nil
 	}
 	cmdText := strings.TrimSpace(in.Cmd)
-	if cmdText == "" {
-		cmdText = strings.TrimSpace(in.Command)
-	}
 	if cmdText == "" {
 		return tools.ErrorResultWith(c, "cmd is required", marshalNoHTMLEscape), nil
 	}

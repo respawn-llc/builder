@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/workflowruntime"
+	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -39,8 +41,6 @@ const (
 	handoffCompactionToolCallRetries                       = 3
 )
 
-var errRemoteCompactionMissingCheckpoint = errors.New("remote compaction output missing checkpoint item")
-
 var (
 	ErrManualCompactionTooSoon = serverapi.ErrManualCompactionTooSoon
 	ErrManualCompactionActive  = serverapi.ErrManualCompactionActive
@@ -69,18 +69,27 @@ type defaultContextCompactor struct {
 
 func (e *Engine) CompactContext(ctx context.Context, args string) error {
 	e.ensureOrchestrationCollaborators()
-	_, err := e.compactionFlow.CompactContextWithAcceptance(ctx, args, nil, nil)
+	_, err := e.compactionFlow.CompactContextWithAcceptance(ctx, runtimeids.NewCompactionRequestID(), args, nil, nil)
 	return err
 }
 
 func (e *Engine) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextWithAcceptance(ctx, args, onActive, nil)
+	return e.compactionFlow.CompactContextWithAcceptance(ctx, runtimeids.NewCompactionRequestID(), args, onActive, nil)
 }
 
 func (e *Engine) CompactContextWithAcceptance(ctx context.Context, args string, accept CommandAcceptance) (session.CommitReceipt, error) {
+	return e.CompactContextForRequestWithAcceptance(ctx, runtimeids.NewCompactionRequestID(), args, accept)
+}
+
+func (e *Engine) CompactContextForRequestWithAcceptance(
+	ctx context.Context,
+	requestID runtimeids.CompactionRequestID,
+	args string,
+	accept CommandAcceptance,
+) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextWithAcceptance(ctx, args, nil, accept)
+	return e.compactionFlow.CompactContextWithAcceptance(ctx, requestID, args, nil, accept)
 }
 
 func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
@@ -95,7 +104,7 @@ func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context) erro
 	return err
 }
 
-func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
+func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextForWorkflowPostCompletion(ctx)
 }
@@ -104,21 +113,21 @@ func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) wo
 // consumes a committed Workflow Pre-Compaction boundary only after the target
 // turn succeeds. A failed target attempt therefore preserves the boundary for
 // the existing Resume path.
-func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (llm.Message, error) {
+func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (WorkflowTurnResult, error) {
 	if e == nil {
-		return llm.Message{}, errors.New("runtime engine is required")
+		return WorkflowTurnResult{}, errors.New("runtime engine is required")
 	}
 	if !e.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		if err := e.CompactContextForWorkflowContinuation(ctx); err != nil {
-			return llm.Message{}, err
+			return WorkflowTurnResult{}, err
 		}
 	}
-	assistant, err := e.SubmitWorkflowTurn(ctx)
+	result, err := e.SubmitWorkflowTurn(ctx)
 	if err != nil {
-		return llm.Message{}, err
+		return WorkflowTurnResult{}, err
 	}
 	e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity)
-	return assistant, nil
+	return result, nil
 }
 
 func (e *Engine) WorkflowPreCompactionTokenLimit() (int, error) {
@@ -146,22 +155,149 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 	return e.compactionFlow.TriggerHandoff(ctx, stepID, activeCall, summarizerPrompt, futureAgentMessage)
 }
 
-func (c *defaultContextCompactor) CompactContextWithAcceptance(ctx context.Context, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) CompactContextWithAcceptance(
+	ctx context.Context,
+	requestID runtimeids.CompactionRequestID,
+	args string,
+	onActive func(),
+	accept CommandAcceptance,
+) (session.CommitReceipt, error) {
 	instructions, err := newCompactionInstructionsInput(args)
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return c.compactManualContext(ctx, instructions, onActive, accept, true)
+	if requestID.IsZero() {
+		return session.CommitReceipt{}, errors.New("compaction request id is required")
+	}
+	return c.scheduleManualCompaction(ctx, requestID, instructions, nil, onActive, accept)
+}
+
+func (e *Engine) CompactContextAdmissionForRequestWithAcceptance(
+	ctx context.Context,
+	requestID runtimeids.CompactionRequestID,
+	admission runtimeinput.ManualCompactionAdmission,
+	accept CommandAcceptance,
+) (session.CommitReceipt, error) {
+	e.ensureOrchestrationCollaborators()
+	return e.compactionFlow.CompactContextAdmissionWithAcceptance(ctx, requestID, admission, accept)
+}
+
+func (c *defaultContextCompactor) CompactContextAdmissionWithAcceptance(
+	ctx context.Context,
+	requestID runtimeids.CompactionRequestID,
+	admission runtimeinput.ManualCompactionAdmission,
+	accept CommandAcceptance,
+) (session.CommitReceipt, error) {
+	if requestID.IsZero() {
+		return session.CommitReceipt{}, errors.New("compaction request id is required")
+	}
+	if err := admission.Validate(); err != nil {
+		return session.CommitReceipt{}, err
+	}
+	args := ""
+	if admission.Guidance != nil {
+		args = *admission.Guidance
+	}
+	instructions, err := newCompactionInstructionsInput(args)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	return c.scheduleManualCompaction(ctx, requestID, instructions, &admission, nil, accept)
+}
+
+func (c *defaultContextCompactor) scheduleManualCompaction(
+	ctx context.Context,
+	requestID runtimeids.CompactionRequestID,
+	instructions compactionInstructionsInput,
+	admission *runtimeinput.ManualCompactionAdmission,
+	onActive func(),
+	accept CommandAcceptance,
+) (session.CommitReceipt, error) {
+	e := c.engine
+	return awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (session.CommitReceipt, error) {
+		if admission != nil {
+			if err := e.requirePendingWorkCapacity(); err != nil {
+				return session.CommitReceipt{}, err
+			}
+		}
+		if snapshot := c.steps.Snapshot(); snapshot != nil &&
+			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
+			return session.CommitReceipt{}, ErrManualCompactionActive
+		}
+		planningSnapshot := e.compactionPlanningSnapshot()
+		if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
+			return session.CommitReceipt{}, errCompactionDisabledModeNone
+		}
+		reservation := &exclusiveStepReservation{
+			Kind:      exclusiveStepReservationManualCompaction,
+			queueable: true,
+		}
+		pendingCtx, cancelPending := context.WithCancelCause(context.Background())
+		if admission != nil {
+			reservation.pendingManualCompaction = &pendingManualCompaction{
+				itemID:    runtimeids.NewQueueItemID(),
+				order:     runtimeOperationSequence(operationCtx),
+				admission: *admission,
+			}
+			reservation.cancelPendingCompaction = cancelPending
+		}
+		if err := c.steps.AcquireReservation(reservation); err != nil {
+			cancelPending(err)
+			return session.CommitReceipt{}, err
+		}
+		committed, acceptErr := runCommandAcceptance(accept, func() (bool, error) {
+			return true, nil
+		})
+		if err := commandAcceptanceResult(committed, acceptErr); err != nil {
+			c.steps.ReleaseReservation(reservation)
+			cancelPending(err)
+			return session.CommitReceipt{}, err
+		}
+		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+			stopLifecycleCancellation := context.AfterFunc(lifecycleCtx, func() {
+				cancelPending(context.Cause(lifecycleCtx))
+			})
+			defer stopLifecycleCancellation()
+			defer cancelPending(context.Canceled)
+			defer c.steps.ReleaseReservation(reservation)
+			_, runErr := c.compactContext(
+				pendingCtx,
+				compactionModeManual,
+				&requestID,
+				instructions,
+				true,
+				reservation,
+				onActive,
+				nil,
+				true,
+			)
+			fatal, abort := resultGroupFatalFromError(runErr)
+			if abort {
+				return fatal
+			}
+			return nil
+		})
+		if !launched {
+			c.steps.ReleaseReservation(reservation)
+			cancelPending(ErrEngineClosed)
+			return session.CommitReceipt{}, ErrEngineClosed
+		}
+		if admission != nil {
+			e.publishPendingWorkSnapshot()
+		}
+		return session.CommitReceipt{}, nil
+	})
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
 	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, nil, false)
 }
 
-func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
-	receipt, err := c.compactContext(
+func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error) {
+	return c.compactContext(
 		ctx,
 		compactionModeWorkflowPostCompletion,
+		nil,
 		compactionInstructionsInput{},
 		false,
 		nil,
@@ -169,10 +305,6 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 		nil,
 		false,
 	)
-	return workflowruntime.PostCompletionCompactionResult{
-		CommitReceipt: receipt,
-		Diagnostic:    err,
-	}
 }
 
 func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
@@ -190,14 +322,23 @@ func (c *defaultContextCompactor) compactManualContext(ctx context.Context, inst
 		return session.CommitReceipt{}, err
 	}
 	defer c.steps.ReleaseReservation(reservation)
-	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive, accept, requireEligibility)
+	return c.compactContext(ctx, compactionModeManual, nil, instructions, true, reservation, onActive, accept, requireEligibility)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive, accept, false)
+	return c.compactContext(ctx, compactionModeManual, nil, compactionInstructionsInput{}, false, nil, onActive, accept, false)
 }
 
-func isAgentStepCapable(kind ActiveKind) bool {
+func isAgentStepKind(kind ActiveKind) bool {
+	switch kind {
+	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop, ActiveKindBackground:
+		return true
+	default:
+		return false
+	}
+}
+
+func isInterruptibleAgentTurn(kind ActiveKind) bool {
 	switch kind {
 	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop:
 		return true
@@ -229,7 +370,17 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(
+	ctx context.Context,
+	mode compactionMode,
+	requestID *runtimeids.CompactionRequestID,
+	instructions compactionInstructionsInput,
+	includePreservedUserMessage bool,
+	reservation *exclusiveStepReservation,
+	onActive func(),
+	accept CommandAcceptance,
+	requireEligibility bool,
+) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
 	if includePreservedUserMessage {
@@ -239,22 +390,28 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
+		if reservation != nil && reservation.pendingManualCompaction != nil {
+			e.publishPendingWorkSnapshot()
+		}
 		if requireEligibility {
 			planningSnapshot := e.compactionPlanningSnapshot()
 			if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
-				return errCompactionDisabledModeNone
+				return c.reportManualCompactionSelectionFailure(stepID, requestID, errCompactionDisabledModeNone)
 			}
 			if !e.compactionRuntimeState().ManualCompactionEligible() {
-				return ErrManualCompactionTooSoon
+				return c.reportManualCompactionSelectionFailure(stepID, requestID, ErrManualCompactionTooSoon)
 			}
 		}
 		if onActive != nil {
 			onActive()
 		}
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
+			if requireEligibility {
+				return c.reportManualCompactionSelectionFailure(stepID, requestID, err)
+			}
 			return err
 		}
-		_, compactReceipt, err := e.compactNowWithAcceptance(stepCtx, stepID, mode, instructions, includePreservedUserMessage, accept)
+		_, compactReceipt, err := e.compactNowWithAcceptance(stepCtx, stepID, requestID, mode, instructions, includePreservedUserMessage, accept)
 		receipt = compactReceipt
 		if err == nil || receipt.Committed {
 			e.handoffRuntimeState().ClearRequest()
@@ -262,6 +419,28 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 		return err
 	})
 	return receipt, err
+}
+
+func (c *defaultContextCompactor) reportManualCompactionSelectionFailure(
+	stepID string,
+	requestID *runtimeids.CompactionRequestID,
+	cause error,
+) error {
+	if cause == nil {
+		return nil
+	}
+	emitErr := newCompactionPersistence(c.engine).emitStatus(
+		stepID,
+		requestID,
+		EventCompactionFailed,
+		compactionModeManual,
+		"selector",
+		"unknown",
+		nil,
+		0,
+		cause.Error(),
+	)
+	return errors.Join(cause, emitErr)
 }
 
 func (e *Engine) autoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error {
@@ -411,10 +590,18 @@ func (e *Engine) currentTokenUsage() int {
 }
 
 func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool) (compactionResult, session.CommitReceipt, error) {
-	return e.compactNowWithAcceptance(ctx, stepID, mode, instructionsInput, includePreservedUserMessage, nil)
+	return e.compactNowWithAcceptance(ctx, stepID, nil, mode, instructionsInput, includePreservedUserMessage, nil)
 }
 
-func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool, accept CommandAcceptance) (compactionResult, session.CommitReceipt, error) {
+func (e *Engine) compactNowWithAcceptance(
+	ctx context.Context,
+	stepID string,
+	requestID *runtimeids.CompactionRequestID,
+	mode compactionMode,
+	instructionsInput compactionInstructionsInput,
+	includePreservedUserMessage bool,
+	accept CommandAcceptance,
+) (compactionResult, session.CommitReceipt, error) {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	planner := e.compactionPlannerState()
 	if planner.mode(planningSnapshot.policy) == "none" {
@@ -429,41 +616,38 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		return compactionResult{}, session.CommitReceipt{}, nil
 	}
 
-	caps, err := e.providerCapabilities(ctx)
-	if err != nil {
-		return compactionResult{}, session.CommitReceipt{}, err
-	}
-	providerID := strings.TrimSpace(caps.ProviderID)
-	if providerID == "" {
-		providerID = "unknown"
-	}
-
+	providerID := "unknown"
 	persistence := newCompactionPersistence(e)
-	if err := persistence.setActivity(stepID, mode, e.compactionRuntimeState().Count()+1, true); err != nil {
-		return compactionResult{}, session.CommitReceipt{}, err
-	}
-	defer func() {
-		if err := persistence.setActivity(stepID, mode, 0, false); err != nil {
-			e.surfaceRunError(fmt.Errorf("clear compaction activity: %w", err))
-		}
-	}()
-	if accept == nil {
-		if err := persistence.emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
-			return compactionResult{}, session.CommitReceipt{}, err
-		}
-	}
 	compactionFailure := func(result compactionResult, err error) error {
 		if accept != nil {
 			return err
 		}
-		return errors.Join(err, persistence.emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error()))
+		return errors.Join(err, persistence.emitStatus(stepID, requestID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error()))
 	}
 
-	instructions := compactionInstructionsForMode(mode, instructionsInput)
-	preservedUserMessageText := ""
-	if mode == compactionModeManual && includePreservedUserMessage {
-		preservedUserMessageText = lastVisibleUserMessageSinceLatestCompaction(input)
+	caps, err := e.providerCapabilities(ctx)
+	if err != nil {
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(compactionResult{}, err)
 	}
+	if resolvedProviderID := strings.TrimSpace(caps.ProviderID); resolvedProviderID != "" {
+		providerID = resolvedProviderID
+	}
+
+	if err := persistence.setActivity(stepID, requestID, mode, e.compactionRuntimeState().Count()+1, true); err != nil {
+		return compactionResult{}, session.CommitReceipt{}, err
+	}
+	defer func() {
+		if err := persistence.setActivity(stepID, requestID, mode, 0, false); err != nil {
+			e.surfaceRunError(fmt.Errorf("clear compaction activity: %w", err))
+		}
+	}()
+	if accept == nil {
+		if err := persistence.emitStatus(stepID, requestID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
+			return compactionResult{}, session.CommitReceipt{}, err
+		}
+	}
+	instructions := compactionInstructionsForMode(mode, instructionsInput)
+	preservedUserMessageText := lastVisibleUserMessageSinceLatestCompaction(input)
 	var result compactionResult
 	enginePlan := planner.enginePlan(planningSnapshot)
 	var requestKind *llm.CodexRequestKind
@@ -475,13 +659,42 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
 	if enginePlan.engineKind == compactionEngineRemote {
-		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
-		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
+		var remoteInput []llm.ResponseItem
+		result, remoteInput, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
+		var checkpointErr *llm.CompactionCheckpointContractError
+		if err != nil && errors.As(err, &checkpointErr) {
+			if e.cfg.Debug {
+				panic(checkpointErr)
+			}
+			attrs := []slog.Attr{
+				slog.String("provider_id", providerID),
+				slog.String("checkpoint_reason", string(checkpointErr.Reason)),
+				slog.Int("compaction_count", checkpointErr.CompactionCount),
+				slog.Int("output_count", checkpointErr.OutputCount),
+				slog.Any("output_type_counts", checkpointErr.OutputTypeCounts),
+			}
+			var providerErr *llm.ProviderAPIError
+			if errors.As(err, &providerErr) {
+				attrs = append(attrs, slog.Int("status_code", providerErr.StatusCode))
+				if requestID, ok := textutil.OptionalTrimmed(providerErr.ProviderRequestID); ok {
+					attrs = append(attrs, slog.String("request_id", requestID))
+				}
+			}
+			slog.LogAttrs(ctx, slog.LevelError, "remote compaction returned a malformed checkpoint", attrs...)
+
 			localFactory, factoryErr := e.activeDispatchRequestFactory(stepID, nil)
 			if factoryErr != nil {
-				return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, factoryErr)
+				err = errors.Join(err, factoryErr)
+			} else {
+				localResult, localErr := e.compactLocal(ctx, stepID, remoteInput, providerID, instructions, mode, localFactory)
+				localResult.overflowRepair = result.overflowRepair.Add(localResult.overflowRepair)
+				result = localResult
+				if localErr != nil {
+					err = errors.Join(err, localErr)
+				} else {
+					err = nil
+				}
 			}
-			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, localFactory)
 		}
 	} else {
 		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, dispatchFactory)
@@ -501,6 +714,12 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
 	replacementItems := append(llm.ItemsFromMessages(postReplacementMeta.StablePrefix), llm.CloneResponseItems(result.items)...)
+	replacementItems = append(replacementItems, llm.ItemsFromMessages(postReplacementMeta.Environment)...)
+	if preservedUserMessageText != nil {
+		if preservedMessage, ok := compactionPreservedUserMessage(*preservedUserMessageText); ok {
+			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
+		}
+	}
 	if mode == compactionModeHandoff {
 		if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {
 			if futureMessage, ok := handoffFutureAgentMessage(req.futureAgentMessage); ok {
@@ -508,12 +727,6 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 			}
 		}
 	}
-	if mode == compactionModeManual {
-		if preservedMessage, ok := compactionPreservedUserMessage(preservedUserMessageText); ok {
-			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
-		}
-	}
-	replacementItems = append(replacementItems, llm.ItemsFromMessages(postReplacementMeta.Environment)...)
 	var replacementReceipt session.CommitReceipt
 	committed, replacementErr := runCommandAcceptance(accept, func() (bool, error) {
 		var err error
@@ -568,13 +781,13 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		finalizationErr = errors.Join(finalizationErr, staleErr)
 	}
 
-	if err := persistence.emitStatus(stepID, EventCompactionCompleted, mode, result.engine, providerID, result.trimmedItemsCount, compactionNumber, ""); err != nil {
+	if err := persistence.emitStatus(stepID, requestID, EventCompactionCompleted, mode, result.engine, providerID, result.trimmedItemsCount, compactionNumber, ""); err != nil {
 		finalizationErr = errors.Join(finalizationErr, err)
 	}
 	return result, replacementReceipt, finalizationErr
 }
 
-func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) string {
+func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) *string {
 	start := 0
 	for i := len(items) - 1; i >= 0; i-- {
 		if !isCompactionBoundaryItem(items[i]) {
@@ -590,17 +803,16 @@ func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) strin
 			*item.Role != llm.RoleUser {
 			continue
 		}
-		if item.MessageType != nil &&
-			*item.MessageType == llm.MessageTypeCompactionSummary {
+		if item.MessageType != nil {
 			continue
 		}
 		content, present := textutil.OptionalTrimmed(item.Content)
 		if !present {
 			continue
 		}
-		return content
+		return textutil.Value(content)
 	}
-	return ""
+	return nil
 }
 
 func (e *Engine) handoffRuntimeState() *handoffRuntimeState {

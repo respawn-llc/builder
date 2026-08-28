@@ -713,7 +713,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	requestHeaders := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestHeaders <- r.Header.Clone()
-		writeCompletedResponseJSON(w)
+		writeCompletedResponseSSE(w)
 	}))
 	defer server.Close()
 
@@ -722,7 +722,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	transport.Client = server.Client()
 	transport.ProviderIdentifier = "acme_agent"
 
-	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", SessionID: textutil.Value("session-1")}); err != nil {
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", SessionID: textutil.Value("session-1")}, StreamCallbacks{}); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	headers := <-requestHeaders
@@ -797,8 +797,8 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_anon_1","object":"response","output":[{"type":"message","id":"msg_anon_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello from anonymous compatible server"}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}`))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_anon_1\",\"object\":\"response\",\"output\":[{\"type\":\"message\",\"id\":\"msg_anon_1\",\"role\":\"assistant\",\"status\":\"completed\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello from anonymous compatible server\"}]}],\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\ndata: [DONE]\n\n")
 	}))
 	defer server.Close()
 	transport := NewHTTPTransport(nil)
@@ -818,7 +818,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 		Model:     "vendor-custom-model",
 		SessionID: textutil.Value("session-1"),
 		Items:     PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
-	})
+	}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}

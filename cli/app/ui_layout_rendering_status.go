@@ -290,7 +290,7 @@ func (l uiViewLayout) shouldRenderHelpHint() bool {
 	if !m.canShowHelp() || m.helpVisible {
 		return false
 	}
-	if m.isBusy() || m.isCompacting() || m.isReviewerRunning() {
+	if m.isBusy() || m.isCompacting() || m.isReviewerActive() {
 		return false
 	}
 	return m.activity == uiActivityIdle
