@@ -81,7 +81,7 @@ func projectWorktreeList(entries []*worktreepb.TopologyEntry, target *clientui.S
 			return nil, err
 		}
 		entry, err := projectListEntry(
-			topology,
+			topologySelectorMatch{index: index, entry: topology},
 			selector,
 			target != nil && topologyIsCurrent(topology, *target),
 			target != nil,
@@ -94,7 +94,8 @@ func projectWorktreeList(entries []*worktreepb.TopologyEntry, target *clientui.S
 	return out, nil
 }
 
-func projectListEntry(topology *worktreepb.TopologyEntry, selector string, isCurrent bool, sessionScoped bool) (*worktreepb.ListEntry, error) {
+func projectListEntry(match topologySelectorMatch, selector string, isCurrent bool, sessionScoped bool) (*worktreepb.ListEntry, error) {
+	topology := match.entry
 	projection := &worktreepb.ListProjection{Selector: selector, IsCurrent: isCurrent}
 	var git *worktreepb.GitFacts
 	switch {
@@ -122,7 +123,7 @@ func projectListEntry(topology *worktreepb.TopologyEntry, selector string, isCur
 			projection.Switch.Selector = &projection.Selector
 		}
 	}
-	deletionSelector, err := deletionSelector(topology)
+	deletionSelector, err := deletionSelector(match)
 	switch {
 	case err == nil:
 		projection.DeletePreview = &worktreepb.DeletePreviewOperation{Selector: deletionSelector}
@@ -185,7 +186,7 @@ func (s *Service) PreviewWorktreeDelete(ctx context.Context, req *worktreepb.Del
 	if err != nil {
 		return nil, err
 	}
-	selector, err := deletionSelector(resolution.match.entry)
+	selector, err := deletionSelector(resolution.match)
 	if err != nil {
 		return nil, err
 	}
@@ -200,17 +201,19 @@ func (s *Service) PreviewWorktreeDelete(ctx context.Context, req *worktreepb.Del
 	}, nil
 }
 
-func deletionSelector(entry *worktreepb.TopologyEntry) (string, error) {
+func deletionSelector(match topologySelectorMatch) (string, error) {
+	entry := match.entry
+	// Git lists its primary worktree first, and projectTopology preserves that order.
 	switch {
 	case entry == nil:
 		return "", errors.New("worktree topology entry is required")
 	case entry.GetRegistered() != nil:
-		if entry.GetRegistered().GetGit().GetIsMain() {
+		if match.index == 0 || entry.GetRegistered().GetGit().GetIsMain() {
 			return "", worktreecontract.ErrWorktreeBlocked
 		}
 		return entry.GetRegistered().GetKent().GetWorktreeId(), nil
 	case entry.GetExternal() != nil:
-		if entry.GetExternal().GetGit().GetIsMain() {
+		if match.index == 0 || entry.GetExternal().GetGit().GetIsMain() {
 			return "", worktreecontract.ErrWorktreeBlocked
 		}
 		return entry.GetExternal().GetGit().GetCanonicalRoot(), nil
