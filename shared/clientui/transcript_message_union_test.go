@@ -101,6 +101,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			QueueItemID: transcriptTestQueueItemID(t),
 			Status:      QueuedUserMessageAccepted, Text: &queueText,
 		}), TranscriptMessageQueuedMessageState},
+		{"pending work changed", NewTranscriptEvent(TranscriptPendingWorkChanged{}), TranscriptMessagePendingWorkChanged},
 		{"pending work technical restoration", NewTranscriptEvent(TranscriptPendingWorkRestored{
 			Restoration: runtimeinput.PendingWorkTechnicalRestoration{
 				ItemID:         transcriptTestQueueItemID(t),

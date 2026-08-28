@@ -307,27 +307,25 @@ func (e *Engine) queueMessageForActiveRunRaw(ctx context.Context, message llm.Me
 			return false, context.Canceled
 		}
 		committed = true
-		mutationErr := e.mutatePendingWork(true, func(admission *pendingWorkSteerAdmission) (bool, error) {
-			e.outputMutationMu.Lock()
-			defer e.outputMutationMu.Unlock()
-			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
-				lane:           runtimeinput.PendingWorkLaneSteer,
-				steerAdmission: admission,
-			})
-			if queueErr != nil {
-				return false, queueErr
-			}
+		admission := e.nextPendingWorkSteerAdmission()
+		e.outputMutationMu.Lock()
+		queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
+			lane:           runtimeinput.PendingWorkLaneSteer,
+			steerAdmission: admission,
+		})
+		if queueErr == nil {
 			item = queuedItem
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-			return true, nil
-		}, nil)
-		if mutationErr != nil {
+		}
+		e.outputMutationMu.Unlock()
+		if queueErr != nil {
 			queueItemID := mustQueueItemID(item.ID)
 			e.liveRun.finishQueueItemPublication(queueItemID)
 			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 			e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-			return false, mutationErr
+			return false, queueErr
 		}
+		e.publishPendingWorkChanged()
 		return true, nil
 	})
 	if err := commandAcceptanceResult(accepted, err); err != nil {
@@ -407,19 +405,15 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 	}
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
 	failed := map[runtimeids.QueueItemID]struct{}{}
-	var removed []QueuedUserMessage
-	if err := e.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
-		removed = e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
-		for _, item := range removed {
-			failed[mustQueueItemID(item.ID)] = struct{}{}
-		}
-		return len(removed) != 0, nil
-	}, func() {
+	removed := e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
+	for _, item := range removed {
+		failed[mustQueueItemID(item.ID)] = struct{}{}
+	}
+	if len(removed) != 0 {
 		e.outputMutationMu.Lock()
 		e.emitInterruptedHumanInputs(removed)
 		e.outputMutationMu.Unlock()
-	}); err != nil {
-		e.surfaceRunError(err)
+		e.publishPendingWorkChanged()
 	}
 	e.liveRun.clearStoppedQueueItems(failed)
 }

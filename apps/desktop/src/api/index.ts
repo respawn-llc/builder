@@ -75,7 +75,7 @@ export {
   parsePendingWorkItemID,
   parseWorktreeOperationID,
   pendingWorkItemSchema,
-  pendingWorkReplacementEventSchema,
+  pendingWorkChangedEventSchema,
   pendingWorkRestorationSchema,
   pendingWorkSchema,
   pendingWorkTechnicalRestorationEventSchema,
@@ -88,7 +88,7 @@ export type {
   PendingWorkItem,
   PendingWorkItemID,
   PendingWorkRestoration,
-  PendingWorkReplacementEvent,
+  PendingWorkChangedEvent,
   PendingWorkTechnicalRestorationEvent,
   SessionSettingFeedback,
 } from "./pendingWork";

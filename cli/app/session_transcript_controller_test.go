@@ -11,7 +11,6 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -88,28 +87,22 @@ func TestOngoingTranscriptControllerQueuesOriginalMessagesWhileUnowned(t *testin
 	}
 }
 
-func TestOngoingTranscriptControllerHydratesPendingWorkIntoLiveFrame(t *testing.T) {
+func TestOngoingTranscriptControllerHydrationCarriesNoPendingWork(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	controller := newTestOngoingTranscriptController(surface, ongoingTestFrameProvider)
 	hydration := ongoingHydrationMessage(1)
-	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
-	hydrationPayload.PendingWork = runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneQueue, "queued"),
-	}}
-	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
 
 	if _, err := controller.Accept(hydration); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 
-	if got, want := surface.callKinds(), []string{"apply", "render"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.callKinds(), []string{"apply"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("surface calls = %v, want %v", got, want)
 	}
 	lines := surface.lastFrameSectionLines(ongoing.FrameSectionQueuedOrSteered)
-	if len(lines) == 0 {
-		t.Fatal("hydrated Pending Work did not produce a live frame section")
+	if len(lines) != 0 {
+		t.Fatalf("hydration produced Pending Work lines = %v", lines)
 	}
-	assertTerminalSafeFrameLines(t, lines)
 }
 
 func TestOngoingTranscriptControllerLeavesUserMessageFlushPresentationToStateObserver(t *testing.T) {
@@ -274,7 +267,7 @@ func TestOngoingTranscriptControllerDrainsQueuedNonRowsInArrivalOrderWithOneRend
 	}
 	queued := []clientui.TranscriptMessage{
 		ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate),
-		ongoingTranscriptMessage(3, clientui.TranscriptMessagePendingWorkReplaced),
+		ongoingTranscriptMessage(3, clientui.TranscriptMessagePendingWorkChanged),
 		ongoingTranscriptMessage(4, clientui.TranscriptMessagePrompt),
 		ongoingTranscriptMessage(5, clientui.TranscriptMessageContextUsage),
 		ongoingTranscriptMessage(6, clientui.TranscriptMessageGoalStatus),
@@ -502,12 +495,8 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 			Status:      clientui.QueuedUserMessageAccepted,
 			Text:        &text,
 		})
-	case clientui.TranscriptMessagePendingWorkReplaced:
-		event = clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkReplaced{
-			PendingWork: runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-				pendingWorkMessageForTest(runtimeinput.PendingWorkLaneQueue, "queued prompt"),
-			}},
-		})
+	case clientui.TranscriptMessagePendingWorkChanged:
+		event = clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkChanged{})
 	case clientui.TranscriptMessageUserMessageFlushed:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptUserMessageFlushed{
 			StepID: ongoingTestStepIDPointer(),

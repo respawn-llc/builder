@@ -136,16 +136,16 @@ type Engine struct {
 	mu               sync.Mutex
 	workflowTerminal WorkflowTerminalState
 
-	lifecycleMu       sync.Mutex
-	lifecycleOnce     sync.Once
-	lifecycleCtx      context.Context
-	lifecycleCancel   context.CancelFunc
-	lifecycleWG       sync.WaitGroup
-	lifecycleClosed   bool
-	closed            atomic.Bool
-	runtimeFIFO       *runtimeOperationFIFO
-	pendingWork       *pendingWorkCoordinator
-	immediateSettings immediateSessionSettingOwner
+	lifecycleMu             sync.Mutex
+	lifecycleOnce           sync.Once
+	lifecycleCtx            context.Context
+	lifecycleCancel         context.CancelFunc
+	lifecycleWG             sync.WaitGroup
+	lifecycleClosed         bool
+	closed                  atomic.Bool
+	runtimeFIFO             *runtimeOperationFIFO
+	pendingWorkSteerOrdinal atomic.Uint64
+	immediateSettings       immediateSessionSettingOwner
 
 	store                       *session.Store
 	eventLog                    session.MaterializedEventLog
@@ -528,21 +528,20 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 	if !forceAutoDrain {
 		var item QueuedUserMessage
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
-			err := e.mutatePendingWork(false, func(admission *pendingWorkSteerAdmission) (bool, error) {
-				e.outputMutationMu.Lock()
-				defer e.outputMutationMu.Unlock()
-				var queueErr error
-				item, queueErr = e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
-					lane:           runtimeinput.PendingWorkLaneQueue,
-					steerAdmission: admission,
-				})
-				if queueErr != nil {
-					return false, queueErr
-				}
+			e.outputMutationMu.Lock()
+			queued, queueErr := e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+				lane: runtimeinput.PendingWorkLaneQueue,
+			})
+			if queueErr == nil {
+				item = queued
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-				return true, nil
-			}, nil)
-			return err == nil, err
+			}
+			e.outputMutationMu.Unlock()
+			if queueErr != nil {
+				return false, queueErr
+			}
+			e.publishPendingWorkChanged()
+			return true, nil
 		})
 		if err := commandAcceptanceResult(committed, err); err != nil {
 			return QueuedUserMessage{}, err
@@ -563,27 +562,25 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 				return false, nil
 			}
 			livePublication = true
-			mutationErr := e.mutatePendingWork(true, func(admission *pendingWorkSteerAdmission) (bool, error) {
-				e.outputMutationMu.Lock()
-				defer e.outputMutationMu.Unlock()
-				queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, queuedUserMessageAssociation{
-					lane:           runtimeinput.PendingWorkLaneSteer,
-					steerAdmission: admission,
-				})
-				if queueErr != nil {
-					return false, queueErr
-				}
+			admission := e.nextPendingWorkSteerAdmission()
+			e.outputMutationMu.Lock()
+			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, queuedUserMessageAssociation{
+				lane:           runtimeinput.PendingWorkLaneSteer,
+				steerAdmission: admission,
+			})
+			if queueErr == nil {
 				item = queuedItem
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-				return true, nil
-			}, nil)
-			if mutationErr != nil {
+			}
+			e.outputMutationMu.Unlock()
+			if queueErr != nil {
 				queueItemID := mustQueueItemID(liveItem.ID)
 				e.liveRun.finishQueueItemPublication(queueItemID)
 				e.unmarkQueuedUserInjectionForAutoDrain(liveItem.ID)
 				e.completeLiveRunQueueItems(map[string]struct{}{liveItem.ID: {}})
-				return false, mutationErr
+				return false, queueErr
 			}
+			e.publishPendingWorkChanged()
 			return true, nil
 		})
 		if err != nil {
@@ -614,22 +611,23 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 	}
 	var item QueuedUserMessage
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
-		err := e.mutatePendingWork(true, func(admission *pendingWorkSteerAdmission) (bool, error) {
-			e.outputMutationMu.Lock()
-			defer e.outputMutationMu.Unlock()
-			var queueErr error
-			item, queueErr = e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
-				lane:           runtimeinput.PendingWorkLaneSteer,
-				steerAdmission: admission,
-			})
-			if queueErr != nil {
-				return false, queueErr
-			}
+		admission := e.nextPendingWorkSteerAdmission()
+		e.outputMutationMu.Lock()
+		queued, queueErr := e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+			lane:           runtimeinput.PendingWorkLaneSteer,
+			steerAdmission: admission,
+		})
+		if queueErr == nil {
+			item = queued
 			e.markQueuedUserInjectionForAutoDrain(item.ID)
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-			return true, nil
-		}, nil)
-		return err == nil, err
+		}
+		e.outputMutationMu.Unlock()
+		if queueErr != nil {
+			return false, queueErr
+		}
+		e.publishPendingWorkChanged()
+		return true, nil
 	})
 	if err := commandAcceptanceResult(committed, err); err != nil {
 		return QueuedUserMessage{}, err

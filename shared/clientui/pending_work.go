@@ -2,13 +2,9 @@ package clientui
 
 import "core/shared/runtimeinput"
 
-type TranscriptPendingWorkReplaced struct {
-	PendingWork runtimeinput.PendingWork
-}
+type TranscriptPendingWorkChanged struct{}
 
-func (r TranscriptPendingWorkReplaced) Validate() error {
-	return r.PendingWork.Validate()
-}
+func (TranscriptPendingWorkChanged) Validate() error { return nil }
 
 type TranscriptPendingWorkRestored struct {
 	Restoration runtimeinput.PendingWorkTechnicalRestoration

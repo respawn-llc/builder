@@ -694,17 +694,16 @@ func (e *Engine) steerWithCommitReceiptRaw(provenance steeringProvenance, intent
 
 func (e *Engine) steerOrdered(provenance steeringProvenance, intents ...steeringIntent) error {
 	if restored, ok := queuedUserMessageRestoreItems(intents); ok {
-		var applyErr error
-		mutationErr := e.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
-			e.outputMutationMu.Lock()
-			defer e.outputMutationMu.Unlock()
-			e.messageFlow.RestorePendingUserInjections(restored)
-			for _, pending := range restored {
-				e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
-			}
-			return len(restored) != 0, nil
-		}, nil)
-		return errors.Join(applyErr, mutationErr)
+		e.outputMutationMu.Lock()
+		e.messageFlow.RestorePendingUserInjections(restored)
+		for _, pending := range restored {
+			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
+		}
+		e.outputMutationMu.Unlock()
+		if len(restored) != 0 {
+			e.publishPendingWorkChanged()
+		}
+		return nil
 	}
 	e.outputMutationMu.Lock()
 	defer e.outputMutationMu.Unlock()

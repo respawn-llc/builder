@@ -496,21 +496,18 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var pending []queuedUserMessage
-	err := m.engine.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
-		switch selected := selection.(type) {
-		case allPendingUserInjectionSelection:
-			pending = m.queue.Drain()
-		case steerUserInjectionSelection:
-			if len(selected.queueItemIDs) > 0 {
-				pending = m.queue.DrainByID(selected.queueItemIDs)
-			}
-		default:
-			return false, fmt.Errorf("unsupported user injection selection %T", selection)
+	switch selected := selection.(type) {
+	case allPendingUserInjectionSelection:
+		pending = m.queue.Drain()
+	case steerUserInjectionSelection:
+		if len(selected.queueItemIDs) > 0 {
+			pending = m.queue.DrainByID(selected.queueItemIDs)
 		}
-		return len(pending) != 0, nil
-	}, nil)
-	if err != nil {
-		return userInjectionCommitResult{}, err
+	default:
+		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
+	}
+	if len(pending) != 0 {
+		m.engine.publishPendingWorkChanged()
 	}
 	return m.commitPendingUserInjections(stepID, pending)
 }

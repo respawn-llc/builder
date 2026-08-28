@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -392,15 +393,11 @@ func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
-	var replacementMu sync.Mutex
-	var replacement runtimeinput.PendingWork
+	var changes atomic.Int32
 	engine.cfg.OnEvent = func(event Event) {
-		if event.Kind != EventPendingWorkReplaced || event.PendingWork == nil {
-			return
+		if event.Kind == EventPendingWorkChanged {
+			changes.Add(1)
 		}
-		replacementMu.Lock()
-		replacement = clonePendingWork(*event.PendingWork)
-		replacementMu.Unlock()
 	}
 
 	message := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
@@ -414,11 +411,8 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 		restoration.CanonicalInput != "restore message" {
 		t.Fatalf("message removal = %+v/%v", restoration, err)
 	}
-	replacementMu.Lock()
-	messageReplacement := clonePendingWork(replacement)
-	replacementMu.Unlock()
-	if pendingWorkTestContains(messageReplacement, messageID) {
-		t.Fatalf("message removal replacement = %+v", messageReplacement.Items)
+	if pendingWorkTestContains(pendingWorkTestSnapshot(t, engine), messageID) {
+		t.Fatal("removed message remained in list projection")
 	}
 
 	guidance := "tighten spacing"
@@ -442,26 +436,22 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	if compaction.ID.IsZero() {
 		t.Fatal("manual compaction is absent from Pending Work")
 	}
-	hydrated := hydrationSnapshot(t, engine).PendingWork
-	if len(hydrated.Items) != 1 || hydrated.Items[0].ID != compaction.ID {
-		t.Fatalf("hydrated Pending Work = %+v", hydrated.Items)
-	}
 	restoration, err = engine.RemovePendingWork(context.Background(), compaction.ID)
 	if err != nil || restoration.Kind != runtimeinput.PendingWorkItemKindManualCompaction ||
 		restoration.CanonicalInput != "/compact tighten spacing" {
 		t.Fatalf("compaction removal = %+v/%v", restoration, err)
 	}
-	replacementMu.Lock()
-	compactionReplacement := clonePendingWork(replacement)
-	replacementMu.Unlock()
-	if pendingWorkTestContains(compactionReplacement, compaction.ID) {
-		t.Fatalf("compaction removal replacement = %+v", compactionReplacement.Items)
+	if pendingWorkTestContains(pendingWorkTestSnapshot(t, engine), compaction.ID) {
+		t.Fatal("removed compaction remained in list projection")
 	}
 	if _, err := engine.RemovePendingWork(context.Background(), compaction.ID); !errors.Is(err, runtimeinput.ErrPendingWorkNotPending) {
 		t.Fatalf("repeated removal = %v", err)
 	}
 
 	releaseMaintenance()
+	if changes.Load() < 4 {
+		t.Fatalf("Pending Work Changed notifications = %d, want admission and removal notifications", changes.Load())
+	}
 }
 
 func TestPendingOperationalWorkLeavesProjectionBeforeDomainExecution(t *testing.T) {
@@ -472,23 +462,16 @@ func TestPendingOperationalWorkLeavesProjectionBeforeDomainExecution(t *testing.
 		return serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
 	})
 	domainStarted := make(chan bool, 1)
-	var replacementMu sync.Mutex
-	var replacement runtimeinput.PendingWork
+	var changes atomic.Int32
 	engine.cfg.OnEvent = func(event Event) {
 		switch event.Kind {
-		case EventPendingWorkReplaced:
-			if event.PendingWork != nil {
-				replacementMu.Lock()
-				replacement = clonePendingWork(*event.PendingWork)
-				replacementMu.Unlock()
-			}
+		case EventPendingWorkChanged:
+			changes.Add(1)
 		case EventCompactionStarted, EventCompactionFailed:
 			if event.Compaction == nil || event.Compaction.RequestID == nil || *event.Compaction.RequestID != requestID {
 				return
 			}
-			replacementMu.Lock()
-			pending := pendingWorkTestContains(replacement, itemID)
-			replacementMu.Unlock()
+			pending := pendingWorkTestContains(pendingWorkTestSnapshot(t, engine), itemID)
 			select {
 			case domainStarted <- pending:
 			default:
@@ -516,6 +499,9 @@ func TestPendingOperationalWorkLeavesProjectionBeforeDomainExecution(t *testing.
 		}
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("manual compaction domain execution did not start")
+	}
+	if changes.Load() < 2 {
+		t.Fatalf("Pending Work Changed notifications = %d, want admission and start", changes.Load())
 	}
 }
 
@@ -777,25 +763,21 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 	}
 }
 
-func TestPendingWorkReplacementDeliveryIsSerializedWithoutBlockingReads(t *testing.T) {
+func TestPendingWorkChangedDeliveryDoesNotBlockReadsOrIndependentMutations(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
-	firstReplacementStarted := make(chan struct{})
-	releaseFirstReplacement := make(chan struct{})
-	var firstReplacement sync.Once
-	var replacementsMu sync.Mutex
-	var replacements []runtimeinput.PendingWork
+	firstChangedStarted := make(chan struct{})
+	releaseFirstChanged := make(chan struct{})
+	var releaseChanged sync.Once
+	defer releaseChanged.Do(func() { close(releaseFirstChanged) })
+	var changes atomic.Int32
 	engine.cfg.OnEvent = func(event Event) {
-		if event.Kind != EventPendingWorkReplaced || event.PendingWork == nil {
+		if event.Kind != EventPendingWorkChanged {
 			return
 		}
-		firstReplacement.Do(func() {
-			close(firstReplacementStarted)
-			<-releaseFirstReplacement
-			event.PendingWork.Items[0].CanonicalInput = "mutated event"
-		})
-		replacementsMu.Lock()
-		replacements = append(replacements, clonePendingWork(*event.PendingWork))
-		replacementsMu.Unlock()
+		if changes.Add(1) == 1 {
+			close(firstChangedStarted)
+			<-releaseFirstChanged
+		}
 	}
 
 	type admissionResult struct {
@@ -804,10 +786,10 @@ func TestPendingWorkReplacementDeliveryIsSerializedWithoutBlockingReads(t *testi
 	}
 	firstDone := make(chan admissionResult, 1)
 	go func() {
-		item, err := engine.QueueUserMessage(context.Background(), "first")
+		item, err := engine.queueUserMessageRaw("first", false, nil)
 		firstDone <- admissionResult{item: item, err: err}
 	}()
-	pendingWorkTestWait(t, firstReplacementStarted, "first Pending Work replacement")
+	pendingWorkTestWait(t, firstChangedStarted, "first Pending Work Changed")
 
 	readDone := make(chan runtimeinput.PendingWork, 1)
 	go func() {
@@ -827,30 +809,24 @@ func TestPendingWorkReplacementDeliveryIsSerializedWithoutBlockingReads(t *testi
 
 	secondDone := make(chan admissionResult, 1)
 	go func() {
-		item, err := engine.QueueUserMessage(context.Background(), "second")
+		item, err := engine.queueUserMessageRaw("second", false, nil)
 		secondDone <- admissionResult{item: item, err: err}
 	}()
-	close(releaseFirstReplacement)
+	var secondResult admissionResult
+	select {
+	case secondResult = <-secondDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("second admission blocked on Changed delivery")
+	}
+	releaseChanged.Do(func() { close(releaseFirstChanged) })
 	firstResult := <-firstDone
-	secondResult := <-secondDone
 	if firstResult.err != nil || secondResult.err != nil {
 		t.Fatalf("admissions = %v/%v", firstResult.err, secondResult.err)
 	}
 
-	replacementsMu.Lock()
-	gotReplacements := append([]runtimeinput.PendingWork(nil), replacements...)
-	replacementsMu.Unlock()
-	if len(gotReplacements) != 2 ||
-		len(gotReplacements[0].Items) != 1 ||
-		len(gotReplacements[1].Items) != 2 ||
-		gotReplacements[0].Items[0].ID.String() != firstResult.item.ID ||
-		gotReplacements[1].Items[0].ID.String() != firstResult.item.ID ||
-		gotReplacements[1].Items[1].ID.String() != secondResult.item.ID {
-		t.Fatalf("serialized replacements = %+v", gotReplacements)
-	}
 	current := pendingWorkTestSnapshot(t, engine)
-	if current.Items[0].CanonicalInput != "first" {
-		t.Fatalf("snapshot was mutated through read/event payload: %+v", current.Items)
+	if len(current.Items) != 2 || changes.Load() != 2 {
+		t.Fatalf("list/notifications = %+v/%d", current.Items, changes.Load())
 	}
 }
 

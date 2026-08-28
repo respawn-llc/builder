@@ -42,8 +42,6 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 			t.Fatalf("tool %s: %v", call.ID, err)
 		}
 	}
-	first := mustQueueUserMessage(t, engine, "first")
-	second := mustQueueUserMessage(t, engine, "second")
 	snapshot := hydrationSnapshot(t, engine)
 	if snapshot.ActiveThinkingStatus == nil || snapshot.ActiveThinkingStatus.StepID != stepID ||
 		snapshot.ActiveThinkingStatus.Text != "Planning" ||
@@ -52,11 +50,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 		t.Fatalf("reasoning = status %+v traces %+v", snapshot.ActiveThinkingStatus, snapshot.ActiveReasoningTraces)
 	}
 	if len(snapshot.InFlightTools) != 2 || snapshot.InFlightTools[0].ToolCallID != "call-1" ||
-		snapshot.InFlightTools[1].ToolCallID != "call-2" ||
-		len(snapshot.PendingWork.Items) != 2 ||
-		snapshot.PendingWork.Items[0].ID.String() != first.ID ||
-		snapshot.PendingWork.Items[1].ID.String() != second.ID {
-		t.Fatalf("owner facts = tools %+v Pending Work %+v", snapshot.InFlightTools, snapshot.PendingWork)
+		snapshot.InFlightTools[1].ToolCallID != "call-2" {
+		t.Fatalf("owner facts = tools %+v", snapshot.InFlightTools)
 	}
 	if err := engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
 		t.Fatalf("reset reasoning: %v", err)

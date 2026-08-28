@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-
-	"core/shared/runtimeinput"
 )
 
 type TranscriptMessageKind string
@@ -22,7 +20,7 @@ const (
 	TranscriptMessageToolAbort                 TranscriptMessageKind = "tool_abort"
 	TranscriptMessageUserMessageFlushed        TranscriptMessageKind = "user_message_flushed"
 	TranscriptMessageQueuedMessageState        TranscriptMessageKind = "queued_message_state"
-	TranscriptMessagePendingWorkReplaced       TranscriptMessageKind = "pending_work_replaced"
+	TranscriptMessagePendingWorkChanged        TranscriptMessageKind = "pending_work_changed"
 	TranscriptMessagePendingWorkRestored       TranscriptMessageKind = "pending_work_restored"
 	TranscriptMessageSessionSettingFeedback    TranscriptMessageKind = "session_setting_feedback"
 	TranscriptMessageHumanInputInterrupted     TranscriptMessageKind = "human_input_interrupted"
@@ -62,7 +60,7 @@ type transcriptEventPayloadValue interface {
 		TranscriptToolAbort |
 		TranscriptUserMessageFlushed |
 		TranscriptQueuedMessageState |
-		TranscriptPendingWorkReplaced |
+		TranscriptPendingWorkChanged |
 		TranscriptPendingWorkRestored |
 		TranscriptSessionSettingFeedback |
 		TranscriptHumanInputInterrupted |
@@ -126,7 +124,6 @@ type TranscriptHydration struct {
 	ActiveStep             *TranscriptStepState
 	ActiveCompaction       *TranscriptCompactionStatus
 	InFlightTools          []TranscriptToolStart
-	PendingWork            runtimeinput.PendingWork
 	PendingPrompts         []TranscriptPrompt
 	BackgroundActivities   []TranscriptBackgroundActivity
 	ContextUsage           *TranscriptContextUsage
@@ -229,8 +226,8 @@ func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (Transcri
 		return decodeTranscriptPayload[TranscriptUserMessageFlushed](data)
 	case TranscriptMessageQueuedMessageState:
 		return decodeTranscriptPayload[TranscriptQueuedMessageState](data)
-	case TranscriptMessagePendingWorkReplaced:
-		return decodeTranscriptPayload[TranscriptPendingWorkReplaced](data)
+	case TranscriptMessagePendingWorkChanged:
+		return decodeTranscriptPayload[TranscriptPendingWorkChanged](data)
 	case TranscriptMessagePendingWorkRestored:
 		return decodeTranscriptPayload[TranscriptPendingWorkRestored](data)
 	case TranscriptMessageSessionSettingFeedback:
@@ -318,8 +315,8 @@ func (TranscriptQueuedMessageState) transcriptEventKind() TranscriptMessageKind 
 	return TranscriptMessageQueuedMessageState
 }
 
-func (TranscriptPendingWorkReplaced) transcriptEventKind() TranscriptMessageKind {
-	return TranscriptMessagePendingWorkReplaced
+func (TranscriptPendingWorkChanged) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessagePendingWorkChanged
 }
 
 func (TranscriptPendingWorkRestored) transcriptEventKind() TranscriptMessageKind {

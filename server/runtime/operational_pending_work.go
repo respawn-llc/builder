@@ -46,20 +46,18 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 	pendingCtx, cancelPending := context.WithCancelCause(context.Background())
 	admitted := false
 	committed, acceptErr := runCommandAcceptance(request.accept, func() (bool, error) {
-		err := e.mutatePendingWork(true, func(order *pendingWorkSteerAdmission) (bool, error) {
-			reservation.pendingWork = &pendingOperationalWork{
-				order:  *order,
-				item:   item,
-				cancel: cancelPending,
-			}
-			if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
-				reservation.pendingWork = nil
-				return false, err
-			}
-			admitted = true
-			return true, nil
-		}, nil)
-		return err == nil, err
+		reservation.pendingWork = &pendingOperationalWork{
+			order:  *e.nextPendingWorkSteerAdmission(),
+			item:   item,
+			cancel: cancelPending,
+		}
+		if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
+			reservation.pendingWork = nil
+			return false, err
+		}
+		admitted = true
+		e.publishPendingWorkChanged()
+		return true, nil
 	})
 	if err := commandAcceptanceResult(committed, acceptErr); err != nil {
 		if admitted {

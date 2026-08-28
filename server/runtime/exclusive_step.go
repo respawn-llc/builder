@@ -110,38 +110,36 @@ func (s *defaultExclusiveStepLifecycle) ReleaseReservation(reservation *exclusiv
 	if s == nil || s.engine == nil {
 		panic("exclusive step reservation release requires an Engine")
 	}
-	if err := s.engine.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if reservation == nil || s.reservations == nil {
-			panic("exclusive step reservation release does not match the held reservation")
+	s.mu.Lock()
+	if reservation == nil || s.reservations == nil {
+		panic("exclusive step reservation release does not match the held reservation")
+	}
+	if _, known := s.reservations[reservation]; !known {
+		panic("exclusive step reservation release does not match the held reservation")
+	}
+	pending := reservation.pendingWork != nil
+	reservation.pendingWork = nil
+	if waiter := s.reservationWaiters[reservation]; waiter != nil {
+		index := slices.Index(s.nextWaiters, waiter)
+		if index >= 0 {
+			s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
 		}
-		if _, known := s.reservations[reservation]; !known {
-			panic("exclusive step reservation release does not match the held reservation")
+		if s.boundaryDone != nil {
+			close(s.boundaryDone)
+			s.boundaryDone = nil
+			s.boundaryReady = false
 		}
-		pending := reservation.pendingWork != nil
-		reservation.pendingWork = nil
-		if waiter := s.reservationWaiters[reservation]; waiter != nil {
-			index := slices.Index(s.nextWaiters, waiter)
-			if index >= 0 {
-				s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
-			}
-			if s.boundaryDone != nil {
-				close(s.boundaryDone)
-				s.boundaryDone = nil
-				s.boundaryReady = false
-			}
-			delete(s.reservationWaiters, reservation)
-		}
-		delete(s.reservations, reservation)
-		if s.heldReservation == reservation {
-			s.heldReservation = nil
-			s.heldWaiter = nil
-		}
-		s.notifyNextWaiterLocked()
-		return pending, nil
-	}, nil); err != nil {
-		s.engine.surfaceRunError(err)
+		delete(s.reservationWaiters, reservation)
+	}
+	delete(s.reservations, reservation)
+	if s.heldReservation == reservation {
+		s.heldReservation = nil
+		s.heldWaiter = nil
+	}
+	s.notifyNextWaiterLocked()
+	s.mu.Unlock()
+	if pending {
+		s.engine.publishPendingWorkChanged()
 	}
 	s.engine.surfaceRunError(s.scheduleIdleWork(true))
 }
@@ -604,9 +602,10 @@ func (s *defaultExclusiveStepLifecycle) claimNextWaiter(
 		_, err := claim()
 		return stepCtx, stepID, retry, err
 	}
-	err := s.engine.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
-		return claim()
-	}, nil)
+	changed, err := claim()
+	if changed {
+		s.engine.publishPendingWorkChanged()
+	}
 	return stepCtx, stepID, retry, err
 }
 
@@ -697,26 +696,25 @@ func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *ex
 
 func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
 	idle := false
-	if err := s.engine.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if waiter.reservation != nil && waiter.reservation == s.heldReservation {
-			return false, nil
-		}
-		index := slices.Index(s.nextWaiters, waiter)
-		removed := index >= 0
-		pending := removed && waiter.reservation != nil && waiter.reservation.pendingWork != nil
-		if pending {
-			waiter.reservation.pendingWork = nil
-		}
-		if removed {
-			s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
-		}
-		s.notifyNextWaiterLocked()
-		idle = removed && s.active == nil && s.publicationDepth == 0 && len(s.nextWaiters) == 0
-		return pending, nil
-	}, nil); err != nil {
-		s.engine.surfaceRunError(err)
+	s.mu.Lock()
+	if waiter.reservation != nil && waiter.reservation == s.heldReservation {
+		s.mu.Unlock()
+		return false
+	}
+	index := slices.Index(s.nextWaiters, waiter)
+	removed := index >= 0
+	pending := removed && waiter.reservation != nil && waiter.reservation.pendingWork != nil
+	if pending {
+		waiter.reservation.pendingWork = nil
+	}
+	if removed {
+		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
+	}
+	s.notifyNextWaiterLocked()
+	idle = removed && s.active == nil && s.publicationDepth == 0 && len(s.nextWaiters) == 0
+	s.mu.Unlock()
+	if pending {
+		s.engine.publishPendingWorkChanged()
 	}
 	return idle
 }

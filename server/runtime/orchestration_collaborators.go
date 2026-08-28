@@ -194,9 +194,6 @@ type phaseProtocolEnforcer interface {
 
 func (e *Engine) ensureOrchestrationCollaborators() {
 	e.collaboratorsOnce.Do(func() {
-		if e.pendingWork == nil {
-			e.pendingWork = newPendingWorkCoordinator()
-		}
 		if e.liveRun == nil {
 			e.liveRun = newLiveRunCoordinator(func(result LiveRunResult) {
 				e.publishLiveRunFinished(result)

@@ -7,6 +7,7 @@ import type { JsonValue } from "./json";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 import { parseWorktreeOperationID } from "./pendingWork";
 import {
+  pendingWorkChangedEventSchema,
   pendingWorkRestorationSchema,
   pendingWorkSchema,
   pendingWorkTechnicalRestorationEventSchema,
@@ -21,6 +22,11 @@ const ids = [
 ] as const;
 
 describe("Desktop Pending Work client", () => {
+  it("decodes payload-free Pending Work Changed events", () => {
+    expect(pendingWorkChangedEventSchema.parse({})).toEqual({});
+    expect(() => pendingWorkChangedEventSchema.parse({ PendingWork: { items: [] } })).toThrow();
+  });
+
   it("decodes the closed Pending Work variants in server order", () => {
     const pendingWork = pendingWorkSchema.parse({
       items: [

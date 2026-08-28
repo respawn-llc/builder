@@ -36,8 +36,8 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.applyTranscriptUserMessageFlushed(message.Payload().(clientui.TranscriptUserMessageFlushed))
 	case clientui.TranscriptMessageQueuedMessageState:
 		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
-	case clientui.TranscriptMessagePendingWorkReplaced:
-		return m.applyPendingWorkReplacement(message.Payload().(clientui.TranscriptPendingWorkReplaced).PendingWork)
+	case clientui.TranscriptMessagePendingWorkChanged:
+		return nil
 	case clientui.TranscriptMessagePendingWorkRestored:
 		restoration := message.Payload().(clientui.TranscriptPendingWorkRestored).Restoration
 		m.inputController().restoreServerOrderedTextBeforeComposer(restoration.CanonicalInput)
@@ -108,7 +108,6 @@ func (m *uiModel) applyTranscriptHydration(
 		m.applyTranscriptStepState(*hydration.ActiveStep)
 	}
 
-	m.pendingWork = hydration.PendingWork
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
 	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
 	currentSessionID := strings.TrimSpace(m.sessionID)

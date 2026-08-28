@@ -186,10 +186,8 @@ export type PendingWorkTechnicalRestorationEvent = Readonly<
   z.output<typeof pendingWorkTechnicalRestorationEventSchema>
 >;
 
-export const pendingWorkReplacementEventSchema = strict({
-  PendingWork: pendingWorkSchema,
-}).transform((value) => ({ pendingWork: value.PendingWork }));
-export type PendingWorkReplacementEvent = Readonly<z.output<typeof pendingWorkReplacementEventSchema>>;
+export const pendingWorkChangedEventSchema = strict({});
+export type PendingWorkChangedEvent = Readonly<z.output<typeof pendingWorkChangedEventSchema>>;
 
 const feedbackBase = {
   Changed: z.boolean(),

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"sync"
-	"sync/atomic"
 
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -26,27 +24,14 @@ type pendingOperationalWork struct {
 	cancel context.CancelCauseFunc
 }
 
-type pendingWorkCoordinator struct {
-	mu                 sync.Mutex
-	nextSteerAdmission pendingWorkSteerAdmission
-	latest             atomic.Pointer[runtimeinput.PendingWork]
-}
-
 var errPendingOperationalWorkRemoved = errors.New("pending operational work was removed")
-
-func newPendingWorkCoordinator() *pendingWorkCoordinator {
-	coordinator := &pendingWorkCoordinator{}
-	empty := runtimeinput.PendingWork{}
-	coordinator.latest.Store(&empty)
-	return coordinator
-}
 
 func (e *Engine) PendingWorkSnapshot() (runtimeinput.PendingWork, error) {
 	if e == nil {
 		return runtimeinput.PendingWork{}, nil
 	}
 	e.ensureOrchestrationCollaborators()
-	return clonePendingWork(*e.pendingWork.latest.Load()), nil
+	return e.projectPendingWork()
 }
 
 func (e *Engine) requirePendingWorkCapacity() error {
@@ -60,45 +45,9 @@ func (e *Engine) requirePendingWorkCapacity() error {
 	return nil
 }
 
-func (e *Engine) mutatePendingWork(
-	assignSteerAdmission bool,
-	mutate func(*pendingWorkSteerAdmission) (bool, error),
-	beforeReplacement func(),
-) error {
-	if mutate == nil {
-		return errors.New("Pending Work mutation is required")
-	}
-	e.ensureOrchestrationCollaborators()
-	coordinator := e.pendingWork
-	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
-
-	var admission *pendingWorkSteerAdmission
-	if assignSteerAdmission {
-		next := coordinator.nextSteerAdmission + 1
-		admission = &next
-	}
-	changed, err := mutate(admission)
-	if err != nil {
-		return err
-	}
-	if !changed {
-		return nil
-	}
-	if admission != nil {
-		coordinator.nextSteerAdmission = *admission
-	}
-	snapshot, err := e.projectPendingWork()
-	if err != nil {
-		panic(fmt.Sprintf("project Pending Work after accepted mutation: %v", err))
-	}
-	stored := clonePendingWork(snapshot)
-	coordinator.latest.Store(&stored)
-	if beforeReplacement != nil {
-		beforeReplacement()
-	}
-	e.publishPendingWork(snapshot)
-	return nil
+func (e *Engine) nextPendingWorkSteerAdmission() *pendingWorkSteerAdmission {
+	next := pendingWorkSteerAdmission(e.pendingWorkSteerOrdinal.Add(1))
+	return &next
 }
 
 func (e *Engine) projectPendingWork() (runtimeinput.PendingWork, error) {
@@ -145,10 +94,9 @@ func (e *Engine) projectPendingWork() (runtimeinput.PendingWork, error) {
 	return collection, nil
 }
 
-func (e *Engine) publishPendingWork(snapshot runtimeinput.PendingWork) {
-	published := clonePendingWork(snapshot)
-	if err := e.emitRaw(Event{Kind: EventPendingWorkReplaced, PendingWork: &published}); err != nil {
-		e.surfaceRunError(fmt.Errorf("publish Pending Work replacement: %w", err))
+func (e *Engine) publishPendingWorkChanged() {
+	if err := e.emitRaw(Event{Kind: EventPendingWorkChanged}); err != nil {
+		e.surfaceRunError(fmt.Errorf("publish Pending Work Changed: %w", err))
 	}
 }
 
@@ -179,38 +127,37 @@ func (e *Engine) RemovePendingWork(ctx context.Context, id runtimeids.QueueItemI
 func (e *Engine) removePendingWork(id runtimeids.QueueItemID) (runtimeinput.PendingWorkRestoration, error) {
 	e.ensureOrchestrationCollaborators()
 	var restoration runtimeinput.PendingWorkRestoration
-	err := e.mutatePendingWork(false, func(*pendingWorkSteerAdmission) (bool, error) {
-		if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
-			if operational, removed := lifecycle.removePendingOperationalWork(id); removed {
-				var err error
-				restoration, err = operational.item.Restoration()
-				if err != nil {
-					return false, err
-				}
-				return true, nil
+	if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
+		if operational, removed := lifecycle.removePendingOperationalWork(id); removed {
+			var err error
+			restoration, err = operational.item.Restoration()
+			if err != nil {
+				return runtimeinput.PendingWorkRestoration{}, err
 			}
+			e.publishPendingWorkChanged()
+			return restoration, nil
 		}
+	}
 
-		message, removed := e.messageFlow.DiscardQueuedUserMessage(id.String())
-		if !removed {
-			return false, &runtimeinput.PendingWorkRemovalError{ItemID: id}
-		}
-		if message.lane == runtimeinput.PendingWorkLaneSteer {
-			e.unmarkQueuedUserInjectionForAutoDrain(id.String())
-			e.completeLiveRunQueueItems(map[string]struct{}{id.String(): {}})
-		}
-		item, err := pendingWorkMessage(message)
-		if err != nil {
-			return false, err
-		}
-		restoration, err = item.Restoration()
-		if err != nil {
-			return false, err
-		}
-		e.emitQueuedUserMessageStatus(message.message, QueuedUserMessageDiscarded, "", false)
-		return true, nil
-	}, nil)
-	return restoration, err
+	message, removed := e.messageFlow.DiscardQueuedUserMessage(id.String())
+	if !removed {
+		return runtimeinput.PendingWorkRestoration{}, &runtimeinput.PendingWorkRemovalError{ItemID: id}
+	}
+	if message.lane == runtimeinput.PendingWorkLaneSteer {
+		e.unmarkQueuedUserInjectionForAutoDrain(id.String())
+		e.completeLiveRunQueueItems(map[string]struct{}{id.String(): {}})
+	}
+	item, err := pendingWorkMessage(message)
+	if err != nil {
+		return runtimeinput.PendingWorkRestoration{}, err
+	}
+	restoration, err = item.Restoration()
+	if err != nil {
+		return runtimeinput.PendingWorkRestoration{}, err
+	}
+	e.emitQueuedUserMessageStatus(message.message, QueuedUserMessageDiscarded, "", false)
+	e.publishPendingWorkChanged()
+	return restoration, nil
 }
 
 func (s *defaultExclusiveStepLifecycle) pendingOperationalWork() []pendingOperationalWork {
@@ -273,32 +220,4 @@ func pendingWorkMessage(message queuedUserMessage) (runtimeinput.PendingWorkItem
 		CanonicalInput: text,
 		Message:        &runtimeinput.PendingWorkMessage{Text: text},
 	}, nil
-}
-
-func clonePendingWork(source runtimeinput.PendingWork) runtimeinput.PendingWork {
-	cloned := runtimeinput.PendingWork{Items: make([]runtimeinput.PendingWorkItem, len(source.Items))}
-	for index, item := range source.Items {
-		cloned.Items[index] = item
-		if item.Message != nil {
-			message := *item.Message
-			cloned.Items[index].Message = &message
-		}
-		if item.ManualCompaction != nil {
-			compaction := *item.ManualCompaction
-			if item.ManualCompaction.Guidance != nil {
-				guidance := *item.ManualCompaction.Guidance
-				compaction.Guidance = &guidance
-			}
-			cloned.Items[index].ManualCompaction = &compaction
-		}
-		if item.WorktreeTransition != nil {
-			transition := *item.WorktreeTransition
-			if item.WorktreeTransition.Selector != nil {
-				selector := *item.WorktreeTransition.Selector
-				transition.Selector = &selector
-			}
-			cloned.Items[index].WorktreeTransition = &transition
-		}
-	}
-	return cloned
 }

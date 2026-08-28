@@ -177,6 +177,7 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(TranscriptToolAbort{StepID: stepID, ToolCallID: "call-1", Reason: ToolAbortCanceled}),
 		NewTranscriptEvent(TranscriptUserMessageFlushed{StepID: &stepID}),
 		NewTranscriptEvent(TranscriptQueuedMessageState{QueueItemID: transcriptTestQueueItemID(t), Status: QueuedUserMessageAccepted, Text: &text}),
+		NewTranscriptEvent(TranscriptPendingWorkChanged{}),
 		NewTranscriptEvent(TranscriptPendingWorkRestored{Restoration: runtimeinput.PendingWorkTechnicalRestoration{
 			ItemID:         transcriptTestQueueItemID(t),
 			Kind:           runtimeinput.PendingWorkItemKindManualCompaction,
