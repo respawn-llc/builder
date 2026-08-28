@@ -71,16 +71,20 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 		return context.Canceled
 	}
 
-	launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+	launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) error {
 		stopLifecycleCancellation := context.AfterFunc(lifecycleCtx, func() {
 			cancelPending(context.Cause(lifecycleCtx))
 		})
 		defer stopLifecycleCancellation()
 		defer cancelPending(context.Canceled)
 		defer e.stepLifecycle.ReleaseReservation(reservation)
-		fatal, abort := resultGroupFatalFromError(request.run(pendingCtx, reservation, item))
+		runErr := request.run(pendingCtx, reservation, item)
+		fatal, abort := resultGroupFatalFromError(runErr)
 		if abort {
 			return fatal
+		}
+		if worktreeFailureIsIndeterminate(runErr) {
+			return runErr
 		}
 		return nil
 	})

@@ -454,7 +454,7 @@ func (e *Engine) maybeReserveEagerCompaction(activeKind ActiveKind, resultKind L
 		e.surfaceRunError(err)
 		return
 	}
-	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
+	if !e.launchLifecycleTask(func(ctx context.Context) error {
 		defer e.stepLifecycle.ReleaseReservation(reservation)
 		err := runExclusiveStepWhenIdle(ctx, e.stepLifecycle, ActiveKindCompaction, reservation, func(stepCtx context.Context, stepID string) error {
 			planningSnapshot := e.compactionPlanningSnapshot()

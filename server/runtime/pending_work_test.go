@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -769,6 +770,99 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 				t.Fatalf("runtime abort count = %d, want abort=%v", gotAborts, test.wantAbort)
 			}
 		})
+	}
+}
+
+func TestIndeterminateWorktreeTransitionRetiresRuntimeAfterLifecycleRelease(t *testing.T) {
+	transitionFailure := errors.New("rollback target is indeterminate")
+	retirementFailure := errors.New("retire exact Runtime resource")
+	callbackDone := make(chan error, 1)
+	var engine *Engine
+	var mu sync.Mutex
+	var queuedStatuses []QueuedUserMessageStatusEvent
+	var restorations []runtimeinput.PendingWorkTechnicalRestoration
+	engine = pendingWorkTestEngine(t, Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			if event.QueuedUserMessageStatus != nil {
+				queuedStatuses = append(queuedStatuses, *event.QueuedUserMessageStatus)
+			}
+			if event.PendingWorkRestoration != nil {
+				restorations = append(restorations, *event.PendingWorkRestoration)
+			}
+		},
+		LifecycleRuntimeAbort: func() error {
+			engine.lifecycleWG.Wait()
+			callbackDone <- nil
+			return retirementFailure
+		},
+	})
+	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+	operationID := clientui.NewWorktreeTransitionID()
+	if _, err := engine.ScheduleWorktreeTransition(
+		t.Context(),
+		operationID,
+		runtimeinput.PendingWorkWorktreeTransition{
+			Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+		},
+		func(context.Context) error {
+			return worktreeIndeterminateTestError{error: transitionFailure}
+		},
+	); err != nil {
+		t.Fatalf("schedule Worktree transition: %v", err)
+	}
+	queued, err := engine.QueueUserMessage(t.Context(), "queued after Worktree transition")
+	if err != nil {
+		t.Fatalf("queue human work: %v", err)
+	}
+	releaseMaintenance()
+
+	select {
+	case callbackErr := <-callbackDone:
+		if callbackErr != nil {
+			t.Fatalf("Runtime-abort callback close: %v", callbackErr)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Runtime-abort callback did not run after lifecycle ownership was released")
+	}
+	waitEngineLifecycleTasks(t, engine)
+
+	if _, err := engine.QueueUserMessage(t.Context(), "later human work"); !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("later human work error = %v, want ErrEngineClosed", err)
+	}
+	mu.Lock()
+	gotStatuses := append([]QueuedUserMessageStatusEvent(nil), queuedStatuses...)
+	gotRestorations := append([]runtimeinput.PendingWorkTechnicalRestoration(nil), restorations...)
+	mu.Unlock()
+	var queuedFailure *QueuedUserMessageStatusEvent
+	for index := range gotStatuses {
+		status := &gotStatuses[index]
+		if status.QueueItemID == queued.ID && status.Status == QueuedUserMessageFailed {
+			queuedFailure = status
+			break
+		}
+	}
+	if queuedFailure == nil || queuedFailure.FailureReason != QueuedUserMessageFailureRuntimeUnavailable {
+		t.Fatalf("queued human work statuses = %+v, want Runtime unavailable failure for %s", gotStatuses, queued.ID)
+	}
+	if len(gotRestorations) != 0 {
+		t.Fatalf("technical restorations = %+v, want none", gotRestorations)
+	}
+	var streamingError string
+	deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
+	for time.Now().Before(deadline) {
+		streamingError = engine.ChatSnapshot().StreamingError
+		if strings.Contains(streamingError, transitionFailure.Error()) &&
+			strings.Contains(streamingError, retirementFailure.Error()) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(streamingError, transitionFailure.Error()) ||
+		!strings.Contains(streamingError, retirementFailure.Error()) {
+		t.Fatalf("retirement diagnostic = %q, want transition and retirement failures", streamingError)
 	}
 }
 

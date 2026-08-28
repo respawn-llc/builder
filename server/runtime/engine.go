@@ -470,7 +470,7 @@ func (e *Engine) ensureLifecycle() {
 	})
 }
 
-func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFatal) bool {
+func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
 	if e == nil || task == nil {
 		return false
 	}
@@ -487,7 +487,7 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFata
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
 	go func(ctx context.Context) {
-		var runtimeAbort *resultGroupFatal
+		var taskErr error
 		defer func() {
 			// Retirement may synchronously close this Engine and wait for lifecycle
 			// tasks, so this task must leave the wait group before callbacks run.
@@ -495,11 +495,18 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFata
 			if e.cfg.LifecycleTaskFinished != nil {
 				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
 			}
-			if runtimeAbort != nil && e.cfg.LifecycleRuntimeAbort != nil {
+			if e.cfg.LifecycleRuntimeAbort == nil {
+				return
+			}
+			if _, runtimeAbort := resultGroupFatalFromError(taskErr); runtimeAbort {
 				e.surfaceRunError(e.cfg.LifecycleRuntimeAbort())
+				return
+			}
+			if worktreeFailureIsIndeterminate(taskErr) {
+				e.surfaceRunErrorRaw(errors.Join(taskErr, e.cfg.LifecycleRuntimeAbort()))
 			}
 		}()
-		runtimeAbort = task(ctx)
+		taskErr = task(ctx)
 	}(ctx)
 	return true
 }
@@ -814,7 +821,7 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 	}
 	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[tools.Result], error) {
 		deferred := newRuntimeDeferred[tools.Result]()
-		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) error {
 			result, runErr := e.runUserShellCommand(lifecycleCtx, command, onActive, accept)
 			deferred.complete(result, runErr)
 			fatal, abort := resultGroupFatalFromError(runErr)

@@ -58,13 +58,16 @@ func createWorktreeRequestForTest(
 }
 
 type serviceTestPublisher struct {
-	mu       sync.Mutex
-	outcomes []clientui.WorktreeTransitionOutcome
-	ready    chan struct{}
+	mu          sync.Mutex
+	identityErr error
+	outcomes    []clientui.WorktreeTransitionOutcome
+	ready       chan struct{}
 }
 
 func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
-	return nil
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.identityErr
 }
 
 func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {

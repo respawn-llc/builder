@@ -130,6 +130,13 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 					return runErr
 				},
 			)
+			if worktreeFailureIsApplied(runErr) {
+				e.surfaceRunError(runErr)
+			}
+			if worktreeFailureIsIndeterminate(runErr) {
+				e.closeAdmissionAfterRuntimeAbort()
+				e.FailQueuedUserMessages(QueuedUserMessageFailureRuntimeUnavailable)
+			}
 			return runErr
 		},
 	})
@@ -196,9 +203,22 @@ type worktreeIndeterminateFailure interface {
 	WorktreeTransitionIndeterminate()
 }
 
-func worktreeFailureRequiresTechnicalRestoration(err error) bool {
+type worktreeAppliedFailure interface {
+	WorktreeTransitionApplied()
+}
+
+func worktreeFailureIsApplied(err error) bool {
+	var applied worktreeAppliedFailure
+	return errors.As(err, &applied)
+}
+
+func worktreeFailureIsIndeterminate(err error) bool {
 	var indeterminate worktreeIndeterminateFailure
-	if errors.As(err, &indeterminate) {
+	return errors.As(err, &indeterminate)
+}
+
+func worktreeFailureRequiresTechnicalRestoration(err error) bool {
+	if worktreeFailureIsIndeterminate(err) {
 		return false
 	}
 	var technical worktreeTechnicalFailure
@@ -399,7 +419,7 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	e.queuedUserWorkScheduled = true
 	e.queuedUserWorkCompletion = completion
 	e.queuedUserWorkMu.Unlock()
-	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
+	if !e.launchLifecycleTask(func(ctx context.Context) error {
 		return e.processQueuedUserWork(ctx, completion)
 	}) {
 		e.clearQueuedUserWorkScheduled(completion, ErrEngineClosed)

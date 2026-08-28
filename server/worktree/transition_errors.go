@@ -26,6 +26,8 @@ func (e *worktreeAppliedError) Unwrap() error {
 	return e.cause
 }
 
+func (e *worktreeAppliedError) WorktreeTransitionApplied() {}
+
 type worktreeIndeterminateError struct {
 	cause error
 }
