@@ -77,6 +77,15 @@ import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 import type * as worktree from "./schemas/worktree";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
+import type {
+  CreateSuccess,
+  CreateTargetResolveSuccess,
+  DeleteSuccess,
+  ListSuccess,
+  ScheduledAcknowledgement,
+  SelectorResolveSuccess,
+  StatusSuccess,
+} from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
 
@@ -181,24 +190,18 @@ export interface ApiService {
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): ApiSubscription;
-  getWorktreeStatus(sessionID: string): Promise<worktree.WorktreeStatus>;
-  listWorktrees(sessionID: string): Promise<worktree.WorktreeList>;
-  resolveWorktreeSelector(sessionID: string, selector: string): Promise<worktree.WorktreeSelectorResolution>;
-  resolveWorktreeCreateTarget(
-    sessionID: string,
-    target: string,
-  ): Promise<worktree.WorktreeCreateTargetResolutionResponse>;
+  getWorktreeStatus(sessionID: string): Promise<StatusSuccess>;
+  listWorktrees(sessionID: string): Promise<ListSuccess>;
+  resolveWorktreeSelector(sessionID: string, selector: string): Promise<SelectorResolveSuccess>;
+  resolveWorktreeCreateTarget(sessionID: string, target: string): Promise<CreateTargetResolveSuccess>;
   previewWorktreeDelete(sessionID: string, selector: string): Promise<worktree.WorktreeDeletePreview>;
-  createWorktree(input: worktree.WorktreeCreateInput): Promise<worktree.WorktreeCreateResponse>;
-  switchWorktree(
-    sessionID: string,
-    operation: worktree.WorktreeSwitch,
-  ): Promise<worktree.WorktreeScheduledAcknowledgement>;
+  createWorktree(input: worktree.WorktreeCreateInput): Promise<CreateSuccess>;
+  switchWorktree(sessionID: string, operation: worktree.WorktreeSwitch): Promise<ScheduledAcknowledgement>;
   deleteWorktree(
     sessionID: string,
     preview: worktree.WorktreeDeletePreview,
     confirmation: worktree.WorktreeDeleteConfirmationChoice,
-  ): Promise<worktree.WorktreeDeleteResult>;
+  ): Promise<DeleteSuccess>;
   subscribeWorktreeSetup(
     setupOperationID: SetupOperationID,
     handler: WorktreeSetupEventHandler,

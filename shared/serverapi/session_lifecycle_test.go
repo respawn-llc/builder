@@ -1,6 +1,10 @@
 package serverapi
 
-import "testing"
+import (
+	"testing"
+
+	"core/shared/worktreecontract"
+)
 
 func TestSessionPersistInputDraftAcceptsComposerDraft(t *testing.T) {
 	req := SessionPersistInputDraftRequest{
@@ -13,7 +17,7 @@ func TestSessionPersistInputDraftAcceptsComposerDraft(t *testing.T) {
 }
 func TestSessionRetargetWorkspaceResponseAcceptsScheduledAcknowledgement(t *testing.T) {
 	response := SessionRetargetWorkspaceResponse{
-		Scheduled: &WorktreeScheduledAcknowledgement{OperationID: NewWorktreeOperationID()},
+		Scheduled: &SessionWorkspaceRetargetScheduledAcknowledgement{OperationID: worktreecontract.NewOperationID()},
 	}
 	if err := response.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)

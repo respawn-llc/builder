@@ -215,17 +215,6 @@ var routeContracts = []Route{
 	unary[serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](protocol.MethodSessionResolveTransition, AuthServer, ScopeSessionActiveProjectIfSet, ConnectionControl),
 	unary[serverapi.SessionRuntimeActivateRequest, serverapi.SessionRuntimeActivateResponse](protocol.MethodSessionRuntimeActivate, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.SessionRuntimeReleaseRequest, serverapi.SessionRuntimeReleaseResponse](protocol.MethodSessionRuntimeRelease, AuthServer, ScopeNone, ConnectionControl),
-	unary[serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](protocol.MethodWorktreeStatus, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](protocol.MethodWorktreeList, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](protocol.MethodWorktreeWorkspaceList, AuthServer, ScopeProjectWorkspaceBinding, ConnectionControl),
-	unary[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](protocol.MethodWorktreeSelectorResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](protocol.MethodWorktreeDeletePreview, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](protocol.MethodWorktreeCreateTargetResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](protocol.MethodWorktreeCreate, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](protocol.MethodWorktreeEnter, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeLeaveRequest, serverapi.WorktreeScheduledAcknowledgement](protocol.MethodWorktreeLeave, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	unary[serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](protocol.MethodWorktreeDelete, AuthServer, ScopeSessionActiveProject, ConnectionControl),
-	subscription[serverapi.WorktreeSetupSubscribeRequest, protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupSubscribe, AuthServer, ScopeNone, protocol.MethodWorktreeSetupEvent, protocol.MethodWorktreeSetupComplete),
 	unary[serverapi.RuntimeSetSessionNameRequest, struct{}](protocol.MethodRuntimeSetSessionName, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeSetThinkingLevelRequest, struct{}](protocol.MethodRuntimeSetThinkingLevel, AuthServer, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.RuntimeSetFastModeEnabledRequest, serverapi.RuntimeSetFastModeEnabledResponse](protocol.MethodRuntimeSetFastModeEnabled, AuthServer, ScopeSessionActiveProject, ConnectionControl),
@@ -281,8 +270,6 @@ var routeContracts = []Route{
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowComplete),
 	notification[protocol.WorkflowProjectEventParams](protocol.MethodWorkflowProjectEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowProjectComplete),
-	notification[protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupEvent),
-	notification[protocol.StreamCompleteParams](protocol.MethodWorktreeSetupComplete),
 }
 
 func Routes() []Route {

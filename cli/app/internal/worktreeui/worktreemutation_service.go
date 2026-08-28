@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"core/shared/apicontract"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 const defaultResolveTimeout = 3 * time.Second
@@ -29,63 +31,61 @@ type Service struct {
 	SessionID      string
 	Runtime        RuntimeControl
 	ResolveContext func() (context.Context, context.CancelFunc)
-	NewOperationID func() serverapi.WorktreeOperationID
+	NewOperationID func() worktreecontract.OperationID
 }
 
-func (s Service) List() (serverapi.WorktreeListResponse, error) {
+func (s Service) List() (*worktreepb.ListSuccess, error) {
 	ctx, cancel, err := s.resolveMutationContext(false)
 	if err != nil {
-		return serverapi.WorktreeListResponse{}, err
+		return nil, err
 	}
 	defer cancel()
-	return s.Client.ListWorktrees(ctx, serverapi.WorktreeListRequest{
-		SessionID: s.SessionID,
+	return s.Client.ListWorktrees(ctx, &worktreepb.ListRequest{
+		SessionId: s.SessionID,
 	})
 }
 
-func (s Service) ResolveCreateTarget(target string) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+func (s Service) ResolveCreateTarget(target string) (*worktreepb.CreateTargetResolveSuccess, error) {
 	if s.Client == nil {
-		return serverapi.WorktreeCreateTargetResolveResponse{}, ErrClientUnavailable
+		return nil, ErrClientUnavailable
 	}
 	ctx, cancel := s.resolveContext()
 	defer cancel()
-	return s.Client.ResolveWorktreeCreateTarget(ctx, serverapi.WorktreeCreateTargetResolveRequest{
-		SessionID: strings.TrimSpace(s.SessionID),
+	return s.Client.ResolveWorktreeCreateTarget(ctx, &worktreepb.CreateTargetResolveRequest{
+		SessionId: strings.TrimSpace(s.SessionID),
 		Target:    target,
 	})
 }
 
-func (s Service) ResolveSelector(selector string) (serverapi.WorktreeSelectorPreviewResponse, error) {
+func (s Service) ResolveSelector(selector string) (*worktreepb.SelectorResolveSuccess, error) {
 	if s.Client == nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, ErrClientUnavailable
+		return nil, ErrClientUnavailable
 	}
 	ctx, cancel := s.resolveContext()
 	defer cancel()
-	return s.Client.ResolveWorktreeSelector(ctx, serverapi.WorktreeSelectorPreviewRequest{
-		SessionID: strings.TrimSpace(s.SessionID),
+	return s.Client.ResolveWorktreeSelector(ctx, &worktreepb.SelectorResolveRequest{
+		SessionId: strings.TrimSpace(s.SessionID),
 		Selector:  strings.TrimSpace(selector),
 	})
 }
 
-func (s Service) Create(req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	if err := req.SetupOperationID.Validate(); err != nil {
-		req.SetupOperationID = serverapi.NewWorktreeSetupOperationID()
+func (s Service) Create(req *worktreepb.CreateRequest) (*worktreepb.CreateSuccess, error) {
+	if _, err := worktreecontract.ParseSetupOperationID(req.SetupOperationId); err != nil {
+		req.SetupOperationId = worktreecontract.NewSetupOperationID().String()
 	}
-	return runCreateMutation(s, func(ctx context.Context) (serverapi.WorktreeCreateResponse, error) {
-		req.SessionID = s.SessionID
+	return runCreateMutation(s, func(ctx context.Context) (*worktreepb.CreateSuccess, error) {
+		req.SessionId = s.SessionID
 		return s.Client.CreateWorktree(ctx, req)
 	})
 }
 
-func (s Service) Enter(selector string) (serverapi.WorktreeScheduledAcknowledgement, error) {
+func (s Service) Enter(selector string) (*worktreepb.ScheduledAcknowledgement, error) {
 	operationID := s.operationID()
-	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeScheduledAcknowledgement, error) {
-		return s.Client.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
-			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-				OperationID: operationID,
-				SessionID:   s.SessionID,
-			},
-			Selector: strings.TrimSpace(selector),
+	return runMutation(s, func(ctx context.Context) (*worktreepb.ScheduledAcknowledgement, error) {
+		return s.Client.EnterWorktree(ctx, &worktreepb.EnterRequest{
+			OperationId: operationID.String(),
+			SessionId:   s.SessionID,
+			Selector:    strings.TrimSpace(selector),
 		})
 	})
 }
@@ -93,11 +93,11 @@ func (s Service) Enter(selector string) (serverapi.WorktreeScheduledAcknowledgem
 func (s Service) Delete(
 	selector string,
 	forceFolderRemoval bool,
-	cleanupPolicy serverapi.WorktreeBranchCleanupMode,
-) (serverapi.WorktreeDeleteResult, error) {
-	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeDeleteResult, error) {
-		return s.Client.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			SessionID:           s.SessionID,
+	cleanupPolicy worktreepb.BranchCleanupMode,
+) (*worktreepb.DeleteSuccess, error) {
+	return runMutation(s, func(ctx context.Context) (*worktreepb.DeleteSuccess, error) {
+		return s.Client.DeleteWorktree(ctx, &worktreepb.DeleteRequest{
+			SessionId:           s.SessionID,
 			Selector:            strings.TrimSpace(selector),
 			ForceFolderRemoval:  forceFolderRemoval,
 			BranchCleanupPolicy: cleanupPolicy,
@@ -170,13 +170,13 @@ func DefaultMutationContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), defaultMutationTimeout)
 }
 
-func (s Service) operationID() serverapi.WorktreeOperationID {
+func (s Service) operationID() worktreecontract.OperationID {
 	if s.NewOperationID != nil {
 		if id := s.NewOperationID(); id.Validate() == nil {
 			return id
 		}
 	}
-	return serverapi.NewWorktreeOperationID()
+	return worktreecontract.NewOperationID()
 }
 
 func retryControlCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {

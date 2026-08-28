@@ -1,9 +1,10 @@
 package worktreeui
 
 import (
+	"reflect"
 	"testing"
 
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 func TestScheduleIncrementsTokenAndDebouncesNonEmptyQuery(t *testing.T) {
@@ -11,7 +12,7 @@ func TestScheduleIncrementsTokenAndDebouncesNonEmptyQuery(t *testing.T) {
 		ErrorText:     "old error",
 		SubmitPending: true,
 		Token:         7,
-		Resolution:    serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch},
+		Resolution:    &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH},
 	}, " main ")
 	if state.Token != 8 {
 		t.Fatalf("token = %d, want 8", state.Token)
@@ -25,8 +26,8 @@ func TestScheduleIncrementsTokenAndDebouncesNonEmptyQuery(t *testing.T) {
 	if state.ErrorText != "" {
 		t.Fatalf("error text = %q, want empty", state.ErrorText)
 	}
-	if state.Resolution.Kind != "" {
-		t.Fatalf("resolution kind = %q, want cleared", state.Resolution.Kind)
+	if state.Resolution.GetKind() != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_UNSPECIFIED {
+		t.Fatalf("resolution kind = %v, want cleared", state.Resolution.GetKind())
 	}
 	if outcome.Token != 8 || !outcome.Debounce {
 		t.Fatalf("outcome = %+v, want token 8 debounce", outcome)
@@ -34,7 +35,7 @@ func TestScheduleIncrementsTokenAndDebouncesNonEmptyQuery(t *testing.T) {
 }
 
 func TestScheduleEmptyQueryClearsResolutionWithoutDebounce(t *testing.T) {
-	state, outcome := Schedule(State{Token: 2, Resolution: serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindNewBranch}}, " ")
+	state, outcome := Schedule(State{Token: 2, Resolution: &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH}}, " ")
 	if state.Token != 3 {
 		t.Fatalf("token = %d, want 3", state.Token)
 	}
@@ -44,8 +45,8 @@ func TestScheduleEmptyQueryClearsResolutionWithoutDebounce(t *testing.T) {
 	if outcome.Debounce {
 		t.Fatal("empty query should not debounce")
 	}
-	if state.Resolution.Kind != "" {
-		t.Fatalf("resolution kind = %q, want cleared", state.Resolution.Kind)
+	if state.Resolution.GetKind() != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_UNSPECIFIED {
+		t.Fatalf("resolution kind = %v, want cleared", state.Resolution.GetKind())
 	}
 }
 
@@ -70,19 +71,19 @@ func TestBeginSubmitValidatesAndMarksSubmitPending(t *testing.T) {
 }
 
 func TestDebounceReadyClearsEmptyQueryAndIgnoresStaleToken(t *testing.T) {
-	initial := State{Token: 2, Resolving: true, SubmitPending: true, ErrorText: "old", Resolution: serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch}}
+	initial := State{Token: 2, Resolving: true, SubmitPending: true, ErrorText: "old", Resolution: &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH}}
 	state, outcome := DebounceReady(initial, 1, "main")
 	if !outcome.Ignored {
 		t.Fatal("expected stale token ignored")
 	}
-	if state != initial {
+	if !reflect.DeepEqual(state, initial) {
 		t.Fatalf("state changed for stale token: %+v", state)
 	}
 	state, outcome = DebounceReady(initial, 2, " ")
 	if outcome.Ignored || outcome.Start {
 		t.Fatalf("outcome = %+v, want handled without start", outcome)
 	}
-	if state.Resolving || state.SubmitPending || state.ErrorText != "" || state.Resolution.Kind != "" {
+	if state.Resolving || state.SubmitPending || state.ErrorText != "" || state.Resolution.GetKind() != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_UNSPECIFIED {
 		t.Fatalf("state = %+v, want cleared empty query state", state)
 	}
 }
@@ -93,22 +94,22 @@ func TestDoneIgnoresStaleResponsesAndSubmitsPendingSuccess(t *testing.T) {
 	if !outcome.Ignored {
 		t.Fatal("expected stale token ignored")
 	}
-	if state != initial {
+	if !reflect.DeepEqual(state, initial) {
 		t.Fatalf("state changed for stale token: %+v", state)
 	}
 	state, outcome = Done(initial, DoneInput{Token: 3, CurrentQuery: "main", ResponseQuery: "other"})
 	if !outcome.Ignored {
 		t.Fatal("expected stale query ignored")
 	}
-	if state != initial {
+	if !reflect.DeepEqual(state, initial) {
 		t.Fatalf("state changed for stale query: %+v", state)
 	}
-	resolution := serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch}
+	resolution := &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH}
 	state, outcome = Done(initial, DoneInput{Token: 3, CurrentQuery: "main", ResponseQuery: "main", Resolution: resolution})
 	if outcome.Ignored || !outcome.Submit || outcome.SubmitKind != resolution.Kind {
 		t.Fatalf("outcome = %+v, want submit existing branch", outcome)
 	}
-	if state.Resolving || state.SubmitPending || state.Resolution.Kind != resolution.Kind {
+	if state.Resolving || state.SubmitPending || state.Resolution.GetKind() != resolution.Kind {
 		t.Fatalf("state = %+v, want resolved non-pending", state)
 	}
 }
@@ -120,12 +121,12 @@ func TestDoneStoresFormattedError(t *testing.T) {
 		ResponseQuery: "main",
 		HasError:      true,
 		ErrorText:     "formatted error",
-		Resolution:    serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch},
+		Resolution:    &worktreepb.CreateTargetResolution{Kind: worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH},
 	})
 	if outcome.Submit || outcome.Ignored {
 		t.Fatalf("outcome = %+v, want handled error without submit", outcome)
 	}
-	if state.Resolving || state.SubmitPending || state.ErrorText != "formatted error" || state.Resolution.Kind != "" {
+	if state.Resolving || state.SubmitPending || state.ErrorText != "formatted error" || state.Resolution.GetKind() != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_UNSPECIFIED {
 		t.Fatalf("state = %+v, want formatted error and cleared resolution", state)
 	}
 }

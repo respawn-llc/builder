@@ -3,7 +3,7 @@ package worktreeui
 import (
 	"testing"
 
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 func TestSelectionUsesCreateRowAndStableIdentities(t *testing.T) {
@@ -62,19 +62,20 @@ func TestSelectionIdentityRejectsInvalidPresentKentID(t *testing.T) {
 
 func TestStableMutationSelectorUsesExternalCanonicalRoot(t *testing.T) {
 	fallbackIdentity := "external"
-	item, err := ProjectItem(serverapi.WorktreeListEntry{
-		Topology: serverapi.WorktreeTopologyEntry{
-			Variant: serverapi.WorktreeTopologyVariantExternal,
-			External: &serverapi.WorktreeExternalFacts{
-				Git: serverapi.WorktreeGitFacts{
-					CanonicalRoot: "/wt/external",
-					HeadObject:    "deadbeef",
-					Detached:      true,
-					PathAvailable: true,
+	item, err := ProjectItem(&worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_External{
+				External: &worktreepb.ExternalFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot: "/wt/external",
+						HeadObject:    "deadbeef",
+						Detached:      true,
+						PathAvailable: true,
+					},
 				},
 			},
 		},
-		Projection: serverapi.WorktreeListProjection{
+		Projection: &worktreepb.ListProjection{
 			Selector:         "external",
 			FallbackIdentity: &fallbackIdentity,
 		},

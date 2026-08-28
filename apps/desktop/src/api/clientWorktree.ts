@@ -1,193 +1,226 @@
-import { z } from "zod";
+import { create, operationName, type DescMethod } from "@app/server-api-contract";
+import {
+  BranchCleanupMode,
+  CreateErrorOwner,
+  CreateService,
+  CreateTargetResolutionKind,
+  CreateTargetService,
+  DeletePreviewService,
+  DirtyStateKind,
+  ListService,
+  SelectorService,
+  StatusService,
+  SwitchOperationKind,
+  TransitionService,
+  type CreateError,
+  type CreateSuccess,
+  type CreateTargetResolveSuccess,
+  type DeleteError,
+  type DeletePreviewError,
+  type DeleteSuccess,
+  type EnterError,
+  type LeaveError,
+  type ListSuccess,
+  type ScheduledAcknowledgement,
+  type SelectorResolveError,
+  type SelectorResolveSuccess,
+  type SetupStartError,
+  type StatusSuccess,
+} from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 
-import { parseRpcResponse } from "./clientParse";
 import { ContractError, RpcError } from "./errors";
-import type { JsonValue } from "./json";
-import { rpcErrorCodes } from "./rpcErrorCodes";
-import * as worktree from "./schemas/worktree";
-import type { RpcCallOptions, RpcTransport } from "./transport";
-import { decodeWorktreeSetupRetainedError, type RetainedPreviousWorktree } from "./worktreeSetup";
-import { parseWorktreeOperationID } from "./worktreeOperationID";
+import { protobufRpcError, requireUnarySuccess } from "./protobufRpc";
+import {
+  authorizeWorktreeCreateTargetResolution,
+  authorizeWorktreeDeletePreview,
+  authorizeWorktreeListEntry,
+  requireWorktreeAuthority,
+  type WorktreeCreateInput,
+  type WorktreeDeleteConfirmationChoice,
+  type WorktreeDeletePreview,
+  type WorktreeSwitch,
+} from "./schemas/worktree";
+import type { DescriptorRpcTransport } from "./transport";
 
-export const getWorktreeStatus = async (transport: RpcTransport, sessionID: string) =>
-  call(transport, "worktree.status", session(sessionID), { schema: worktree.worktreeStatusResponseSchema });
-export const listWorktrees = async (transport: RpcTransport, sessionID: string) =>
-  call(transport, "worktree.list", session(sessionID), { schema: worktree.worktreeListResponseSchema });
-export const resolveWorktreeSelector = factRead(
-  "worktree.selector.resolve",
-  "selector",
-  worktree.worktreeSelectorResolutionSchema,
-);
-export const resolveWorktreeCreateTarget = factRead(
-  "worktree.create_target.resolve",
-  "target",
-  worktree.worktreeCreateTargetResolutionResponseSchema,
-);
-export const previewWorktreeDelete = factRead(
-  "worktree.deletePreview",
-  "selector",
-  worktree.worktreeDeletePreviewResponseSchema,
-);
+export async function getWorktreeStatus(
+  transport: DescriptorRpcTransport,
+  sessionID: string,
+): Promise<StatusSuccess> {
+  const method = StatusService.method.get;
+  return requireUnarySuccess(
+    method,
+    await transport.callDescriptor(method, create(method.input, { sessionId: sessionID })),
+  );
+}
 
-export async function createWorktree(transport: RpcTransport, input: worktree.WorktreeCreateInput) {
-  const resolution = worktree.requireWorktreeAuthority(input.resolution, "create");
-  if ((resolution.kind === "new_branch") !== (input.baseRef !== null)) {
+export async function listWorktrees(
+  transport: DescriptorRpcTransport,
+  sessionID: string,
+): Promise<ListSuccess> {
+  const method = ListService.method.list;
+  const success = requireUnarySuccess(
+    method,
+    await transport.callDescriptor(method, create(method.input, { sessionId: sessionID })),
+  );
+  success.worktrees.forEach(authorizeWorktreeListEntry);
+  return success;
+}
+
+export async function resolveWorktreeSelector(
+  transport: DescriptorRpcTransport,
+  sessionID: string,
+  selector: string,
+): Promise<SelectorResolveSuccess> {
+  const method = SelectorService.method.resolve;
+  const success = requireWorktreeSuccess(
+    method,
+    await transport.callDescriptor(method, create(method.input, { sessionId: sessionID, selector })),
+  );
+  if (success.worktree !== undefined) authorizeWorktreeListEntry(success.worktree);
+  return success;
+}
+
+export async function resolveWorktreeCreateTarget(
+  transport: DescriptorRpcTransport,
+  sessionID: string,
+  target: string,
+): Promise<CreateTargetResolveSuccess> {
+  const method = CreateTargetService.method.resolve;
+  const success = requireUnarySuccess(
+    method,
+    await transport.callDescriptor(method, create(method.input, { sessionId: sessionID, target })),
+  );
+  authorizeWorktreeCreateTargetResolution(required(success.resolution));
+  return success;
+}
+
+export async function previewWorktreeDelete(
+  transport: DescriptorRpcTransport,
+  sessionID: string,
+  selector: string,
+): Promise<WorktreeDeletePreview> {
+  const method = DeletePreviewService.method.get;
+  return authorizeWorktreeDeletePreview(
+    requireWorktreeSuccess(
+      method,
+      await transport.callDescriptor(method, create(method.input, { sessionId: sessionID, selector })),
+    ),
+  );
+}
+
+export async function createWorktree(
+  transport: DescriptorRpcTransport,
+  input: WorktreeCreateInput,
+): Promise<CreateSuccess> {
+  const resolution = requireWorktreeAuthority(input.resolution, "create");
+  const createBranch =
+    resolution.kind === CreateTargetResolutionKind.WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH;
+  if (createBranch !== (input.baseRef !== null)) {
     throw new TypeError("Worktree Create resolution and Base ref do not match.");
   }
-  return call(
-    transport,
-    "worktree.create",
-    {
-      ...session(input.sessionID),
-      setup_operation_id: input.setupOperationID.toJSONValue(),
-      base_ref:
-        resolution.kind === "new_branch"
-          ? worktree.nonBlankString.parse(input.baseRef)
-          : resolution.resolvedRef,
-      ...(resolution.kind === "new_branch" ? { create_branch: true, branch_name: resolution.input } : {}),
-    },
-    { schema: worktree.worktreeCreateResponseSchema, options: { timeoutMs: null } },
+  const method = CreateService.method.create;
+  const success = requireWorktreeSuccess(
+    method,
+    await transport.callDescriptor(
+      method,
+      create(method.input, {
+        setupOperationId: input.setupOperationID.toJSONValue(),
+        sessionId: input.sessionID,
+        spec: {
+          baseRef: createBranch ? required(input.baseRef) : required(resolution.resolvedRef),
+          createBranch,
+          ...(createBranch ? { branchName: resolution.input } : {}),
+        },
+      }),
+      { timeoutMs: null },
+    ),
   );
+  if (success.worktree !== undefined) authorizeWorktreeListEntry(success.worktree);
+  return success;
 }
 
 export async function switchWorktree(
-  transport: RpcTransport,
+  transport: DescriptorRpcTransport,
   sessionID: string,
-  operation: worktree.WorktreeSwitch,
-) {
-  const authority = worktree.requireWorktreeAuthority(operation, "switch");
-  const method = authority.kind === "enter" ? "worktree.enter" : "worktree.leave";
-  const id = parseWorktreeOperationID(crypto.randomUUID());
-  const result = await call(
-    transport,
-    method,
-    authority.kind === "enter"
-      ? { ...session(sessionID), operation_id: id.toJSONValue(), selector: authority.selector }
-      : { ...session(sessionID), operation_id: id.toJSONValue() },
-    { schema: worktree.worktreeScheduledAcknowledgementSchema },
-  );
-  requireMatchingOperationID(id.toJSONValue(), result);
-  return result;
+  operation: WorktreeSwitch,
+): Promise<ScheduledAcknowledgement> {
+  const authority = requireWorktreeAuthority(operation, "switch");
+  const operationID = crypto.randomUUID();
+  const enter = authority.kind === SwitchOperationKind.WORKTREE_SWITCH_OPERATION_ENTER;
+  const method = enter ? TransitionService.method.enter : TransitionService.method.leave;
+  const result = enter
+    ? await transport.callDescriptor(
+        TransitionService.method.enter,
+        create(TransitionService.method.enter.input, {
+          operationId: operationID,
+          sessionId: sessionID,
+          selector: required(authority.selector),
+        }),
+      )
+    : await transport.callDescriptor(
+        TransitionService.method.leave,
+        create(TransitionService.method.leave.input, { operationId: operationID, sessionId: sessionID }),
+      );
+  const acknowledgement = requireWorktreeSuccess(method, result);
+  if (acknowledgement.operationId !== operationID) {
+    throw new ContractError("Server returned a different Worktree operation identity.");
+  }
+  return acknowledgement;
 }
 
 export async function deleteWorktree(
-  transport: RpcTransport,
+  transport: DescriptorRpcTransport,
   sessionID: string,
-  preview: worktree.WorktreeDeletePreview,
-  confirmation: worktree.WorktreeDeleteConfirmationChoice,
-) {
-  const authority = worktree.requireWorktreeAuthority(preview, "delete");
-  const choice = z.enum(["confirm", "confirm_and_branch"]).parse(confirmation);
-  if (
-    choice === "confirm_and_branch" &&
-    (authority.topology.variant === "missing" || authority.topology.git.branchName === null)
-  ) {
+  preview: WorktreeDeletePreview,
+  confirmation: WorktreeDeleteConfirmationChoice,
+): Promise<DeleteSuccess> {
+  const authority = requireWorktreeAuthority(preview, "delete");
+  if (confirmation === "confirm_and_branch" && !hasDeletableBranch(authority)) {
     throw new TypeError("Worktree Delete confirmation is invalid for this preview.");
   }
-  const result = await call(
-    transport,
-    "worktree.delete",
-    {
-      ...session(sessionID),
-      selector: authority.deletionSelector,
-      force_folder_removal: authority.cleanliness.kind !== "clean",
-      branch_cleanup_policy: choice === "confirm" ? "auto_if_kent_created" : "delete_safe",
-    },
-    { schema: worktree.worktreeDeleteResultSchema },
-  );
-  return result;
-}
-
-const session = (sessionID: string) => ({ session_id: worktree.nonBlankString.parse(sessionID) });
-function factRead<Output>(method: string, fact: "selector" | "target", schema: z.ZodType<Output>) {
-  return async (transport: RpcTransport, sessionID: string, value: string) =>
-    call(
-      transport,
+  const method = TransitionService.method.delete;
+  return requireWorktreeSuccess(
+    method,
+    await transport.callDescriptor(
       method,
-      { ...session(sessionID), [fact]: worktree.nonBlankString.parse(value) },
-      { schema },
-    );
-}
-function requireMatchingOperationID(
-  expected: string,
-  acknowledgement: worktree.WorktreeScheduledAcknowledgement,
-) {
-  if (acknowledgement.operationID.toJSONValue() !== expected) {
-    throw new ContractError("Server returned a different Worktree operation identity.");
-  }
-}
-type CallContract<T> = Readonly<{ schema: z.ZodType<T>; options?: RpcCallOptions }>;
-async function call<T>(
-  transport: RpcTransport,
-  method: string,
-  params: JsonValue,
-  contract: CallContract<T>,
-): Promise<T> {
-  const { schema, options } = contract;
-  try {
-    return parseRpcResponse(method, schema, await transport.call(method, params, options));
-  } catch (error) {
-    throw decodeWorktreeError(error) ?? error;
-  }
+      create(method.input, {
+        sessionId: sessionID,
+        selector: authority.deletionSelector,
+        forceFolderRemoval: required(authority.cleanliness).kind !== DirtyStateKind.DIRTY_STATE_CLEAN,
+        branchCleanupPolicy:
+          confirmation === "confirm"
+            ? BranchCleanupMode.WORKTREE_BRANCH_CLEANUP_MODE_AUTO_IF_KENT_CREATED
+            : BranchCleanupMode.WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE,
+      }),
+    ),
+  );
 }
 
-const strict = z.strictObject;
-const candidate = strict({
-  variant: z.enum(["registered", "external", "missing"]),
-  selector: worktree.nonBlankString,
-  branch_name: worktree.optionalNonBlankString,
-  display_name: worktree.optionalNonBlankString,
-  fallback_identity: worktree.nonBlankString,
-}).transform((value) => ({
-  variant: value.variant,
-  selector: value.selector,
-  branchName: value.branch_name,
-  displayName: value.display_name,
-  fallbackIdentity: value.fallback_identity,
-}));
-const selectorError = strict({
-  type: z.literal("worktree_selector_error"),
-  kind: z.enum(["not_found", "ambiguous", "unavailable"]),
-  input: worktree.nonBlankString,
-  candidates: z.array(candidate).optional(),
-})
-  .refine((value) =>
-    value.kind === "ambiguous" ? (value.candidates?.length ?? 0) > 0 : value.candidates === undefined,
-  )
-  .transform((value) => ({
-    kind: "selector" as const,
-    reason: value.kind,
-    input: value.input,
-    candidates: value.candidates ?? [],
-  }));
-const errorSchemas = {
-  [rpcErrorCodes.worktreeSelector]: selectorError,
-  [rpcErrorCodes.worktreeCreate]: strict({
-    owner: z.enum(["base_ref", "form"]),
-    diagnostic: worktree.nonBlankString,
-  }).transform((value) => ({ kind: "create" as const, ...value })),
-  [rpcErrorCodes.worktreeDeletePrecondition]: strict({
-    type: z.literal("worktree_delete_precondition"),
-    dirty_state: worktree.worktreeCleanlinessSchema.refine(
-      (value): value is Exclude<worktree.WorktreeCleanliness, Readonly<{ kind: "clean" }>> =>
-        value.kind !== "clean",
-    ),
-  }).transform((value) => ({
-    kind: "delete_precondition" as const,
-    cleanliness: value.dirty_state,
-  })),
-};
-type ErrorSchema = (typeof errorSchemas)[keyof typeof errorSchemas];
+export type WorktreeFailure =
+  | SelectorResolveError
+  | DeletePreviewError
+  | CreateError
+  | EnterError
+  | LeaveError
+  | DeleteError
+  | SetupStartError;
+
 export type WorktreeErrorDetail =
-  | Readonly<z.output<ErrorSchema>>
-  | Readonly<{ kind: "blocked" }>
+  | Readonly<{
+      kind: "selector";
+      details: Extract<WorktreeFailure["detail"], { case: "selectorError" }>["value"];
+    }>
+  | Readonly<{ kind: "create"; owner: "base_ref" | "form"; diagnostic: string }>
   | Readonly<{
       kind: "setup_retained";
-      worktree: worktree.RegisteredWorktreeTopology;
-      scriptPath: string;
-      diagnostic: string;
-      retainedPreviousWorktree: RetainedPreviousWorktree | null;
-    }>;
+      details: Extract<CreateError["detail"], { case: "setupRetained" }>["value"];
+    }>
+  | Readonly<{
+      kind: "delete_precondition";
+      details: Extract<DeleteError["detail"], { case: "deletePrecondition" }>["value"];
+    }>
+  | Readonly<{ kind: "blocked" }>;
+
 export class WorktreeError extends RpcError {
   constructor(
     rpcError: RpcError,
@@ -197,25 +230,71 @@ export class WorktreeError extends RpcError {
     this.name = "WorktreeError";
   }
 }
-function hasWorktreeErrorSchema(code: number): code is keyof typeof errorSchemas {
-  return Object.hasOwn(errorSchemas, code);
+
+type WorktreeResult<Success, Failure extends WorktreeFailure> = Readonly<{
+  outcome:
+    | Readonly<{ case: "success"; value: Success | undefined }>
+    | Readonly<{ case: "error"; value: Failure }>
+    | Readonly<{ case: undefined; value?: undefined }>;
+}>;
+
+export function requireWorktreeSuccess<Success, Failure extends WorktreeFailure>(
+  method: DescMethod,
+  result: WorktreeResult<Success, Failure>,
+): Success {
+  switch (result.outcome.case) {
+    case "success":
+      return required(result.outcome.value);
+    case "error":
+      throw projectWorktreeFailure(method, result.outcome.value);
+    case undefined:
+      throw new ContractError(`${operationName(method)} returned no outcome.`);
+  }
 }
-export function decodeWorktreeError(error: unknown): WorktreeError | null {
-  if (!(error instanceof RpcError)) return null;
-  if (error.code === rpcErrorCodes.worktreeBlocked) {
-    return error.data === undefined ? new WorktreeError(error, { kind: "blocked" }) : null;
+
+function projectWorktreeFailure(method: DescMethod, failure: WorktreeFailure): RpcError {
+  const generic = protobufRpcError(method, failure);
+  switch (failure.detail.case) {
+    case "selectorError":
+      return new WorktreeError(generic, { kind: "selector", details: failure.detail.value });
+    case "createFailed":
+      return new WorktreeError(generic, {
+        kind: "create",
+        owner:
+          failure.detail.value.owner === CreateErrorOwner.WORKTREE_CREATE_ERROR_OWNER_BASE_REF
+            ? "base_ref"
+            : "form",
+        diagnostic: failure.detail.value.diagnostic,
+      });
+    case "setupRetained":
+      return new WorktreeError(generic, { kind: "setup_retained", details: failure.detail.value });
+    case "deletePrecondition":
+      return new WorktreeError(generic, { kind: "delete_precondition", details: failure.detail.value });
+    case "worktreeBlocked":
+      return new WorktreeError(generic, { kind: "blocked" });
+    case "authRequired":
+    case "serverNotReady":
+    case "internalFailure":
+    case undefined:
+      return generic;
   }
-  const retained = decodeWorktreeSetupRetainedError(error);
-  if (retained !== null) {
-    return new WorktreeError(retained, {
-      kind: "setup_retained",
-      worktree: retained.worktree,
-      scriptPath: retained.scriptPath,
-      diagnostic: retained.diagnostic,
-      retainedPreviousWorktree: retained.retainedPreviousWorktree,
-    });
+}
+
+function hasDeletableBranch(preview: WorktreeDeletePreview): boolean {
+  const topology = required(preview.worktree).topology;
+  switch (topology.case) {
+    case "registered":
+    case "external":
+      return topology.value.git?.branchName !== undefined;
+    case "missing":
+    case undefined:
+      return false;
   }
-  if (!hasWorktreeErrorSchema(error.code)) return null;
-  const parsed = errorSchemas[error.code].safeParse(error.data);
-  return parsed.success ? new WorktreeError(error, parsed.data) : null;
+}
+
+function required<Value>(value: Value | null | undefined): Value {
+  if (value === undefined || value === null) {
+    throw new ContractError("Required Worktree fact is missing.");
+  }
+  return value;
 }

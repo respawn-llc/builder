@@ -9,14 +9,17 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/worktree"
-	"core/shared/serverapi"
+	"core/shared/protoapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type taskSetupObservation struct {
-	setupOperationID serverapi.WorktreeSetupOperationID
-	executionTarget  serverapi.WorkflowExecutionTargetSelection
+	setupOperationID worktreecontract.SetupOperationID
+	executionTarget  *worktreepb.SetupExecutionTargetSelection
 	publisher        workflowTaskSetupEventPublisher
 
 	mu             sync.Mutex
@@ -25,17 +28,15 @@ type taskSetupObservation struct {
 	finalized      bool
 }
 
-func newTaskSetupObservation(setupOperationID serverapi.WorktreeSetupOperationID, executionTarget workflow.ExecutionTargetSelection, publisher workflowTaskSetupEventPublisher) (*taskSetupObservation, error) {
+func newTaskSetupObservation(setupOperationID worktreecontract.SetupOperationID, executionTarget workflow.ExecutionTargetSelection, publisher workflowTaskSetupEventPublisher) (*taskSetupObservation, error) {
 	if err := setupOperationID.Validate(); err != nil {
 		return nil, err
 	}
 	if publisher == nil {
 		return nil, errors.New("Workflow Task setup event publisher is required")
 	}
-	target := serverapi.WorkflowExecutionTargetSelection{
-		Mode: serverapi.WorkflowExecutionTargetMode(executionTarget.Mode), CustomRef: executionTarget.CustomRef,
-	}
-	if err := target.Validate(); err != nil {
+	target, err := worktreeSetupExecutionTarget(executionTarget)
+	if err != nil {
 		return nil, err
 	}
 	return &taskSetupObservation{
@@ -63,80 +64,73 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 	preparationErr := o.preparationErr
 	o.mu.Unlock()
 
-	event := serverapi.WorktreeSetupEvent{SetupOperationID: o.setupOperationID}
+	event := &worktreepb.SetupEvent{SetupOperationId: o.setupOperationID.String()}
 	switch finalization.Kind {
 	case workflowexecution.TaskPreparationHandedOff:
 		switch {
 		case prepared.setupResult == nil:
-			event.Phase = serverapi.WorktreeSetupPhaseNotRequired
-			event.NotRequired = &serverapi.WorktreeSetupNotRequired{
-				Reason:                   serverapi.WorktreeSetupNotRequiredNoTargetPreparation,
+			event.Phase = &worktreepb.SetupEvent_NotRequired{NotRequired: &worktreepb.SetupNotRequired{
+				Reason:                   worktreepb.SetupNotRequiredReason_WORKTREE_SETUP_NOT_REQUIRED_REASON_NO_TARGET_PREPARATION,
 				RetainedPreviousWorktree: prepared.retainedPreviousWorktree,
-			}
+			}}
 		case prepared.setupResult.Completed != nil:
-			completed := *prepared.setupResult.Completed
+			completed := proto.Clone(prepared.setupResult.Completed).(*worktreepb.SetupCompleted)
 			if prepared.retainedPreviousWorktree != nil {
 				completed.RetainedPreviousWorktree = prepared.retainedPreviousWorktree
 			}
-			event.Phase = serverapi.WorktreeSetupPhaseCompleted
-			event.Completed = &completed
+			event.Phase = &worktreepb.SetupEvent_Completed{Completed: completed}
 		case prepared.setupResult.NotRequired != nil:
-			notRequired := *prepared.setupResult.NotRequired
+			notRequired := proto.Clone(prepared.setupResult.NotRequired).(*worktreepb.SetupNotRequired)
 			if prepared.retainedPreviousWorktree != nil {
 				notRequired.RetainedPreviousWorktree = prepared.retainedPreviousWorktree
 			}
-			event.Phase = serverapi.WorktreeSetupPhaseNotRequired
-			event.NotRequired = &notRequired
+			event.Phase = &worktreepb.SetupEvent_NotRequired{NotRequired: notRequired}
 		default:
 			panic("successful Task preparation has a failed or invalid setup result")
 		}
 	case workflowexecution.TaskPreparationFailed:
-		event.Phase = serverapi.WorktreeSetupPhaseFailed
-		event.Failed = preparationFailurePayload(prepared.setupResult, prepared.retainedWorktree, prepared.retainedPreviousWorktree, errors.Join(preparationErr, finalization.Cause))
-		event.Failed.ExecutionTarget = &o.executionTarget
+		failed := preparationFailurePayload(prepared.setupResult, prepared.retainedWorktree, prepared.retainedPreviousWorktree, errors.Join(preparationErr, finalization.Cause))
+		failed.ExecutionTarget = proto.Clone(o.executionTarget).(*worktreepb.SetupExecutionTargetSelection)
+		event.Phase = &worktreepb.SetupEvent_Failed{Failed: failed}
 	case workflowexecution.TaskPreparationInterruptionFailed:
-		event.Phase = serverapi.WorktreeSetupPhaseFailed
-		event.Failed = interruptionPersistenceFailurePayload(
+		event.Phase = &worktreepb.SetupEvent_Failed{Failed: interruptionPersistenceFailurePayload(
 			prepared.setupResult,
 			prepared.retainedWorktree,
 			prepared.retainedPreviousWorktree,
 			preparationErr,
 			finalization.Cause,
-		)
+		)}
 	case workflowexecution.TaskPreparationCanceled:
-		event.Phase = serverapi.WorktreeSetupPhaseFailed
-		event.Failed = nonRetryablePreparationFailure(
-			serverapi.WorktreeSetupFailureCanceled,
+		event.Phase = &worktreepb.SetupEvent_Failed{Failed: nonRetryablePreparationFailure(
+			worktreecontract.SetupFailureCanceled,
 			finalization.Cause,
-		)
+		)}
 	case workflowexecution.TaskPreparationControllerShutDown:
-		event.Phase = serverapi.WorktreeSetupPhaseFailed
-		event.Failed = nonRetryablePreparationFailure(
-			serverapi.WorktreeSetupFailureControllerShutdown,
+		event.Phase = &worktreepb.SetupEvent_Failed{Failed: nonRetryablePreparationFailure(
+			worktreecontract.SetupFailureControllerShutdown,
 			finalization.Cause,
-		)
+		)}
 	default:
 		panic(fmt.Sprintf("unknown Task preparation finalization kind %q", finalization.Kind))
 	}
 	o.publisher.PublishWorkflowTaskSetupEvent(event)
 }
 
-func preparationFailurePayload(result *worktree.WorktreeSetupResult, retainedWorktree *serverapi.WorktreeTopologyEntry, retainedPreviousWorktree *serverapi.RetainedPreviousWorktree, cause error) *serverapi.WorktreeSetupFailed {
+func preparationFailurePayload(result *worktree.WorktreeSetupResult, retainedWorktree *worktreepb.RegisteredFacts, retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree, cause error) *worktreepb.SetupFailed {
 	if result != nil && result.Failed != nil {
-		failed := *result.Failed
+		failed := proto.Clone(result.Failed).(*worktreepb.SetupFailed)
 		if failed.RetainedWorktree == nil && retainedWorktree != nil {
 			failed.RetainedWorktree = retainedWorktree
 		}
 		if retainedPreviousWorktree != nil {
 			failed.RetainedPreviousWorktree = retainedPreviousWorktree
 		}
-		return &failed
+		return failed
 	}
-	return &serverapi.WorktreeSetupFailed{
-		RetryReadiness: serverapi.WorktreeSetupRetryReady,
-		Cause: serverapi.WorktreeSetupFailureCause{
-			Kind:        serverapi.WorktreeSetupFailureTargetPreparation,
-			Preparation: &serverapi.WorktreeSetupPreparationFailure{},
+	return &worktreepb.SetupFailed{
+		RetryReadiness: worktreepb.SetupRetryReadiness_WORKTREE_SETUP_RETRY_READY,
+		Cause: &worktreepb.SetupFailureCause{
+			Cause: &worktreepb.SetupFailureCause_TargetPreparation{TargetPreparation: &emptypb.Empty{}},
 		},
 		Diagnostic:               preparationDiagnostic(cause),
 		RetainedWorktree:         retainedWorktree,
@@ -144,34 +138,37 @@ func preparationFailurePayload(result *worktree.WorktreeSetupResult, retainedWor
 	}
 }
 
-func nonRetryablePreparationFailure(kind serverapi.WorktreeSetupFailureKind, cause error) *serverapi.WorktreeSetupFailed {
-	failureCause := serverapi.WorktreeSetupFailureCause{Kind: kind}
+func nonRetryablePreparationFailure(kind worktreecontract.SetupFailureKind, cause error) *worktreepb.SetupFailed {
+	var failureCause *worktreepb.SetupFailureCause
 	switch kind {
-	case serverapi.WorktreeSetupFailureCanceled:
-		failureCause.Canceled = &serverapi.WorktreeSetupCanceled{}
-	case serverapi.WorktreeSetupFailureControllerShutdown:
-		failureCause.ControllerShutdown = &serverapi.WorktreeSetupControllerShutdown{}
+	case worktreecontract.SetupFailureCanceled:
+		failureCause = &worktreepb.SetupFailureCause{
+			Cause: &worktreepb.SetupFailureCause_Canceled{Canceled: &emptypb.Empty{}},
+		}
+	case worktreecontract.SetupFailureControllerShutdown:
+		failureCause = &worktreepb.SetupFailureCause{
+			Cause: &worktreepb.SetupFailureCause_ControllerShutdown{ControllerShutdown: &emptypb.Empty{}},
+		}
 	default:
 		panic(fmt.Sprintf("unsupported non-retryable Task preparation failure kind %q", kind))
 	}
-	return &serverapi.WorktreeSetupFailed{
-		RetryReadiness: serverapi.WorktreeSetupNonRetryable,
+	return &worktreepb.SetupFailed{
+		RetryReadiness: worktreepb.SetupRetryReadiness_WORKTREE_SETUP_NON_RETRYABLE,
 		Cause:          failureCause,
 		Diagnostic:     preparationDiagnostic(cause),
 	}
 }
 
-func interruptionPersistenceFailurePayload(result *worktree.WorktreeSetupResult, retainedWorktree *serverapi.WorktreeTopologyEntry, retainedPreviousWorktree *serverapi.RetainedPreviousWorktree, preparationErr error, persistenceErr error) *serverapi.WorktreeSetupFailed {
+func interruptionPersistenceFailurePayload(result *worktree.WorktreeSetupResult, retainedWorktree *worktreepb.RegisteredFacts, retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree, preparationErr error, persistenceErr error) *worktreepb.SetupFailed {
 	failed := preparationFailurePayload(
 		result,
 		retainedWorktree,
 		retainedPreviousWorktree,
 		errors.Join(preparationErr, persistenceErr),
 	)
-	failed.RetryReadiness = serverapi.WorktreeSetupNonRetryable
-	failed.Cause = serverapi.WorktreeSetupFailureCause{
-		Kind:                    serverapi.WorktreeSetupFailureInterruptionPersistence,
-		InterruptionPersistence: &serverapi.WorktreeSetupInterruptionPersistenceFailure{},
+	failed.RetryReadiness = worktreepb.SetupRetryReadiness_WORKTREE_SETUP_NON_RETRYABLE
+	failed.Cause = &worktreepb.SetupFailureCause{
+		Cause: &worktreepb.SetupFailureCause_InterruptionPersistence{InterruptionPersistence: &emptypb.Empty{}},
 	}
 	failed.Diagnostic = preparationDiagnostic(errors.Join(preparationErr, persistenceErr))
 	return failed
@@ -185,11 +182,11 @@ func preparationDiagnostic(err error) string {
 }
 
 func taskPreparationError(
-	setupOperationID serverapi.WorktreeSetupOperationID,
+	setupOperationID worktreecontract.SetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	result *worktree.WorktreeSetupResult,
-	retainedWorktree *serverapi.WorktreeTopologyEntry,
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
+	retainedWorktree *worktreepb.RegisteredFacts,
+	retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree,
 	err error,
 ) error {
 	err = configuredTargetPreparationError(preflight, err)
@@ -207,20 +204,24 @@ func taskPreparationError(
 		}
 	}
 	failed := preparationFailurePayload(result, retainedWorktree, retainedPreviousWorktree, err)
-	if failed.RetryReadiness != serverapi.WorktreeSetupRetryReady {
+	if failed.RetryReadiness != worktreepb.SetupRetryReadiness_WORKTREE_SETUP_RETRY_READY {
 		return err
+	}
+	failureKind, kindErr := worktreeSetupFailureKind(failed.Cause)
+	if kindErr != nil {
+		return errors.Join(err, kindErr)
 	}
 	var retained *workflow.CurrentNodeRetainedWorktree
 	var retainedErr error
 	if failed.RetainedWorktree != nil {
-		retained, retainedErr = retainedCurrentNodeWorktree(*failed.RetainedWorktree)
+		retained, retainedErr = retainedCurrentNodeWorktree(failed.RetainedWorktree)
 		if retainedErr != nil {
 			return errors.Join(err, retainedErr)
 		}
 	}
 	var previous *workflow.CurrentNodeRetainedWorktree
 	if failed.RetainedPreviousWorktree != nil {
-		previous, retainedErr = retainedCurrentNodeWorktree(failed.RetainedPreviousWorktree.Worktree)
+		previous, retainedErr = retainedCurrentNodeWorktree(failed.RetainedPreviousWorktree.GetWorktree())
 		if retainedErr != nil {
 			return errors.Join(err, retainedErr)
 		}
@@ -228,7 +229,7 @@ func taskPreparationError(
 	delete(detail.Fields, workflow.CurrentNodeInterruptionDiagnosticField)
 	detail.SetupRecovery = &workflow.CurrentNodeSetupRecoveryDetail{
 		SetupOperationID:         uuid.UUID(setupOperationID),
-		Cause:                    workflow.CurrentNodeSetupRecoveryCause(failed.Cause.Kind),
+		Cause:                    failureKind,
 		Diagnostic:               failed.Diagnostic,
 		ScriptPath:               failed.ScriptPath,
 		SetupRequirement:         setupRequirementForPreparationFailure(result),
@@ -251,13 +252,62 @@ func setupRequirementForPreparationFailure(result *worktree.WorktreeSetupResult)
 
 const reasonWorkflowTaskSetupFailed workflow.CurrentNodeInterruptionReason = "workflow_task_setup_failed"
 
-func retainedCurrentNodeWorktree(entry serverapi.WorktreeTopologyEntry) (*workflow.CurrentNodeRetainedWorktree, error) {
-	if entry.Variant != serverapi.WorktreeTopologyVariantRegistered || entry.Registered == nil {
+func retainedCurrentNodeWorktree(entry *worktreepb.RegisteredFacts) (*workflow.CurrentNodeRetainedWorktree, error) {
+	if entry == nil {
 		return nil, errors.New("setup recovery retained worktree must be registered")
 	}
+	if err := protoapi.Validate(entry); err != nil {
+		return nil, err
+	}
 	retained := &workflow.CurrentNodeRetainedWorktree{
-		WorktreeID: entry.Registered.Kent.WorktreeID,
-		Root:       entry.Registered.Git.CanonicalRoot,
+		WorktreeID: entry.GetKent().GetWorktreeId(),
+		Root:       entry.GetGit().GetCanonicalRoot(),
 	}
 	return retained, retained.Validate()
+}
+
+func worktreeSetupExecutionTarget(selection workflow.ExecutionTargetSelection) (*worktreepb.SetupExecutionTargetSelection, error) {
+	target := &worktreepb.SetupExecutionTargetSelection{CustomRef: selection.CustomRef}
+	switch selection.Mode {
+	case workflow.ExecutionTargetModeNone:
+		target.Mode = worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_NONE
+	case workflow.ExecutionTargetModeHead:
+		target.Mode = worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_HEAD
+	case workflow.ExecutionTargetModeDefaultBranch:
+		target.Mode = worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_DEFAULT_BRANCH
+	case workflow.ExecutionTargetModeCustomRef:
+		target.Mode = worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_CUSTOM_REF
+	case workflow.ExecutionTargetModeAskOnFirstExecution:
+		target.Mode = worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_ASK_ON_FIRST_EXECUTION
+	default:
+		return nil, fmt.Errorf("worktree setup execution target mode %q is invalid", selection.Mode)
+	}
+	if err := protoapi.Validate(target); err != nil {
+		return nil, err
+	}
+	return target, nil
+}
+
+func worktreeSetupFailureKind(cause *worktreepb.SetupFailureCause) (worktreecontract.SetupFailureKind, error) {
+	if cause == nil {
+		return "", errors.New("worktree setup failure cause is required")
+	}
+	switch cause.GetCause().(type) {
+	case *worktreepb.SetupFailureCause_ProcessExit:
+		return worktreecontract.SetupFailureProcessExit, nil
+	case *worktreepb.SetupFailureCause_Timeout:
+		return worktreecontract.SetupFailureTimeout, nil
+	case *worktreepb.SetupFailureCause_TargetPreparation:
+		return worktreecontract.SetupFailureTargetPreparation, nil
+	case *worktreepb.SetupFailureCause_InterruptionPersistence:
+		return worktreecontract.SetupFailureInterruptionPersistence, nil
+	case *worktreepb.SetupFailureCause_Canceled:
+		return worktreecontract.SetupFailureCanceled, nil
+	case *worktreepb.SetupFailureCause_ControllerShutdown:
+		return worktreecontract.SetupFailureControllerShutdown, nil
+	case *worktreepb.SetupFailureCause_Operational:
+		return worktreecontract.SetupFailureOperational, nil
+	default:
+		return "", errors.New("worktree setup failure cause is invalid")
+	}
 }

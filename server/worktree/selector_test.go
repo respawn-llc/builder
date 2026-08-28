@@ -1,34 +1,25 @@
 package worktree
 
 import (
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/worktreecontract"
 	"errors"
 	"testing"
-
-	"core/shared/serverapi"
 )
 
 func TestTopologySelectorPrecedenceAndRoundTrip(t *testing.T) {
 	branch := "feature"
-	entries := []serverapi.WorktreeTopologyEntry{
-		{
-			Variant: serverapi.WorktreeTopologyVariantRegistered,
-			Registered: &serverapi.WorktreeRegisteredFacts{
-				Git:  serverapi.WorktreeGitFacts{CanonicalRoot: "/repo/one/feature", HeadObject: "one", BranchName: &branch, PathAvailable: true},
-				Kent: serverapi.WorktreeKentFacts{WorktreeID: "id-one", CanonicalRoot: "/repo/one/feature", DisplayName: "one"},
-			},
-		},
-		{
-			Variant: serverapi.WorktreeTopologyVariantMissing,
-			Missing: &serverapi.WorktreeMissingFacts{
-				Kent: serverapi.WorktreeKentFacts{WorktreeID: "feature", CanonicalRoot: "/repo/two/missing", DisplayName: "two"},
-			},
-		},
-		{
-			Variant: serverapi.WorktreeTopologyVariantExternal,
-			External: &serverapi.WorktreeExternalFacts{
-				Git: serverapi.WorktreeGitFacts{CanonicalRoot: "/repo/three/feature", HeadObject: "three", PathAvailable: true},
-			},
-		},
+	entries := []*worktreepb.TopologyEntry{
+		{Topology: &worktreepb.TopologyEntry_Registered{Registered: &worktreepb.RegisteredFacts{
+			Git:  &worktreepb.GitFacts{CanonicalRoot: "/repo/one/feature", HeadObject: "one", BranchName: &branch, PathAvailable: true},
+			Kent: &worktreepb.KentFacts{WorktreeId: "id-one", CanonicalRoot: "/repo/one/feature", DisplayName: "one"},
+		}}},
+		{Topology: &worktreepb.TopologyEntry_Missing{Missing: &worktreepb.MissingFacts{
+			Kent: &worktreepb.KentFacts{WorktreeId: "feature", CanonicalRoot: "/repo/two/missing", DisplayName: "two"},
+		}}},
+		{Topology: &worktreepb.TopologyEntry_External{External: &worktreepb.ExternalFacts{
+			Git: &worktreepb.GitFacts{CanonicalRoot: "/repo/three/feature", HeadObject: "three", PathAvailable: true},
+		}}},
 	}
 	match, err := resolveTopologySelector(entries, "feature")
 	if err != nil {
@@ -50,13 +41,15 @@ func TestTopologySelectorPrecedenceAndRoundTrip(t *testing.T) {
 }
 
 func TestTopologySelectorReportsAmbiguousPath(t *testing.T) {
-	entries := []serverapi.WorktreeTopologyEntry{
+	entries := []*worktreepb.TopologyEntry{
 		externalTopologyEntry("/repo/one/feature"),
 		externalTopologyEntry("/repo/two/feature"),
 	}
 	_, err := resolveTopologySelector(entries, "feature")
-	var ambiguous *serverapi.WorktreeSelectorError
-	if !errors.As(err, &ambiguous) || ambiguous.Kind != serverapi.WorktreeSelectorErrorKindAmbiguous || len(ambiguous.Candidates) != 2 {
+	var ambiguous *worktreecontract.SelectorError
+	if !errors.As(err, &ambiguous) ||
+		ambiguous.Details.Kind != worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_AMBIGUOUS ||
+		len(ambiguous.Details.Candidates) != 2 {
 		t.Fatalf("ambiguous path error = %T %+v", err, ambiguous)
 	}
 	match, err := resolveTopologySelector(entries, "one/feature")
@@ -65,11 +58,10 @@ func TestTopologySelectorReportsAmbiguousPath(t *testing.T) {
 	}
 }
 
-func externalTopologyEntry(root string) serverapi.WorktreeTopologyEntry {
-	return serverapi.WorktreeTopologyEntry{
-		Variant: serverapi.WorktreeTopologyVariantExternal,
-		External: &serverapi.WorktreeExternalFacts{
-			Git: serverapi.WorktreeGitFacts{CanonicalRoot: root, HeadObject: root, PathAvailable: true},
+func externalTopologyEntry(root string) *worktreepb.TopologyEntry {
+	return &worktreepb.TopologyEntry{Topology: &worktreepb.TopologyEntry_External{
+		External: &worktreepb.ExternalFacts{
+			Git: &worktreepb.GitFacts{CanonicalRoot: root, HeadObject: root, PathAvailable: true},
 		},
-	}
+	}}
 }

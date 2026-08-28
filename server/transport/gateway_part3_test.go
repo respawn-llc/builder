@@ -11,6 +11,7 @@ import (
 	authpb "core/shared/protoapi/gen/kent/api/auth"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -18,11 +19,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/net/websocket"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/net/websocket"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -64,13 +66,13 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 	status, err := remote.GetWorktreeStatus(
 		context.Background(),
-		serverapi.WorktreeStatusRequest{SessionID: store.Meta().SessionID},
+		&worktreepb.StatusRequest{SessionId: store.Meta().SessionID},
 	)
 	if err != nil {
 		t.Fatalf("GetWorktreeStatus: %v", err)
 	}
-	if status.Target.WorkspaceID != binding.WorkspaceID {
-		t.Fatalf("target workspace id = %q, want %q", status.Target.WorkspaceID, binding.WorkspaceID)
+	if status.Target.WorkspaceId != binding.WorkspaceID {
+		t.Fatalf("target workspace id = %q, want %q", status.Target.WorkspaceId, binding.WorkspaceID)
 	}
 }
 
@@ -157,7 +159,7 @@ func serveGatewayRemoteTestHandshake(ctx context.Context, conn rpcwire.Conn, fra
 	if call.Operation != operation.Name {
 		return fmt.Errorf("unexpected binary operation %q", call.Operation)
 	}
-	payload, err := protoapi.Encode(&connectionpb.HandshakeResult{
+	result := &connectionpb.HandshakeResult{
 		Outcome: &connectionpb.HandshakeResult_Success{
 			Success: &connectionpb.HandshakeSuccess{Identity: &connectionpb.ServerIdentity{
 				ProtocolVersion: protocol.Version,
@@ -165,7 +167,11 @@ func serveGatewayRemoteTestHandshake(ctx context.Context, conn rpcwire.Conn, fra
 				Pid:             1,
 			}},
 		},
-	})
+	}
+	if err := protoapi.Validate(result); err != nil {
+		return err
+	}
+	payload, err := protoapi.Marshal(result)
 	if err != nil {
 		return err
 	}
@@ -316,9 +322,12 @@ func callGatewayDescriptor(
 	if err != nil {
 		t.Fatalf("operation descriptor: %v", err)
 	}
-	payload, err := protoapi.Encode(request)
+	if err := protoapi.Validate(request); err != nil {
+		t.Fatalf("validate %s request: %v", operation.Name, err)
+	}
+	payload, err := protoapi.Marshal(request)
 	if err != nil {
-		t.Fatalf("encode %s request: %v", operation.Name, err)
+		t.Fatalf("marshal %s request: %v", operation.Name, err)
 	}
 	encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
 		Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
@@ -351,8 +360,11 @@ func callGatewayDescriptor(
 	if response.Operation != operation.Name || response.GetCorrelation() != correlation {
 		t.Fatalf("%s result identity = %+v", operation.Name, response)
 	}
-	if err := protoapi.Decode(response.Payload, result); err != nil {
-		t.Fatalf("decode %s result: %v", operation.Name, err)
+	if err := protoapi.Unmarshal(response.Payload, result); err != nil {
+		t.Fatalf("unmarshal %s result: %v", operation.Name, err)
+	}
+	if err := protoapi.Validate(result); err != nil {
+		t.Fatalf("validate %s result: %v", operation.Name, err)
 	}
 }
 

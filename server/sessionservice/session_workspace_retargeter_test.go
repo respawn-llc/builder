@@ -22,6 +22,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 type retargetProcessSource []shelltool.Snapshot
@@ -506,7 +507,7 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 			t.Context(),
 			request,
 			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
-			serverapi.NewWorktreeOperationID(),
+			worktreecontract.NewOperationID(),
 		)
 		return err
 	}
@@ -600,7 +601,7 @@ func TestSessionWorkspaceRetargeterAllowsSelfRebindWhileHumanSameProjectRebindWa
 			t.Context(),
 			request,
 			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
-			serverapi.NewWorktreeOperationID(),
+			worktreecontract.NewOperationID(),
 		)
 		return err
 	}
@@ -667,7 +668,7 @@ func TestSessionWorkspaceRetargeterKeepsSuccessReminderWhenRuntimeRetirementFail
 			t.Context(),
 			request,
 			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
-			serverapi.NewWorktreeOperationID(),
+			worktreecontract.NewOperationID(),
 		)
 		return err
 	}
@@ -734,7 +735,7 @@ func TestSessionWorkspaceRetargeterPublishesFailureBeforeQueuedModelWorkResumes(
 			t.Context(),
 			request,
 			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
-			serverapi.NewWorktreeOperationID(),
+			worktreecontract.NewOperationID(),
 		)
 		return err
 	}

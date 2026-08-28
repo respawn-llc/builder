@@ -13,6 +13,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -324,7 +325,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		resp, terminal, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
+		resp, terminal, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorkflowSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
 			return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 				SetupOperationID:           setupOperationID,
 				TaskID:                     taskID,
@@ -530,7 +531,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		resp, terminal, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskResumeResponse, error) {
+		resp, terminal, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorkflowSetupOperationID) (serverapi.WorkflowTaskResumeResponse, error) {
 			return remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 				TaskID:            taskID,
 				InvokingSessionID: invokingSessionID,
@@ -804,7 +805,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			ProceedDespiteDependencies: *ignoreDependencies,
 		})
 		if err != nil {
-			var setupErr *serverapi.WorktreeSetupRetainedError
+			var setupErr *serverapi.WorkflowSetupRetainedError
 			if errors.As(err, &setupErr) {
 				guidance, projectionErr := projectMoveSetupGuidance(recoveryArgs, executionTarget, setupErr)
 				if projectionErr != nil {
@@ -855,7 +856,7 @@ func writeTaskMoveOutcome(
 		return 1
 	}
 	if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeNoOp {
-		renderRetainedWorktreeGuidance(stderr, resp.NoOp.RetainedPreviousWorktree)
+		renderWorkflowRetainedWorktreeGuidance(stderr, resp.NoOp.RetainedPreviousWorktree)
 		if jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
 		}
@@ -872,7 +873,7 @@ func writeTaskMoveOutcome(
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	renderRetainedWorktreeGuidance(stderr, applied.RetainedPreviousWorktree)
+	renderWorkflowRetainedWorktreeGuidance(stderr, applied.RetainedPreviousWorktree)
 	if jsonOut {
 		return writeCommandJSON(stdout, stderr, resp)
 	}
@@ -996,7 +997,7 @@ func requireAppliedExecutionTargetAction[T any](outcome serverapi.WorkflowExecut
 }
 
 type worktreeSetupProgressSubscriber interface {
-	SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
+	SubscribeWorktreeSetup(context.Context, *worktreepb.SetupSubscribeRequest) (apicontract.WorktreeSetupSubscription, error)
 }
 
 const workflowTaskSetupObservationTimeout = 2 * time.Minute
@@ -1007,7 +1008,7 @@ type worktreeSetupObservation struct {
 }
 
 type worktreeSetupObservationResult struct {
-	terminal *serverapi.WorktreeSetupEvent
+	terminal *worktreepb.SetupEvent
 	err      error
 }
 
@@ -1047,15 +1048,15 @@ const (
 )
 
 type taskSetupGuidance struct {
-	Outcome                  taskSetupOutcomeKind
-	Diagnostic               *string
-	ScriptPath               *string
-	RetainedRoot             *string
-	RetainedPreviousWorktree *serverapi.RetainedPreviousWorktree
-	Actions                  []taskSetupAction
+	Outcome              taskSetupOutcomeKind
+	Diagnostic           *string
+	ScriptPath           *string
+	RetainedRoot         *string
+	RetainedPreviousRoot *string
+	Actions              []taskSetupAction
 }
 
-func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string, projectRef *string, terminal *serverapi.WorktreeSetupEvent, observationErr error) (taskSetupGuidance, error) {
+func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string, projectRef *string, terminal *worktreepb.SetupEvent, observationErr error) (taskSetupGuidance, error) {
 	if action != taskSetupObservedActionStart && action != taskSetupObservedActionResume {
 		return taskSetupGuidance{}, fmt.Errorf("invalid observed Task setup action %q", action)
 	}
@@ -1073,26 +1074,27 @@ func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string
 	if terminal == nil {
 		return taskSetupGuidance{}, errors.New("Worktree Setup observation ended without a terminal result")
 	}
-	var retained *serverapi.RetainedPreviousWorktree
-	switch terminal.Phase {
-	case serverapi.WorktreeSetupPhaseCompleted:
-		retained = terminal.Completed.RetainedPreviousWorktree
-	case serverapi.WorktreeSetupPhaseNotRequired:
-		retained = terminal.NotRequired.RetainedPreviousWorktree
-	case serverapi.WorktreeSetupPhaseFailed:
-		failed := terminal.Failed
+	var retained *worktreepb.RetainedPreviousWorktree
+	switch {
+	case terminal.GetCompleted() != nil:
+		retained = terminal.GetCompleted().GetRetainedPreviousWorktree()
+	case terminal.GetNotRequired() != nil:
+		retained = terminal.GetNotRequired().GetRetainedPreviousWorktree()
+	case terminal.GetFailed() != nil:
+		failed := terminal.GetFailed()
 		diagnostic, err := taskSetupDiagnostic(failed.Diagnostic)
 		if err != nil {
 			return taskSetupGuidance{}, err
 		}
 		result := taskSetupGuidance{Outcome: taskSetupOutcomeObservedSetupFailure, Diagnostic: diagnostic, ScriptPath: failed.ScriptPath}
 		if failed.RetainedWorktree != nil {
-			result.RetainedRoot = &failed.RetainedWorktree.Registered.Git.CanonicalRoot
+			result.RetainedRoot = &failed.RetainedWorktree.Git.CanonicalRoot
 		}
 		if failed.RetainedPreviousWorktree != nil {
-			result.RetainedPreviousWorktree = failed.RetainedPreviousWorktree
+			root := failed.RetainedPreviousWorktree.GetWorktree().GetGit().GetCanonicalRoot()
+			result.RetainedPreviousRoot = &root
 		}
-		if failed.RetryReadiness != serverapi.WorktreeSetupRetryReady {
+		if failed.RetryReadiness != worktreepb.SetupRetryReadiness_WORKTREE_SETUP_RETRY_READY {
 			result.Actions = inspection
 			return result, nil
 		}
@@ -1103,13 +1105,13 @@ func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string
 		if action == taskSetupObservedActionResume {
 			result.Outcome = taskSetupOutcomeResumeInterruptedSetupFailure
 		}
-		if failed.Cause.Kind == serverapi.WorktreeSetupFailureTargetPreparation {
+		if failed.Cause.GetTargetPreparation() != nil {
 			result.Outcome = taskSetupOutcomeStartInterruptedTargetPreparationFailure
 			if action == taskSetupObservedActionResume {
 				result.Outcome = taskSetupOutcomeResumeInterruptedTargetPreparationFailure
 			}
 		}
-		selector, err := taskExecutionTargetSelector(*failed.ExecutionTarget)
+		selector, err := taskSetupExecutionTargetSelector(failed.ExecutionTarget)
 		if err != nil {
 			return taskSetupGuidance{}, err
 		}
@@ -1120,7 +1122,8 @@ func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string
 	}
 	result := taskSetupGuidance{Outcome: taskSetupOutcomeCompleted}
 	if retained != nil {
-		result.RetainedPreviousWorktree = retained
+		root := retained.GetWorktree().GetGit().GetCanonicalRoot()
+		result.RetainedPreviousRoot = &root
 		result.Actions = []taskSetupAction{{Kind: taskSetupActionListWorktrees, Args: []string{config.Command, "worktree", "list"}}}
 	}
 	return result, nil
@@ -1178,7 +1181,7 @@ func taskMoveRecoveryArgs(taskRef, targetNode string, project, commentary, trans
 	return args, nil
 }
 
-func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecutionTargetSelection, setupErr *serverapi.WorktreeSetupRetainedError) (taskSetupGuidance, error) {
+func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecutionTargetSelection, setupErr *serverapi.WorkflowSetupRetainedError) (taskSetupGuidance, error) {
 	if err := setupErr.Validate(); err != nil {
 		return taskSetupGuidance{}, err
 	}
@@ -1192,7 +1195,13 @@ func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecution
 	}
 	script := setupErr.ScriptPath
 	diagnostic := setupErr.Diagnostic
-	return taskSetupGuidance{Outcome: taskSetupOutcomeMoveSetupFailure, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &setupErr.Worktree.Registered.Git.CanonicalRoot, RetainedPreviousWorktree: setupErr.RetainedPreviousWorktree, Actions: taskTargetActions(base, selector)}, nil
+	root := setupErr.Worktree.Registered.Git.CanonicalRoot
+	var previousRoot *string
+	if retained := setupErr.RetainedPreviousWorktree; retained != nil && retained.Worktree.Registered != nil {
+		value := retained.Worktree.Registered.Git.CanonicalRoot
+		previousRoot = &value
+	}
+	return taskSetupGuidance{Outcome: taskSetupOutcomeMoveSetupFailure, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, RetainedPreviousRoot: previousRoot, Actions: taskTargetActions(base, selector)}, nil
 }
 
 func taskSetupStringPointer(value string) *string { return &value }
@@ -1220,14 +1229,33 @@ func taskExecutionTargetSelector(target serverapi.WorkflowExecutionTargetSelecti
 	return "", errors.New("invalid recovery execution target")
 }
 
+func taskSetupExecutionTargetSelector(target *worktreepb.SetupExecutionTargetSelection) (string, error) {
+	if target == nil {
+		return "", errors.New("invalid recovery execution target")
+	}
+	switch target.Mode {
+	case worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_NONE:
+		return "none", nil
+	case worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_HEAD:
+		return "head", nil
+	case worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_DEFAULT_BRANCH:
+		return "default-branch", nil
+	case worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_CUSTOM_REF:
+		if target.CustomRef != nil {
+			return "ref:" + *target.CustomRef, nil
+		}
+	}
+	return "", errors.New("invalid recovery execution target")
+}
+
 func runWorkflowMutationWithSetupProgress[T any](
 	ctx context.Context,
 	remote apicontract.WorkflowService,
 	stderr io.Writer,
-	mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error),
+	mutate func(context.Context, serverapi.WorkflowSetupOperationID) (T, error),
 	shouldWait func(T) bool,
-) (T, *serverapi.WorktreeSetupEvent, error) {
-	setupOperationID := serverapi.NewWorktreeSetupOperationID()
+) (T, *worktreepb.SetupEvent, error) {
+	setupOperationID := serverapi.NewWorkflowSetupOperationID()
 	observation, err := subscribeWorktreeSetupProgress(ctx, remote, setupOperationID, stderr)
 	if err != nil {
 		var zero T
@@ -1255,13 +1283,13 @@ func runWorkflowMutationWithSetupProgress[T any](
 	}
 }
 
-func subscribeWorktreeSetupProgress(ctx context.Context, remote apicontract.WorkflowService, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (worktreeSetupObservation, error) {
+func subscribeWorktreeSetupProgress(ctx context.Context, remote apicontract.WorkflowService, setupOperationID serverapi.WorkflowSetupOperationID, stderr io.Writer) (worktreeSetupObservation, error) {
 	subscriber, ok := remote.(worktreeSetupProgressSubscriber)
 	if !ok {
 		return worktreeSetupObservation{}, errors.New("worktree setup progress subscription is unavailable")
 	}
 	observationCtx, cancel := context.WithCancelCause(ctx)
-	subscription, err := subscriber.SubscribeWorktreeSetup(observationCtx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupOperationID})
+	subscription, err := subscriber.SubscribeWorktreeSetup(observationCtx, &worktreepb.SetupSubscribeRequest{SetupOperationId: setupOperationID.Domain().String()})
 	if err != nil {
 		cancel(context.Canceled)
 		return worktreeSetupObservation{}, err
@@ -1283,20 +1311,15 @@ func subscribeWorktreeSetupProgress(ctx context.Context, remote apicontract.Work
 				}
 				return
 			}
-			if event.SetupOperationID != setupOperationID {
+			if event.GetSetupOperationId() != setupOperationID.Domain().String() {
 				done <- worktreeSetupObservationResult{err: errors.New("worktree setup event operation ID does not match subscription")}
 				return
 			}
-			if err := event.Validate(); err != nil {
-				done <- worktreeSetupObservationResult{err: fmt.Errorf("invalid worktree setup event: %w", err)}
-				return
-			}
 			writeWorktreeSetupProgress(stderr, event)
-			if event.Phase == serverapi.WorktreeSetupPhaseCompleted ||
-				event.Phase == serverapi.WorktreeSetupPhaseNotRequired ||
-				event.Phase == serverapi.WorktreeSetupPhaseFailed {
-				value := event
-				done <- worktreeSetupObservationResult{terminal: &value}
+			if event.GetCompleted() != nil ||
+				event.GetNotRequired() != nil ||
+				event.GetFailed() != nil {
+				done <- worktreeSetupObservationResult{terminal: event}
 				return
 			}
 		}
@@ -1304,7 +1327,7 @@ func subscribeWorktreeSetupProgress(ctx context.Context, remote apicontract.Work
 	return worktreeSetupObservation{cancel: cancel, done: done}, nil
 }
 
-func finishObservedTaskSetup(action taskSetupObservedActionKind, stderr io.Writer, taskRef string, projectRef *string, terminal *serverapi.WorktreeSetupEvent) bool {
+func finishObservedTaskSetup(action taskSetupObservedActionKind, stderr io.Writer, taskRef string, projectRef *string, terminal *worktreepb.SetupEvent) bool {
 	guidance, err := projectTaskSetupGuidance(action, taskRef, projectRef, terminal, nil)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -1354,28 +1377,38 @@ func renderTaskSetupGuidance(stderr io.Writer, guidance taskSetupGuidance) {
 	if guidance.RetainedRoot != nil {
 		fmt.Fprintf(stderr, "Retained Worktree: %s\n", *guidance.RetainedRoot)
 	}
-	renderRetainedWorktreeGuidance(stderr, guidance.RetainedPreviousWorktree)
+	if guidance.RetainedPreviousRoot != nil {
+		renderRetainedWorktreeRootGuidance(stderr, *guidance.RetainedPreviousRoot)
+	}
 	for _, action := range guidance.Actions {
 		fmt.Fprintf(stderr, "  %s\n", commandString(action.Args))
 	}
 }
 
-func renderRetainedWorktreeGuidance(stderr io.Writer, retained *serverapi.RetainedPreviousWorktree) {
+func renderRetainedWorktreeGuidance(stderr io.Writer, retained *worktreepb.RetainedPreviousWorktree) {
 	if retained == nil {
+		return
+	}
+	renderRetainedWorktreeRootGuidance(stderr, retained.GetWorktree().GetGit().GetCanonicalRoot())
+}
+
+func renderRetainedWorktreeRootGuidance(stderr io.Writer, root string) {
+	fmt.Fprintf(stderr, "Warning: previous Worktree retained at %s\n  %s\n", root, commandString([]string{config.Command, "worktree", "list"}))
+}
+
+func renderWorkflowRetainedWorktreeGuidance(stderr io.Writer, retained *serverapi.WorkflowRetainedPreviousWorktree) {
+	if retained == nil || retained.Worktree.Registered == nil {
 		return
 	}
 	root := retained.Worktree.Registered.Git.CanonicalRoot
 	fmt.Fprintf(stderr, "Warning: previous Worktree retained at %s\n  %s\n", root, commandString([]string{config.Command, "worktree", "list"}))
 }
 
-func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupEvent) {
-	if event.Phase != serverapi.WorktreeSetupPhaseStarted {
+func writeWorktreeSetupProgress(stderr io.Writer, event *worktreepb.SetupEvent) {
+	if event.GetStarted() == nil {
 		return
 	}
-	if event.Started == nil {
-		return
-	}
-	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.Started.ScriptPath, event.Started.WorktreeRoot)
+	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.GetStarted().GetScriptPath(), event.GetStarted().GetWorktreeRoot())
 }
 
 func waitForWorkflowTaskRunSession(ctx context.Context, remote apicontract.WorkflowService, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {

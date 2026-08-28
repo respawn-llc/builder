@@ -53,9 +53,16 @@ func productionGatewayRegistration() (gatewayRegistration, error) {
 }
 
 func (r gatewayRegistration) Validate() error {
+	return r.validateAuthorityPartition(apicontract.Routes())
+}
+
+func (r gatewayRegistration) validateAuthorityPartition(legacyRoutes []apicontract.Route) error {
 	usedLegacyRoutes := make(map[string]string, len(r.legacy))
 	for name, operation := range r.operations {
-		binding, migrated := r.binary[name]
+		binding, binary := r.binary[name]
+		notification := operation.Options.Kind == sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION &&
+			operation.LegacyWireName == nil
+		migrated := binary || notification
 		route, legacy := r.legacy[name]
 		if migrated == legacy {
 			if migrated {
@@ -67,8 +74,10 @@ func (r gatewayRegistration) Validate() error {
 			if operation.LegacyWireName != nil {
 				return fmt.Errorf("migrated operation %q retains legacy provenance %q", name, *operation.LegacyWireName)
 			}
-			if err := validateBinaryBinding(operation, binding); err != nil {
-				return err
+			if binary {
+				if err := validateBinaryBinding(operation, binding); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -97,7 +106,7 @@ func (r gatewayRegistration) Validate() error {
 		}
 	}
 	var unresolvedLegacyRoutes []string
-	for _, route := range apicontract.Routes() {
+	for _, route := range legacyRoutes {
 		if _, used := usedLegacyRoutes[route.Method]; !used {
 			unresolvedLegacyRoutes = append(unresolvedLegacyRoutes, route.Method)
 		}
@@ -146,9 +155,6 @@ func validateBinaryBinding(operation protoapi.Operation, binding gatewayBinaryBi
 		binding.operation.Descriptor.FullName() != operation.Descriptor.FullName() {
 		return fmt.Errorf("binary binding %q has a mismatched method descriptor", operation.Name)
 	}
-	if binding.invoke == nil {
-		return fmt.Errorf("binary binding %q has no handler", operation.Name)
-	}
 	if binding.request == nil {
 		return fmt.Errorf("binary binding %q has no request constructor", operation.Name)
 	}
@@ -167,7 +173,17 @@ func validateBinaryBinding(operation protoapi.Operation, binding gatewayBinaryBi
 	if binding.failure == nil {
 		return fmt.Errorf("binary binding %q has no failure mapper", operation.Name)
 	}
-	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_UNARY {
+	switch operation.Options.Kind {
+	case sharedpb.OperationKind_OPERATION_KIND_UNARY:
+		if binding.invoke == nil || binding.subscribe != nil || binding.associated != nil {
+			return fmt.Errorf("binary unary binding %q has invalid handlers", operation.Name)
+		}
+	case sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION:
+		if binding.invoke != nil || binding.subscribe == nil || binding.associated == nil ||
+			binding.start == nil || binding.complete == nil {
+			return fmt.Errorf("binary subscription binding %q has invalid handlers", operation.Name)
+		}
+	default:
 		return fmt.Errorf("binary binding %q has unsupported operation kind %s", operation.Name, operation.Options.Kind)
 	}
 	return nil

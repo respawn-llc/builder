@@ -6,6 +6,7 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 type Operation struct {
@@ -13,6 +14,78 @@ type Operation struct {
 	LegacyWireName *string
 	Descriptor     protoreflect.MethodDescriptor
 	Options        *sharedpb.KentMethodOptions
+}
+
+type SubscriptionOperations struct {
+	Subscribe  Operation
+	Event      Operation
+	Completion Operation
+}
+
+func ResolveSubscriptionOperations(descriptor protoreflect.MethodDescriptor) (SubscriptionOperations, error) {
+	subscribe, err := OperationFromDescriptor(descriptor)
+	if err != nil {
+		return SubscriptionOperations{}, err
+	}
+	if subscribe.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION {
+		return SubscriptionOperations{}, fmt.Errorf("%s is not a subscription", descriptor.FullName())
+	}
+	if subscribe.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
+		return SubscriptionOperations{}, fmt.Errorf("%s is not client-to-server", descriptor.FullName())
+	}
+	event, err := resolveAssociatedNotification(subscribe, "event", subscribe.Options.Event)
+	if err != nil {
+		return SubscriptionOperations{}, err
+	}
+	completion, err := resolveAssociatedNotification(
+		subscribe,
+		"completion",
+		subscribe.Options.Completion,
+	)
+	if err != nil {
+		return SubscriptionOperations{}, err
+	}
+	return SubscriptionOperations{Subscribe: subscribe, Event: event, Completion: completion}, nil
+}
+
+func resolveAssociatedNotification(
+	subscribe Operation,
+	role string,
+	association *sharedpb.OperationAssociation,
+) (Operation, error) {
+	if association == nil {
+		return Operation{}, fmt.Errorf("%s has no %s association", subscribe.Descriptor.FullName(), role)
+	}
+	fullName := protoreflect.FullName(association.Package + "." + association.Service + "." + association.Method)
+	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(fullName)
+	if err != nil {
+		return Operation{}, fmt.Errorf("%s %s association: %w", subscribe.Descriptor.FullName(), role, err)
+	}
+	method, ok := descriptor.(protoreflect.MethodDescriptor)
+	if !ok {
+		return Operation{}, fmt.Errorf("%s %s association %q is not a method", subscribe.Descriptor.FullName(), role, fullName)
+	}
+	operation, err := OperationFromDescriptor(method)
+	if err != nil {
+		return Operation{}, fmt.Errorf("%s %s association: %w", subscribe.Descriptor.FullName(), role, err)
+	}
+	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION {
+		return Operation{}, fmt.Errorf(
+			"%s %s association %q is not a notification",
+			subscribe.Descriptor.FullName(),
+			role,
+			operation.Name,
+		)
+	}
+	if operation.Options.Direction != sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT {
+		return Operation{}, fmt.Errorf(
+			"%s %s association %q is not server-to-client",
+			subscribe.Descriptor.FullName(),
+			role,
+			operation.Name,
+		)
+	}
+	return operation, nil
 }
 
 func OperationFromDescriptor(descriptor protoreflect.MethodDescriptor) (Operation, error) {

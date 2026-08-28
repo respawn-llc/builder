@@ -18,6 +18,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -96,23 +97,6 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, activeRoute, serverapi.SessionMainViewRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign session unexpectedly allowed")
-	}
-	deletePreviewRoute := routeForTest(t, protocol.MethodWorktreeDeletePreview)
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		deletePreviewRoute,
-		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.ownSessionID, Selector: "feature"},
-	); err != nil {
-		t.Fatalf("active project own delete preview: %v", err)
-	}
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		deletePreviewRoute,
-		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.foreignSessionID, Selector: "feature"},
-	); err == nil {
-		t.Fatal("active project foreign delete preview unexpectedly allowed")
 	}
 	transcriptPageRoute := routeForTest(t, protocol.MethodSessionGetTranscriptPage)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.ownSessionID}); err != nil {
@@ -463,25 +447,36 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	); err != nil {
 		t.Fatalf("workspace Chat materialization with attached project: %v", err)
 	}
-	workspaceListRoute := routeForTest(t, protocol.MethodWorktreeWorkspaceList)
-	if err := executor.authorizeScope(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
-		workspaceListRoute,
-		serverapi.WorktreeWorkspaceListRequest{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingA.WorkspaceID},
-	); err != nil {
-		t.Fatalf("workspace list with matching project/workspace: %v", err)
+	workspaceListMethod := worktreepb.File_kent_api_worktree_worktree_proto.Services().
+		ByName("ListService").Methods().ByName("ListWorkspace")
+	workspaceListOperation, err := protoapi.OperationFromDescriptor(workspaceListMethod)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, request := range []serverapi.WorktreeWorkspaceListRequest{
-		{ProjectID: fixture.bindingB.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
-		{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
-	} {
-		if err := executor.authorizeScope(
+	authorizeWorkspaceList := func(request *worktreepb.WorkspaceListRequest) error {
+		scopeParams, err := worktreeWorkspaceScope(request)
+		if err != nil {
+			return err
+		}
+		return executor.authorizeScopeFacts(
 			ctx,
 			&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
-			workspaceListRoute,
-			request,
-		); err == nil {
+			routeScopePolicy(workspaceListOperation.Options.ScopePolicy),
+			workspaceListOperation.Name,
+			scopeParams,
+		)
+	}
+	if err := authorizeWorkspaceList(&worktreepb.WorkspaceListRequest{
+		ProjectId:   fixture.bindingA.ProjectID,
+		WorkspaceId: fixture.bindingA.WorkspaceID,
+	}); err != nil {
+		t.Fatalf("workspace list with matching project/workspace: %v", err)
+	}
+	for _, request := range []*worktreepb.WorkspaceListRequest{
+		{ProjectId: fixture.bindingB.ProjectID, WorkspaceId: fixture.bindingB.WorkspaceID},
+		{ProjectId: fixture.bindingA.ProjectID, WorkspaceId: fixture.bindingB.WorkspaceID},
+	} {
+		if err := authorizeWorkspaceList(request); err == nil {
 			t.Fatalf("foreign workspace list unexpectedly allowed: %+v", request)
 		}
 	}

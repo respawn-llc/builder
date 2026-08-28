@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/worktreecontract"
 )
 
 func TestBoundedOverlayFramesFitTerminal(t *testing.T) {
@@ -26,13 +27,14 @@ func TestBoundedOverlayFramesFitTerminal(t *testing.T) {
 
 	create := sizedTestUIModel(newWorktreeCreateControllerTestModel(t, nil), width, height)
 	create.worktrees.create.submitting = true
-	create.worktrees.create.setupEvent = &serverapi.WorktreeSetupEvent{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
-			SourceWorkspaceRoot: "/workspace/with/a/long/source/path",
-			WorktreeRoot:        "/workspace/with/a/long/worktree/path",
-			ScriptPath:          "/workspace/with/a/long/scripts/setup-worktree.sh",
+	create.worktrees.create.setupEvent = &worktreepb.SetupEvent{
+		SetupOperationId: worktreecontract.NewSetupOperationID().String(),
+		Phase: &worktreepb.SetupEvent_Started{
+			Started: &worktreepb.SetupStarted{
+				SourceWorkspaceRoot: "/workspace/with/a/long/source/path",
+				WorktreeRoot:        "/workspace/with/a/long/worktree/path",
+				ScriptPath:          "/workspace/with/a/long/scripts/setup-worktree.sh",
+			},
 		},
 	}
 	_ = create.activateSurface(uiSurfaceWorktree)

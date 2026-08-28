@@ -12,6 +12,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -539,21 +540,22 @@ func TestTaskMoveStructuredValuesSelectionAndDependencyGuidance(t *testing.T) {
 }
 
 func TestTaskSetupGuidanceContracts(t *testing.T) {
-	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
 	script := "/repo/setup.sh"
-	failed := &serverapi.WorktreeSetupEvent{
-		Phase: serverapi.WorktreeSetupPhaseFailed,
-		Failed: &serverapi.WorktreeSetupFailed{
-			RetryReadiness: serverapi.WorktreeSetupRetryReady,
-			Cause: serverapi.WorktreeSetupFailureCause{
-				Kind:        serverapi.WorktreeSetupFailureProcessExit,
-				ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1},
+	failed := &worktreepb.SetupEvent{
+		Phase: &worktreepb.SetupEvent_Failed{
+			Failed: &worktreepb.SetupFailed{
+				RetryReadiness: worktreepb.SetupRetryReadiness_WORKTREE_SETUP_RETRY_READY,
+				Cause: &worktreepb.SetupFailureCause{
+					Cause: &worktreepb.SetupFailureCause_ProcessExit{
+						ProcessExit: &worktreepb.SetupProcessExit{ExitCode: 1},
+					},
+				},
+				Diagnostic:               "failed twice",
+				ScriptPath:               &script,
+				ExecutionTarget:          &worktreepb.SetupExecutionTargetSelection{Mode: worktreepb.SetupExecutionTargetMode_WORKTREE_SETUP_EXECUTION_TARGET_MODE_HEAD},
+				RetainedWorktree:         taskContractSetupWorktree("/tmp/retained").GetRegistered(),
+				RetainedPreviousWorktree: &worktreepb.RetainedPreviousWorktree{Worktree: taskContractSetupWorktree("/tmp/previous").GetRegistered()},
 			},
-			Diagnostic:               "failed twice",
-			ScriptPath:               &script,
-			ExecutionTarget:          &target,
-			RetainedWorktree:         taskContractSetupWorktree("/tmp/retained"),
-			RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/previous")},
 		},
 	}
 	start, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, failed, nil)
@@ -561,7 +563,7 @@ func TestTaskSetupGuidanceContracts(t *testing.T) {
 		start.Outcome != taskSetupOutcomeStartInterruptedSetupFailure ||
 		start.RetainedRoot == nil ||
 		*start.RetainedRoot != "/tmp/retained" ||
-		start.RetainedPreviousWorktree == nil ||
+		start.RetainedPreviousRoot == nil ||
 		len(start.Actions) != 5 ||
 		start.Actions[0].Kind != taskSetupActionRetry ||
 		start.Actions[0].Args[len(start.Actions[0].Args)-1] != "head" {
@@ -571,16 +573,17 @@ func TestTaskSetupGuidanceContracts(t *testing.T) {
 	if err != nil || resume.Outcome != taskSetupOutcomeResumeInterruptedSetupFailure {
 		t.Fatalf("resume setup guidance=%+v err=%v", resume, err)
 	}
-	completed, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, &serverapi.WorktreeSetupEvent{
-		Phase: serverapi.WorktreeSetupPhaseNotRequired,
-		NotRequired: &serverapi.WorktreeSetupNotRequired{
-			Reason:                   serverapi.WorktreeSetupNotRequiredNoConfiguredScript,
-			RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/orphan")},
+	completed, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, &worktreepb.SetupEvent{
+		Phase: &worktreepb.SetupEvent_NotRequired{
+			NotRequired: &worktreepb.SetupNotRequired{
+				Reason:                   worktreepb.SetupNotRequiredReason_WORKTREE_SETUP_NOT_REQUIRED_REASON_NO_CONFIGURED_SCRIPT,
+				RetainedPreviousWorktree: &worktreepb.RetainedPreviousWorktree{Worktree: taskContractSetupWorktree("/tmp/orphan").GetRegistered()},
+			},
 		},
 	}, nil)
 	if err != nil ||
 		completed.Outcome != taskSetupOutcomeCompleted ||
-		completed.RetainedPreviousWorktree == nil ||
+		completed.RetainedPreviousRoot == nil ||
 		len(completed.Actions) != 1 ||
 		completed.Actions[0].Kind != taskSetupActionListWorktrees {
 		t.Fatalf("completed setup guidance=%+v err=%v", completed, err)
@@ -615,17 +618,17 @@ func TestTaskMoveSetupRecoveryPreservesStructuredInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
-	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorktreeSetupRetainedError{
-		Worktree:                 *taskContractSetupWorktree("/tmp/retained"),
+	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorkflowSetupRetainedError{
+		Worktree:                 taskContractWorkflowSetupWorktree("/tmp/retained"),
 		Diagnostic:               "failed twice",
 		ScriptPath:               "/repo/setup.sh",
-		RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/previous")},
+		RetainedPreviousWorktree: &serverapi.WorkflowRetainedPreviousWorktree{Worktree: taskContractWorkflowSetupWorktree("/tmp/previous")},
 	})
 	if err != nil ||
 		guidance.Outcome != taskSetupOutcomeMoveSetupFailure ||
 		guidance.RetainedRoot == nil ||
 		*guidance.RetainedRoot != "/tmp/retained" ||
-		guidance.RetainedPreviousWorktree == nil ||
+		guidance.RetainedPreviousRoot == nil ||
 		len(guidance.Actions) != 5 ||
 		!slices.Contains(guidance.Actions[0].Args, `{"plan":{"summary":"done"}}`) {
 		t.Fatalf("move setup guidance=%+v err=%v", guidance, err)
@@ -633,22 +636,17 @@ func TestTaskMoveSetupRecoveryPreservesStructuredInput(t *testing.T) {
 }
 
 func TestWorktreeHeaderAndBranchCleanupPolicy(t *testing.T) {
-	header, err := newWorktreeCommandTransitionHeader("session-1")
-	if err != nil || header.SessionID != "session-1" || header.OperationID.String() == "" {
-		t.Fatalf("header=%+v err=%v", header, err)
-	}
-
 	for _, test := range []struct {
 		name        string
 		delete      bool
 		forceDelete bool
 		agent       bool
-		want        serverapi.WorktreeBranchCleanupMode
+		want        worktreepb.BranchCleanupMode
 		wantError   bool
 	}{
-		{name: "retain", want: serverapi.WorktreeBranchCleanupModeRetain},
-		{name: "safe delete", delete: true, want: serverapi.WorktreeBranchCleanupModeDeleteSafe},
-		{name: "force delete", delete: true, forceDelete: true, want: serverapi.WorktreeBranchCleanupModeDeleteForce},
+		{name: "retain", want: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN},
+		{name: "safe delete", delete: true, want: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE},
+		{name: "force delete", delete: true, forceDelete: true, want: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_FORCE},
 		{name: "force requires delete", forceDelete: true, wantError: true},
 		{name: "agent retains branch", delete: true, agent: true, wantError: true},
 	} {
@@ -711,12 +709,23 @@ func taskContractStatus(kind serverapi.WorkflowTaskStatusKind) serverapi.Workflo
 	return serverapi.WorkflowTaskStatus{Kind: kind, NativeState: native}
 }
 
-func taskContractSetupWorktree(root string) *serverapi.WorktreeTopologyEntry {
-	return &serverapi.WorktreeTopologyEntry{
-		Variant: serverapi.WorktreeTopologyVariantRegistered,
-		Registered: &serverapi.WorktreeRegisteredFacts{
-			Git:  serverapi.WorktreeGitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
-			Kent: serverapi.WorktreeKentFacts{WorktreeID: "worktree-1", CanonicalRoot: root, DisplayName: "KENT-453", Managed: true},
+func taskContractSetupWorktree(root string) *worktreepb.TopologyEntry {
+	return &worktreepb.TopologyEntry{
+		Topology: &worktreepb.TopologyEntry_Registered{
+			Registered: &worktreepb.RegisteredFacts{
+				Git:  &worktreepb.GitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
+				Kent: &worktreepb.KentFacts{WorktreeId: "worktree-1", CanonicalRoot: root, DisplayName: "KENT-453", Managed: true},
+			},
+		},
+	}
+}
+
+func taskContractWorkflowSetupWorktree(root string) serverapi.WorkflowRegisteredWorktreeTopology {
+	return serverapi.WorkflowRegisteredWorktreeTopology{
+		Variant: "registered",
+		Registered: &serverapi.WorkflowRegisteredWorktreeFacts{
+			Git:  serverapi.WorkflowWorktreeGitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
+			Kent: serverapi.WorkflowWorktreeKentFacts{WorktreeID: "worktree-1", CanonicalRoot: root, DisplayName: "KENT-453", Managed: true},
 		},
 	}
 }
