@@ -19,6 +19,18 @@ import (
 	"core/shared/textutil"
 )
 
+type worktreeTechnicalTestError struct {
+	error
+}
+
+func (worktreeTechnicalTestError) WorktreeTechnicalFailure() {}
+
+type worktreeIndeterminateTestError struct {
+	error
+}
+
+func (worktreeIndeterminateTestError) WorktreeTransitionIndeterminate() {}
+
 func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
@@ -48,8 +60,8 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 			Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
 			Selector:   &enterSelector,
 		},
-		func(context.Context) WorktreeApplicationResult {
-			return CommittedWorktreeApplication(nil)
+		func(context.Context) error {
+			return nil
 		},
 	)
 	if err != nil {
@@ -68,8 +80,8 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 		runtimeinput.PendingWorkWorktreeTransition{
 			Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 		},
-		func(context.Context) WorktreeApplicationResult {
-			return CommittedWorktreeApplication(nil)
+		func(context.Context) error {
+			return nil
 		},
 	)
 	if err != nil {
@@ -144,9 +156,9 @@ func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
 				t.Context(),
 				operationID,
 				testCase.transition,
-				func(context.Context) WorktreeApplicationResult {
+				func(context.Context) error {
 					started <- struct{}{}
-					return CommittedWorktreeApplication(nil)
+					return nil
 				},
 			)
 			if err != nil {
@@ -192,7 +204,7 @@ func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
 				t.Context(),
 				operationID,
 				testCase.transition,
-				func(ctx context.Context) WorktreeApplicationResult {
+				func(ctx context.Context) error {
 					close(started)
 					select {
 					case <-release:
@@ -200,7 +212,7 @@ func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
 						t.Errorf("started Worktree transition was canceled: %v", context.Cause(ctx))
 					}
 					close(finished)
-					return CommittedWorktreeApplication(nil)
+					return nil
 				},
 			)
 			if err != nil {
@@ -248,8 +260,8 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 			runtimeinput.PendingWorkWorktreeTransition{
 				Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 			},
-			func(context.Context) WorktreeApplicationResult {
-				return CommittedWorktreeApplication(nil)
+			func(context.Context) error {
+				return nil
 			},
 		); err != nil {
 			t.Fatalf("schedule Worktree transition: %v", err)
@@ -272,8 +284,8 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 				Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
 				Selector:   textutil.Value("feature/rejected"),
 			},
-			func(context.Context) WorktreeApplicationResult {
-				return CommittedWorktreeApplication(nil)
+			func(context.Context) error {
+				return nil
 			},
 		)
 		var typed *serverapi.PendingWorkCapacityError
@@ -298,8 +310,8 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 				Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
 				Selector:   textutil.Value("feature/admitted"),
 			},
-			func(context.Context) WorktreeApplicationResult {
-				return CommittedWorktreeApplication(nil)
+			func(context.Context) error {
+				return nil
 			},
 		); err != nil {
 			t.Fatalf("admit Worktree transition: %v", err)
@@ -340,8 +352,8 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 						Selector:   textutil.Value(fmt.Sprintf("feature/concurrent-%d", index)),
 					},
 					accept,
-					func(context.Context) WorktreeApplicationResult {
-						return CommittedWorktreeApplication(nil)
+					func(context.Context) error {
+						return nil
 					},
 				)
 				results <- admissionResult{operationID: operationID, ack: ack, err: err}
@@ -529,8 +541,8 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 						Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
 						Selector:   textutil.Value("feature/technical"),
 					},
-					func(context.Context) WorktreeApplicationResult {
-						return UnappliedWorktreeApplication(technicalFailure)
+					func(context.Context) error {
+						return worktreeTechnicalTestError{error: technicalFailure}
 					},
 				); err != nil {
 					t.Fatalf("schedule Worktree transition: %v", err)
@@ -596,8 +608,8 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 						Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
 						Selector:   textutil.Value("missing"),
 					},
-					func(context.Context) WorktreeApplicationResult {
-						return UnappliedUserCorrectableWorktreeApplication(errors.New("selector not found"))
+					func(context.Context) error {
+						return errors.New("selector not found")
 					},
 				); err != nil {
 					t.Fatalf("schedule Worktree transition: %v", err)
@@ -635,7 +647,7 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 			},
 		},
 		{
-			name: "committed Worktree failure",
+			name: "ordinary Worktree failure without technical marker",
 			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
 				t.Helper()
 				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
@@ -649,8 +661,8 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 					runtimeinput.PendingWorkWorktreeTransition{
 						Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 					},
-					func(context.Context) WorktreeApplicationResult {
-						return CommittedWorktreeApplication(technicalFailure)
+					func(context.Context) error {
+						return technicalFailure
 					},
 				); err != nil {
 					t.Fatalf("schedule Worktree transition: %v", err)
@@ -660,14 +672,10 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 			},
 		},
 		{
-			name: "indeterminate Worktree failure",
-			run: func(t *testing.T, observe func(Event), abort func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+			name: "indeterminate Worktree failure does not restore",
+			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
 				t.Helper()
-				engine := pendingWorkTestEngine(t, Config{
-					Model:                 "gpt-5",
-					OnEvent:               observe,
-					LifecycleRuntimeAbort: abort,
-				})
+				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
 				operationID := clientui.NewWorktreeTransitionID()
 				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
@@ -678,8 +686,10 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 					runtimeinput.PendingWorkWorktreeTransition{
 						Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 					},
-					func(context.Context) WorktreeApplicationResult {
-						return IndeterminateWorktreeApplication(technicalFailure)
+					func(context.Context) error {
+						return worktreeIndeterminateTestError{
+							error: worktreeTechnicalTestError{error: technicalFailure},
+						}
 					},
 				); err != nil {
 					t.Fatalf("schedule Worktree transition: %v", err)
@@ -687,7 +697,6 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 				waitEngineLifecycleTasks(t, engine)
 				return itemID, runtimeinput.PendingWorkItemKindWorktreeTransition, "/wt leave"
 			},
-			wantAbort: true,
 		},
 		{
 			name: "explicit discard",
@@ -705,8 +714,8 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 					runtimeinput.PendingWorkWorktreeTransition{
 						Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 					},
-					func(context.Context) WorktreeApplicationResult {
-						return UnappliedWorktreeApplication(technicalFailure)
+					func(context.Context) error {
+						return worktreeTechnicalTestError{error: technicalFailure}
 					},
 				); err != nil {
 					t.Fatalf("schedule Worktree transition: %v", err)

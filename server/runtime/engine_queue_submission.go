@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"strings"
 	"time"
@@ -86,7 +85,7 @@ func (e *Engine) ScheduleWorktreeTransition(
 	ctx context.Context,
 	operationID clientui.WorktreeTransitionID,
 	transition runtimeinput.PendingWorkWorktreeTransition,
-	fn func(context.Context) WorktreeApplicationResult,
+	fn func(context.Context) error,
 ) (*worktreepb.ScheduledAcknowledgement, error) {
 	return e.ScheduleWorktreeTransitionWithAcceptance(ctx, operationID, transition, nil, fn)
 }
@@ -96,7 +95,7 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 	operationID clientui.WorktreeTransitionID,
 	transition runtimeinput.PendingWorkWorktreeTransition,
 	accept CommandAcceptance,
-	fn func(context.Context) WorktreeApplicationResult,
+	fn func(context.Context) error,
 ) (*worktreepb.ScheduledAcknowledgement, error) {
 	if fn == nil {
 		return nil, errors.New("worktree transition executor is required")
@@ -124,9 +123,8 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 				ActiveKindRuntimeMaintenance,
 				reservation,
 				func(stepCtx context.Context, _ string) error {
-					result := fn(stepCtx)
-					runErr := worktreeApplicationError(result)
-					if result.RequiresTechnicalRestoration() {
+					runErr := fn(stepCtx)
+					if worktreeFailureRequiresTechnicalRestoration(runErr) {
 						runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
 					}
 					return runErr
@@ -172,35 +170,39 @@ func (e *Engine) RunExecutionTargetTransition(ctx context.Context, onScheduled f
 
 func (e *Engine) ApplyWorktreeTransitionTerminal(
 	ctx context.Context,
-	apply func(context.Context) WorktreeApplicationResult,
-) WorktreeApplicationResult {
+	apply func(context.Context) error,
+) error {
 	if apply == nil {
-		return UnappliedWorktreeApplication(errors.New("worktree transition terminal mutation is required"))
+		return errors.New("worktree transition terminal mutation is required")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := context.Cause(ctx); err != nil {
-		return UnappliedWorktreeApplication(err)
+		return err
 	}
-	var result WorktreeApplicationResult
-	applied := false
 	deferred := submitEngineRuntimeOperation(e, func(operationCtx context.Context) (struct{}, error) {
-		applied = true
-		result = apply(operationCtx)
-		return struct{}{}, nil
+		return struct{}{}, apply(operationCtx)
 	})
 	_, err := deferred.Await(context.WithoutCancel(ctx))
-	if !applied {
-		return UnappliedWorktreeApplication(err)
+	return err
+}
+
+type worktreeTechnicalFailure interface {
+	WorktreeTechnicalFailure()
+}
+
+type worktreeIndeterminateFailure interface {
+	WorktreeTransitionIndeterminate()
+}
+
+func worktreeFailureRequiresTechnicalRestoration(err error) bool {
+	var indeterminate worktreeIndeterminateFailure
+	if errors.As(err, &indeterminate) {
+		return false
 	}
-	if validationErr := result.Validate(); validationErr != nil {
-		return IndeterminateWorktreeApplication(errors.Join(
-			result.Err,
-			fmt.Errorf("invalid Worktree terminal application result: %w", validationErr),
-		))
-	}
-	return result
+	var technical worktreeTechnicalFailure
+	return errors.As(err, &technical)
 }
 
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user

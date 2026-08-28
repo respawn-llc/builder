@@ -71,21 +71,21 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 }
 
 type WorktreeTransitionAuthority func(
-	func(context.Context) runtime.WorktreeApplicationResult,
-) runtime.WorktreeApplicationResult
+	func(context.Context) error,
+) error
 
 type WorktreeTransitionTargetSync func(
 	context.Context,
 	clientui.SessionExecutionTarget,
 	*session.WorktreeReminderState,
-) runtime.WorktreeApplicationResult
+) error
 
 type WorktreeTransitionExecutor func(
 	context.Context,
 	WorktreeTransitionAuthority,
 	WorktreeTransitionTargetSync,
 	func(clientui.WorktreeTransitionOutcome) error,
-) runtime.WorktreeApplicationResult
+) error
 
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,
@@ -110,29 +110,26 @@ func (a *Authority) RunWorktreeTransition(
 	var acknowledgement *worktreepb.ScheduledAcknowledgement
 	err = a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 		if resource == nil {
-			result := fn(
+			runErr := fn(
 				runCtx,
 				nil,
-				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) runtime.WorktreeApplicationResult {
+				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 					if err := context.Cause(syncCtx); err != nil {
-						return runtime.UnappliedWorktreeApplication(err)
+						return err
 					}
 					_, normalizedReminder, err := normalizeTarget(target, reminder)
 					if err != nil {
-						return runtime.UnappliedWorktreeApplication(err)
+						return err
 					}
 					if err := store.SetWorktreeReminderState(normalizedReminder); err != nil {
-						return runtime.UnappliedWorktreeApplication(err)
+						return err
 					}
-					return runtime.CommittedWorktreeApplication(nil)
+					return nil
 				},
 				nil,
 			)
-			if validationErr := result.Validate(); validationErr != nil {
-				return false, fmt.Errorf("validate dormant Worktree application result: %w", validationErr)
-			}
-			if result.Certainty == runtime.WorktreeApplicationIndeterminate {
-				return false, result.Err
+			if worktreeTransitionIsIndeterminate(runErr) {
+				return false, runErr
 			}
 			acknowledgement = &worktreepb.ScheduledAcknowledgement{OperationId: operationID.String()}
 			return false, nil
@@ -142,25 +139,19 @@ func (a *Authority) RunWorktreeTransition(
 			runCtx,
 			operationID,
 			transition,
-			func(executionCtx context.Context) runtime.WorktreeApplicationResult {
+			func(executionCtx context.Context) error {
 				return fn(
 					executionCtx,
-					func(apply func(context.Context) runtime.WorktreeApplicationResult) runtime.WorktreeApplicationResult {
+					func(apply func(context.Context) error) error {
 						return engine.ApplyWorktreeTransitionTerminal(executionCtx, apply)
 					},
-					func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) runtime.WorktreeApplicationResult {
+					func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 						normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
 						if err != nil {
-							return runtime.UnappliedWorktreeApplication(err)
+							return err
 						}
-						retire, syncErr := syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
-						if syncErr == nil {
-							return runtime.CommittedWorktreeApplication(nil)
-						}
-						if retire {
-							return runtime.IndeterminateWorktreeApplication(syncErr)
-						}
-						return runtime.UnappliedWorktreeApplication(syncErr)
+						_, syncErr := syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+						return syncErr
 					},
 					func(outcome clientui.WorktreeTransitionOutcome) error {
 						return engine.SteerWorktreeTransitionFailure(outcome)
@@ -175,6 +166,15 @@ func (a *Authority) RunWorktreeTransition(
 		return false, scheduleErr
 	})
 	return acknowledgement, err
+}
+
+type indeterminateWorktreeTransition interface {
+	WorktreeTransitionIndeterminate()
+}
+
+func worktreeTransitionIsIndeterminate(err error) bool {
+	var indeterminate indeterminateWorktreeTransition
+	return errors.As(err, &indeterminate)
 }
 
 func (a *Authority) RunSessionMaintenance(

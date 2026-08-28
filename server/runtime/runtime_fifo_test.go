@@ -48,13 +48,10 @@ func runScheduledWorktreeTransitionForTest(
 		runtimeinput.PendingWorkWorktreeTransition{
 			Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 		},
-		func(context.Context) WorktreeApplicationResult {
+		func(context.Context) error {
 			runErr := fn()
 			completed <- runErr
-			if runErr != nil {
-				return UnappliedWorktreeApplication(runErr)
-			}
-			return CommittedWorktreeApplication(nil)
+			return runErr
 		},
 	)
 	if err != nil {
@@ -1068,11 +1065,11 @@ func TestWorktreeTerminalEffectReentersAtTheCurrentRuntimeTail(t *testing.T) {
 		transitionDone <- runScheduledWorktreeTransitionForTest(t.Context(), engine, func() error {
 			close(transitionStarted)
 			<-releaseTransition
-			result := engine.ApplyWorktreeTransitionTerminal(t.Context(), func(context.Context) WorktreeApplicationResult {
+			err := engine.ApplyWorktreeTransitionTerminal(t.Context(), func(context.Context) error {
 				close(terminalApplied)
-				return CommittedWorktreeApplication(nil)
+				return nil
 			})
-			return result.Err
+			return err
 		})
 	}()
 	select {
