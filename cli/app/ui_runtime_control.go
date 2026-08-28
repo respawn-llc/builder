@@ -160,43 +160,34 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 		return nil
 	}
 	return m.sendTransientStatusWithNoticeID(
-		chatSettingsSuccessNotices[msg.operation](settings),
+		chatSettingsSuccessNotice(msg.operation, settings),
 		uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "",
 	)
 }
 
-var chatSettingsSuccessNotices = map[serverapi.ChatSettingsMutationOperationKind]func(serverapi.ChatSettings) string{
-	serverapi.ChatSettingsMutationAgent: func(s serverapi.ChatSettings) string { return "Agent: " + s.SelectedAgent.Role },
-	serverapi.ChatSettingsMutationSupervisor: func(s serverapi.ChatSettings) string {
-		return "Supervisor: " + chatSettingsSupervisorNotices[s.Supervisor.Value]
-	},
-	serverapi.ChatSettingsMutationThinking: func(s serverapi.ChatSettings) string { return "Thinking: " + s.SelectedAgent.Thinking },
-	serverapi.ChatSettingsMutationFast: func(s serverapi.ChatSettings) string {
-		return "Fast: " + chatSettingsOnOffValues[s.Fast != nil && s.Fast.Value]
-	},
-	serverapi.ChatSettingsMutationQuestions: func(s serverapi.ChatSettings) string {
-		return "Questions: " + chatSettingsOnOffValues[s.Questions.Enabled]
-	},
-	serverapi.ChatSettingsMutationAutoCompaction: func(s serverapi.ChatSettings) string {
-		return "Auto-compaction: " + chatSettingsOnOffValues[s.AutoCompaction.Stored]
-	},
+func chatSettingsSuccessNotice(kind serverapi.ChatSettingsMutationOperationKind, settings serverapi.ChatSettings) string {
+	switch kind {
+	case serverapi.ChatSettingsMutationAgent:
+		return "Agent: " + settings.SelectedAgent.Role
+	case serverapi.ChatSettingsMutationSupervisor:
+		return "Supervisor: " + chatSettingsSupervisorNotices[settings.Supervisor.Value]
+	case serverapi.ChatSettingsMutationThinking:
+		return "Thinking: " + settings.SelectedAgent.Thinking
+	case serverapi.ChatSettingsMutationFast:
+		return "Fast: " + chatSettingsOnOffValues[settings.Fast != nil && settings.Fast.Value]
+	case serverapi.ChatSettingsMutationQuestions:
+		return "Questions: " + chatSettingsOnOffValues[settings.Questions.Enabled]
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		return "Auto-compaction: " + chatSettingsOnOffValues[settings.AutoCompaction.Stored]
+	}
+	return ""
 }
 
 var chatSettingsOnOffValues = map[bool]string{false: "off", true: "on"}
 
-var chatSettingsSupervisorNotices = map[serverapi.ChatSettingsSupervisorValue]string{
-	serverapi.ChatSettingsSupervisorOff:        "Off",
-	serverapi.ChatSettingsSupervisorAfterEdits: "After edits",
-	serverapi.ChatSettingsSupervisorAlways:     "Always",
-}
+var chatSettingsSupervisorNotices = map[serverapi.ChatSettingsSupervisorValue]string{serverapi.ChatSettingsSupervisorOff: "Off", serverapi.ChatSettingsSupervisorAfterEdits: "After edits", serverapi.ChatSettingsSupervisorAlways: "Always"}
 
-var chatSettingsRejectionNotices = map[serverapi.ChatSettingsMutationRejectionReason]string{
-	serverapi.ChatSettingsMutationAgentLocked:              "Agent is locked",
-	serverapi.ChatSettingsMutationAgentUnavailable:         "Agent is unavailable",
-	serverapi.ChatSettingsMutationThinkingUnavailable:      "Thinking is unavailable",
-	serverapi.ChatSettingsMutationFastUnavailable:          "Fast mode is unavailable",
-	serverapi.ChatSettingsMutationAutoCompactionPolicyLock: "Auto-compaction is unavailable",
-}
+var chatSettingsRejectionNotices = map[serverapi.ChatSettingsMutationRejectionReason]string{serverapi.ChatSettingsMutationAgentLocked: "Agent is locked", serverapi.ChatSettingsMutationAgentUnavailable: "Agent is unavailable", serverapi.ChatSettingsMutationThinkingUnavailable: "Thinking is unavailable", serverapi.ChatSettingsMutationFastUnavailable: "Fast mode is unavailable", serverapi.ChatSettingsMutationAutoCompactionPolicyLock: "Auto-compaction is unavailable"}
 
 func (m *uiModel) setRuntimeSessionName(name string) error {
 	m.checkTUIBlockingOperation("runtime control mutation", "set session name")

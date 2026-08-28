@@ -873,14 +873,6 @@ func sessionPlanSuccessFromResult(result PlanResult) (*sessionlaunchpb.SessionPl
 	if result.Plan.ActivationAgentSelection != nil {
 		selection := result.Plan.ActivationAgentSelection
 		settings := selection.Settings
-		if settings == nil ||
-			settings.Supervisor == nil ||
-			settings.Thinking == nil ||
-			settings.Fast == nil ||
-			settings.Questions == nil ||
-			settings.AutoCompaction == nil {
-			return nil, errors.New("activation Agent selection has incomplete Chat settings")
-		}
 		plan.ActivationAgentSelection = &sessionlaunchpb.SessionRuntimeAgentSelection{
 			Agent: selection.Agent,
 			Baseline: &sessionlaunchpb.SessionRuntimeChatSettings{

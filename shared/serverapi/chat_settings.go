@@ -227,19 +227,6 @@ func (o ChatSettingsMutationOperation) Validate() error {
 	}
 	return nil
 }
-func (o *ChatSettingsMutationOperation) UnmarshalJSON(data []byte) error {
-	type wire ChatSettingsMutationOperation
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	operation := ChatSettingsMutationOperation(decoded)
-	if err := operation.Validate(); err != nil {
-		return err
-	}
-	*o = operation
-	return nil
-}
 
 type ChatSettingsMutationRequest struct {
 	Target    ChatSettingsReadTarget        `json:"target"`
@@ -351,9 +338,6 @@ func (r *ChatSettingsMutationResponse) UnmarshalJSON(data []byte) error {
 }
 
 func (r ChatSettingsMutationResponse) ValidateForTarget(target ChatSettingsReadTarget) error {
-	if err := target.Validate(); err != nil {
-		return fmt.Errorf("target: %w", err)
-	}
 	if err := r.Result.Validate(); err != nil {
 		return fmt.Errorf("result: %w", err)
 	}

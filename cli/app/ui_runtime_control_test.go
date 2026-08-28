@@ -113,60 +113,16 @@ func (f *runtimeControlFakeClient) SetSessionName(name string) error {
 	return f.err
 }
 func (f *runtimeControlFakeClient) ReadChatSettings() (serverapi.ChatSettings, error) {
-	return f.chatSettings(), f.err
+	return serverapi.ChatSettings{}, f.err
 }
 func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
-	settings := f.chatSettings()
-	switch operation.Kind {
-	case serverapi.ChatSettingsMutationThinking:
-		settings.SelectedAgent.Thinking = *operation.Value
-	case serverapi.ChatSettingsMutationFast:
-		settings.Fast.Value = *operation.Enabled
-	case serverapi.ChatSettingsMutationSupervisor:
-		settings.Supervisor.Value = serverapi.ChatSettingsSupervisorValue(*operation.Value)
-	case serverapi.ChatSettingsMutationQuestions:
-		settings.Questions.Enabled = *operation.Enabled
-	case serverapi.ChatSettingsMutationAutoCompaction:
-		settings.AutoCompaction.Stored = *operation.Enabled
+	if operation.Value != nil {
+		f.status.ThinkingLevel = *operation.Value
 	}
-	response := serverapi.ChatSettingsMutationResponse{
+	return serverapi.ChatSettingsMutationResponse{
 		Result:   serverapi.NewChatSettingsMutationApplied(true),
-		Settings: settings,
-		Context: serverapi.ChatContext{
-			ContextWindowTokens:      100,
-			UsedTokens:               10,
-			RemainingTokens:          90,
-			AutomaticThresholdTokens: 80,
-			AutoCompactionEnabled:    settings.AutoCompaction.Stored,
-			CompactionMode:           serverapi.ChatContextCompactionModeLocal,
-		},
-	}
-	f.status.ThinkingLevel = response.Settings.SelectedAgent.Thinking
-	f.status.ReviewerFrequency = string(response.Settings.Supervisor.Value)
-	f.status.ReviewerEnabled = response.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
-	f.status.FastModeAvailable = response.Settings.Fast != nil
-	f.status.FastModeEnabled = response.Settings.Fast != nil && response.Settings.Fast.Value
-	f.status.QuestionsEnabled = response.Settings.Questions.Enabled
-	f.status.AutoCompactionEnabled = response.Context.AutoCompactionEnabled
-	f.status.CompactionMode = string(response.Context.CompactionMode)
-	f.status.CompactionCount = int(response.Context.CompletedCompactionCount)
-	f.status.ContextUsage = clientui.RuntimeContextUsage{
-		UsedTokens:   int(response.Context.UsedTokens),
-		WindowTokens: int(response.Context.ContextWindowTokens),
-	}
-	return response, f.err
-}
-func (f *runtimeControlFakeClient) chatSettings() serverapi.ChatSettings {
-	return serverapi.ChatSettings{
-		SelectedAgent: serverapi.ChatSettingsAgentSummary{Role: "default", Thinking: f.status.ThinkingLevel},
-		Supervisor: serverapi.ChatSettingsSupervisor{
-			Value:    serverapi.ChatSettingsSupervisorValue(f.status.ReviewerFrequency),
-			Baseline: serverapi.ChatSettingsSupervisorAfterEdits,
-		},
-		Fast:           &serverapi.ChatSettingsFast{Value: f.status.FastModeEnabled},
-		Questions:      serverapi.ChatSettingsQuestions{Enabled: f.status.QuestionsEnabled},
-		AutoCompaction: serverapi.ChatSettingsAutoCompaction{Stored: f.status.AutoCompactionEnabled},
-	}
+		Settings: serverapi.ChatSettings{SelectedAgent: serverapi.ChatSettingsAgentSummary{Thinking: f.status.ThinkingLevel}},
+	}, f.err
 }
 func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	f.showGoalCalls++

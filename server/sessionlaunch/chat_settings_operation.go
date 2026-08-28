@@ -32,23 +32,6 @@ func ProjectPreparedChatSettingsOperation(
 	input PreparedChatSettingsOperationInput,
 	operation serverapi.ChatSettingsMutationOperation,
 ) (PreparedChatSettingsOperationResult, error) {
-	switch operation.Kind {
-	case serverapi.ChatSettingsMutationAgent:
-		agent, ok := session.NormalizeChatAgent(*operation.Role)
-		if !ok {
-			return PreparedChatSettingsOperationResult{}, fmt.Errorf("Chat Agent %q is invalid", *operation.Role)
-		}
-		operation.Role = &agent
-	case serverapi.ChatSettingsMutationSupervisor:
-		normalized, err := session.NormalizeChatSettingsOverrides(&session.ChatSettingsOverrides{Supervisor: operation.Value})
-		if err != nil {
-			return PreparedChatSettingsOperationResult{}, err
-		}
-		operation.Value = normalized.Supervisor
-	case serverapi.ChatSettingsMutationThinking:
-		value := strings.TrimSpace(*operation.Value)
-		operation.Value = &value
-	}
 	rawAgent := input.Raw.Agent
 	defaultEntry, ok := input.Catalog.Lookup(config.DefaultSubagentRole)
 	if !ok {
@@ -85,24 +68,29 @@ func ProjectPreparedChatSettingsOperation(
 	target := base
 	switch operation.Kind {
 	case serverapi.ChatSettingsMutationAgent:
-		entry, available := input.Catalog.Lookup(*operation.Role)
+		agent, ok := session.NormalizeChatAgent(*operation.Role)
+		if !ok {
+			return PreparedChatSettingsOperationResult{}, fmt.Errorf("Chat Agent %q is invalid", *operation.Role)
+		}
+		entry, available := input.Catalog.Lookup(agent)
 		if !available {
 			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationAgentUnavailable), nil
 		}
-		if (input.Locked != nil || input.WorkflowLocked) && *operation.Role != rawAgent {
+		if (input.Locked != nil || input.WorkflowLocked) && agent != rawAgent {
 			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationAgentLocked), nil
 		}
-		if *operation.Role != rawAgent || !selectedAvailable {
+		if agent != rawAgent || !selectedAvailable {
 			target = session.ChatSettingsState{Agent: entry.Choice.Role, Settings: completeChatSettingsOverrides(entry.Settings.Baseline)}
 		}
 		selectedEntry = entry
 	case serverapi.ChatSettingsMutationSupervisor:
 		target.Settings.Supervisor = operation.Value
 	case serverapi.ChatSettingsMutationThinking:
-		if !slices.Contains(selectedEntry.Settings.SupportedThinkingValues, *operation.Value) {
+		thinking := strings.TrimSpace(*operation.Value)
+		if !slices.Contains(selectedEntry.Settings.SupportedThinkingValues, thinking) {
 			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationThinkingUnavailable), nil
 		}
-		target.Settings.Thinking = operation.Value
+		target.Settings.Thinking = &thinking
 	case serverapi.ChatSettingsMutationFast:
 		if !selectedEntry.Settings.FastAvailable {
 			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationFastUnavailable), nil

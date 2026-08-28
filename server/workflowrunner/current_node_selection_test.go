@@ -70,18 +70,10 @@ func TestCurrentNodeStartUsesMaterializedSelectedRoleAtCompactionBoundary(t *tes
 	if err != nil {
 		t.Fatalf("read retained Session Chat settings: %v", err)
 	}
-	settings := session.ChatSettingsOverrides{
-		Supervisor:     textutil.Value("off"),
-		Thinking:       textutil.Value("medium"),
-		Fast:           textutil.Value(false),
-		Questions:      textutil.Value(true),
-		AutoCompaction: textutil.Value(true),
+	if state.Settings == nil {
+		t.Fatal("retained Session Chat settings are required")
 	}
-	if state.Settings != nil {
-		settings = *state.Settings
-	}
-	settings.AutoCompaction = textutil.Value(false)
-	state.Settings = &settings
+	state.Settings.AutoCompaction = textutil.Value(false)
 	if _, err := store.CommitChatSettingsState(state); err != nil {
 		t.Fatalf("disable retained Session Auto-compaction: %v", err)
 	}
