@@ -6,7 +6,7 @@ import (
 	"core/cli/app/internal/worktreeui"
 	tuiinput "core/cli/tui/input"
 	"core/shared/clientui"
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	sharedtheme "core/shared/theme"
 
 	"github.com/charmbracelet/lipgloss"
@@ -253,18 +253,17 @@ func (l uiViewLayout) renderWorktreeCreateDialog(width, height int, style uiStyl
 		style.brand.Render(truncateQueuedMessageLine("New worktree", width)),
 	})
 	addSection(uiWorktreeCreateFieldBranchTarget, true, l.renderWorktreeCreateTargetField(width, dialog))
-	usesBaseRef := dialog.resolution.Kind == serverapi.WorktreeCreateTargetResolutionKindNewBranch
+	usesBaseRef := dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH
 	addSection(uiWorktreeCreateFieldBaseRef, usesBaseRef, l.renderWorktreeCreateField(width, style, "Base ref", "Used when creating a new branch.", dialog.baseRef, dialog.baseRefErrorText, dialog.focus == uiWorktreeCreateFieldBaseRef, usesBaseRef))
 	addSection(uiWorktreeCreateFieldActions, true, renderWorktreeCreateActionGroup(width, m.theme, dialog, dialog.focus == uiWorktreeCreateFieldActions))
 	footer := make([]string, 0, 3)
 	if dialog.submitting {
 		footer = append(footer, style.meta.Render(truncateQueuedMessageLine(pendingToolSpinnerFrame(m.spinnerFrame)+" Creating worktree...", width)))
 		if dialog.setupEvent != nil &&
-			dialog.setupEvent.Phase == serverapi.WorktreeSetupPhaseStarted &&
-			dialog.setupEvent.Started != nil {
+			dialog.setupEvent.GetStarted() != nil {
 			footer = append(footer,
-				style.meta.Render(truncateQueuedMessageLine("Setup script: "+dialog.setupEvent.Started.ScriptPath, width)),
-				style.meta.Render(truncateQueuedMessageLine("Setup worktree: "+dialog.setupEvent.Started.WorktreeRoot, width)),
+				style.meta.Render(truncateQueuedMessageLine("Setup script: "+dialog.setupEvent.GetStarted().ScriptPath, width)),
+				style.meta.Render(truncateQueuedMessageLine("Setup worktree: "+dialog.setupEvent.GetStarted().WorktreeRoot, width)),
 			)
 		}
 	}
@@ -320,13 +319,13 @@ func (l uiViewLayout) renderWorktreeCreateTargetField(width int, dialog uiWorktr
 		badgeText = ""
 	case dialog.resolving:
 		badgeText = ""
-	case dialog.resolution.Kind == serverapi.WorktreeCreateTargetResolutionKindNewBranch:
+	case dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_NEW_BRANCH:
 		badgeStyle = rowStyle.Foreground(p.secondary).Bold(true)
 		badgeText = "✔︎ new branch"
-	case dialog.resolution.Kind == serverapi.WorktreeCreateTargetResolutionKindExistingBranch:
+	case dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_EXISTING_BRANCH:
 		badgeStyle = rowStyle.Foreground(sharedtheme.DefaultPalette().Status.Warning.Adaptive()).Bold(true)
 		badgeText = "∴ existing branch"
-	case dialog.resolution.Kind == serverapi.WorktreeCreateTargetResolutionKindDetachedRef:
+	case dialog.resolution.GetKind() == worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF:
 		badgeStyle = rowStyle.Foreground(sharedtheme.DefaultPalette().Status.Warning.Adaptive()).Bold(true)
 		badgeText = "∴ detached ref"
 	}

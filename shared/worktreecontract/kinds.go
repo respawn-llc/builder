@@ -41,19 +41,19 @@ func IsValidSetupRequirement(requirement SetupRequirement) bool {
 }
 
 type SetupRecoveryDetail[OperationID ~[16]byte, ExecutionTarget interface{ Validate() error }] struct {
-	SetupOperationID         OperationID       `json:"setup_operation_id"`
-	Cause                    SetupFailureKind  `json:"cause"`
-	Diagnostic               string            `json:"diagnostic"`
-	ScriptPath               *string           `json:"script_path"`
-	SetupRequirement         SetupRequirement  `json:"setup_requirement"`
-	ExecutionTarget          ExecutionTarget   `json:"execution_target"`
-	RetainedWorktree         *RetainedWorktree `json:"retained_worktree"`
-	RetainedPreviousWorktree *RetainedWorktree `json:"retained_previous_worktree"`
+	SetupOperationID         OperationID
+	Cause                    SetupFailureKind
+	Diagnostic               string
+	ScriptPath               *string
+	SetupRequirement         SetupRequirement
+	ExecutionTarget          ExecutionTarget
+	RetainedWorktree         *RetainedWorktree
+	RetainedPreviousWorktree *RetainedWorktree
 }
 
 type RetainedWorktree struct {
-	WorktreeID string `json:"worktree_id"`
-	Root       string `json:"root"`
+	WorktreeID string
+	Root       string
 }
 
 func (d SetupRecoveryDetail[OperationID, ExecutionTarget]) Validate() error {

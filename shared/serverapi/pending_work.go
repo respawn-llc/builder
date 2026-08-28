@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -99,7 +100,7 @@ func PendingWorkItemIDFromCompactionRequest(id runtimeids.CompactionRequestID) (
 	return runtimeids.ParseQueueItemID(id.String())
 }
 
-func PendingWorkItemIDFromWorktreeOperation(id WorktreeOperationID) (runtimeids.QueueItemID, error) {
+func PendingWorkItemIDFromWorktreeOperation(id clientui.WorktreeTransitionID) (runtimeids.QueueItemID, error) {
 	return runtimeids.ParseQueueItemID(id.String())
 }
 

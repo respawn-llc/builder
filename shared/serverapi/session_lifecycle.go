@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/shared/runtimeids"
+	"core/shared/worktreecontract"
 )
 
 type SessionTransitionAction string
@@ -58,9 +59,13 @@ type SessionRetargetWorkspaceRequest struct {
 }
 
 type SessionRetargetWorkspaceResponse struct {
-	Binding                 *ProjectBinding                   `json:"binding,omitempty"`
-	WorkspaceBindingCreated bool                              `json:"workspace_binding_created,omitempty"`
-	Scheduled               *WorktreeScheduledAcknowledgement `json:"scheduled,omitempty"`
+	Binding                 *ProjectBinding                                   `json:"binding,omitempty"`
+	WorkspaceBindingCreated bool                                              `json:"workspace_binding_created,omitempty"`
+	Scheduled               *SessionWorkspaceRetargetScheduledAcknowledgement `json:"scheduled,omitempty"`
+}
+
+type SessionWorkspaceRetargetScheduledAcknowledgement struct {
+	OperationID worktreecontract.OperationID `json:"operation_id"`
 }
 
 type SessionResolveTransitionRequest struct {
@@ -124,6 +129,10 @@ func (r SessionRetargetWorkspaceResponse) Validate() error {
 	default:
 		return errors.New("retarget response requires exactly one completed binding or scheduled acknowledgement")
 	}
+}
+
+func (a SessionWorkspaceRetargetScheduledAcknowledgement) Validate() error {
+	return a.OperationID.Validate()
 }
 
 func (r SessionResolveTransitionRequest) Validate() error {

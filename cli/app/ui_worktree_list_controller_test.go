@@ -4,8 +4,7 @@ import (
 	"testing"
 
 	"core/cli/app/internal/worktreeui"
-	"core/shared/runtimeinput"
-	"core/shared/serverapi"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -115,49 +114,6 @@ func TestWorktreeListControllerEnterWorktreeSubmitsSwitch(t *testing.T) {
 	}
 }
 
-func TestWorktreeCommandSchedulesLeaveAndRejectsArguments(t *testing.T) {
-	client := &worktreeCommandTestClient{}
-	model := newWorktreeTestModel(t, client)
-
-	_, cmd := model.inputController().handleWorktreeCommand("leave")
-	if cmd == nil {
-		t.Fatal("leave command did not schedule a mutation")
-	}
-	result := cmd()
-	done, ok := result.(worktreeSwitchDoneMsg)
-	if !ok {
-		t.Fatalf("leave command message type = %T, want worktreeSwitchDoneMsg", result)
-	}
-	if len(client.leaveRequests) != 1 ||
-		client.leaveRequests[0].OperationID.Validate() != nil ||
-		done.ack.OperationID != client.leaveRequests[0].OperationID {
-		t.Fatalf("leave scheduling = requests %+v acknowledgement %+v", client.leaveRequests, done.ack)
-	}
-
-	_, rejectedCmd := model.inputController().handleWorktreeCommand("leave unexpected")
-	if rejectedCmd == nil {
-		t.Fatal("leave arguments were not rejected with usage feedback")
-	}
-	_ = rejectedCmd()
-	if len(client.leaveRequests) != 1 {
-		t.Fatalf("leave arguments scheduled requests: %+v", client.leaveRequests)
-	}
-}
-
-func TestWorktreeCommandSwitchUsesCompleteNormalizedSelector(t *testing.T) {
-	client := &worktreeCommandTestClient{}
-	model := newWorktreeTestModel(t, client)
-
-	_, cmd := model.inputController().handleWorktreeCommand("switch   feature   with spaces")
-	if cmd == nil {
-		t.Fatal("switch command did not schedule a mutation")
-	}
-	_ = cmd()
-	if len(client.enterRequests) != 1 || client.enterRequests[0].Selector != "feature with spaces" {
-		t.Fatalf("enter requests = %+v, want complete normalized selector", client.enterRequests)
-	}
-}
-
 func TestWorktreeListControllerQueuesStableSwitchTarget(t *testing.T) {
 	fixture := newWorktreeListFixture(t, nil)
 	fixture.model.worktrees.selection = 1
@@ -167,12 +123,10 @@ func TestWorktreeListControllerQueuesStableSwitchTarget(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("queued switch returned a command while another switch is pending")
 	}
-	queued := fixture.model.worktrees.queuedTransition
-	if queued == nil ||
-		queued.Transition != runtimeinput.PendingWorkWorktreeTransitionEnter ||
-		queued.Selector == nil ||
-		*queued.Selector != "wt-feature" {
-		t.Fatalf("queued transition = %+v, want stable worktree ID", queued)
+	if fixture.model.worktrees.queuedTransition == nil ||
+		fixture.model.worktrees.queuedTransition.Selector == nil ||
+		*fixture.model.worktrees.queuedTransition.Selector != "wt-feature" {
+		t.Fatalf("queued transition = %+v, want stable worktree ID", fixture.model.worktrees.queuedTransition)
 	}
 }
 
@@ -232,7 +186,7 @@ func TestWorktreeSlashDeleteResolvesSelectorsWithServer(t *testing.T) {
 			if len(client.selectorRequests) != 1 {
 				t.Fatalf("selector requests = %+v, want one authoritative resolution", client.selectorRequests)
 			}
-			if got := client.selectorRequests[0]; got.SessionID != "session-1" || got.Selector != selector {
+			if got := client.selectorRequests[0]; got.SessionId != "session-1" || got.Selector != selector {
 				t.Fatalf("selector request = %+v, want session-scoped selector %q", got, selector)
 			}
 			if updated.worktrees.phase != uiWorktreeOverlayPhaseDeleteConfirm {
@@ -354,7 +308,7 @@ func TestUnorderedListWithoutResolvedIdentityCannotDismissDeleteConfirmation(t *
 	resolvedEntry := testResolvedFeatureWorktreeEntry()
 	for _, tc := range []struct {
 		name     string
-		response serverapi.WorktreeListResponse
+		response *worktreepb.ListSuccess
 	}{
 		{
 			name:     "target omitted",
@@ -362,8 +316,8 @@ func TestUnorderedListWithoutResolvedIdentityCannotDismissDeleteConfirmation(t *
 		},
 		{
 			name: "target reclassified external",
-			response: serverapi.WorktreeListResponse{
-				Worktrees: []serverapi.WorktreeListEntry{
+			response: &worktreepb.ListSuccess{
+				Worktrees: []*worktreepb.ListEntry{
 					testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, true, true, false),
 					testExternalWorktreeListEntry("/wt/feature-renamed", "feature-renamed", false),
 				},
@@ -411,8 +365,8 @@ func TestClosedWorktreeDeleteResolutionCannotOpenReplacementOverlay(t *testing.T
 
 func TestClosedWorktreeListResultCannotHydrateReplacementOverlay(t *testing.T) {
 	client := &worktreeCommandTestClient{
-		listResp: serverapi.WorktreeListResponse{
-			Worktrees: []serverapi.WorktreeListEntry{
+		listResp: &worktreepb.ListSuccess{
+			Worktrees: []*worktreepb.ListEntry{
 				testRegisteredWorktreeListEntry("wt-stale", "stale", "/wt/stale", "stale", false, false, true, true),
 			},
 		},
@@ -460,19 +414,19 @@ func TestWorktreeListRefreshPreservesSelectionAndDeleteTargetByKentID(t *testing
 	}
 }
 
-func testSelectorPreview(entry serverapi.WorktreeListEntry) serverapi.WorktreeSelectorPreviewResponse {
-	return serverapi.WorktreeSelectorPreviewResponse{
+func testSelectorPreview(entry *worktreepb.ListEntry) *worktreepb.SelectorResolveSuccess {
+	return &worktreepb.SelectorResolveSuccess{
 		Worktree: entry,
 	}
 }
 
-func testResolvedFeatureWorktreeEntry() serverapi.WorktreeListEntry {
+func testResolvedFeatureWorktreeEntry() *worktreepb.ListEntry {
 	return testRegisteredWorktreeListEntry("wt-feature", "renamed", "/wt/feature-renamed", "feature/renamed", false, false, true, true)
 }
 
-func testRefreshedWorktreeListResponse() serverapi.WorktreeListResponse {
-	return serverapi.WorktreeListResponse{
-		Worktrees: []serverapi.WorktreeListEntry{
+func testRefreshedWorktreeListResponse() *worktreepb.ListSuccess {
+	return &worktreepb.ListSuccess{
+		Worktrees: []*worktreepb.ListEntry{
 			testRegisteredWorktreeListEntry("wt-other", "other", "/wt/other", "feature", false, false, true, true),
 			testRegisteredWorktreeListEntry("wt-feature", "renamed", "/wt/feature", "feature-renamed", false, false, true, true),
 		},

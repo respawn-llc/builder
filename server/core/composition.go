@@ -38,6 +38,7 @@ import (
 	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -503,9 +504,9 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 		}
 		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
 	}
-	var retainedWorktree *serverapi.WorktreeTopologyEntry
+	var retainedWorktree *worktreepb.RegisteredFacts
 	if prepared.Materialization != nil {
-		retainedWorktree = &prepared.Materialization.Worktree
+		retainedWorktree = prepared.Materialization.Worktree.GetRegistered()
 	}
 	return workflowsvc.ExecutionTargetMaterialization{
 		RetainedRoot:             prepared.Root.Managed,

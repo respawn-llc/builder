@@ -11,6 +11,7 @@ export type {
   InteractiveChipSize,
   InteractiveChipTone,
 } from "./InteractiveChip";
+export { AnimatedChipSummary } from "./AnimatedChipSummary";
 export { ProgressChip, ProgressInteractiveChip } from "./ProgressChip";
 export type { ProgressChipProps, ProgressInteractiveChipProps } from "./ProgressChip";
 export { ActionableListRow } from "./ActionableListRow";

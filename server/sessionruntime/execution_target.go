@@ -13,9 +13,11 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type ActiveRuntimeMaintenance struct {
@@ -88,24 +90,24 @@ type WorktreeTransitionExecutor func(
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
-	operationID serverapi.WorktreeOperationID,
+	operationID clientui.WorktreeTransitionID,
 	transition runtimeinput.PendingWorkWorktreeTransition,
 	fn WorktreeTransitionExecutor,
-) (serverapi.WorktreeScheduledAcknowledgement, error) {
+) (*worktreepb.ScheduledAcknowledgement, error) {
 	if fn == nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, errors.New("worktree transition executor is required")
+		return nil, errors.New("worktree transition executor is required")
 	}
 	if err := operationID.Validate(); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return nil, err
 	}
 	if err := transition.Validate(); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return nil, err
 	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return nil, err
 	}
-	var acknowledgement serverapi.WorktreeScheduledAcknowledgement
+	var acknowledgement *worktreepb.ScheduledAcknowledgement
 	err = a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 		if resource == nil {
 			result := fn(
@@ -132,7 +134,7 @@ func (a *Authority) RunWorktreeTransition(
 			if result.Certainty == runtime.WorktreeApplicationIndeterminate {
 				return false, result.Err
 			}
-			acknowledgement = serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}
+			acknowledgement = &worktreepb.ScheduledAcknowledgement{OperationId: operationID.String()}
 			return false, nil
 		}
 		var scheduleErr error
@@ -168,7 +170,7 @@ func (a *Authority) RunWorktreeTransition(
 		)
 		if errors.Is(scheduleErr, runtime.ErrReviewerActive) ||
 			errors.Is(scheduleErr, runtime.ErrWorktreeDeleteBlockedByQueuedWork) {
-			scheduleErr = errors.Join(serverapi.ErrWorktreeBlocked, scheduleErr)
+			scheduleErr = errors.Join(worktreecontract.ErrWorktreeBlocked, scheduleErr)
 		}
 		return false, scheduleErr
 	})

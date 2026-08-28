@@ -27,6 +27,7 @@ import (
 
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -536,12 +537,12 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 				reportHandlerError(handlerErrs, "connection %d sent %q before binary setup completed", connIndex, req.Method)
 				return
 			}
-			if req.Method != protocol.MethodWorktreeStatus {
-				reportHandlerError(handlerErrs, "connection %d method = %q, want worktree status", connIndex, req.Method)
+			if req.Method != protocol.MethodSessionGetMainView {
+				reportHandlerError(handlerErrs, "connection %d method = %q, want Session main view", connIndex, req.Method)
 				return
 			}
-			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{}))); err != nil {
-				reportHandlerError(handlerErrs, "send worktree status response: %w", err)
+			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.SessionMainViewResponse{}))); err != nil {
+				reportHandlerError(handlerErrs, "send Session main-view response: %w", err)
 			}
 			return
 		}
@@ -558,13 +559,13 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	request := serverapi.WorktreeStatusRequest{SessionID: "session-1"}
-	if _, err := remote.GetWorktreeStatus(context.Background(), request); err != nil {
-		t.Fatalf("first GetWorktreeStatus: %v", err)
+	request := serverapi.SessionMainViewRequest{SessionID: "session-1"}
+	if _, err := remote.GetSessionMainView(context.Background(), request); err != nil {
+		t.Fatalf("first GetSessionMainView: %v", err)
 	}
 	waitForRemoteControlDisconnect(t, remote, handlerErrs)
-	if _, err := remote.GetWorktreeStatus(context.Background(), request); err != nil {
-		t.Fatalf("GetWorktreeStatus after reconnect: %v", err)
+	if _, err := remote.GetSessionMainView(context.Background(), request); err != nil {
+		t.Fatalf("GetSessionMainView after reconnect: %v", err)
 	}
 	if got := connectionCount.Load(); got != 2 {
 		t.Fatalf("connectionCount = %d, want 2", got)

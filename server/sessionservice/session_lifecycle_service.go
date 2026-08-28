@@ -14,6 +14,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 var errSessionWorkspaceRetargeterRequired = errors.New("session workspace retargeter is required")
@@ -37,7 +38,7 @@ func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.
 
 type sessionWorkspaceRetargeter interface {
 	RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
-	ScheduleWorkspaceRetarget(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest, origin serverapi.RuntimeStepOrigin, operationID serverapi.WorktreeOperationID) (serverapi.WorktreeScheduledAcknowledgement, error)
+	ScheduleWorkspaceRetarget(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest, origin serverapi.RuntimeStepOrigin, operationID worktreecontract.OperationID) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error)
 }
 
 type sessionNavigationTargetResolver interface {
@@ -146,7 +147,7 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 			ctx,
 			retargetRequest,
 			*req.Origin,
-			serverapi.NewWorktreeOperationID(),
+			worktreecontract.NewOperationID(),
 		)
 		if err != nil {
 			return serverapi.SessionRetargetWorkspaceResponse{}, err

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 )
@@ -50,7 +51,7 @@ func TestPendingWorkIdentityViewsReuseDomainUUID(t *testing.T) {
 	if got.String() != compactionID.String() {
 		t.Fatalf("compaction Pending Work id = %q, want %q", got, compactionID)
 	}
-	worktreeID := NewWorktreeOperationID()
+	worktreeID := clientui.NewWorktreeTransitionID()
 	got, err = PendingWorkItemIDFromWorktreeOperation(worktreeID)
 	if err != nil {
 		t.Fatalf("Worktree Pending Work id: %v", err)

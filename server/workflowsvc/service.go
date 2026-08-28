@@ -17,6 +17,7 @@ import (
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/server/worktree"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -55,8 +56,8 @@ type initiatingActionTargetDecision struct {
 
 type preparedInitiatingActionTarget struct {
 	candidate                *workflowstore.ExecutionTargetCandidate
-	retainedWorktree         *serverapi.WorktreeTopologyEntry
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	retainedWorktree         *worktreepb.RegisteredFacts
+	retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 	setupResult              *worktree.WorktreeSetupResult
 }
 
@@ -78,7 +79,7 @@ const (
 
 type initiatingActionRequest struct {
 	taskID                  workflow.TaskID
-	setupOperationID        *serverapi.WorktreeSetupOperationID
+	setupOperationID        *worktreecontract.SetupOperationID
 	requiresExecutionTarget bool
 	targetPreflight         initiatingActionTargetPreflight
 	afterTargetResolution   func() error
@@ -87,7 +88,7 @@ type initiatingActionRequest struct {
 type initiatingActionResult[T any] struct {
 	applied                  *T
 	selectionRequired        *serverapi.WorkflowExecutionTargetSelectionRequirement
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 }
 
 type initiatingActionPreflight struct {
@@ -134,7 +135,7 @@ type ExecutionTargetResolveRequest struct {
 
 type ExecutionTargetMaterializeRequest struct {
 	TaskID                 workflow.TaskID
-	SetupOperationID       *serverapi.WorktreeSetupOperationID
+	SetupOperationID       *worktreecontract.SetupOperationID
 	Snapshot               workflowstore.ExecutionTargetSnapshot
 	SetupRequirement       worktreecontract.SetupRequirement
 	InitialBranchAssertion *string
@@ -143,13 +144,13 @@ type ExecutionTargetMaterializeRequest struct {
 type ExecutionTargetMaterialization struct {
 	RetainedRoot             *workflowstore.ManagedExecutionRoot
 	SetupResult              *worktree.WorktreeSetupResult
-	RetainedWorktree         *serverapi.WorktreeTopologyEntry
-	RetainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	RetainedWorktree         *worktreepb.RegisteredFacts
+	RetainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 }
 
 type ExecutionTargetRestoreRequest struct {
 	TaskID                 workflow.TaskID
-	SetupOperationID       *serverapi.WorktreeSetupOperationID
+	SetupOperationID       *worktreecontract.SetupOperationID
 	InitialBranchAssertion *string
 }
 
@@ -166,7 +167,7 @@ type workflowAttentionFinalizer interface {
 }
 
 type workflowTaskSetupEventPublisher interface {
-	PublishWorkflowTaskSetupEvent(serverapi.WorktreeSetupEvent)
+	PublishWorkflowTaskSetupEvent(*worktreepb.SetupEvent)
 }
 
 const (
@@ -823,7 +824,8 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 }
 
 func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return s.startWorkflowTask(ctx, req)
+	response, err := s.startWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
@@ -875,19 +877,20 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 			},
 		}, nil
 	}
-	observation, err := newTaskSetupObservation(req.SetupOperationID, target.selection, s.setupEvents)
+	setupOperationID := req.SetupOperationID.Domain()
+	observation, err := newTaskSetupObservation(setupOperationID, target.selection, s.setupEvents)
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	target.unavailable = initiatingActionTargetInterrupt
 	preparation := s.initiatingActionPreparation(
 		workflow.TaskID(req.TaskID),
-		req.SetupOperationID,
+		setupOperationID,
 		target,
 		observation,
 		func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 			return s.prepareInitiatingActionTarget(
-				preparationCtx, workflow.TaskID(req.TaskID), &req.SetupOperationID, target,
+				preparationCtx, workflow.TaskID(req.TaskID), &setupOperationID, target,
 			)
 		},
 	)
@@ -916,7 +919,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 
 func (s *Service) initiatingActionPreparation(
 	taskID workflow.TaskID,
-	setupOperationID serverapi.WorktreeSetupOperationID,
+	setupOperationID worktreecontract.SetupOperationID,
 	target initiatingActionTargetPreflight,
 	observation *taskSetupObservation,
 	materialize func(context.Context) (preparedInitiatingActionTarget, error),
@@ -962,7 +965,7 @@ func (s *Service) initiatingActionPreparation(
 func (s *Service) prepareInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	setupOperationID *serverapi.WorktreeSetupOperationID,
+	setupOperationID *worktreecontract.SetupOperationID,
 	target initiatingActionTargetPreflight,
 ) (preparedInitiatingActionTarget, error) {
 	decision, preparationErr := s.initiatingActionTarget(ctx, taskID, setupOperationID, target)
@@ -980,7 +983,7 @@ func (s *Service) prepareInitiatingActionTarget(
 
 func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
 	var candidate *workflowstore.ExecutionTargetCandidate
-	var retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	var retainedPreviousWorktree *worktreepb.RetainedPreviousWorktree
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
 		if err != nil {
@@ -1012,6 +1015,60 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 		return initiatingActionResult[T]{retainedPreviousWorktree: retainedPreviousWorktree}, err
 	}
 	return initiatingActionResult[T]{applied: applied, retainedPreviousWorktree: retainedPreviousWorktree}, nil
+}
+
+func workflowRetainedPreviousWorktree(retained *worktreepb.RetainedPreviousWorktree) *serverapi.WorkflowRetainedPreviousWorktree {
+	if retained == nil {
+		return nil
+	}
+	return &serverapi.WorkflowRetainedPreviousWorktree{Worktree: workflowRegisteredWorktree(retained.GetWorktree())}
+}
+
+func workflowRegisteredWorktree(registered *worktreepb.RegisteredFacts) serverapi.WorkflowRegisteredWorktreeTopology {
+	git := registered.GetGit()
+	kent := registered.GetKent()
+	facts := &serverapi.WorkflowRegisteredWorktreeFacts{}
+	if git != nil {
+		facts.Git = serverapi.WorkflowWorktreeGitFacts{
+			CanonicalRoot:  git.CanonicalRoot,
+			HeadObject:     git.HeadObject,
+			BranchRef:      git.BranchRef,
+			BranchName:     git.BranchName,
+			Detached:       git.Detached,
+			Bare:           git.Bare,
+			LockedReason:   git.LockedReason,
+			PrunableReason: git.PrunableReason,
+			IsMain:         git.IsMain,
+			PathAvailable:  git.PathAvailable,
+		}
+	}
+	if kent != nil {
+		facts.Kent = serverapi.WorkflowWorktreeKentFacts{
+			WorktreeID:      kent.WorktreeId,
+			CanonicalRoot:   kent.CanonicalRoot,
+			DisplayName:     kent.DisplayName,
+			Managed:         kent.Managed,
+			CreatedBranch:   kent.CreatedBranch,
+			OriginSessionID: kent.OriginSessionId,
+		}
+	}
+	return serverapi.WorkflowRegisteredWorktreeTopology{
+		Variant:    "registered",
+		Registered: facts,
+	}
+}
+
+func workflowSetupRetainedError(err error) error {
+	var retained *worktreecontract.SetupRetainedError
+	if !errors.As(err, &retained) || retained == nil || retained.Details == nil {
+		return err
+	}
+	return &serverapi.WorkflowSetupRetainedError{
+		Worktree:                 workflowRegisteredWorktree(retained.Details.Worktree),
+		ScriptPath:               retained.Details.ScriptPath,
+		Diagnostic:               retained.Details.Diagnostic,
+		RetainedPreviousWorktree: workflowRetainedPreviousWorktree(retained.Details.RetainedPreviousWorktree),
+	}
 }
 
 func (s *Service) preflightInitiatingActionTarget(
@@ -1143,7 +1200,7 @@ func operationCannotCreateInitialWorktreeError(branchName string) *serverapi.Wor
 	}
 }
 
-func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID *serverapi.WorktreeSetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
+func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID *worktreecontract.SetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
 	targetContext := preflight.context
 	if targetContext.Task.ExecutionTarget != nil {
 		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
@@ -1213,7 +1270,7 @@ func (s *Service) resolveInitiatingActionTarget(
 func (s *Service) materializeInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	setupOperationID *serverapi.WorktreeSetupOperationID,
+	setupOperationID *worktreecontract.SetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	snapshot *workflowstore.ExecutionTargetSnapshot,
 	setupRequirement worktreecontract.SetupRequirement,
@@ -1460,7 +1517,8 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
-	return s.resumeWorkflowTask(ctx, req)
+	response, err := s.resumeWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
@@ -1539,7 +1597,8 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	observation, err := newTaskSetupObservation(req.SetupOperationID, target.selection, s.setupEvents)
+	setupOperationID := req.SetupOperationID.Domain()
+	observation, err := newTaskSetupObservation(setupOperationID, target.selection, s.setupEvents)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
@@ -1562,14 +1621,14 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 		}
 		prepared := s.initiatingActionPreparation(
 			taskID,
-			req.SetupOperationID,
+			setupOperationID,
 			target,
 			observation,
 			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 				return s.materializeInitiatingActionTarget(
 					preparationCtx,
 					taskID,
-					&req.SetupOperationID,
+					&setupOperationID,
 					target,
 					snapshot,
 					setupRequirement,
@@ -1580,12 +1639,12 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 	} else if target.context.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		prepared := s.initiatingActionPreparation(
 			taskID,
-			req.SetupOperationID,
+			setupOperationID,
 			target,
 			observation,
 			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
 				return s.prepareInitiatingActionTarget(
-					preparationCtx, taskID, &req.SetupOperationID, target,
+					preparationCtx, taskID, &setupOperationID, target,
 				)
 			},
 		)
@@ -1671,7 +1730,8 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
-	return s.moveWorkflowTask(ctx, req)
+	response, err := s.moveWorkflowTask(ctx, req)
+	return response, workflowSetupRetainedError(err)
 }
 
 func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
@@ -1838,7 +1898,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
 				CurrentNodes:             workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
-				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
+				RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
 			},
 		}, nil
 	}
@@ -1874,7 +1934,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
 				CurrentNodes:             workflowview.ProjectCurrentNodes(moved.CurrentNodes),
-				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
+				RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
 			},
 		}, nil
 	}
@@ -1886,7 +1946,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
 			CurrentNodes:             workflowview.ProjectCurrentNodes(moved.Mutation.Created),
-			RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
+			RetainedPreviousWorktree: workflowRetainedPreviousWorktree(coordinated.retainedPreviousWorktree),
 		},
 	}, nil
 }

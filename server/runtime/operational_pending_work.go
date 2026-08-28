@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -11,7 +12,7 @@ import (
 
 type operationalPendingWorkRequest struct {
 	compactionRequestID *runtimeids.CompactionRequestID
-	worktreeOperationID *serverapi.WorktreeOperationID
+	worktreeOperationID *clientui.WorktreeTransitionID
 	reservationKind     exclusiveStepReservationKind
 	manualCompaction    *runtimeinput.ManualCompactionAdmission
 	worktreeTransition  *runtimeinput.PendingWorkWorktreeTransition

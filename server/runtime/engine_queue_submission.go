@@ -10,8 +10,9 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeinput"
-	"core/shared/serverapi"
 )
 
 var ErrWorktreeDeleteBlockedByQueuedWork = errors.New("worktree deletion is blocked by accepted Session work")
@@ -83,31 +84,31 @@ func (e *Engine) RunIfIdleBeforeQueuedUserWork(ctx context.Context, activeKind A
 
 func (e *Engine) ScheduleWorktreeTransition(
 	ctx context.Context,
-	operationID serverapi.WorktreeOperationID,
+	operationID clientui.WorktreeTransitionID,
 	transition runtimeinput.PendingWorkWorktreeTransition,
 	fn func(context.Context) WorktreeApplicationResult,
-) (serverapi.WorktreeScheduledAcknowledgement, error) {
+) (*worktreepb.ScheduledAcknowledgement, error) {
 	return e.ScheduleWorktreeTransitionWithAcceptance(ctx, operationID, transition, nil, fn)
 }
 
 func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 	ctx context.Context,
-	operationID serverapi.WorktreeOperationID,
+	operationID clientui.WorktreeTransitionID,
 	transition runtimeinput.PendingWorkWorktreeTransition,
 	accept CommandAcceptance,
 	fn func(context.Context) WorktreeApplicationResult,
-) (serverapi.WorktreeScheduledAcknowledgement, error) {
+) (*worktreepb.ScheduledAcknowledgement, error) {
 	if fn == nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, errors.New("worktree transition executor is required")
+		return nil, errors.New("worktree transition executor is required")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := context.Cause(ctx); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return nil, err
 	}
 	if err := transition.Validate(); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return nil, err
 	}
 	err := e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
 		worktreeOperationID: &operationID,
@@ -135,9 +136,9 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 		},
 	})
 	if err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
+		return nil, err
 	}
-	return serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}, nil
+	return &worktreepb.ScheduledAcknowledgement{OperationId: operationID.String()}, nil
 }
 
 func (e *Engine) RunExecutionTargetTransition(ctx context.Context, onScheduled func(), fn func() error) error {

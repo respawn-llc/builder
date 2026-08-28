@@ -35,7 +35,7 @@ func TestWorkflowSessionCannotStartItsOwnTask(t *testing.T) {
 	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 	})
 	var denied *serverapi.WorkflowTaskMutationSelfTargetError
 	if !errors.As(err, &denied) || denied.TaskID != task.Task.ID {
@@ -135,7 +135,7 @@ func TestWorkflowSessionCannotInterruptOrResumeItsOwnTask(t *testing.T) {
 	_, resumeErr := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 	})
 	var resumeDenied *serverapi.WorkflowTaskMutationSelfTargetError
 	if !errors.As(resumeErr, &resumeDenied) || resumeDenied.TaskID != task.Task.ID {
@@ -165,7 +165,7 @@ func TestWorkflowSessionCanStartAnotherTask(t *testing.T) {
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:            targetTask.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -280,7 +280,7 @@ func TestWorkflowSessionCanInterruptAndResumeAnotherTask(t *testing.T) {
 	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            targetTask.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 		ExecutionTarget:   &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
 	}); err != nil {
 		t.Fatalf("ResumeWorkflowTask: %v", err)
@@ -314,7 +314,7 @@ func TestWorkflowTaskMutationRejectsUnknownInvokingSession(t *testing.T) {
 	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &unknownSessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 	}); !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("ResumeWorkflowTask error = %v, want unknown Session failure", err)
 	}
@@ -325,7 +325,7 @@ func TestWorkflowTaskMutationRejectsUnknownInvokingSession(t *testing.T) {
 	_, err = service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &unknownSessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 	})
 	if !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("StartWorkflowTask error = %v, want unknown Session failure", err)
@@ -333,7 +333,7 @@ func TestWorkflowTaskMutationRejectsUnknownInvokingSession(t *testing.T) {
 
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           task.Task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -362,7 +362,7 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 		ExecutionTarget:   &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
 	}); err != nil {
 		t.Fatalf("ResumeWorkflowTask with unbound Session: %v", err)
@@ -411,7 +411,7 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID:  serverapi.NewWorkflowSetupOperationID(),
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},

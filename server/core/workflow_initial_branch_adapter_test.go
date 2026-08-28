@@ -75,8 +75,8 @@ func TestTaskExecutionTargetInfrastructureCarriesPostCreationBranchAssertion(t *
 		Root: workflowstore.ExecutionRoot{
 			SourceWorkspaceID: binding.WorkspaceID, SourceWorkspaceRoot: binding.CanonicalRoot,
 			Managed: &workflowstore.ManagedExecutionRoot{
-				WorktreeID: materialized.Worktree.Registered.Kent.WorktreeID,
-				Root:       materialized.Worktree.Registered.Git.CanonicalRoot,
+				WorktreeID: materialized.Worktree.GetRegistered().GetKent().GetWorktreeId(),
+				Root:       materialized.Worktree.GetRegistered().GetGit().GetCanonicalRoot(),
 			},
 		},
 	}); err != nil {

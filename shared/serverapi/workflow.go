@@ -15,6 +15,7 @@ import (
 	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
 	"core/shared/worktreecontract"
+	"github.com/google/uuid"
 )
 
 const (
@@ -914,10 +915,24 @@ type WorkflowTaskUpdateResponse struct {
 	Task WorkflowTaskSummary `json:"task"`
 }
 
+type WorkflowSetupOperationID struct {
+	uuid.UUID
+}
+
+func NewWorkflowSetupOperationID() WorkflowSetupOperationID {
+	return WorkflowSetupOperationID{UUID: uuid.New()}
+}
+
+func (id WorkflowSetupOperationID) Domain() worktreecontract.SetupOperationID {
+	return worktreecontract.SetupOperationID(id.UUID)
+}
+
+func (id WorkflowSetupOperationID) Validate() error { return id.Domain().Validate() }
+
 type WorkflowTaskStartRequest struct {
 	TaskID                     string                            `json:"task_id"`
 	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
-	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id"`
+	SetupOperationID           WorkflowSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 	BranchName                 *string                           `json:"branch_name,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
@@ -945,7 +960,7 @@ type WorkflowTaskCurrentNode struct {
 type WorkflowTaskResumeRequest struct {
 	TaskID            string                            `json:"task_id"`
 	InvokingSessionID *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
-	SetupOperationID  WorktreeSetupOperationID          `json:"setup_operation_id"`
+	SetupOperationID  WorkflowSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget   *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 	BranchName        *string                           `json:"branch_name,omitempty"`
 }
@@ -1000,13 +1015,143 @@ type WorkflowTaskMoveResponse struct {
 }
 
 type WorkflowTaskMoveNoOp struct {
-	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
+	CurrentNodes             []WorkflowTaskCurrentNode         `json:"current_nodes"`
+	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 type WorkflowTaskMoveApplied struct {
-	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
+	CurrentNodes             []WorkflowTaskCurrentNode         `json:"current_nodes"`
+	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree `json:"retained_previous_worktree"`
+}
+
+type WorkflowRetainedPreviousWorktree struct {
+	Worktree WorkflowRegisteredWorktreeTopology `json:"worktree"`
+}
+
+type WorkflowRegisteredWorktreeTopology struct {
+	Variant    string                           `json:"variant"`
+	Registered *WorkflowRegisteredWorktreeFacts `json:"registered,omitempty"`
+}
+
+type WorkflowRegisteredWorktreeFacts struct {
+	Git  WorkflowWorktreeGitFacts  `json:"git"`
+	Kent WorkflowWorktreeKentFacts `json:"kent"`
+}
+
+type WorkflowWorktreeGitFacts struct {
+	CanonicalRoot  string  `json:"canonical_root"`
+	HeadObject     string  `json:"head_object"`
+	BranchRef      *string `json:"branch_ref"`
+	BranchName     *string `json:"branch_name"`
+	Detached       bool    `json:"detached"`
+	Bare           bool    `json:"bare"`
+	LockedReason   *string `json:"locked_reason"`
+	PrunableReason *string `json:"prunable_reason"`
+	IsMain         bool    `json:"is_main"`
+	PathAvailable  bool    `json:"path_available"`
+}
+
+type WorkflowWorktreeKentFacts struct {
+	WorktreeID      string  `json:"worktree_id"`
+	CanonicalRoot   string  `json:"canonical_root"`
+	DisplayName     string  `json:"display_name"`
+	Managed         bool    `json:"managed"`
+	CreatedBranch   bool    `json:"created_branch"`
+	OriginSessionID *string `json:"origin_session_id"`
+}
+
+func (t WorkflowRegisteredWorktreeTopology) Validate() error {
+	if t.Variant != "registered" || t.Registered == nil {
+		return errors.New("workflow retained worktree must be registered")
+	}
+	facts := t.Registered
+	if strings.TrimSpace(facts.Git.CanonicalRoot) == "" ||
+		strings.TrimSpace(facts.Git.HeadObject) == "" ||
+		strings.TrimSpace(facts.Kent.WorktreeID) == "" ||
+		strings.TrimSpace(facts.Kent.CanonicalRoot) == "" ||
+		strings.TrimSpace(facts.Kent.DisplayName) == "" {
+		return errors.New("workflow retained worktree required facts must be non-blank")
+	}
+	for _, optional := range []*string{facts.Git.BranchRef, facts.Git.BranchName, facts.Git.LockedReason, facts.Git.PrunableReason, facts.Kent.OriginSessionID} {
+		if optional != nil && strings.TrimSpace(*optional) == "" {
+			return errors.New("workflow retained worktree optional facts must be non-blank")
+		}
+	}
+	if facts.Git.CanonicalRoot != facts.Kent.CanonicalRoot {
+		return errors.New("workflow retained worktree Git and Kent canonical roots must match")
+	}
+	return nil
+}
+
+type WorkflowSetupRetainedError struct {
+	Worktree                 WorkflowRegisteredWorktreeTopology `json:"worktree"`
+	ScriptPath               string                             `json:"script_path"`
+	Diagnostic               string                             `json:"diagnostic"`
+	RetainedPreviousWorktree *WorkflowRetainedPreviousWorktree  `json:"retained_previous_worktree"`
+}
+
+func (e *WorkflowSetupRetainedError) Error() string {
+	if e == nil || strings.TrimSpace(e.Diagnostic) == "" {
+		return worktreecontract.ErrWorktreeSetupRetained.Error()
+	}
+	return fmt.Sprintf("%s: %s", worktreecontract.ErrWorktreeSetupRetained, strings.TrimSpace(e.Diagnostic))
+}
+
+func (e *WorkflowSetupRetainedError) Is(target error) bool {
+	return target == worktreecontract.ErrWorktreeSetupRetained
+}
+
+func (e *WorkflowSetupRetainedError) RPCErrorCode() int {
+	return protocol.ErrCodeWorktreeSetupRetained
+}
+
+func (e *WorkflowSetupRetainedError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type string `json:"type"`
+		*WorkflowSetupRetainedError
+	}{Type: "worktree_setup_retained", WorkflowSetupRetainedError: e})
+}
+
+func (e *WorkflowSetupRetainedError) Validate() error {
+	if e == nil {
+		return errors.New("retained setup error is required")
+	}
+	if err := e.Worktree.Validate(); err != nil {
+		return err
+	}
+	if e.RetainedPreviousWorktree != nil {
+		if err := e.RetainedPreviousWorktree.Worktree.Validate(); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(e.ScriptPath) == "" || strings.TrimSpace(e.Diagnostic) == "" {
+		return errors.New("retained setup error script_path and diagnostic are required")
+	}
+	return nil
+}
+
+func DecodeWorkflowSetupRetainedError(data json.RawMessage, message string) error {
+	var payload struct {
+		Type string `json:"type"`
+		WorkflowSetupRetainedError
+	}
+	if err := protocol.DecodeStrictJSON(data, &payload); err != nil || payload.Type != "worktree_setup_retained" {
+		return errors.New(strings.TrimSpace(message))
+	}
+	presence := struct {
+		RetainedPreviousWorktree json.RawMessage `json:"retained_previous_worktree"`
+	}{}
+	if err := json.Unmarshal(data, &presence); err != nil || len(presence.RetainedPreviousWorktree) == 0 {
+		return errors.New(strings.TrimSpace(message))
+	}
+	result := &payload.WorkflowSetupRetainedError
+	if err := result.Validate(); err != nil {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return result
 }
 
 const (
@@ -2852,10 +2997,46 @@ type workflowAttentionInterruptionDetailSchema struct {
 		RequestedRef *string                                 `json:"requested_ref,omitempty"`
 		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
 	} `json:"configured_execution_target_unavailable,omitempty"`
-	SetupRecovery *worktreecontract.SetupRecoveryDetail[
-		WorktreeSetupOperationID,
-		WorkflowExecutionTargetSelection,
-	] `json:"setup_recovery,omitempty"`
+	SetupRecovery *workflowSetupRecoveryDetailSchema `json:"setup_recovery,omitempty"`
+}
+
+type workflowSetupRecoveryDetailSchema struct {
+	SetupOperationID         WorkflowSetupOperationID          `json:"setup_operation_id"`
+	Cause                    worktreecontract.SetupFailureKind `json:"cause"`
+	Diagnostic               string                            `json:"diagnostic"`
+	ScriptPath               *string                           `json:"script_path"`
+	SetupRequirement         worktreecontract.SetupRequirement `json:"setup_requirement"`
+	ExecutionTarget          WorkflowExecutionTargetSelection  `json:"execution_target"`
+	RetainedWorktree         *workflowRetainedWorktreeSchema   `json:"retained_worktree"`
+	RetainedPreviousWorktree *workflowRetainedWorktreeSchema   `json:"retained_previous_worktree"`
+}
+
+type workflowRetainedWorktreeSchema struct {
+	WorktreeID string `json:"worktree_id"`
+	Root       string `json:"root"`
+}
+
+func (retained *workflowRetainedWorktreeSchema) domain() *worktreecontract.RetainedWorktree {
+	if retained == nil {
+		return nil
+	}
+	return &worktreecontract.RetainedWorktree{WorktreeID: retained.WorktreeID, Root: retained.Root}
+}
+
+func (detail workflowSetupRecoveryDetailSchema) domain() worktreecontract.SetupRecoveryDetail[
+	worktreecontract.SetupOperationID,
+	WorkflowExecutionTargetSelection,
+] {
+	return worktreecontract.SetupRecoveryDetail[worktreecontract.SetupOperationID, WorkflowExecutionTargetSelection]{
+		SetupOperationID:         detail.SetupOperationID.Domain(),
+		Cause:                    detail.Cause,
+		Diagnostic:               detail.Diagnostic,
+		ScriptPath:               detail.ScriptPath,
+		SetupRequirement:         detail.SetupRequirement,
+		ExecutionTarget:          detail.ExecutionTarget,
+		RetainedWorktree:         detail.RetainedWorktree.domain(),
+		RetainedPreviousWorktree: detail.RetainedPreviousWorktree.domain(),
+	}
 }
 
 func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
@@ -2891,7 +3072,7 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 		}
 	}
 	if recovery := detail.SetupRecovery; recovery != nil {
-		if err := recovery.Validate(); err != nil {
+		if err := recovery.domain().Validate(); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery facts are invalid")
 		}
 	}

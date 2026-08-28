@@ -147,6 +147,10 @@ func (e routePolicyExecutor) authenticationStage(method string) (sharedpb.Authen
 		if _, migrated := registration.BinaryBinding(trimmed); migrated {
 			return operation.Options.AuthenticationStage, true
 		}
+		if operation.Options.Kind == sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION &&
+			operation.LegacyWireName == nil {
+			return operation.Options.AuthenticationStage, true
+		}
 	}
 	operation, _, ok := registration.LegacyOperation(trimmed)
 	if !ok {
@@ -332,12 +336,7 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 }
 
 func routeProjectWorkspaceBinding(params any) (string, string, bool) {
-	switch request := params.(type) {
-	case serverapi.WorktreeWorkspaceListRequest:
-		return request.ProjectID, request.WorkspaceID, true
-	default:
-		return "", "", false
-	}
+	return "", "", false
 }
 
 func routeSessionID(params any) (string, bool) {
@@ -368,24 +367,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionRuntimeReleaseRequest:
 		return p.Attachment.SessionID, true
-	case serverapi.WorktreeListRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeStatusRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeSelectorPreviewRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeDeletePreviewRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeCreateTargetResolveRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeCreateRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeEnterRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeLeaveRequest:
-		return p.SessionID, true
-	case serverapi.WorktreeDeleteRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeSetSessionNameRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeSetThinkingLevelRequest:

@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeinput"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -104,7 +104,7 @@ func (m *uiModel) worktreeTransitionCommand(transition runtimeinput.PendingWorkW
 	switchToken := m.worktrees.switchToken
 	m.worktrees.switchPending = true
 	return func() tea.Msg {
-		var ack serverapi.WorktreeScheduledAcknowledgement
+		var ack *worktreepb.ScheduledAcknowledgement
 		var err error
 		switch transition.Transition {
 		case runtimeinput.PendingWorkWorktreeTransitionEnter:

@@ -10,6 +10,7 @@ import (
 	remoteclient "core/shared/client"
 	"core/shared/config"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"net/http/httptest"
@@ -259,17 +260,17 @@ func TestGatewayRemoteResolveWorktreeCreateTarget(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), serverapi.WorktreeCreateTargetResolveRequest{
-		SessionID: store.Meta().SessionID,
+	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), &worktreepb.CreateTargetResolveRequest{
+		SessionId: store.Meta().SessionID,
 		Target:    "HEAD",
 	})
 	if err != nil {
 		t.Fatalf("ResolveWorktreeCreateTarget: %v", err)
 	}
-	if resp.Resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindDetachedRef {
+	if resp.Resolution.Kind != worktreepb.CreateTargetResolutionKind_WORKTREE_CREATE_TARGET_RESOLUTION_KIND_DETACHED_REF {
 		t.Fatalf("resolution kind = %q, want detached_ref", resp.Resolution.Kind)
 	}
-	if strings.TrimSpace(resp.Resolution.ResolvedRef) == "" {
+	if strings.TrimSpace(resp.Resolution.GetResolvedRef()) == "" {
 		t.Fatalf("expected resolved ref oid, got %+v", resp.Resolution)
 	}
 }

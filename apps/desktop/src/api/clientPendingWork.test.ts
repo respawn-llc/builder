@@ -5,7 +5,7 @@ import { decodePendingWorkError, PendingWorkError } from "./clientPendingWork";
 import { RpcError } from "./errors";
 import type { JsonValue } from "./json";
 import { rpcErrorCodes } from "./rpcErrorCodes";
-import { parseWorktreeOperationID } from "./worktreeOperationID";
+import { parseWorktreeOperationID } from "./pendingWork";
 import {
   pendingWorkRestorationSchema,
   pendingWorkSchema,

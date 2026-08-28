@@ -11,7 +11,8 @@ import (
 	"core/server/metadata"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {
@@ -22,6 +23,53 @@ func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTa
 		return errors.New("session execution target worktree id is required")
 	}
 	return nil
+}
+
+func contractSessionExecutionTarget(target clientui.SessionExecutionTarget) (*worktreepb.SessionExecutionTarget, error) {
+	workspaceAvailability, err := projectAvailability(target.WorkspaceAvailability)
+	if err != nil {
+		return nil, err
+	}
+	var worktree *worktreepb.SessionExecutionWorktreeTarget
+	if target.Worktree != nil {
+		availability, err := projectAvailability(clientui.ProjectAvailability(target.Worktree.Availability))
+		if err != nil {
+			return nil, err
+		}
+		worktree = &worktreepb.SessionExecutionWorktreeTarget{
+			Id:           target.Worktree.ID,
+			Name:         target.Worktree.Name,
+			Root:         target.Worktree.Root,
+			Availability: availability,
+		}
+	}
+	return &worktreepb.SessionExecutionTarget{
+		WorkspaceId:           target.WorkspaceID,
+		WorkspaceName:         target.WorkspaceName,
+		WorkspaceRoot:         target.WorkspaceRoot,
+		WorkspaceAvailability: workspaceAvailability,
+		Worktree:              worktree,
+		CwdRelpath:            target.CwdRelpath,
+		EffectiveWorkdir:      target.EffectiveWorkdir,
+	}, nil
+}
+
+func projectAvailability(value clientui.ProjectAvailability) (projectpb.ProjectAvailability, error) {
+	switch value {
+	case clientui.ProjectAvailabilityAvailable:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_AVAILABLE, nil
+	case clientui.ProjectAvailabilityMissing:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_MISSING, nil
+	case clientui.ProjectAvailabilityInaccessible:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_INACCESSIBLE, nil
+	case clientui.ProjectAvailabilityUnlinked:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_UNLINKED, nil
+	default:
+		return projectpb.ProjectAvailability_PROJECT_AVAILABILITY_UNSPECIFIED, fmt.Errorf(
+			"project availability %q is unsupported",
+			value,
+		)
+	}
 }
 
 func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktree) (string, bool, error) {
@@ -49,11 +97,19 @@ func worktreeNamedBranch(worktree GitWorktree) (string, bool) {
 }
 
 type PathInspection struct {
-	Availability serverapi.WorktreePathAvailability
+	Availability pathAvailability
 	Directory    bool
 }
 
-func PathAvailability(path string) serverapi.WorktreePathAvailability {
+type pathAvailability string
+
+const (
+	pathAvailabilityAvailable    pathAvailability = "available"
+	pathAvailabilityMissing      pathAvailability = "missing"
+	pathAvailabilityInaccessible pathAvailability = "inaccessible"
+)
+
+func PathAvailability(path string) pathAvailability {
 	return InspectPath(path).Availability
 }
 
@@ -61,15 +117,15 @@ func InspectPath(path string) PathInspection {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return PathInspection{Availability: serverapi.WorktreePathAvailabilityMissing}
+			return PathInspection{Availability: pathAvailabilityMissing}
 		}
-		return PathInspection{Availability: serverapi.WorktreePathAvailabilityInaccessible}
+		return PathInspection{Availability: pathAvailabilityInaccessible}
 	}
 	if !info.IsDir() {
-		return PathInspection{Availability: serverapi.WorktreePathAvailabilityInaccessible}
+		return PathInspection{Availability: pathAvailabilityInaccessible}
 	}
 	return PathInspection{
-		Availability: serverapi.WorktreePathAvailabilityAvailable,
+		Availability: pathAvailabilityAvailable,
 		Directory:    true,
 	}
 }

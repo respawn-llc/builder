@@ -10,6 +10,8 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -37,7 +39,7 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	enterSelector := "feature/pending-work"
-	enterID := serverapi.NewWorktreeOperationID()
+	enterID := clientui.NewWorktreeTransitionID()
 	enterAck, err := engine.ScheduleWorktreeTransition(
 		context.Background(),
 		enterID,
@@ -52,13 +54,13 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if enterAck.OperationID != enterID {
-		t.Fatalf("enter acknowledgement ID = %s, want %s", enterAck.OperationID, enterID)
+	if enterAck.OperationId != enterID.String() {
+		t.Fatalf("enter acknowledgement ID = %s, want %s", enterAck.OperationId, enterID)
 	}
 	secondSteer := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
 		return engine.QueueUserMessageForAutoDrain(context.Background(), "second steer")
 	})
-	leaveID := serverapi.NewWorktreeOperationID()
+	leaveID := clientui.NewWorktreeTransitionID()
 	leaveAck, err := engine.ScheduleWorktreeTransition(
 		context.Background(),
 		leaveID,
@@ -72,8 +74,8 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaveAck.OperationID != leaveID {
-		t.Fatalf("leave acknowledgement ID = %s, want %s", leaveAck.OperationID, leaveID)
+	if leaveAck.OperationId != leaveID.String() {
+		t.Fatalf("leave acknowledgement ID = %s, want %s", leaveAck.OperationId, leaveID)
 	}
 	queued := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
 		return engine.QueueUserMessage(context.Background(), "post-turn queue")
@@ -134,7 +136,7 @@ func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
 		t.Run(testCase.name+"/remove before start", func(t *testing.T) {
 			engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 			releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
-			operationID := serverapi.NewWorktreeOperationID()
+			operationID := clientui.NewWorktreeTransitionID()
 			started := make(chan struct{}, 1)
 
 			ack, err := engine.ScheduleWorktreeTransition(
@@ -149,8 +151,8 @@ func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("schedule Worktree transition: %v", err)
 			}
-			if ack.OperationID != operationID {
-				t.Fatalf("acknowledgement ID = %s, want %s", ack.OperationID, operationID)
+			if ack.OperationId != operationID.String() {
+				t.Fatalf("acknowledgement ID = %s, want %s", ack.OperationId, operationID)
 			}
 			itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 				return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
@@ -177,7 +179,7 @@ func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
 
 		t.Run(testCase.name+"/not pending after start", func(t *testing.T) {
 			engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
-			operationID := serverapi.NewWorktreeOperationID()
+			operationID := clientui.NewWorktreeTransitionID()
 			itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 				return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
 			})
@@ -203,8 +205,8 @@ func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("schedule Worktree transition: %v", err)
 			}
-			if ack.OperationID != operationID {
-				t.Fatalf("acknowledgement ID = %s, want %s", ack.OperationID, operationID)
+			if ack.OperationId != operationID.String() {
+				t.Fatalf("acknowledgement ID = %s, want %s", ack.OperationId, operationID)
 			}
 			pendingWorkTestWait(t, started, "Worktree transition start")
 			if pendingWorkTestContains(pendingWorkTestSnapshot(t, engine), itemID) {
@@ -241,7 +243,7 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 		}
 		if _, err := engine.ScheduleWorktreeTransition(
 			t.Context(),
-			serverapi.NewWorktreeOperationID(),
+			clientui.NewWorktreeTransitionID(),
 			runtimeinput.PendingWorkWorktreeTransition{
 				Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 			},
@@ -264,7 +266,7 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 
 		_, err := engine.ScheduleWorktreeTransition(
 			t.Context(),
-			serverapi.NewWorktreeOperationID(),
+			clientui.NewWorktreeTransitionID(),
 			runtimeinput.PendingWorkWorktreeTransition{
 				Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
 				Selector:   textutil.Value("feature/rejected"),
@@ -290,7 +292,7 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 
 		if _, err := engine.ScheduleWorktreeTransition(
 			t.Context(),
-			serverapi.NewWorktreeOperationID(),
+			clientui.NewWorktreeTransitionID(),
 			runtimeinput.PendingWorkWorktreeTransition{
 				Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
 				Selector:   textutil.Value("feature/admitted"),
@@ -320,15 +322,15 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 			return commit()
 		})
 		type admissionResult struct {
-			operationID serverapi.WorktreeOperationID
-			ack         serverapi.WorktreeScheduledAcknowledgement
+			operationID clientui.WorktreeTransitionID
+			ack         *worktreepb.ScheduledAcknowledgement
 			err         error
 		}
 		results := make(chan admissionResult, 2)
 		for index := range 2 {
 			index := index
 			go func() {
-				operationID := serverapi.NewWorktreeOperationID()
+				operationID := clientui.NewWorktreeTransitionID()
 				ack, err := engine.ScheduleWorktreeTransitionWithAcceptance(
 					t.Context(),
 					operationID,
@@ -352,8 +354,8 @@ func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
 			if result.err != nil {
 				t.Fatalf("concurrent Worktree admission: %v", result.err)
 			}
-			if result.ack.OperationID != result.operationID {
-				t.Fatalf("concurrent acknowledgement ID = %s, want %s", result.ack.OperationID, result.operationID)
+			if result.ack.OperationId != result.operationID.String() {
+				t.Fatalf("concurrent acknowledgement ID = %s, want %s", result.ack.OperationId, result.operationID)
 			}
 		}
 		if got := len(pendingWorkTestSnapshot(t, engine).Items); got != runtimeinput.PendingWorkCapacity+1 {
@@ -530,7 +532,7 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
 				t.Helper()
 				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
-				operationID := serverapi.NewWorktreeOperationID()
+				operationID := clientui.NewWorktreeTransitionID()
 				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
 				})
@@ -597,7 +599,7 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
 				t.Helper()
 				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
-				operationID := serverapi.NewWorktreeOperationID()
+				operationID := clientui.NewWorktreeTransitionID()
 				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
 				})
@@ -609,10 +611,7 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 						Selector:   textutil.Value("missing"),
 					},
 					func(context.Context) WorktreeApplicationResult {
-						return UnappliedUserCorrectableWorktreeApplication(&serverapi.WorktreeSelectorError{
-							Kind:  serverapi.WorktreeSelectorErrorKindNotFound,
-							Input: "missing",
-						})
+						return UnappliedUserCorrectableWorktreeApplication(errors.New("selector not found"))
 					},
 				); err != nil {
 					t.Fatalf("schedule Worktree transition: %v", err)
@@ -654,7 +653,7 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
 				t.Helper()
 				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
-				operationID := serverapi.NewWorktreeOperationID()
+				operationID := clientui.NewWorktreeTransitionID()
 				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
 				})
@@ -683,7 +682,7 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 					OnEvent:               observe,
 					LifecycleRuntimeAbort: abort,
 				})
-				operationID := serverapi.NewWorktreeOperationID()
+				operationID := clientui.NewWorktreeTransitionID()
 				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
 				})
@@ -710,7 +709,7 @@ func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
 				t.Helper()
 				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
 				releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
-				operationID := serverapi.NewWorktreeOperationID()
+				operationID := clientui.NewWorktreeTransitionID()
 				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
 				})

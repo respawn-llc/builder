@@ -534,12 +534,12 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 			if test.resume {
 				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskResume, serverapi.WorkflowTaskResumeRequest{
 					TaskID:           task.ID,
-					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+					SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 				})
 			} else {
 				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskStart, serverapi.WorkflowTaskStartRequest{
 					TaskID:           task.ID,
-					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+					SetupOperationID: serverapi.NewWorkflowSetupOperationID(),
 				})
 			}
 			requireGatewayResponse(t, conn, "explicit")

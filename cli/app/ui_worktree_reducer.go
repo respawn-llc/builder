@@ -7,8 +7,9 @@ import (
 	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
 	"core/shared/invariant"
+	"core/shared/protoapi"
 	"core/shared/runtimeinput"
-	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -173,9 +174,9 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		event := msg.event
-		m.worktrees.create.setupEvent = &event
+		m.worktrees.create.setupEvent = event
 		m.layout().syncViewport()
-		if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
+		if event.GetCompleted() != nil || event.GetFailed() != nil {
 			return handledUIFeatureUpdate(m, nil)
 		}
 		return handledUIFeatureUpdate(m, worktreeSetupEventCmd(msg.events))
@@ -217,10 +218,10 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.worktrees.deleteConfirm.submitting = false
 		if msg.err != nil {
-			var precondition *serverapi.WorktreeDeletePreconditionError
+			var precondition *worktreecontract.DeletePreconditionError
 			if errors.As(msg.err, &precondition) {
 				m.worktrees.deleteConfirm.forceFolderRemoval = true
-				m.worktrees.deleteConfirm.errorText = worktreeDeleteForceConfirmation(precondition.DirtyState)
+				m.worktrees.deleteConfirm.errorText = worktreeDeleteForceConfirmation(precondition.Details.DirtyState)
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 			}
@@ -270,7 +271,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			Token:         msg.token,
 			CurrentQuery:  m.worktrees.create.branchTarget.Text(),
 			ResponseQuery: msg.query,
-			Resolution:    msg.resp.Resolution,
+			Resolution:    msg.resp.GetResolution(),
 			HasError:      msg.err != nil,
 			ErrorText:     errorText,
 		})
@@ -292,7 +293,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 }
 
 type worktreeCreateErrorPlacement struct {
-	owner      serverapi.WorktreeCreateErrorOwner
+	owner      worktreecontract.CreateErrorOwner
 	diagnostic string
 }
 
@@ -307,9 +308,9 @@ func (m *uiModel) applyWorktreeCreateError(err error) {
 		return
 	}
 	switch placement.owner {
-	case serverapi.WorktreeCreateErrorOwnerBaseRef:
+	case worktreecontract.CreateErrorOwnerBaseRef:
 		m.worktrees.create.baseRefErrorText = placement.diagnostic
-	case serverapi.WorktreeCreateErrorOwnerForm:
+	case worktreecontract.CreateErrorOwnerForm:
 		m.worktrees.create.errorText = placement.diagnostic
 	default:
 		m.worktrees.create.errorText = placement.diagnostic
@@ -320,35 +321,35 @@ func classifyWorktreeCreateError(err error, policy invariant.Policy) *worktreeCr
 	if err == nil {
 		return nil
 	}
-	if contractErr := serverapi.ValidateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
+	if contractErr := protoapi.ValidateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
 		return &worktreeCreateErrorPlacement{
-			owner:      serverapi.WorktreeCreateErrorOwnerForm,
+			owner:      worktreecontract.CreateErrorOwnerForm,
 			diagnostic: runtimeattach.FormatSubmissionError(contractErr),
 		}
 	}
-	var typed *serverapi.WorktreeCreateError
+	var typed *worktreecontract.CreateError
 	if errors.As(err, &typed) {
 		if typed == nil {
 			return &worktreeCreateErrorPlacement{
-				owner:      serverapi.WorktreeCreateErrorOwnerForm,
+				owner:      worktreecontract.CreateErrorOwnerForm,
 				diagnostic: runtimeattach.FormatSubmissionError(err),
 			}
 		}
 		switch typed.Owner {
-		case serverapi.WorktreeCreateErrorOwnerBaseRef:
+		case worktreecontract.CreateErrorOwnerBaseRef:
 			return &worktreeCreateErrorPlacement{
-				owner:      serverapi.WorktreeCreateErrorOwnerBaseRef,
+				owner:      worktreecontract.CreateErrorOwnerBaseRef,
 				diagnostic: typed.Diagnostic,
 			}
-		case serverapi.WorktreeCreateErrorOwnerForm:
+		case worktreecontract.CreateErrorOwnerForm:
 			return &worktreeCreateErrorPlacement{
-				owner:      serverapi.WorktreeCreateErrorOwnerForm,
+				owner:      worktreecontract.CreateErrorOwnerForm,
 				diagnostic: typed.Diagnostic,
 			}
 		}
 	}
 	return &worktreeCreateErrorPlacement{
-		owner:      serverapi.WorktreeCreateErrorOwnerForm,
+		owner:      worktreecontract.CreateErrorOwnerForm,
 		diagnostic: runtimeattach.FormatSubmissionError(err),
 	}
 }

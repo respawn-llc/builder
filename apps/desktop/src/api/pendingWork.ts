@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { createUUIDv4ValueParser, type UUIDv4Value } from "./setupOperationID";
-import { parseWorktreeOperationID, type WorktreeOperationID } from "./worktreeOperationID";
 
 const strict = z.strictObject;
 const nonBlankExact = z.string().refine((value) => value.trim().length > 0, {
@@ -15,12 +14,16 @@ const normalizedArgument = z
 
 export type PendingWorkItemID = UUIDv4Value<"pending_work_item">;
 export type CompactionRequestID = UUIDv4Value<"compaction_request">;
+export type WorktreeOperationID = UUIDv4Value<"worktree_operation">;
 
 export const parsePendingWorkItemID = createUUIDv4ValueParser<"pending_work_item">(
   "Pending Work item id must be a UUID v4.",
 );
 export const parseCompactionRequestID = createUUIDv4ValueParser<"compaction_request">(
   "Compaction request id must be a UUID v4.",
+);
+export const parseWorktreeOperationID = createUUIDv4ValueParser<"worktree_operation">(
+  "Worktree operation id must be a UUID v4.",
 );
 
 const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID, "Expected Pending Work item UUID v4.");

@@ -14,7 +14,6 @@ import (
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeinput"
-	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -45,7 +44,7 @@ func runScheduledWorktreeTransitionForTest(
 	completed := make(chan error, 1)
 	_, err := engine.ScheduleWorktreeTransition(
 		ctx,
-		serverapi.NewWorktreeOperationID(),
+		clientui.NewWorktreeTransitionID(),
 		runtimeinput.PendingWorkWorktreeTransition{
 			Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
 		},

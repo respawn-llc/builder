@@ -769,13 +769,26 @@ message Prompt {
   }
 }
 
+enum WorktreeTransitionKind {
+  WORKTREE_TRANSITION_KIND_UNSPECIFIED = 0;
+  WORKTREE_TRANSITION_KIND_ENTER = 1;
+  WORKTREE_TRANSITION_KIND_LEAVE = 2;
+  WORKTREE_TRANSITION_KIND_DELETE = 3;
+}
+
+enum WorktreeTransitionState {
+  WORKTREE_TRANSITION_STATE_UNSPECIFIED = 0;
+  WORKTREE_TRANSITION_STATE_COMPLETED = 1;
+  WORKTREE_TRANSITION_STATE_FAILED = 2;
+}
+
 message WorktreeTransitionOutcome {
   string operation_id = 1 [
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  kent.api.worktree.TransitionKind transition = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
-  kent.api.worktree.TransitionState state = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  WorktreeTransitionKind transition = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  WorktreeTransitionState state = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional Diagnostic failure = 4;
   optional kent.api.worktree.DeletePreconditionDetails delete_precondition = 5;
   option (buf.validate.message).cel = {
