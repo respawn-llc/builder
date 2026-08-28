@@ -205,12 +205,12 @@ func deletionSelector(entry *worktreepb.TopologyEntry) (string, error) {
 	case entry == nil:
 		return "", errors.New("worktree topology entry is required")
 	case entry.GetRegistered() != nil:
-		if entry.GetRegistered().GetGit().GetIsMain() || entry.GetRegistered().GetGit().GetIsGitPrimary() {
+		if entry.GetRegistered().GetGit().GetIsMain() {
 			return "", worktreecontract.ErrWorktreeBlocked
 		}
 		return entry.GetRegistered().GetKent().GetWorktreeId(), nil
 	case entry.GetExternal() != nil:
-		if entry.GetExternal().GetGit().GetIsMain() || entry.GetExternal().GetGit().GetIsGitPrimary() {
+		if entry.GetExternal().GetGit().GetIsMain() {
 			return "", worktreecontract.ErrWorktreeBlocked
 		}
 		return entry.GetExternal().GetGit().GetCanonicalRoot(), nil
@@ -228,7 +228,6 @@ func gitFactsFromEntry(entry GitWorktree) *worktreepb.GitFacts {
 		Detached:      entry.Detached,
 		Bare:          entry.Bare,
 		IsMain:        entry.IsMain,
-		IsGitPrimary:  entry.IsGitPrimary,
 		PathAvailable: PathAvailability(entry.Root) == pathAvailabilityAvailable,
 	}
 	if entry.Branch != nil {

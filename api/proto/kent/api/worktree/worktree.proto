@@ -109,7 +109,6 @@ message GitFacts {
   optional string prunable_reason = 8 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   bool is_main = 9;
   bool path_available = 10;
-  bool is_git_primary = 11;
 }
 
 message KentFacts {
@@ -201,9 +200,9 @@ message ListEntry {
     message: "worktree delete preview projection must match topology"
     expression:
       "!has(this.projection.delete_preview) || "
-      "(has(this.topology.registered) && !this.topology.registered.git.is_main && !this.topology.registered.git.is_git_primary && "
+      "(has(this.topology.registered) && !this.topology.registered.git.is_main && "
       "this.projection.delete_preview.selector == this.topology.registered.kent.worktree_id) || "
-      "(has(this.topology.external) && !this.topology.external.git.is_main && !this.topology.external.git.is_git_primary && "
+      "(has(this.topology.external) && !this.topology.external.git.is_main && "
       "this.projection.delete_preview.selector == this.topology.external.git.canonical_root) || "
       "(has(this.topology.missing) && "
       "this.projection.delete_preview.selector == this.topology.missing.kent.worktree_id)"
@@ -448,8 +447,8 @@ message ListSuccess {
       "((has(w.topology.registered) && w.topology.registered.git.path_available) || "
       "(has(w.topology.external) && w.topology.external.git.path_available))) && "
       "has(w.projection.delete_preview) == "
-      "((has(w.topology.registered) && !w.topology.registered.git.is_main && !w.topology.registered.git.is_git_primary) || "
-      "(has(w.topology.external) && !w.topology.external.git.is_main && !w.topology.external.git.is_git_primary) || "
+      "((has(w.topology.registered) && !w.topology.registered.git.is_main) || "
+      "(has(w.topology.external) && !w.topology.external.git.is_main) || "
       "has(w.topology.missing)))"
   };
 }
@@ -551,8 +550,8 @@ message SelectorResolveSuccess {
       "((has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
       "(has(this.worktree.topology.external) && this.worktree.topology.external.git.path_available))) && "
       "has(this.worktree.projection.delete_preview) == "
-      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main && !this.worktree.topology.registered.git.is_git_primary) || "
-      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main && !this.worktree.topology.external.git.is_git_primary) || "
+      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main) || "
+      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main) || "
       "has(this.worktree.topology.missing))"
   };
 }
@@ -604,9 +603,9 @@ message DeletePreviewSuccess {
     id: "kent.worktree.delete_preview_authority"
     message: "delete preview selector and cleanliness must match its topology"
     expression:
-      "(has(this.worktree.registered) && !this.worktree.registered.git.is_main && !this.worktree.registered.git.is_git_primary && "
+      "(has(this.worktree.registered) && !this.worktree.registered.git.is_main && "
       "this.deletion_selector == this.worktree.registered.kent.worktree_id) || "
-      "(has(this.worktree.external) && !this.worktree.external.git.is_main && !this.worktree.external.git.is_git_primary && "
+      "(has(this.worktree.external) && !this.worktree.external.git.is_main && "
       "this.deletion_selector == this.worktree.external.git.canonical_root) || "
       "(has(this.worktree.missing) && this.deletion_selector == this.worktree.missing.kent.worktree_id && "
       "this.cleanliness.kind == 1)"
@@ -755,8 +754,8 @@ message CreateSuccess {
       "((has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
       "(has(this.worktree.topology.external) && this.worktree.topology.external.git.path_available))) && "
       "has(this.worktree.projection.delete_preview) == "
-      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main && !this.worktree.topology.registered.git.is_git_primary) || "
-      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main && !this.worktree.topology.external.git.is_git_primary) || "
+      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main) || "
+      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main) || "
       "has(this.worktree.topology.missing))"
   };
 }

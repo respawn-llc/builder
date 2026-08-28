@@ -412,7 +412,6 @@ func gitWorktreeFromFacts(facts *worktreepb.GitFacts) (GitWorktree, error) {
 		LockedReason:   optionalString(facts.LockedReason),
 		PrunableReason: optionalString(facts.PrunableReason),
 		IsMain:         facts.IsMain,
-		IsGitPrimary:   facts.IsGitPrimary,
 	}
 	if err := entry.validateHead(); err != nil {
 		return GitWorktree{}, err
