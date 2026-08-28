@@ -11,7 +11,7 @@ import (
 
 func TestRuntimeClientInputRequestUsesCallerRequestIdentity(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{}
-	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls, unavailableChatSettingsService{}).(*sessionRuntimeClient)
+	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls, nil).(*sessionRuntimeClient)
 	requestID := runtimeids.NewRuntimeClientRequestID()
 
 	if _, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
