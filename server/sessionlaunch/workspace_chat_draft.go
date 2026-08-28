@@ -167,11 +167,7 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 	if err := validateWorkspaceChatDraftTransform(next, current); err != nil {
 		return WorkspaceChatDraft{}, err
 	}
-	var replacement *WorkspaceChatDraft
-	defaults := current.Baselines[config.DefaultSubagentRole]
-	if strings.TrimSpace(next.Message) != "" || !workspaceChatDraftSettingsEqual(next, defaults) {
-		replacement = &next
-	}
+	replacement := canonicalWorkspaceChatDraft(next, current.Baselines[config.DefaultSubagentRole])
 	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
 		return WorkspaceChatDraft{}, err
 	}
@@ -234,16 +230,9 @@ func (o *WorkspaceChatDraftOwner) MutateWorkspaceChatSettings(
 	if err != nil {
 		return PreparedChatSettingsOperationResult{}, false, err
 	}
-	var replacement *WorkspaceChatDraft
-	defaults := resolved.Baselines[config.DefaultSubagentRole]
-	if strings.TrimSpace(next.Message) != "" || !workspaceChatDraftSettingsEqual(next, defaults) {
-		replacement = &next
-	}
-	same := stored == nil && replacement == nil
-	if stored != nil && replacement != nil {
-		same = *stored == *replacement
-	}
-	if same {
+	replacement := canonicalWorkspaceChatDraft(next, resolved.Baselines[config.DefaultSubagentRole])
+	if stored == nil && replacement == nil ||
+		stored != nil && replacement != nil && *stored == *replacement {
 		return projected, false, nil
 	}
 	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
@@ -398,6 +387,13 @@ func resolveWorkspaceChatDraftBaselines(
 }
 func workspaceChatDraftSettingsEqual(a, b WorkspaceChatDraft) bool {
 	return a.Agent == b.Agent && a.Supervisor == b.Supervisor && a.Thinking == b.Thinking && a.Fast == b.Fast && a.Questions == b.Questions && a.AutoCompaction == b.AutoCompaction
+}
+
+func canonicalWorkspaceChatDraft(draft, defaults WorkspaceChatDraft) *WorkspaceChatDraft {
+	if strings.TrimSpace(draft.Message) == "" && workspaceChatDraftSettingsEqual(draft, defaults) {
+		return nil
+	}
+	return &draft
 }
 
 func workspaceChatDraftFromSettingsState(message string, state session.ChatSettingsState) (WorkspaceChatDraft, error) {

@@ -49,8 +49,15 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 			enqueueRuntimeReconnectWarning(runtimeReconnectWarning, text, visibility)
 		})
 	}
-	mainView := m.runtimeMainView()
-	m.applyRuntimeMainViewState(mainView)
+	if !m.hasRuntimeClient() {
+		m.applyRuntimeMainViewState(m.runtimeMainView())
+	} else if cached, ok := m.runtimeClient().(interface {
+		CachedMainView() (clientui.RuntimeMainView, bool)
+	}); ok {
+		if mainView, available := cached.CachedMainView(); available {
+			m.applyRuntimeMainViewState(mainView)
+		}
+	}
 	if !m.hasRuntimeClient() {
 		m.reviewerEnabled = strings.TrimSpace(m.reviewerMode) != "" && strings.TrimSpace(m.reviewerMode) != "off"
 	}

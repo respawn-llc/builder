@@ -96,6 +96,7 @@ type runtimeControlDoneMsg struct {
 }
 
 type chatSettingsDoneMsg struct {
+	operation serverapi.ChatSettingsMutationOperationKind
 	response  serverapi.ChatSettingsMutationResponse
 	err       error
 }

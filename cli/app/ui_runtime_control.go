@@ -10,6 +10,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -41,7 +42,7 @@ func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMu
 	client := m.runtimeClient().(chatSettingsRuntimeClient)
 	return func() tea.Msg {
 		response, err := client.MutateChatSettings(operation)
-		return chatSettingsDoneMsg{response: response, err: err}
+		return chatSettingsDoneMsg{operation: operation.Kind, response: response, err: err}
 	}
 }
 
@@ -56,14 +57,14 @@ func (m *uiModel) chatSettingsToggleCommand(
 	return func() tea.Msg {
 		settings, err := client.ReadChatSettings()
 		if err != nil {
-			return chatSettingsDoneMsg{err: err}
+			return chatSettingsDoneMsg{operation: kind, err: err}
 		}
 		operation, err := resolveChatSettingsToggle(kind, requested, settings)
 		if err != nil {
-			return chatSettingsDoneMsg{err: err}
+			return chatSettingsDoneMsg{operation: kind, err: err}
 		}
 		response, err := client.MutateChatSettings(operation)
-		return chatSettingsDoneMsg{response: response, err: err}
+		return chatSettingsDoneMsg{operation: kind, response: response, err: err}
 	}
 }
 
@@ -153,17 +154,65 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	m.questionsEnabled = settings.Questions.Enabled
 	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
 	m.modelContractLocked = settings.AgentLocked
+	m.status.snapshot.AgentRole = textutil.OptionalTrimmedString(settings.SelectedAgent.Role)
+	m.status.snapshot.CompactionMode = string(response.Context.CompactionMode)
+	m.status.snapshot.CompactionCount = int(response.Context.CompletedCompactionCount)
 	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), clientui.RuntimeContextUsage{
 		UsedTokens:   int(response.Context.UsedTokens),
 		WindowTokens: int(response.Context.ContextWindowTokens),
 	})
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
-		return m.sendTransientStatusWithNoticeID("Chat settings mutation rejected", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		reason := "rejected"
+		if response.Result.Rejected != nil {
+			reason = string(response.Result.Rejected.Reason)
+		}
+		return m.sendTransientStatusWithNoticeID("Chat settings: "+reason, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if response.Result.Applied == nil || !response.Result.Applied.Changed {
 		return nil
 	}
-	return m.sendTransientStatusWithNoticeID("Chat settings updated", uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+	return m.sendTransientStatusWithNoticeID(
+		chatSettingsSuccessNotice(msg.operation, settings),
+		uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "",
+	)
+}
+
+func chatSettingsSuccessNotice(
+	operation serverapi.ChatSettingsMutationOperationKind,
+	settings serverapi.ChatSettings,
+) string {
+	name := map[serverapi.ChatSettingsMutationOperationKind]string{
+		serverapi.ChatSettingsMutationAgent:          "Agent",
+		serverapi.ChatSettingsMutationSupervisor:     "Supervisor",
+		serverapi.ChatSettingsMutationThinking:       "Thinking",
+		serverapi.ChatSettingsMutationFast:           "Fast",
+		serverapi.ChatSettingsMutationQuestions:      "Questions",
+		serverapi.ChatSettingsMutationAutoCompaction: "Auto-compaction",
+	}[operation]
+	value := settings.SelectedAgent.Role
+	switch operation {
+	case serverapi.ChatSettingsMutationSupervisor:
+		value = string(settings.Supervisor.Value)
+	case serverapi.ChatSettingsMutationThinking:
+		value = settings.SelectedAgent.Thinking
+	case serverapi.ChatSettingsMutationFast:
+		value = chatSettingsOnOff(settings.Fast != nil && settings.Fast.Value)
+	case serverapi.ChatSettingsMutationQuestions:
+		value = chatSettingsOnOff(settings.Questions.Enabled)
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		value = chatSettingsOnOff(settings.AutoCompaction.Stored)
+	}
+	if name == "" {
+		return "Chat settings updated"
+	}
+	return name + ": " + value
+}
+
+func chatSettingsOnOff(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
 }
 
 func (m *uiModel) setRuntimeSessionName(name string) error {
