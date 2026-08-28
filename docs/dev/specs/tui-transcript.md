@@ -208,6 +208,15 @@
 - Pending Work projects post-turn Queue items first in Queue order, followed by Steer items in server acceptance order across human messages, manual compaction, and Active-Runtime Worktree transitions.
 - Manual compaction renders with canonical `/compact` and normalized guidance when present.
 - Active-Runtime Worktree enter renders with canonical `/wt switch <selector>` and leave renders with `/wt leave`.
+- The TUI obtains complete Pending Work collections only through the Pending Work list route.
+- Transcript hydration and Pending Work Changed notifications carry no complete Pending Work collection.
+- Every accepted initial, replacement, reconnect, or Scratch Rehydration hydration clears displayed Pending Work and fetches the latest collection for the exact hydrated Session.
+- The TUI clears displayed Pending Work for every accepted hydration even when the Session identity is unchanged because the hydration may represent a replacement Active Session Runtime.
+- Every successful local Send/Steer, Queue, manual-compaction, Active-Runtime Worktree, or discard response and every observed Pending Work Changed notification fetches the latest collection for its exact Session.
+- A Pending Work Changed notification is payload-free and carries no order, revision, or freshness guarantee.
+- A list result or failure from an earlier hydration scope has no effect after the TUI accepts a later hydration.
+- A failed list read preserves displayed Pending Work only when the TUI fetched that collection successfully during the current uninterrupted hydration scope.
+- A failed initial list read after any accepted hydration leaves displayed Pending Work empty.
 - The TUI has no standalone per-item discard affordance for operational Pending Work.
 - Pending queues are lost on process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - A mid-turn message becomes durable only when Kent delivers it.
@@ -272,7 +281,10 @@
 - After that Agent Step ends, Worktree applies before another ordinary continuation.
 - Human messages remain accepted while Worktree is in progress.
 - Repeated Worktree requests receive no matching-retry response, pending-operation deduplication, or different-target busy rejection.
-- Attached clients receive the final success or failure.
+- Attached clients receive a final success or failure when the Worktree owner can determine the terminal outcome.
+- If the target applied but later Session state or response publication fails, the Worktree operation remains Completed and the TUI surfaces the later diagnostic without restoring the command.
+- If Worktree rollback fails, the TUI receives no Completed or Failed outcome and restores no command.
+- An indeterminate rollback retires only the affected Active Session Runtime; an indeterminate dormant-Session transition returns its diagnostic without a Runtime to retire.
 - A successful change becomes model-visible through the ordinary worktree reminder.
 - An accepted Worktree transition that has not applied is lost on server shutdown or restart and is never resumed.
 - Reconnecting clients refresh Worktree status.

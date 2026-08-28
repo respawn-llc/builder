@@ -82,11 +82,22 @@
 - Normal admission rejects when the server independently observes at least 100 items.
 - Concurrent admissions that each observe a lower count may temporarily exceed 100.
 - Kent never evicts accepted work to enforce the capacity.
+- The Pending Work list route is the only client-facing source of a complete Pending Work collection.
+- Transcript hydration and live notifications never carry a complete Pending Work collection.
+- Kent broadcasts a payload-free Pending Work Changed notification after each completed membership change.
+- A Pending Work Changed notification carries no order, revision, membership, or freshness guarantee.
+- Every client that observes a Pending Work Changed notification fetches the latest collection for the exact Session associated with that notification.
+- A client that receives a successful Send/Steer, Queue, manual-compaction, Active-Runtime Worktree, or discard response fetches the latest collection for that exact Session.
+- Every accepted initial, replacement, reconnect, or Scratch Rehydration hydration clears the client's previous Pending Work collection and fetches the latest collection for the exact hydrated Session.
+- An accepted hydration clears the previous collection even when the Session identity is unchanged because Pending Work belongs to the process-local Active Session Runtime.
+- A Pending Work list result or failure from an earlier accepted hydration has no effect after a later hydration is accepted.
+- A failed Pending Work list read may preserve only a collection fetched successfully during the current uninterrupted hydration scope.
+- A failed initial read after an accepted hydration leaves the collection empty.
 - Every item is discardable until its operation starts.
 - Starting and discarding one item are mutually exclusive; whichever the server accepts first wins.
 - A discard after start fails because the item is no longer pending.
 - Successful discard removes only that item and returns its canonical presentation to the discarding client.
-- Every connected client observes the authoritative Pending Work replacement after a successful discard.
+- A successful discard produces the removal response and a Pending Work Changed notification, after which clients fetch the latest collection.
 - Pending Work removal never cancels an operation that has started.
 - Discarding a Worktree transition before start emits no Worktree completion, failure, or cancellation outcome.
 - Pending Work retains no running, completed, failed, canceled, or historical items.
@@ -99,6 +110,11 @@
 - Kent does not target, persist, replay, or acknowledge the restoration and does not count connected clients before broadcasting it.
 - If no client observes the restoration, the canonical presentation is lost.
 - An operation that committed is never restored because later publication or response delivery failed.
+- A Worktree transition whose target applied remains Completed if later Session state or response publication fails.
+- Kent surfaces the later Worktree publication diagnostic without restoring the command or reporting the applied transition as failed.
+- If Worktree rollback fails, Kent reports neither Completed nor Failed and restores no command because the target and Runtime relationship is indeterminate.
+- An indeterminate rollback retires only the affected Active Session Runtime before it can accept or execute more work.
+- An indeterminate dormant-Session transition returns its diagnostic without retiring a Runtime.
 
 ## Protected Agent Steps
 
@@ -229,7 +245,7 @@
 - A definitely uncommitted required Session mutation starts no later provider request, fails pending operation results, returns restorable input through its ephemeral restoration event, and closes the Runtime without automatic retry, replay, or recovery.
 - A committed mutation remains authoritative if later publication or reply delivery fails.
 - Kent reports a failure after a committed mutation and does not apply the mutation again.
-- If Kent cannot determine whether an authoritative Session mutation committed, it terminates the backend with diagnostic context.
+- If Kent cannot determine whether an authoritative Session mutation committed outside the indeterminate Worktree rollback case defined by this specification, it terminates the backend with diagnostic context.
 - Process death may lose pending mutations, commands, Questions, Reviewer work, partial Agent Turns, and ephemeral input restoration.
 - Kent does not reconstruct or replay work lost on process death.
 - Except for the Pending Work normal-admission limit defined here, accepting or retaining the 10,000th pending Session mutation for one Session terminates the backend as an invariant violation.
