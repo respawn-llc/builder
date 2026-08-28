@@ -195,7 +195,7 @@ func (l uiViewLayout) queuedVisibleMessages() ([]queuedPaneEntry, int) {
 }
 
 func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
-	pending := pendingWorkInputs(l.model.pendingWork)
+	pending := pendingWorkInputs(l.model.pendingWorkRefresh.collection)
 	entries := make([]queuedPaneEntry, 0, len(pending)+len(l.model.queued)+len(l.model.injectedQueue))
 	for _, item := range pending {
 		entries = append(entries, queuedPaneEntry{ongoingLiveInput: item})

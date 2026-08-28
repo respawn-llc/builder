@@ -352,7 +352,6 @@ func hydrationHasNoTerminalRows(hydration *clientui.TranscriptHydration) bool {
 func (c *ongoingTranscriptController) frameInput() ongoing.FrameInput {
 	frame := c.frameProvider()
 	c.liveReadModel.refreshPendingToolSection(frame.Size.Width, frame.SpinnerFrame, frame.Theme)
-	c.liveReadModel.refreshQueuedOrSteeredSection(frame.Size.Width)
 	c.liveReadModel.refreshPendingPromptSection(frame.Size.Width)
 	cursorSectionRow, cursorTargetsInput := ongoingFrameInputCursorSectionRow(frame)
 	sections := make([]ongoing.FrameSection, 0, len(c.liveReadModel.sectionOrder))

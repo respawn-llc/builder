@@ -289,7 +289,6 @@ func TestOngoingTranscriptControllerDrainsQueuedNonRowsInArrivalOrderWithOneRend
 		t.Fatalf("surface calls = %v, want %v", got, want)
 	}
 	wantSections := []ongoing.FrameSectionKind{
-		ongoing.FrameSectionQueuedOrSteered,
 		ongoing.FrameSectionPendingPrompt,
 	}
 	if got := surface.lastFrameSectionKinds(); !reflect.DeepEqual(got, wantSections) {

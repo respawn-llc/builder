@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
 
@@ -289,6 +292,36 @@ func (c *sessionRuntimeClient) RemovePendingWork(queueItemID string) bool {
 		return pendingWork.RemovePendingWork(ctx, serverapi.RuntimeRemovePendingWorkRequest{SessionID: c.sessionID, ItemID: itemID})
 	})
 	return err == nil
+}
+
+func (c *sessionRuntimeClient) ListPendingWork(sessionID runtimeids.SessionID) (runtimeinput.PendingWork, error) {
+	if c == nil {
+		return runtimeinput.PendingWork{}, errors.New("runtime client is required")
+	}
+	if sessionID.IsZero() {
+		return runtimeinput.PendingWork{}, errors.New("Pending Work Session ID is required")
+	}
+	if sessionID.String() != c.sessionID {
+		return runtimeinput.PendingWork{}, fmt.Errorf(
+			"Pending Work Session ID %q does not match runtime client Session %q",
+			sessionID.String(),
+			c.sessionID,
+		)
+	}
+	pendingWork, ok := c.controls.(apicontract.RuntimePendingWorkService)
+	if !ok {
+		return runtimeinput.PendingWork{}, errors.New("runtime Pending Work service is unavailable")
+	}
+	resp, err := runtimeControlCall(c, false, func(ctx context.Context) (serverapi.RuntimeListPendingWorkResponse, error) {
+		return pendingWork.ListPendingWork(ctx, serverapi.RuntimeListPendingWorkRequest{SessionID: sessionID.String()})
+	})
+	if err != nil {
+		return runtimeinput.PendingWork{}, err
+	}
+	if err := resp.Validate(); err != nil {
+		return runtimeinput.PendingWork{}, fmt.Errorf("validate Pending Work list response: %w", err)
+	}
+	return resp.PendingWork, nil
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {

@@ -14,6 +14,7 @@ import (
 
 type submitDoneMsg struct {
 	token         uint64
+	sessionID     runtimeids.SessionID
 	message       string
 	submittedText string
 	resultKind    *clientui.UserTurnResultKind
@@ -104,6 +105,7 @@ type runtimeControlDoneMsg struct {
 
 type injectedQueueCreateDoneMsg struct {
 	token                    uint64
+	sessionID                runtimeids.SessionID
 	localID                  string
 	item                     clientui.QueuedUserMessage
 	completed                bool
@@ -113,6 +115,7 @@ type injectedQueueCreateDoneMsg struct {
 
 type injectedQueueDiscardDoneMsg struct {
 	token     uint64
+	sessionID runtimeids.SessionID
 	localID   string
 	serverID  string
 	discarded bool
@@ -120,6 +123,7 @@ type injectedQueueDiscardDoneMsg struct {
 
 type compactDoneMsg struct {
 	requestID     runtimeids.CompactionRequestID
+	sessionID     runtimeids.SessionID
 	submittedText string
 	err           error
 }

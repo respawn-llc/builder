@@ -103,6 +103,7 @@ func (m *uiModel) worktreeTransitionCommand(transition runtimeinput.PendingWorkW
 	m.worktrees.switchToken++
 	switchToken := m.worktrees.switchToken
 	m.worktrees.switchPending = true
+	sessionID := m.pendingWorkRefresh.sessionID
 	return func() tea.Msg {
 		var ack *worktreepb.ScheduledAcknowledgement
 		var err error
@@ -114,7 +115,7 @@ func (m *uiModel) worktreeTransitionCommand(transition runtimeinput.PendingWorkW
 		default:
 			err = transition.Validate()
 		}
-		return worktreeSwitchDoneMsg{token: switchToken, transition: transition, ack: ack, err: err}
+		return worktreeSwitchDoneMsg{token: switchToken, sessionID: sessionID, transition: transition, ack: ack, err: err}
 	}
 }
 

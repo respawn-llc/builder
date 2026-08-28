@@ -37,7 +37,7 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageQueuedMessageState:
 		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
 	case clientui.TranscriptMessagePendingWorkChanged:
-		return nil
+		return m.requestPendingWorkRefresh(m.pendingWorkRefresh.sessionID)
 	case clientui.TranscriptMessagePendingWorkRestored:
 		restoration := message.Payload().(clientui.TranscriptPendingWorkRestored).Restoration
 		m.inputController().restoreServerOrderedTextBeforeComposer(restoration.CanonicalInput)
@@ -96,6 +96,7 @@ func (m *uiModel) applyTranscriptHydration(
 	admission runtimeTupleMergeResult,
 ) tea.Cmd {
 	var cmds []tea.Cmd
+	cmds = append(cmds, m.advancePendingWorkRefreshScope(hydration.SessionIdentity.SessionID))
 	cmds = append(cmds, m.applyTranscriptSessionIdentity(hydration.SessionIdentity))
 	m.applyTranscriptSessionStatus(hydration.SessionStatus)
 	cmds = append(cmds, m.applyTranscriptRuntimeReadModelUpdate(admission))

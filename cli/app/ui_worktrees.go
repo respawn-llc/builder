@@ -13,6 +13,7 @@ import (
 	"core/shared/clientui"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/worktreecontract"
 
@@ -162,6 +163,7 @@ type worktreeSetupEventMsg struct {
 
 type worktreeSwitchDoneMsg struct {
 	token      uint64
+	sessionID  runtimeids.SessionID
 	transition runtimeinput.PendingWorkWorktreeTransition
 	ack        *worktreepb.ScheduledAcknowledgement
 	err        error

@@ -181,9 +181,13 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		return handledUIFeatureUpdate(m, worktreeSetupEventCmd(msg.events))
 	case worktreeSwitchDoneMsg:
+		var pendingWorkRefreshCmd tea.Cmd
+		if msg.err == nil && msg.ack != nil {
+			pendingWorkRefreshCmd = m.requestPendingWorkRefresh(msg.sessionID)
+		}
 		if msg.token != m.worktrees.switchToken {
 			m.layout().syncViewport()
-			return handledUIFeatureUpdate(m, nil)
+			return handledUIFeatureUpdate(m, pendingWorkRefreshCmd)
 		}
 		m.worktrees.switchPending = false
 		followUp := tea.Cmd(nil)
@@ -210,7 +214,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 		followUp = m.takeQueuedWorktreeTransitionCmd()
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, followUp, m.reconcileSpinnerTicking(false)))
+		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, pendingWorkRefreshCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, followUp, m.reconcileSpinnerTicking(false)))
 	case worktreeDeleteDoneMsg:
 		if msg.token != m.worktrees.mutationToken {
 			m.layout().syncViewport()
