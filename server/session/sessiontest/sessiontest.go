@@ -16,6 +16,7 @@ import (
 	"core/server/session"
 
 	"core/internal/testharness/recordstore"
+	"core/shared/textutil"
 )
 
 // WriteEventLogHeaderFixture replaces a test session's event artifact with a
@@ -204,6 +205,38 @@ func CollectRecords(store *session.Store) ([]session.EventRecord, error) {
 // AgentRole constructs a present continuation agent-role fixture. Test-only.
 func AgentRole(value string) *string {
 	return &value
+}
+
+// CompleteChatSettingsOverrides returns an independent complete settings
+// fixture, preserving present values and filling the fields omitted by a fresh
+// Session.
+func CompleteChatSettingsOverrides(existing *session.ChatSettingsOverrides) *session.ChatSettingsOverrides {
+	settings := &session.ChatSettingsOverrides{
+		Supervisor:     textutil.Value("off"),
+		Thinking:       textutil.Value("medium"),
+		Fast:           textutil.Value(false),
+		Questions:      textutil.Value(true),
+		AutoCompaction: textutil.Value(true),
+	}
+	if existing == nil {
+		return settings
+	}
+	if existing.Supervisor != nil {
+		settings.Supervisor = textutil.Pointer(existing.Supervisor)
+	}
+	if existing.Thinking != nil {
+		settings.Thinking = textutil.Pointer(existing.Thinking)
+	}
+	if existing.Fast != nil {
+		settings.Fast = textutil.Pointer(existing.Fast)
+	}
+	if existing.Questions != nil {
+		settings.Questions = textutil.Pointer(existing.Questions)
+	}
+	if existing.AutoCompaction != nil {
+		settings.AutoCompaction = textutil.Pointer(existing.AutoCompaction)
+	}
+	return settings
 }
 
 // Snapshot mirrors the durable session state a test commonly asserts against:

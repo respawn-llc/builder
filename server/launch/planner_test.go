@@ -33,27 +33,8 @@ func commitChatSettingsTestState(t *testing.T, store *session.Store, update func
 	if err != nil {
 		return err
 	}
-	settings := session.ChatSettingsOverrides{}
-	if state.Settings != nil {
-		settings = *state.Settings
-	}
-	if settings.Supervisor == nil {
-		settings.Supervisor = textutil.Value("off")
-	}
-	if settings.Thinking == nil {
-		settings.Thinking = textutil.Value("medium")
-	}
-	if settings.Fast == nil {
-		settings.Fast = textutil.Value(false)
-	}
-	if settings.Questions == nil {
-		settings.Questions = textutil.Value(true)
-	}
-	if settings.AutoCompaction == nil {
-		settings.AutoCompaction = textutil.Value(true)
-	}
-	update(&settings)
-	state.Settings = &settings
+	state.Settings = sessiontest.CompleteChatSettingsOverrides(state.Settings)
+	update(state.Settings)
 	_, err = store.CommitChatSettingsState(state)
 	return err
 }
