@@ -355,20 +355,6 @@ func (r ChatSettingsMutationResponse) ValidateForTarget(target ChatSettingsReadT
 	}
 	return r.Context.Validate()
 }
-func (r *ChatSettingsMutationResponse) UnmarshalJSON(data []byte) error {
-	type wire ChatSettingsMutationResponse
-	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	response := ChatSettingsMutationResponse(decoded)
-	if err := response.Result.Validate(); err != nil {
-		return err
-	}
-	*r = response
-	return nil
-}
-
 func (r ChatSettingsReadResponse) ValidateForTarget(target ChatSettingsReadTarget) error {
 	if err := target.Validate(); err != nil {
 		return fmt.Errorf("target: %w", err)

@@ -73,7 +73,6 @@ func ChatSettingsStateFromCompleteSettings(agent string, settings ChatSettings) 
 type ChatSettingsCommitResult struct {
 	CommitReceipt
 	Changed bool
-	State   ChatSettingsState
 }
 
 func ProjectChatSettingsState(meta Meta, target ChatSettingsState) (Meta, bool, error) {
@@ -137,19 +136,12 @@ func (s *Store) CommitChatSettingsState(target ChatSettingsState) (ChatSettingsC
 	s.mu.Lock()
 	projected, changed, err := ProjectChatSettingsState(s.meta, target)
 	if err != nil || !changed {
-		state, stateErr := ChatSettingsStateFromMeta(s.meta)
 		s.mu.Unlock()
-		if err != nil {
-			return ChatSettingsCommitResult{State: state}, err
-		}
-		if stateErr != nil {
-			return ChatSettingsCommitResult{}, stateErr
-		}
-		return ChatSettingsCommitResult{State: state}, nil
+		return ChatSettingsCommitResult{}, err
 	}
 	if err := s.requireMetadataPersistenceLocked(); err != nil {
 		s.mu.Unlock()
-		return ChatSettingsCommitResult{State: target}, err
+		return ChatSettingsCommitResult{}, err
 	}
 	checkpoint := s.metadataMutationCheckpointLocked()
 	s.meta.ChatSettings = projected.ChatSettings
@@ -160,11 +152,7 @@ func (s *Store) CommitChatSettingsState(target ChatSettingsState) (ChatSettingsC
 	if !receipt.Committed {
 		changed = false
 	}
-	state, stateErr := ChatSettingsStateFromMeta(projected)
-	if stateErr != nil {
-		return ChatSettingsCommitResult{CommitReceipt: receipt, Changed: changed}, errors.Join(err, stateErr)
-	}
-	return ChatSettingsCommitResult{CommitReceipt: receipt, Changed: changed, State: state}, errors.Join(err, stateErr)
+	return ChatSettingsCommitResult{CommitReceipt: receipt, Changed: changed}, err
 }
 
 func NormalizeChatSettingsOverrides(overrides *ChatSettingsOverrides) (*ChatSettingsOverrides, error) {

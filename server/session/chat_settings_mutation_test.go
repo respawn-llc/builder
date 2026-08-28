@@ -76,7 +76,6 @@ func TestMutateChatSettingsUpdatesOneControlWithoutChangingTheAggregate(t *testi
 			if !result.Changed || !result.Committed || !observer.called {
 				t.Fatalf("mutation result = %+v, observer called=%v", result, observer.called)
 			}
-			assertChatSettingsState(t, result.State, "worker", test.want)
 			assertChatSettingsStateFromMeta(t, store.Meta(), "worker", test.want)
 			assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "worker", test.want)
 		})
@@ -109,7 +108,6 @@ func TestMutateChatSettingsSelectsDifferentAgentWithCompleteBaselineAtomically(t
 	if !result.Changed || !result.Committed || !observer.called {
 		t.Fatalf("mutation result = %+v, observer called=%v", result, observer.called)
 	}
-	assertChatSettingsState(t, result.State, "reviewer", want)
 	assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "reviewer", want)
 	for name, meta := range map[string]Meta{
 		"store":    store.Meta(),
@@ -158,7 +156,6 @@ func TestMutateChatSettingsRepairsUnavailableUnlockedAgentToDefaultBaseline(t *t
 		t.Fatalf("repair unavailable Agent: %v", err)
 	}
 	want := completeChatSettingsOverrides("edits", "provider-default", false, true, true)
-	assertChatSettingsState(t, result.State, "default", want)
 	assertChatSettingsStateFromMeta(t, store.Meta(), "default", want)
 }
 
@@ -200,7 +197,6 @@ func TestMutateChatSettingsObserverFailurePublishesOnlyCompleteAggregate(t *test
 		t.Fatalf("observer failure result = %+v, err=%v", result, err)
 	}
 	want := completeChatSettingsOverrides("all", "provider-specific", true, false, false)
-	assertChatSettingsState(t, result.State, "reviewer", want)
 	assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "reviewer", want)
 	assertChatSettingsStateFromMeta(t, store.Meta(), "reviewer", want)
 }

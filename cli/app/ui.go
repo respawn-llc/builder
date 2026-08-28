@@ -49,13 +49,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 			enqueueRuntimeReconnectWarning(runtimeReconnectWarning, text, visibility)
 		})
 	}
-	if cached, ok := m.runtimeClient().(interface {
-		CachedMainView() (clientui.RuntimeMainView, bool)
-	}); ok {
-		if mainView, available := cached.CachedMainView(); available {
-			m.applyRuntimeMainViewState(mainView)
-		}
-	}
 	if gitStartupCmd := m.statusLineGitRefreshCmd(); gitStartupCmd != nil {
 		m.statusGitBackgroundInFlight = true
 		m.startupCmds = append(m.startupCmds, gitStartupCmd)

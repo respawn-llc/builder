@@ -184,9 +184,6 @@ func (o *WorkspaceChatDraftOwner) MutateWorkspaceChatSettings(
 	if id, err = o.workspaceID(id); err != nil {
 		return PreparedChatSettingsOperationResult{}, false, err
 	}
-	if resolve == nil {
-		return PreparedChatSettingsOperationResult{}, false, errors.New("workspace Chat draft resolver is required")
-	}
 	lane, err := o.lanes.Acquire(ctx, id)
 	if err != nil {
 		return PreparedChatSettingsOperationResult{}, false, err

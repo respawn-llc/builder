@@ -32,9 +32,6 @@ func ProjectPreparedChatSettingsOperation(
 	input PreparedChatSettingsOperationInput,
 	operation serverapi.ChatSettingsMutationOperation,
 ) (PreparedChatSettingsOperationResult, error) {
-	if err := operation.Validate(); err != nil {
-		return PreparedChatSettingsOperationResult{}, err
-	}
 	switch operation.Kind {
 	case serverapi.ChatSettingsMutationAgent:
 		agent, ok := session.NormalizeChatAgent(*operation.Role)
@@ -50,16 +47,9 @@ func ProjectPreparedChatSettingsOperation(
 		operation.Value = normalized.Supervisor
 	case serverapi.ChatSettingsMutationThinking:
 		value := strings.TrimSpace(*operation.Value)
-		if value == "" {
-			return PreparedChatSettingsOperationResult{}, errors.New("Chat settings Thinking is required")
-		}
 		operation.Value = &value
 	}
-	rawAgent, ok := session.NormalizeChatAgent(input.Raw.Agent)
-	if !ok {
-		return PreparedChatSettingsOperationResult{}, fmt.Errorf("Chat Agent %q is invalid", input.Raw.Agent)
-	}
-	input.Raw.Agent = rawAgent
+	rawAgent := input.Raw.Agent
 	defaultEntry, ok := input.Catalog.Lookup(config.DefaultSubagentRole)
 	if !ok {
 		return PreparedChatSettingsOperationResult{}, errors.New("default Chat Agent baseline is missing")
@@ -81,12 +71,11 @@ func ProjectPreparedChatSettingsOperation(
 		baseAgent = config.DefaultSubagentRole
 		baseSettings = defaultEntry.Settings.Baseline
 		baseSettings.Questions = input.PersistedQuestions
-		baseSettings.Thinking = defaultEntry.Settings.Baseline.Thinking
 	} else if selectedAvailable {
 		baseSettings.Questions = input.PersistedQuestions
-		if strings.TrimSpace(input.PersistedThinking) != "" &&
-			slices.Contains(selectedEntry.Settings.SupportedThinkingValues, strings.TrimSpace(input.PersistedThinking)) {
-			baseSettings.Thinking = strings.TrimSpace(input.PersistedThinking)
+		persistedThinking := strings.TrimSpace(input.PersistedThinking)
+		if persistedThinking != "" && slices.Contains(selectedEntry.Settings.SupportedThinkingValues, persistedThinking) {
+			baseSettings.Thinking = persistedThinking
 		}
 	}
 	base := session.ChatSettingsState{

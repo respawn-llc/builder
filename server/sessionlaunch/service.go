@@ -278,12 +278,6 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 	ctx context.Context,
 	store *session.Store,
 ) (PreparedChatSettingsOperationInput, error) {
-	if s == nil || s.planner.PersistedSessions == nil {
-		return PreparedChatSettingsOperationInput{}, errors.New("Session launch planner is required")
-	}
-	if store == nil {
-		return PreparedChatSettingsOperationInput{}, errors.New("Session store is required")
-	}
 	input, _, err := s.prepareMaterializedChatSettings(ctx, store.Meta())
 	return input, err
 }
