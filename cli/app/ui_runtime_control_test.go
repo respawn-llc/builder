@@ -116,13 +116,8 @@ func (f *runtimeControlFakeClient) ReadChatSettings() (serverapi.ChatSettings, e
 	return serverapi.ChatSettings{}, f.err
 }
 func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
-	if operation.Value != nil {
-		f.status.ThinkingLevel = *operation.Value
-	}
-	return serverapi.ChatSettingsMutationResponse{
-		Result:   serverapi.NewChatSettingsMutationApplied(true),
-		Settings: serverapi.ChatSettings{SelectedAgent: serverapi.ChatSettingsAgentSummary{Thinking: f.status.ThinkingLevel}},
-	}, f.err
+	f.status.ThinkingLevel = *operation.Value
+	return serverapi.ChatSettingsMutationResponse{Result: serverapi.NewChatSettingsMutationApplied(true), Settings: serverapi.ChatSettings{SelectedAgent: serverapi.ChatSettingsAgentSummary{Thinking: f.status.ThinkingLevel}}}, f.err
 }
 func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	f.showGoalCalls++
