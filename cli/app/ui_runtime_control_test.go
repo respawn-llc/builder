@@ -419,10 +419,10 @@ func TestThinkingQueryUsesStatusOnly(t *testing.T) {
 	}
 }
 
-func TestThinkingSetWithoutRuntimeUsesStatusOnly(t *testing.T) {
+func TestThinkingSetUsesChatSettingsService(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
-	m := newProjectedStaticUIModel()
+	m := newProjectedTestUIModel(&runtimeControlFakeClient{})
 
 	next, cmd := m.inputController().handleThinkingLevelCommand("low")
 	updated := next.(*uiModel)
