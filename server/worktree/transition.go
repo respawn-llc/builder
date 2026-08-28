@@ -116,11 +116,7 @@ func (s *Service) runWorktreeTransition(
 			outcome := worktreeTransitionOutcome(request, result.Err)
 			if result.Err != nil && syncFailure != nil {
 				if syncErr := syncFailure(outcome); syncErr != nil {
-					if result.Certainty == runtime.WorktreeApplicationCommitted {
-						result = runtime.CommittedWorktreeApplication(errors.Join(result.Err, syncErr))
-					} else {
-						result = runtime.UnappliedWorktreeApplication(errors.Join(result.Err, syncErr))
-					}
+					result = result.WithError(errors.Join(result.Err, syncErr))
 				}
 			}
 			s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
@@ -160,7 +156,7 @@ func (s *Service) executeEnterWorktree(
 ) runtime.WorktreeApplicationResult {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
 	if err != nil {
-		return runtime.UnappliedWorktreeApplication(err)
+		return worktreeTransitionFailure(err)
 	}
 	defer release()
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
@@ -169,11 +165,11 @@ func (s *Service) executeEnterWorktree(
 	}
 	match, err := resolveTopologySelector(topology, selector)
 	if err != nil {
-		return runtime.UnappliedWorktreeApplication(err)
+		return worktreeTransitionFailure(err)
 	}
 	entry := match.entry
 	if entry.Variant == serverapi.WorktreeTopologyVariantMissing {
-		return runtime.UnappliedWorktreeApplication(&serverapi.WorktreeSelectorError{
+		return runtime.UnappliedUserCorrectableWorktreeApplication(&serverapi.WorktreeSelectorError{
 			Kind:  serverapi.WorktreeSelectorErrorKindUnavailable,
 			Input: selector,
 		})
@@ -184,11 +180,11 @@ func (s *Service) executeEnterWorktree(
 		}
 		previous, err := s.currentTransitionWorktree(applyCtx, topology, workspaceCtx.target)
 		if err != nil {
-			return runtime.UnappliedWorktreeApplication(err)
+			return worktreeTransitionFailure(err)
 		}
 		next, err := s.enterTransitionWorktree(applyCtx, workspaceCtx, entry)
 		if err != nil {
-			return runtime.UnappliedWorktreeApplication(err)
+			return worktreeTransitionFailure(err)
 		}
 		_, result := s.switchSessionTargetWithSync(applyCtx, workspaceCtx, previous, next, authority, sync)
 		return result
@@ -207,7 +203,7 @@ func (s *Service) executeLeaveWorktree(
 ) runtime.WorktreeApplicationResult {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
 	if err != nil {
-		return runtime.UnappliedWorktreeApplication(err)
+		return worktreeTransitionFailure(err)
 	}
 	defer release()
 	if workspaceCtx.target.Worktree == nil {
@@ -219,11 +215,11 @@ func (s *Service) executeLeaveWorktree(
 	}
 	previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
 	if err != nil {
-		return runtime.UnappliedWorktreeApplication(err)
+		return worktreeTransitionFailure(err)
 	}
 	main, err := mainTransitionWorktree(topology, workspaceCtx.workspaceRoot)
 	if err != nil {
-		return runtime.UnappliedWorktreeApplication(err)
+		return worktreeTransitionFailure(err)
 	}
 	apply := func(applyCtx context.Context) runtime.WorktreeApplicationResult {
 		_, result := s.switchSessionTargetWithSync(applyCtx, workspaceCtx, previous, main, authority, sync)
@@ -233,6 +229,19 @@ func (s *Service) executeLeaveWorktree(
 		return authority(apply)
 	}
 	return apply(ctx)
+}
+
+func worktreeTransitionFailure(err error) runtime.WorktreeApplicationResult {
+	var selector *serverapi.WorktreeSelectorError
+	if errors.As(err, &selector) ||
+		errors.Is(err, serverapi.ErrWorktreeNotFound) ||
+		errors.Is(err, serverapi.ErrWorktreeBlocked) ||
+		errors.Is(err, serverapi.ErrWorkspaceNotRegistered) ||
+		errors.Is(err, session.ErrSessionNotFound) ||
+		errors.Is(err, serverapi.ErrSessionWorktreeDeleting) {
+		return runtime.UnappliedUserCorrectableWorktreeApplication(err)
+	}
+	return runtime.UnappliedWorktreeApplication(err)
 }
 
 func (s *Service) enterTransitionWorktree(ctx context.Context, workspaceCtx sessionWorkspaceContext, entry serverapi.WorktreeTopologyEntry) (syncedWorktree, error) {
@@ -368,7 +377,7 @@ func mainTransitionWorktree(topology []serverapi.WorktreeTopologyEntry, workspac
 			}
 		}
 	}
-	return syncedWorktree{}, fmt.Errorf("main worktree not found")
+	return syncedWorktree{}, fmt.Errorf("main worktree not found: %w", serverapi.ErrWorktreeNotFound)
 }
 
 func gitWorktreeFromFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error) {

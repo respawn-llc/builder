@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/transcript"
 )
 
@@ -175,6 +176,11 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(TranscriptToolAbort{StepID: stepID, ToolCallID: "call-1", Reason: ToolAbortCanceled}),
 		NewTranscriptEvent(TranscriptUserMessageFlushed{StepID: &stepID}),
 		NewTranscriptEvent(TranscriptQueuedMessageState{QueueItemID: transcriptTestQueueItemID(t), Status: QueuedUserMessageAccepted, Text: &text}),
+		NewTranscriptEvent(TranscriptPendingWorkRestored{Restoration: runtimeinput.PendingWorkTechnicalRestoration{
+			ItemID:         transcriptTestQueueItemID(t),
+			Kind:           runtimeinput.PendingWorkItemKindManualCompaction,
+			CanonicalInput: "/compact",
+		}}),
 		NewTranscriptEvent(TranscriptHumanInputInterrupted{Items: []TranscriptInterruptedHumanInputItem{{
 			QueueItemID: transcriptTestQueueItemID(t),
 			Text:        "restore verbatim",

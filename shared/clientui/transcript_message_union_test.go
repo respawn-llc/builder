@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/transcript"
 )
 
@@ -99,6 +100,13 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			QueueItemID: transcriptTestQueueItemID(t),
 			Status:      QueuedUserMessageAccepted, Text: &queueText,
 		}), TranscriptMessageQueuedMessageState},
+		{"pending work technical restoration", NewTranscriptEvent(TranscriptPendingWorkRestored{
+			Restoration: runtimeinput.PendingWorkTechnicalRestoration{
+				ItemID:         transcriptTestQueueItemID(t),
+				Kind:           runtimeinput.PendingWorkItemKindManualCompaction,
+				CanonicalInput: "/compact",
+			},
+		}), TranscriptMessagePendingWorkRestored},
 		{"interrupted human input", NewTranscriptEvent(TranscriptHumanInputInterrupted{
 			Items: []TranscriptInterruptedHumanInputItem{{
 				QueueItemID: transcriptTestQueueItemID(t),

@@ -180,7 +180,12 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 			ActiveKindRuntimeMaintenance,
 			reservation,
 			func(stepCtx context.Context, _ string) error {
-				return worktreeApplicationError(fn(stepCtx))
+				result := fn(stepCtx)
+				runErr := worktreeApplicationError(result)
+				if result.RequiresTechnicalRestoration() {
+					runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
+				}
+				return runErr
 			},
 		)
 		fatal, abort := resultGroupFatalFromError(runErr)

@@ -49,6 +49,7 @@ const (
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
 	EventPendingWorkReplaced        EventKind = "pending_work_replaced"
+	EventPendingWorkRestored        EventKind = "pending_work_restored"
 	EventHumanInputInterrupted      EventKind = "human_input_interrupted"
 	EventLiveRunFinished            EventKind = "live_run_finished"
 
@@ -145,6 +146,7 @@ type Event struct {
 	GoalStatus                   *GoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
 	PendingWork                  *runtimeinput.PendingWork
+	PendingWorkRestoration       *runtimeinput.PendingWorkTechnicalRestoration
 	HumanInputInterrupted        *HumanInputInterruptedEvent
 	LiveRunResult                *LiveRunResult
 }

@@ -211,6 +211,15 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(
 			clientui.TranscriptPendingWorkReplaced{PendingWork: *evt.PendingWork},
 		)}
+	case runtime.EventPendingWorkRestored:
+		if evt.PendingWorkRestoration == nil {
+			return nil
+		}
+		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(
+			clientui.TranscriptPendingWorkRestored{
+				Restoration: *evt.PendingWorkRestoration,
+			},
+		)}
 	case runtime.EventHumanInputInterrupted:
 		return transcriptHumanInputInterruptedMessages(evt)
 	case runtime.EventRunStateChanged:

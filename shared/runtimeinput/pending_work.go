@@ -222,6 +222,12 @@ type PendingWorkRestoration struct {
 	CanonicalInput string              `json:"canonical_input"`
 }
 
+type PendingWorkTechnicalRestoration struct {
+	ItemID         runtimeids.QueueItemID `json:"item_id"`
+	Kind           PendingWorkItemKind    `json:"kind"`
+	CanonicalInput string                 `json:"canonical_input"`
+}
+
 func (i PendingWorkItem) Restoration() (PendingWorkRestoration, error) {
 	if err := i.Validate(); err != nil {
 		return PendingWorkRestoration{}, err
@@ -242,6 +248,28 @@ func (r PendingWorkRestoration) Validate() error {
 		return errors.New("Pending Work restoration canonical input is required")
 	}
 	return nil
+}
+
+func (i PendingWorkItem) TechnicalRestoration() (PendingWorkTechnicalRestoration, error) {
+	restoration, err := i.Restoration()
+	if err != nil {
+		return PendingWorkTechnicalRestoration{}, err
+	}
+	return PendingWorkTechnicalRestoration{
+		ItemID:         i.ID,
+		Kind:           restoration.Kind,
+		CanonicalInput: restoration.CanonicalInput,
+	}, nil
+}
+
+func (r PendingWorkTechnicalRestoration) Validate() error {
+	if r.ItemID.IsZero() {
+		return errors.New("Pending Work technical restoration item id is required")
+	}
+	return (PendingWorkRestoration{
+		Kind:           r.Kind,
+		CanonicalInput: r.CanonicalInput,
+	}).Validate()
 }
 
 func normalizePendingWorkArgument(value string) string {

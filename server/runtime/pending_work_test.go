@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/llm"
 	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -513,6 +514,267 @@ func TestPendingOperationalWorkLeavesProjectionBeforeDomainExecution(t *testing.
 		}
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("manual compaction domain execution did not start")
+	}
+}
+
+func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
+	technicalFailure := errors.New("technical application failure")
+	tests := []struct {
+		name            string
+		run             func(*testing.T, func(Event), func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string)
+		wantRestoration bool
+		wantAbort       bool
+	}{
+		{
+			name: "Worktree definitely unapplied technical failure",
+			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+				t.Helper()
+				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
+				operationID := serverapi.NewWorktreeOperationID()
+				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+				})
+				if _, err := engine.ScheduleWorktreeTransition(
+					t.Context(),
+					operationID,
+					runtimeinput.PendingWorkWorktreeTransition{
+						Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+						Selector:   textutil.Value("feature/technical"),
+					},
+					func(context.Context) WorktreeApplicationResult {
+						return UnappliedWorktreeApplication(technicalFailure)
+					},
+				); err != nil {
+					t.Fatalf("schedule Worktree transition: %v", err)
+				}
+				waitEngineLifecycleTasks(t, engine)
+				return itemID, runtimeinput.PendingWorkItemKindWorktreeTransition, "/wt switch feature/technical"
+			},
+			wantRestoration: true,
+		},
+		{
+			name: "manual compaction definitely unapplied technical failure",
+			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+				t.Helper()
+				client := &fakeCompactionClient{compactionErrors: []error{technicalFailure}}
+				engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+					Model:          "gpt-5",
+					CompactionMode: "native",
+					OnEvent:        observe,
+				})
+				if err := steerTestActiveStep(
+					engine,
+					"seed-restoration",
+					steerMessagesWithPersistenceIntent(
+						steeringPriorityNormal,
+						steeringMessageEventNone,
+						true,
+						[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}},
+					),
+				); err != nil {
+					t.Fatalf("seed compaction input: %v", err)
+				}
+				requestID := runtimeids.NewCompactionRequestID()
+				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+					return serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
+				})
+				guidance := "preserve facts"
+				if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
+					t.Context(),
+					requestID,
+					runtimeinput.ManualCompactionAdmission{Guidance: &guidance},
+					nil,
+				); err != nil {
+					t.Fatalf("schedule manual compaction: %v", err)
+				}
+				waitEngineLifecycleTasks(t, engine)
+				return itemID, runtimeinput.PendingWorkItemKindManualCompaction, "/compact preserve facts"
+			},
+			wantRestoration: true,
+		},
+		{
+			name: "user-correctable Worktree failure",
+			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+				t.Helper()
+				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
+				operationID := serverapi.NewWorktreeOperationID()
+				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+				})
+				if _, err := engine.ScheduleWorktreeTransition(
+					t.Context(),
+					operationID,
+					runtimeinput.PendingWorkWorktreeTransition{
+						Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+						Selector:   textutil.Value("missing"),
+					},
+					func(context.Context) WorktreeApplicationResult {
+						return UnappliedUserCorrectableWorktreeApplication(&serverapi.WorktreeSelectorError{
+							Kind:  serverapi.WorktreeSelectorErrorKindNotFound,
+							Input: "missing",
+						})
+					},
+				); err != nil {
+					t.Fatalf("schedule Worktree transition: %v", err)
+				}
+				waitEngineLifecycleTasks(t, engine)
+				return itemID, runtimeinput.PendingWorkItemKindWorktreeTransition, "/wt switch missing"
+			},
+		},
+		{
+			name: "user-correctable manual compaction failure",
+			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+				t.Helper()
+				engine := pendingWorkTestEngine(t, Config{
+					Model:          "gpt-5",
+					CompactionMode: "local",
+					OnEvent:        observe,
+				})
+				releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+				requestID := runtimeids.NewCompactionRequestID()
+				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+					return serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
+				})
+				if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
+					t.Context(),
+					requestID,
+					runtimeinput.ManualCompactionAdmission{},
+					nil,
+				); err != nil {
+					t.Fatalf("schedule manual compaction: %v", err)
+				}
+				engine.compactionRuntimeState().SetManualCompactionEligible(false)
+				releaseMaintenance()
+				waitEngineLifecycleTasks(t, engine)
+				return itemID, runtimeinput.PendingWorkItemKindManualCompaction, "/compact"
+			},
+		},
+		{
+			name: "committed Worktree failure",
+			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+				t.Helper()
+				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
+				operationID := serverapi.NewWorktreeOperationID()
+				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+				})
+				if _, err := engine.ScheduleWorktreeTransition(
+					t.Context(),
+					operationID,
+					runtimeinput.PendingWorkWorktreeTransition{
+						Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+					},
+					func(context.Context) WorktreeApplicationResult {
+						return CommittedWorktreeApplication(technicalFailure)
+					},
+				); err != nil {
+					t.Fatalf("schedule Worktree transition: %v", err)
+				}
+				waitEngineLifecycleTasks(t, engine)
+				return itemID, runtimeinput.PendingWorkItemKindWorktreeTransition, "/wt leave"
+			},
+		},
+		{
+			name: "indeterminate Worktree failure",
+			run: func(t *testing.T, observe func(Event), abort func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+				t.Helper()
+				engine := pendingWorkTestEngine(t, Config{
+					Model:                 "gpt-5",
+					OnEvent:               observe,
+					LifecycleRuntimeAbort: abort,
+				})
+				operationID := serverapi.NewWorktreeOperationID()
+				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+				})
+				if _, err := engine.ScheduleWorktreeTransition(
+					t.Context(),
+					operationID,
+					runtimeinput.PendingWorkWorktreeTransition{
+						Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+					},
+					func(context.Context) WorktreeApplicationResult {
+						return IndeterminateWorktreeApplication(technicalFailure)
+					},
+				); err != nil {
+					t.Fatalf("schedule Worktree transition: %v", err)
+				}
+				waitEngineLifecycleTasks(t, engine)
+				return itemID, runtimeinput.PendingWorkItemKindWorktreeTransition, "/wt leave"
+			},
+			wantAbort: true,
+		},
+		{
+			name: "explicit discard",
+			run: func(t *testing.T, observe func(Event), _ func() error) (runtimeids.QueueItemID, runtimeinput.PendingWorkItemKind, string) {
+				t.Helper()
+				engine := pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: observe})
+				releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+				operationID := serverapi.NewWorktreeOperationID()
+				itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+					return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+				})
+				if _, err := engine.ScheduleWorktreeTransition(
+					t.Context(),
+					operationID,
+					runtimeinput.PendingWorkWorktreeTransition{
+						Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+					},
+					func(context.Context) WorktreeApplicationResult {
+						return UnappliedWorktreeApplication(technicalFailure)
+					},
+				); err != nil {
+					t.Fatalf("schedule Worktree transition: %v", err)
+				}
+				if _, err := engine.RemovePendingWork(t.Context(), itemID); err != nil {
+					t.Fatalf("discard Worktree transition: %v", err)
+				}
+				releaseMaintenance()
+				waitEngineLifecycleTasks(t, engine)
+				return itemID, runtimeinput.PendingWorkItemKindWorktreeTransition, "/wt leave"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var restorations []runtimeinput.PendingWorkTechnicalRestoration
+			aborts := 0
+			observe := func(event Event) {
+				if event.Kind != EventPendingWorkRestored || event.PendingWorkRestoration == nil {
+					return
+				}
+				mu.Lock()
+				restorations = append(restorations, *event.PendingWorkRestoration)
+				mu.Unlock()
+			}
+			itemID, kind, canonical := test.run(t, observe, func() error {
+				mu.Lock()
+				aborts++
+				mu.Unlock()
+				return nil
+			})
+
+			mu.Lock()
+			gotRestorations := append([]runtimeinput.PendingWorkTechnicalRestoration(nil), restorations...)
+			gotAborts := aborts
+			mu.Unlock()
+			if test.wantRestoration {
+				if len(gotRestorations) != 1 {
+					t.Fatalf("technical restorations = %+v, want one", gotRestorations)
+				}
+				got := gotRestorations[0]
+				if got.ItemID != itemID || got.Kind != kind || got.CanonicalInput != canonical {
+					t.Fatalf("technical restoration = %+v, want id=%s kind=%s canonical=%q", got, itemID, kind, canonical)
+				}
+			} else if len(gotRestorations) != 0 {
+				t.Fatalf("technical restorations = %+v, want none", gotRestorations)
+			}
+			if gotAborts != 0 != test.wantAbort {
+				t.Fatalf("runtime abort count = %d, want abort=%v", gotAborts, test.wantAbort)
+			}
+		})
 	}
 }
 

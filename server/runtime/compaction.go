@@ -62,6 +62,24 @@ type compactionResult struct {
 	provider          string
 }
 
+type manualCompactionSelectionFailure struct {
+	cause error
+}
+
+func (e *manualCompactionSelectionFailure) Error() string {
+	if e == nil || e.cause == nil {
+		return "manual compaction selection failed"
+	}
+	return e.cause.Error()
+}
+
+func (e *manualCompactionSelectionFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
 type defaultContextCompactor struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
@@ -285,7 +303,7 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 		defer stopLifecycleCancellation()
 		defer cancelPending(context.Canceled)
 		defer c.steps.ReleaseReservation(reservation)
-		_, runErr := c.compactContext(
+		receipt, runErr := c.compactContext(
 			pendingCtx,
 			compactionModeManual,
 			&requestID,
@@ -296,6 +314,13 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 			nil,
 			true,
 		)
+		var selectionFailure *manualCompactionSelectionFailure
+		if runErr != nil &&
+			!receipt.Committed &&
+			!errors.As(runErr, &selectionFailure) &&
+			!errors.Is(runErr, errPendingOperationalWorkRemoved) {
+			runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
+		}
 		fatal, abort := resultGroupFatalFromError(runErr)
 		if abort {
 			return fatal
@@ -422,7 +447,7 @@ func (c *defaultContextCompactor) compactContext(
 		}
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			if requireEligibility {
-				return c.reportManualCompactionSelectionFailure(stepID, requestID, err)
+				return c.reportManualCompactionTechnicalFailure(stepID, requestID, err)
 			}
 			return err
 		}
@@ -437,6 +462,18 @@ func (c *defaultContextCompactor) compactContext(
 }
 
 func (c *defaultContextCompactor) reportManualCompactionSelectionFailure(
+	stepID string,
+	requestID *runtimeids.CompactionRequestID,
+	cause error,
+) error {
+	reported := c.reportManualCompactionTechnicalFailure(stepID, requestID, cause)
+	if reported == nil {
+		return nil
+	}
+	return &manualCompactionSelectionFailure{cause: reported}
+}
+
+func (c *defaultContextCompactor) reportManualCompactionTechnicalFailure(
 	stepID string,
 	requestID *runtimeids.CompactionRequestID,
 	cause error,

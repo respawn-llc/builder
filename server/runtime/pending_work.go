@@ -152,6 +152,17 @@ func (e *Engine) publishPendingWork(snapshot runtimeinput.PendingWork) {
 	}
 }
 
+func (e *Engine) publishPendingWorkTechnicalRestoration(item runtimeinput.PendingWorkItem) error {
+	restoration, err := item.TechnicalRestoration()
+	if err != nil {
+		return err
+	}
+	return e.emitRaw(Event{
+		Kind:                   EventPendingWorkRestored,
+		PendingWorkRestoration: &restoration,
+	})
+}
+
 func (e *Engine) RemovePendingWork(ctx context.Context, id runtimeids.QueueItemID) (runtimeinput.PendingWorkRestoration, error) {
 	if id.IsZero() {
 		return runtimeinput.PendingWorkRestoration{}, &runtimeinput.PendingWorkRemovalError{ItemID: id}

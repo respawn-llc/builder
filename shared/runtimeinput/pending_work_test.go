@@ -117,6 +117,22 @@ func TestPendingWorkRestorationUsesServerCanonicalInput(t *testing.T) {
 	if err := restoration.Validate(); err != nil {
 		t.Fatalf("Validate restoration: %v", err)
 	}
+	technical, err := item.TechnicalRestoration()
+	if err != nil {
+		t.Fatalf("TechnicalRestoration: %v", err)
+	}
+	if technical.ItemID != item.ID ||
+		technical.Kind != item.Kind ||
+		technical.CanonicalInput != item.CanonicalInput {
+		t.Fatalf("technical restoration = %#v", technical)
+	}
+	if err := technical.Validate(); err != nil {
+		t.Fatalf("Validate technical restoration: %v", err)
+	}
+	technical.ItemID = runtimeids.QueueItemID{}
+	if err := technical.Validate(); err == nil {
+		t.Fatal("technical restoration accepted an absent item id")
+	}
 }
 
 func pendingWorkTestMessage(lane PendingWorkLane, text string) PendingWorkItem {

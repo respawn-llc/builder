@@ -138,6 +138,26 @@ func TestTranscriptCompactionStatusPreservesInitiatingRequestIdentity(t *testing
 	}
 }
 
+func TestTranscriptPendingWorkTechnicalRestorationProjection(t *testing.T) {
+	itemID := runtimeids.NewQueueItemID()
+	restoration := runtimeinput.PendingWorkTechnicalRestoration{
+		ItemID:         itemID,
+		Kind:           runtimeinput.PendingWorkItemKindWorktreeTransition,
+		CanonicalInput: "/wt leave",
+	}
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                   runtime.EventPendingWorkRestored,
+		PendingWorkRestoration: &restoration,
+	})
+	if len(messages) != 1 {
+		t.Fatalf("technical restoration messages = %+v, want one", messages)
+	}
+	projected := transcriptPayload[clientui.TranscriptPendingWorkRestored](t, messages[0])
+	if projected.Restoration != restoration {
+		t.Fatalf("projected technical restoration = %+v, want %+v", projected.Restoration, restoration)
+	}
+}
+
 func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {

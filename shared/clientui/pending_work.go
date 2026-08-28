@@ -9,3 +9,11 @@ type TranscriptPendingWorkReplaced struct {
 func (r TranscriptPendingWorkReplaced) Validate() error {
 	return r.PendingWork.Validate()
 }
+
+type TranscriptPendingWorkRestored struct {
+	Restoration runtimeinput.PendingWorkTechnicalRestoration
+}
+
+func (r TranscriptPendingWorkRestored) Validate() error {
+	return r.Restoration.Validate()
+}
