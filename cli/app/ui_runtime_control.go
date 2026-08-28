@@ -7,6 +7,7 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -154,7 +155,9 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	m.questionsEnabled = settings.Questions.Enabled
 	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
 	m.modelContractLocked = settings.AgentLocked
-	m.status.snapshot.AgentRole = textutil.OptionalTrimmedString(settings.SelectedAgent.Role)
+	m.status.snapshot.AgentRole = textutil.OptionalTrimmedString(
+		config.NormalizeSubagentSelector(settings.SelectedAgent.Role),
+	)
 	m.status.snapshot.CompactionMode = string(response.Context.CompactionMode)
 	m.status.snapshot.CompactionCount = int(response.Context.CompletedCompactionCount)
 	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), clientui.RuntimeContextUsage{
@@ -162,11 +165,13 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 		WindowTokens: int(response.Context.ContextWindowTokens),
 	})
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
-		reason := "rejected"
-		if response.Result.Rejected != nil {
-			reason = string(response.Result.Rejected.Reason)
+		if response.Result.Rejected == nil {
+			panic("rejected Chat settings response is missing its reason")
 		}
-		return m.sendTransientStatusWithNoticeID("Chat settings: "+reason, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		return m.sendTransientStatusWithNoticeID(
+			chatSettingsRejectionNotice(response.Result.Rejected.Reason),
+			uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "",
+		)
 	}
 	if response.Result.Applied == nil || !response.Result.Applied.Changed {
 		return nil
@@ -181,31 +186,22 @@ func chatSettingsSuccessNotice(
 	operation serverapi.ChatSettingsMutationOperationKind,
 	settings serverapi.ChatSettings,
 ) string {
-	name := map[serverapi.ChatSettingsMutationOperationKind]string{
-		serverapi.ChatSettingsMutationAgent:          "Agent",
-		serverapi.ChatSettingsMutationSupervisor:     "Supervisor",
-		serverapi.ChatSettingsMutationThinking:       "Thinking",
-		serverapi.ChatSettingsMutationFast:           "Fast",
-		serverapi.ChatSettingsMutationQuestions:      "Questions",
-		serverapi.ChatSettingsMutationAutoCompaction: "Auto-compaction",
-	}[operation]
-	value := settings.SelectedAgent.Role
 	switch operation {
+	case serverapi.ChatSettingsMutationAgent:
+		return "Agent: " + settings.SelectedAgent.Role
 	case serverapi.ChatSettingsMutationSupervisor:
-		value = string(settings.Supervisor.Value)
+		return "Supervisor: " + chatSettingsSupervisorNotice(settings.Supervisor.Value)
 	case serverapi.ChatSettingsMutationThinking:
-		value = settings.SelectedAgent.Thinking
+		return "Thinking: " + settings.SelectedAgent.Thinking
 	case serverapi.ChatSettingsMutationFast:
-		value = chatSettingsOnOff(settings.Fast != nil && settings.Fast.Value)
+		return "Fast: " + chatSettingsOnOff(settings.Fast != nil && settings.Fast.Value)
 	case serverapi.ChatSettingsMutationQuestions:
-		value = chatSettingsOnOff(settings.Questions.Enabled)
+		return "Questions: " + chatSettingsOnOff(settings.Questions.Enabled)
 	case serverapi.ChatSettingsMutationAutoCompaction:
-		value = chatSettingsOnOff(settings.AutoCompaction.Stored)
+		return "Auto-compaction: " + chatSettingsOnOff(settings.AutoCompaction.Stored)
+	default:
+		panic("unhandled Chat settings mutation operation")
 	}
-	if name == "" {
-		return "Chat settings updated"
-	}
-	return name + ": " + value
 }
 
 func chatSettingsOnOff(enabled bool) string {
@@ -213,6 +209,36 @@ func chatSettingsOnOff(enabled bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+func chatSettingsSupervisorNotice(value serverapi.ChatSettingsSupervisorValue) string {
+	switch value {
+	case serverapi.ChatSettingsSupervisorOff:
+		return "Off"
+	case serverapi.ChatSettingsSupervisorAfterEdits:
+		return "After edits"
+	case serverapi.ChatSettingsSupervisorAlways:
+		return "Always"
+	default:
+		panic("unhandled Chat settings Supervisor value")
+	}
+}
+
+func chatSettingsRejectionNotice(reason serverapi.ChatSettingsMutationRejectionReason) string {
+	switch reason {
+	case serverapi.ChatSettingsMutationAgentLocked:
+		return "Agent is locked"
+	case serverapi.ChatSettingsMutationAgentUnavailable:
+		return "Agent is unavailable"
+	case serverapi.ChatSettingsMutationThinkingUnavailable:
+		return "Thinking is unavailable"
+	case serverapi.ChatSettingsMutationFastUnavailable:
+		return "Fast mode is unavailable"
+	case serverapi.ChatSettingsMutationAutoCompactionPolicyLock:
+		return "Auto-compaction is unavailable"
+	default:
+		panic("unhandled Chat settings mutation rejection reason")
+	}
 }
 
 func (m *uiModel) setRuntimeSessionName(name string) error {
