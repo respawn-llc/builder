@@ -67,29 +67,15 @@ func ChatSettingsStateFromCompleteSettings(agent string, settings ChatSettings) 
 	if err != nil {
 		return ChatSettingsState{}, err
 	}
-	return ChatSettingsState{
-		Agent: normalizedAgent,
-		Settings: &ChatSettingsOverrides{
-			Supervisor:     textutil.Value(normalizedSettings.Supervisor),
-			Thinking:       textutil.Value(normalizedSettings.Thinking),
-			Fast:           textutil.Value(normalizedSettings.Fast),
-			Questions:      textutil.Value(normalizedSettings.Questions),
-			AutoCompaction: textutil.Value(normalizedSettings.AutoCompaction),
-		},
-	}, nil
+	return ChatSettingsState{Agent: normalizedAgent, Settings: &ChatSettingsOverrides{Supervisor: textutil.Value(normalizedSettings.Supervisor), Thinking: textutil.Value(normalizedSettings.Thinking), Fast: textutil.Value(normalizedSettings.Fast), Questions: textutil.Value(normalizedSettings.Questions), AutoCompaction: textutil.Value(normalizedSettings.AutoCompaction)}}, nil
 }
 
-// ChatSettingsCommitResult reports the result of committing a complete Chat
-// settings state through the Session metadata authority.
 type ChatSettingsCommitResult struct {
 	CommitReceipt
 	Changed bool
 	State   ChatSettingsState
 }
 
-// ProjectChatSettingsState applies a complete Chat settings target to Meta
-// without persisting it. The target is intentionally complete so every writer
-// uses the same validation, continuation, and Agent-change behavior.
 func ProjectChatSettingsState(meta Meta, target ChatSettingsState) (Meta, bool, error) {
 	currentMeta := cloneMeta(meta)
 	if err := normalizeMetaContinuation(&currentMeta); err != nil {
@@ -121,7 +107,6 @@ func ProjectChatSettingsState(meta Meta, target ChatSettingsState) (Meta, bool, 
 	if currentMeta.Locked != nil && current.Agent != next.Agent {
 		return Meta{}, false, ErrChatAgentLocked
 	}
-
 	currentMeta.ChatSettings = cloneChatSettingsOverrides(next.Settings)
 	continuation := cloneContinuationContext(currentMeta.Continuation)
 	if continuation == nil {
@@ -143,17 +128,13 @@ func ProjectChatSettingsState(meta Meta, target ChatSettingsState) (Meta, bool, 
 	return currentMeta, true, nil
 }
 
-// CommitChatSettingsState commits one complete Chat settings target through
-// the existing metadata mutation lock and commit-receipt path.
 func (s *Store) CommitChatSettingsState(target ChatSettingsState) (ChatSettingsCommitResult, error) {
 	if s == nil {
 		return ChatSettingsCommitResult{}, errors.New("Session store is required")
 	}
-
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
-
 	projected, changed, err := ProjectChatSettingsState(s.meta, target)
 	if err != nil || !changed {
 		state, stateErr := ChatSettingsStateFromMeta(s.meta)
@@ -170,7 +151,6 @@ func (s *Store) CommitChatSettingsState(target ChatSettingsState) (ChatSettingsC
 		s.mu.Unlock()
 		return ChatSettingsCommitResult{State: target}, err
 	}
-
 	checkpoint := s.metadataMutationCheckpointLocked()
 	s.meta.ChatSettings = projected.ChatSettings
 	s.meta.Continuation = projected.Continuation
@@ -182,16 +162,9 @@ func (s *Store) CommitChatSettingsState(target ChatSettingsState) (ChatSettingsC
 	}
 	state, stateErr := ChatSettingsStateFromMeta(projected)
 	if stateErr != nil {
-		return ChatSettingsCommitResult{
-			CommitReceipt: receipt,
-			Changed:       changed,
-		}, errors.Join(err, stateErr)
+		return ChatSettingsCommitResult{CommitReceipt: receipt, Changed: changed}, errors.Join(err, stateErr)
 	}
-	return ChatSettingsCommitResult{
-		CommitReceipt: receipt,
-		Changed:       changed,
-		State:         state,
-	}, errors.Join(err, stateErr)
+	return ChatSettingsCommitResult{CommitReceipt: receipt, Changed: changed, State: state}, errors.Join(err, stateErr)
 }
 
 func NormalizeChatSettingsOverrides(overrides *ChatSettingsOverrides) (*ChatSettingsOverrides, error) {
@@ -351,10 +324,6 @@ func chatSettingsStateFromNormalizedMeta(meta Meta) ChatSettingsState {
 
 func chatSettingsStatesEqual(left ChatSettingsState, right ChatSettingsState) bool {
 	return left.Agent == right.Agent && chatSettingsOverridesEqual(left.Settings, right.Settings)
-}
-
-func ChatSettingsStatesEqual(left ChatSettingsState, right ChatSettingsState) bool {
-	return chatSettingsStatesEqual(left, right)
 }
 
 func chatSettingsOverridesEqual(left *ChatSettingsOverrides, right *ChatSettingsOverrides) bool {

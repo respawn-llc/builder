@@ -98,11 +98,10 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration) {
 	applyTranscriptSessionStatusToRuntimeStatus(&view.Status, hydration.SessionStatus)
 	applyTranscriptSessionIdentityToRuntimeMainView(view, hydration.SessionIdentity)
-	usage := clientui.RuntimeContextUsage{}
+	view.Status.ContextUsage = clientui.RuntimeContextUsage{}
 	if hydration.ContextUsage != nil {
-		usage = runtimeContextUsageFromTranscript(*hydration.ContextUsage)
+		view.Status.ContextUsage = runtimeContextUsageFromTranscript(*hydration.ContextUsage)
 	}
-	view.Status.ContextUsage = usage
 	view.Status.Goal = nil
 	if hydration.GoalStatus != nil {
 		view.Status.Goal = runtimeGoalFromTranscript(*hydration.GoalStatus)
@@ -149,10 +148,6 @@ func runtimeContextUsageFromTranscript(usage clientui.TranscriptContextUsage) cl
 	projected := clientui.RuntimeContextUsage{
 		UsedTokens:   usage.UsedTokens,
 		WindowTokens: usage.WindowTokens,
-	}
-	if usage.AutomaticThresholdTokens != nil {
-		projected.AutomaticThresholdTokens = *usage.AutomaticThresholdTokens
-		projected.HasAutomaticThreshold = true
 	}
 	if usage.CacheHitPercent != nil {
 		projected.CacheHitPercent = *usage.CacheHitPercent

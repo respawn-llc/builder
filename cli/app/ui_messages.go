@@ -96,10 +96,8 @@ type runtimeControlDoneMsg struct {
 }
 
 type chatSettingsDoneMsg struct {
-	operation  serverapi.ChatSettingsMutationOperationKind
-	response   serverapi.ChatSettingsMutationResponse
-	projection chatSettingsMutationProjection
-	err        error
+	response  serverapi.ChatSettingsMutationResponse
+	err       error
 }
 
 type injectedQueueCreateDoneMsg struct {

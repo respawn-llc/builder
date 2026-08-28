@@ -58,43 +58,27 @@ func (s chatSettingsService) MutateChatSettings(
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
 		service := s.core.sessionLaunchServiceForProjectContext(projectCtx)
-		projected, err := service.MutateWorkspaceChatSettingsAggregate(ctx, req.Operation)
+		projected, changed, err := service.MutateWorkspaceChatSettingsAggregate(ctx, req.Operation)
 		if err != nil {
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
 		if projected.Rejection != nil {
-			result = serverapi.NewChatSettingsMutationRejected(
-				projected.Rejection.Reason,
-			)
+			result = serverapi.NewChatSettingsMutationRejected(projected.Rejection.Reason)
 		}
-		if result.Applied != nil {
-			result.Applied.Changed = projected.Changed
-		}
-		settings, contextFacts, err := s.readLazySettingsAndContext(ctx, service)
+		if result.Applied != nil { result.Applied.Changed = changed }
+		settings, err := service.LazyChatSettings(ctx)
 		if err != nil {
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
-		return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings, Context: contextFacts}, nil
+		contextFacts, err := service.ReadWorkspaceChatContext(ctx)
+		if err != nil {
+			return serverapi.ChatSettingsMutationResponse{}, err
+		}
+		return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings.Settings, Context: contextFacts}, nil
 	case serverapi.ChatSettingsReadTargetSession:
 		return s.mutateMaterializedChatSettings(ctx, *req.Target.Session, req.Operation, result)
-	default:
-		return serverapi.ChatSettingsMutationResponse{}, errors.New("Chat settings target kind is invalid")
 	}
-}
-
-func (s chatSettingsService) readLazySettingsAndContext(
-	ctx context.Context,
-	service *sessionlaunch.Service,
-) (serverapi.ChatSettings, serverapi.ChatContext, error) {
-	settings, err := service.LazyChatSettings(ctx)
-	if err != nil {
-		return serverapi.ChatSettings{}, serverapi.ChatContext{}, err
-	}
-	contextFacts, err := service.ReadWorkspaceChatContext(ctx)
-	if err != nil {
-		return serverapi.ChatSettings{}, serverapi.ChatContext{}, err
-	}
-	return settings.Settings, contextFacts, nil
+	return serverapi.ChatSettingsMutationResponse{}, errors.New("Chat settings target kind is invalid")
 }
 
 func (s chatSettingsService) mutateMaterializedChatSettings(
@@ -177,9 +161,7 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
 	}
-	return serverapi.ChatSettingsMutationResponse{
-		Result: result, Settings: settings.Settings, Session: settings.Session, Context: contextFacts,
-	}, nil
+	return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings.Settings, Session: settings.Session, Context: contextFacts}, nil
 }
 
 func (s chatSettingsService) materializedService(

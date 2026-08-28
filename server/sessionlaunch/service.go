@@ -266,17 +266,12 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 func (s *Service) MutateWorkspaceChatSettingsAggregate(
 	ctx context.Context,
 	operation serverapi.ChatSettingsMutationOperation,
-) (WorkspaceChatSettingsMutationResult, error) {
+) (PreparedChatSettingsOperationResult, bool, error) {
 	owner, workspaceID, err := s.workspaceChatDraftOwner()
 	if err != nil {
-		return WorkspaceChatSettingsMutationResult{}, err
+		return PreparedChatSettingsOperationResult{}, false, err
 	}
-	return owner.MutateWorkspaceChatSettings(
-		ctx,
-		workspaceID,
-		s.workspaceChatDraftResolverInput,
-		operation,
-	)
+	return owner.MutateWorkspaceChatSettings(ctx, workspaceID, s.workspaceChatDraftResolverInput, operation)
 }
 
 func (s *Service) PrepareMaterializedChatSettingsOperation(
@@ -289,12 +284,20 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 	if store == nil {
 		return PreparedChatSettingsOperationInput{}, errors.New("Session store is required")
 	}
+	input, _, err := s.prepareMaterializedChatSettings(ctx, store.Meta())
+	return input, err
+}
+
+func (s *Service) prepareMaterializedChatSettings(
+	ctx context.Context,
+	meta session.Meta,
+) (PreparedChatSettingsOperationInput, *string, error) {
 	planner := s.planner
 	if planner.ReloadConfig != nil {
 		var err error
 		planner.Config, err = planner.ReloadConfig()
 		if err != nil {
-			return PreparedChatSettingsOperationInput{}, err
+			return PreparedChatSettingsOperationInput{}, nil, err
 		}
 	}
 	authState := auth.EmptyState()
@@ -302,37 +305,33 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 	if s.authStates != nil {
 		authState, err = s.authStates.StoredState(ctx)
 		if err != nil {
-			return PreparedChatSettingsOperationInput{}, err
+			return PreparedChatSettingsOperationInput{}, nil, err
 		}
 	}
 	catalog, err := launch.PrepareChatAgentCatalog(planner.Config, authState, false)
 	if err != nil {
-		return PreparedChatSettingsOperationInput{}, err
+		return PreparedChatSettingsOperationInput{}, nil, err
 	}
-	raw, err := session.ChatSettingsStateFromMeta(store.Meta())
+	raw, err := session.ChatSettingsStateFromMeta(meta)
 	if err != nil {
-		return PreparedChatSettingsOperationInput{}, err
+		return PreparedChatSettingsOperationInput{}, nil, err
 	}
 	entry, selectedAvailable := catalog.Lookup(raw.Agent)
 	if !selectedAvailable {
 		var defaultAvailable bool
 		entry, defaultAvailable = catalog.Lookup(config.DefaultSubagentRole)
 		if !defaultAvailable {
-			return PreparedChatSettingsOperationInput{}, errors.New("default Chat Agent baseline is missing")
+			return PreparedChatSettingsOperationInput{}, nil, errors.New("default Chat Agent baseline is missing")
 		}
 	}
 	effective, err := session.ResolveEffectiveChatSettings(raw.Settings, nil, entry.Settings.Baseline)
 	if err != nil {
-		return PreparedChatSettingsOperationInput{}, err
+		return PreparedChatSettingsOperationInput{}, nil, err
 	}
-	if store.Meta().Locked != nil {
-		entry.Settings, err = lockedPreparedChatSettings(
-			*store.Meta().Locked,
-			entry.Settings,
-			effective,
-		)
+	if meta.Locked != nil {
+		entry.Settings, err = lockedPreparedChatSettings(*meta.Locked, entry.Settings, effective)
 		if err != nil {
-			return PreparedChatSettingsOperationInput{}, err
+			return PreparedChatSettingsOperationInput{}, nil, err
 		}
 	}
 	effective = normalizeProjectedChatSettings(effective, entry.Settings)
@@ -349,9 +348,9 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 			persistedThinking = strings.TrimSpace(*raw.Settings.Thinking)
 		}
 	}
-	taskID, err := s.workflowTaskID(ctx, store.Meta().SessionID)
+	taskID, err := s.workflowTaskID(ctx, meta.SessionID)
 	if err != nil {
-		return PreparedChatSettingsOperationInput{}, err
+		return PreparedChatSettingsOperationInput{}, nil, err
 	}
 	return PreparedChatSettingsOperationInput{
 		Raw:                raw,
@@ -359,10 +358,10 @@ func (s *Service) PrepareMaterializedChatSettingsOperation(
 		PersistedQuestions: persistedQuestions,
 		PersistedThinking:  persistedThinking,
 		Catalog:            catalog,
-		Locked:             store.Meta().Locked,
+		Locked:             meta.Locked,
 		WorkflowLocked:     taskID != nil,
 		CompactionMode:     planner.Config.Settings.CompactionMode,
-	}, nil
+	}, taskID, nil
 }
 
 func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
@@ -397,67 +396,17 @@ func (s *Service) MaterializedChatSettings(
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	planner := s.planner
-	if planner.ReloadConfig != nil {
-		planner.Config, err = planner.ReloadConfig()
-		if err != nil {
-			return serverapi.ChatSettingsReadResponse{}, err
-		}
-	}
-	authState := auth.EmptyState()
-	if s.authStates != nil {
-		authState, err = s.authStates.StoredState(ctx)
-		if err != nil {
-			return serverapi.ChatSettingsReadResponse{}, err
-		}
-	}
-	catalog, err := launch.PrepareChatAgentCatalog(
-		planner.Config,
-		authState,
-		false,
-	)
+	input, taskID, err := s.prepareMaterializedChatSettings(ctx, *record.Meta)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	state, err := session.ChatSettingsStateFromMeta(*record.Meta)
-	if err != nil {
-		return serverapi.ChatSettingsReadResponse{}, err
-	}
-	baselineEntry, ok := catalog.Lookup(state.Agent)
-	if !ok {
-		baselineEntry, _ = catalog.Lookup(config.DefaultSubagentRole)
-	}
-	effective, err := session.ResolveEffectiveChatSettings(
-		state.Settings,
-		nil,
-		baselineEntry.Settings.Baseline,
-	)
-	if err != nil {
-		return serverapi.ChatSettingsReadResponse{}, err
-	}
-	if record.Meta.Locked != nil {
-		baselineEntry.Settings, err = lockedPreparedChatSettings(
-			*record.Meta.Locked,
-			baselineEntry.Settings,
-			effective,
-		)
-		if err != nil {
-			return serverapi.ChatSettingsReadResponse{}, err
-		}
-		effective = normalizeProjectedChatSettings(effective, baselineEntry.Settings)
-	}
-	taskID, err := s.workflowTaskID(ctx, sessionID.String())
-	if err != nil {
-		return serverapi.ChatSettingsReadResponse{}, err
-	}
-	workflowLocked := taskID != nil
 	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog:        catalog,
-		Agent:          state.Agent,
-		Settings:       effective,
-		WorkflowLocked: workflowLocked,
-		CompactionMode: planner.Config.Settings.CompactionMode,
-		Locked:         record.Meta.Locked,
+		Catalog:        input.Catalog,
+		Agent:          input.Raw.Agent,
+		Settings:       input.Effective,
+		WorkflowLocked: input.WorkflowLocked,
+		CompactionMode: input.CompactionMode,
+		Locked:         input.Locked,
 	})
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err

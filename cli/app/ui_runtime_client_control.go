@@ -29,10 +29,10 @@ func (c *sessionRuntimeClient) ReadChatSettings() (serverapi.ChatSettings, error
 	return response.Settings, nil
 }
 
-func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (chatSettingsMutationResult, error) {
+func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
 	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
 	if err != nil {
-		return chatSettingsMutationResult{}, err
+		return serverapi.ChatSettingsMutationResponse{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
@@ -41,14 +41,9 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 		Operation: operation,
 	})
 	if err != nil {
-		return chatSettingsMutationResult{}, err
+		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	result := chatSettingsMutationResult{response: response}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		result.projection = projectChatSettingsMutation(response, *view)
-		result.projection.applyToRuntimeMainView(view)
-	})
-	return result, nil
+	return response, nil
 }
 
 func runtimeRequestCallWithID[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, requestID string, call func(ctx context.Context, requestID string) (T, error)) (T, error) {

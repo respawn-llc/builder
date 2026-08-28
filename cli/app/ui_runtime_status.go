@@ -22,17 +22,12 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 		return nil
 	}
 	status := view.Status
-	if strings.TrimSpace(status.ThinkingLevel) != "" {
-		m.thinkingLevel = status.ThinkingLevel
-	}
 	m.reviewerMode = status.ReviewerFrequency
 	m.reviewerEnabled = status.ReviewerEnabled
 	m.autoCompactionEnabled = status.AutoCompactionEnabled
 	m.questionsEnabled = status.QuestionsEnabled
 	m.fastModeAvailable = status.FastModeAvailable
 	m.fastModeEnabled = status.FastModeEnabled
-	m.compactionMode = status.CompactionMode
-	m.compactionCount = status.CompactionCount
 	m.conversationFreshness = status.ConversationFreshness
 	m.setRuntimeContextUsage(view.Session.SessionID, status.ContextUsage)
 	if view.Activity.State != "" {
@@ -59,21 +54,6 @@ func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
 	}
 }
 
-func (m *uiModel) initialRuntimeMainView() (clientui.RuntimeMainView, bool) {
-	if m == nil {
-		return clientui.RuntimeMainView{}, false
-	}
-	if client := m.runtimeClient(); client != nil {
-		if cached, ok := client.(interface {
-			CachedMainView() (clientui.RuntimeMainView, bool)
-		}); ok {
-			return cached.CachedMainView()
-		}
-		return m.runtimeMainView(), true
-	}
-	return m.runtimeMainView(), true
-}
-
 func (m *uiModel) cachedRuntimeMainView() clientui.RuntimeMainView {
 	client := m.runtimeClient()
 	if cached, ok := client.(interface {
@@ -93,17 +73,7 @@ func (m *uiModel) cachedRuntimeStatus() clientui.RuntimeStatus {
 	view := m.cachedRuntimeMainView()
 	status := view.Status
 	if m.runtimeContextUsageAppliesTo(view.Session.SessionID) {
-		usage := m.runtimeContextUsage
-		status.ContextUsage.UsedTokens = usage.UsedTokens
-		status.ContextUsage.WindowTokens = usage.WindowTokens
-		if usage.HasAutomaticThreshold {
-			status.ContextUsage.AutomaticThresholdTokens = usage.AutomaticThresholdTokens
-			status.ContextUsage.HasAutomaticThreshold = true
-		}
-		if usage.HasCacheHitPercentage {
-			status.ContextUsage.CacheHitPercent = usage.CacheHitPercent
-			status.ContextUsage.HasCacheHitPercentage = true
-		}
+		status.ContextUsage = m.runtimeContextUsage
 	}
 	return status
 }
@@ -215,7 +185,5 @@ func (m *uiModel) localRuntimeStatus() clientui.RuntimeStatus {
 		FastModeEnabled:       m.fastModeEnabled,
 		ConversationFreshness: m.conversationFreshness,
 		ThinkingLevel:         m.thinkingLevel,
-		CompactionMode:        m.compactionMode,
-		CompactionCount:       m.compactionCount,
 	}
 }

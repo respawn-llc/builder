@@ -8,10 +8,9 @@ import (
 )
 
 type TranscriptContextUsage struct {
-	UsedTokens               int
-	WindowTokens             int
-	AutomaticThresholdTokens *int
-	CacheHitPercent          *int
+	UsedTokens      int
+	WindowTokens    int
+	CacheHitPercent *int
 }
 
 type TranscriptGoalStatus struct {
@@ -46,10 +45,6 @@ func (u TranscriptContextUsage) Validate() error {
 	}
 	if u.WindowTokens <= 0 {
 		return fmt.Errorf("context window tokens must be positive")
-	}
-	if u.AutomaticThresholdTokens != nil &&
-		(*u.AutomaticThresholdTokens < 0 || *u.AutomaticThresholdTokens > u.WindowTokens) {
-		return fmt.Errorf("context automatic threshold tokens %d are outside 0..%d", *u.AutomaticThresholdTokens, u.WindowTokens)
 	}
 	if u.CacheHitPercent != nil && (*u.CacheHitPercent < 0 || *u.CacheHitPercent > 100) {
 		return fmt.Errorf("context cache hit percent %d is outside 0..100", *u.CacheHitPercent)

@@ -125,9 +125,8 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 		return nil
 	}
 	projected := &clientui.TranscriptContextUsage{
-		UsedTokens:               usage.UsedTokens,
-		WindowTokens:             usage.WindowTokens,
-		AutomaticThresholdTokens: textutil.Value(usage.AutomaticThresholdTokens),
+		UsedTokens:   usage.UsedTokens,
+		WindowTokens: usage.WindowTokens,
 	}
 	if usage.HasCacheHitPercentage {
 		cacheHitPercent := usage.CacheHitPercent
@@ -313,9 +312,8 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptEvent {
 	}
 	if evt.ContextUsage != nil {
 		usage := clientui.TranscriptContextUsage{
-			UsedTokens:               evt.ContextUsage.UsedTokens,
-			WindowTokens:             evt.ContextUsage.WindowTokens,
-			AutomaticThresholdTokens: textutil.Value(evt.ContextUsage.AutomaticThresholdTokens),
+			UsedTokens:   evt.ContextUsage.UsedTokens,
+			WindowTokens: evt.ContextUsage.WindowTokens,
 		}
 		if evt.ContextUsage.HasCacheHitPercentage {
 			cacheHitPercent := evt.ContextUsage.CacheHitPercent

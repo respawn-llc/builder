@@ -63,9 +63,6 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		if contextInfo.AvailableTokens < 0 {
 			contextInfo.AvailableTokens = 0
 		}
-		if usage.HasAutomaticThreshold {
-			contextInfo.ThresholdTokens = usage.AutomaticThresholdTokens
-		}
 		if status.PreviousSessionID != nil {
 			id := *status.PreviousSessionID
 			previousSessionID = &id

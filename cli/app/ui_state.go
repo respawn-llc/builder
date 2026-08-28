@@ -55,6 +55,10 @@ type uiInputFeatureState struct {
 	promptHistoryDraft     *tuiinput.EditorSnapshot
 	activity               uiActivity
 	runtimeLifecycle       uiRuntimeLifecycle
+	reviewerEnabled        bool
+	reviewerMode           string
+	autoCompactionEnabled  bool
+	questionsEnabled       bool
 	conversationFreshness  clientui.ConversationFreshness
 	localConversationTurn  bool
 	runtimeControlToken    uint64
@@ -81,18 +85,11 @@ type uiInputFeatureState struct {
 	completedStepID             string
 
 	modelName                 string
-	agentRole                 *string
 	configuredModelName       *string
 	thinkingLevel             string
 	fastModeAvailable         bool
 	fastModeEnabled           bool
-	compactionMode            string
-	compactionCount           int
 	modelContractLocked       bool
-	reviewerEnabled           bool
-	reviewerMode              string
-	autoCompactionEnabled     bool
-	questionsEnabled          bool
 	spinnerFrame              int
 	spinnerClock              frameAnimationClock
 	spinnerTickDue            time.Time

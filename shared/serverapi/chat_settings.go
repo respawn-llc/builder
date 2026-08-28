@@ -211,13 +211,11 @@ type ChatSettingsMutationOperation struct {
 func (o ChatSettingsMutationOperation) Validate() error {
 	switch o.Kind {
 	case ChatSettingsMutationAgent:
-		if o.Role == nil || strings.TrimSpace(*o.Role) == "" ||
-			o.Value != nil || o.Enabled != nil {
+		if o.Role == nil || strings.TrimSpace(*o.Role) == "" || o.Value != nil || o.Enabled != nil {
 			return errors.New("Agent Chat settings operation requires only role")
 		}
 	case ChatSettingsMutationSupervisor, ChatSettingsMutationThinking:
-		if o.Value == nil || strings.TrimSpace(*o.Value) == "" ||
-			o.Role != nil || o.Enabled != nil {
+		if o.Value == nil || strings.TrimSpace(*o.Value) == "" || o.Role != nil || o.Enabled != nil {
 			return errors.New("value Chat settings operation requires only value")
 		}
 	case ChatSettingsMutationFast, ChatSettingsMutationQuestions, ChatSettingsMutationAutoCompaction:
@@ -229,11 +227,7 @@ func (o ChatSettingsMutationOperation) Validate() error {
 	}
 	return nil
 }
-
 func (o *ChatSettingsMutationOperation) UnmarshalJSON(data []byte) error {
-	if o == nil {
-		return errors.New("Chat settings mutation operation is required")
-	}
 	type wire ChatSettingsMutationOperation
 	var decoded wire
 	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
@@ -258,11 +252,7 @@ func (r ChatSettingsMutationRequest) Validate() error {
 	}
 	return r.Operation.Validate()
 }
-
 func (r *ChatSettingsMutationRequest) UnmarshalJSON(data []byte) error {
-	if r == nil {
-		return errors.New("Chat settings mutation request is required")
-	}
 	type wire ChatSettingsMutationRequest
 	var decoded wire
 	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
@@ -309,11 +299,9 @@ func (r ChatSettingsMutationRejectionReason) Validate() error {
 type ChatSettingsMutationAppliedResult struct {
 	Changed bool `json:"changed"`
 }
-
 type ChatSettingsMutationRejectedResult struct {
 	Reason ChatSettingsMutationRejectionReason `json:"reason"`
 }
-
 type ChatSettingsMutationResult struct {
 	Kind     ChatSettingsMutationResultKind      `json:"kind"`
 	Applied  *ChatSettingsMutationAppliedResult  `json:"applied,omitempty"`
@@ -321,19 +309,11 @@ type ChatSettingsMutationResult struct {
 }
 
 func NewChatSettingsMutationApplied(changed bool) ChatSettingsMutationResult {
-	return ChatSettingsMutationResult{
-		Kind:    ChatSettingsMutationApplied,
-		Applied: &ChatSettingsMutationAppliedResult{Changed: changed},
-	}
+	return ChatSettingsMutationResult{Kind: ChatSettingsMutationApplied, Applied: &ChatSettingsMutationAppliedResult{Changed: changed}}
 }
-
 func NewChatSettingsMutationRejected(reason ChatSettingsMutationRejectionReason) ChatSettingsMutationResult {
-	return ChatSettingsMutationResult{
-		Kind:     ChatSettingsMutationRejected,
-		Rejected: &ChatSettingsMutationRejectedResult{Reason: reason},
-	}
+	return ChatSettingsMutationResult{Kind: ChatSettingsMutationRejected, Rejected: &ChatSettingsMutationRejectedResult{Reason: reason}}
 }
-
 func (r ChatSettingsMutationResult) Validate() error {
 	switch r.Kind {
 	case ChatSettingsMutationApplied:
@@ -375,11 +355,7 @@ func (r ChatSettingsMutationResponse) ValidateForTarget(target ChatSettingsReadT
 	}
 	return r.Context.Validate()
 }
-
 func (r *ChatSettingsMutationResponse) UnmarshalJSON(data []byte) error {
-	if r == nil {
-		return errors.New("Chat settings mutation response is required")
-	}
 	type wire ChatSettingsMutationResponse
 	var decoded wire
 	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {

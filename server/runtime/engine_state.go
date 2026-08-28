@@ -209,8 +209,7 @@ func messagePreservesLastCommittedAssistantFinalAnswer(message llm.Message) bool
 }
 
 func (e *Engine) ContextUsage() ContextUsage {
-	planning := e.compactionPlanningSnapshot()
-	window := e.compactionPlannerState().contextWindowTokens(planning)
+	window := e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
 	used := e.currentTokenUsage()
 	cacheHitPercent, hasCacheHitPercentage := e.usageTrackingState().CacheHitSnapshot()
 	if used < 0 {
@@ -220,11 +219,10 @@ func (e *Engine) ContextUsage() ContextUsage {
 		window = 0
 	}
 	return ContextUsage{
-		UsedTokens:               used,
-		WindowTokens:             window,
-		AutomaticThresholdTokens: int(planning.policy.AutomaticThresholdTokens),
-		CacheHitPercent:          cacheHitPercent,
-		HasCacheHitPercentage:    hasCacheHitPercentage,
+		UsedTokens:            used,
+		WindowTokens:          window,
+		CacheHitPercent:       cacheHitPercent,
+		HasCacheHitPercentage: hasCacheHitPercentage,
 	}
 }
 
@@ -286,16 +284,11 @@ func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText
 	})
 }
 
-func (e *Engine) appendCommittedEntryWithCommitReceipt(entry storedLocalEntry) (session.CommitReceipt, error) {
-	if entry.Role == "" || entry.Text == "" {
-		return session.CommitReceipt{}, nil
-	}
-	return e.steerWithCommitReceipt("", steerLocalEntryIntent(entry))
-}
-
 func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
-	_, err := e.appendCommittedEntryWithCommitReceipt(entry)
-	return err
+	if entry.Role == "" || entry.Text == "" {
+		return nil
+	}
+	return e.steer("", steerLocalEntryIntent(entry))
 }
 
 func (e *Engine) SetStreamingError(text string) {
