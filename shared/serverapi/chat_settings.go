@@ -340,6 +340,16 @@ type ChatSettingsMutationResponse struct {
 	Context  ChatContext                `json:"context"`
 }
 
+func (r *ChatSettingsMutationResponse) UnmarshalJSON(data []byte) error {
+	type wire ChatSettingsMutationResponse
+	var decoded wire
+	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	*r = ChatSettingsMutationResponse(decoded)
+	return nil
+}
+
 func (r ChatSettingsMutationResponse) ValidateForTarget(target ChatSettingsReadTarget) error {
 	if err := target.Validate(); err != nil {
 		return fmt.Errorf("target: %w", err)
