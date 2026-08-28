@@ -38,6 +38,7 @@ type GitWorktree struct {
 	PrunableReason string       `json:"prunable_reason,omitempty"`
 	DirtyFileCount int          `json:"-"`
 	IsMain         bool         `json:"-"`
+	IsGitPrimary   bool         `json:"-"`
 }
 
 func (w GitWorktree) validateHead() error {
@@ -1271,6 +1272,7 @@ func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWork
 		}
 		current.Root = canonicalRoot
 		current.IsMain = canonicalRoot == canonicalWorkspaceRoot
+		current.IsGitPrimary = len(entries) == 0
 		if err := current.validateHead(); err != nil {
 			return err
 		}

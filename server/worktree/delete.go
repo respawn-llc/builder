@@ -32,7 +32,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req *worktreepb.DeleteRequ
 		release()
 		return nil, err
 	}
-	if _, err := deletionSelector(match); err != nil {
+	if _, err := deletionSelector(match.entry); err != nil {
 		release()
 		return nil, err
 	}
