@@ -39,12 +39,11 @@ type sessionRuntimeTestLLMClient struct {
 }
 
 func commitSessionChatSettingsTestState(t *testing.T, store *session.Store, update func(*session.ChatSettingsOverrides)) {
-	t.Helper()
 	state, err := session.ChatSettingsStateFromMeta(store.Meta())
 	if err != nil {
 		t.Fatalf("read Chat settings: %v", err)
 	}
-	state.Settings = &session.ChatSettingsOverrides{Supervisor: textutil.Value("off"), Thinking: textutil.Value("medium"), Fast: textutil.Value(false), Questions: textutil.Value(true), AutoCompaction: textutil.Value(true)}
+	state.Settings = sessiontest.CompleteChatSettingsOverrides()
 	update(state.Settings)
 	if _, err := store.CommitChatSettingsState(state); err != nil {
 		t.Fatalf("commit Chat settings: %v", err)

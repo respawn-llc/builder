@@ -42,7 +42,6 @@ func (s chatSettingsService) ReadChatSettings(
 		return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
 	}
 }
-
 func (s chatSettingsService) MutateChatSettings(
 	ctx context.Context,
 	req serverapi.ChatSettingsMutationRequest,
@@ -80,7 +79,6 @@ func (s chatSettingsService) MutateChatSettings(
 	}
 	return serverapi.ChatSettingsMutationResponse{}, errors.New("Chat settings target kind is invalid")
 }
-
 func (s chatSettingsService) mutateMaterializedChatSettings(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,

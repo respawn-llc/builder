@@ -28,12 +28,11 @@ type failingUpdateMetadataExecutionTargetStore struct {
 }
 
 func commitChatSettingsTestState(t *testing.T, store *session.Store, update func(*session.ChatSettingsOverrides)) error {
-	t.Helper()
 	state, err := session.ChatSettingsStateFromMeta(store.Meta())
 	if err != nil {
-		return err
+		t.Fatalf("read Chat settings: %v", err)
 	}
-	state.Settings = &session.ChatSettingsOverrides{Supervisor: textutil.Value("off"), Thinking: textutil.Value("medium"), Fast: textutil.Value(false), Questions: textutil.Value(true), AutoCompaction: textutil.Value(true)}
+	state.Settings = sessiontest.CompleteChatSettingsOverrides()
 	update(state.Settings)
 	_, err = store.CommitChatSettingsState(state)
 	return err

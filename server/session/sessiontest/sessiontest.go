@@ -16,6 +16,7 @@ import (
 	"core/server/session"
 
 	"core/internal/testharness/recordstore"
+	"core/shared/textutil"
 )
 
 // WriteEventLogHeaderFixture replaces a test session's event artifact with a
@@ -206,6 +207,9 @@ func AgentRole(value string) *string {
 	return &value
 }
 
+func CompleteChatSettingsOverrides() *session.ChatSettingsOverrides {
+	return &session.ChatSettingsOverrides{Supervisor: textutil.Value("off"), Thinking: textutil.Value("medium"), Fast: textutil.Value(false), Questions: textutil.Value(true), AutoCompaction: textutil.Value(true)}
+}
 // Snapshot mirrors the durable session state a test commonly asserts against:
 // metadata, the full event history, and conversation freshness.
 type Snapshot struct {
