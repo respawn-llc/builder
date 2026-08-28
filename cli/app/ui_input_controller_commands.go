@@ -8,7 +8,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -197,8 +196,16 @@ func (c uiInputController) handleSessionNameCommand(sessionName string) (tea.Mod
 	if m.hasRuntimeClient() {
 		return m, m.runtimeControlCommand(runtimeControlSetSessionName, sessionName, false, "")
 	}
+	changed := m.sessionName != sessionName
 	m.sessionName = sessionName
-	return m, tea.SetWindowTitle(sessionTitle(m.sessionName))
+	return m, sequenceCmds(
+		tea.SetWindowTitle(sessionTitle(m.sessionName)),
+		m.applySessionSettingFeedback(clientui.TranscriptSessionSettingFeedback{
+			Kind:        clientui.SessionSettingSessionName,
+			Changed:     changed,
+			SessionName: &m.sessionName,
+		}),
+	)
 }
 
 func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Model, tea.Cmd) {
@@ -220,8 +227,13 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 	if m.hasRuntimeClient() {
 		return m, m.runtimeControlCommand(runtimeControlSetThinkingLevel, normalized, false, "")
 	}
+	changed := m.thinkingLevel != normalized
 	m.thinkingLevel = normalized
-	return m, c.model.sendThinkingLevelSetStatus(m.thinkingLevel)
+	return m, m.applySessionSettingFeedback(clientui.TranscriptSessionSettingFeedback{
+		Kind:     clientui.SessionSettingThinking,
+		Changed:  changed,
+		Thinking: &m.thinkingLevel,
+	})
 }
 
 func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
@@ -230,10 +242,6 @@ func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
 		current = "unknown"
 	}
 	return m.sendTransientStatusWithNoticeID("Thinking level is "+current, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
-}
-
-func (m *uiModel) sendThinkingLevelSetStatus(level string) tea.Cmd {
-	return m.sendTransientStatusWithNoticeID("Thinking level set to "+strings.TrimSpace(level), uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, tea.Cmd) {
@@ -277,8 +285,11 @@ func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, t
 		m.fastModeEnabled = targetEnabled
 	}
 
-	status := serverapi.FastModeToggleStatusMessage(m.fastModeEnabled, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeSuccess)
+	return m, m.applySessionSettingFeedback(clientui.TranscriptSessionSettingFeedback{
+		Kind:     clientui.SessionSettingFastMode,
+		Changed:  changed,
+		FastMode: &m.fastModeEnabled,
+	})
 }
 
 func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Model, tea.Cmd) {
@@ -311,8 +322,11 @@ func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Mo
 	}
 	m.reviewerMode = nextMode
 	m.reviewerEnabled = nextMode != "off"
-	status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
+	return m, m.applySessionSettingFeedback(clientui.TranscriptSessionSettingFeedback{
+		Kind:       clientui.SessionSettingSupervisor,
+		Changed:    changed,
+		Supervisor: &m.reviewerMode,
+	})
 }
 
 func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, tea.Cmd) {
@@ -341,8 +355,11 @@ func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, 
 		changed = currentEnabled != targetEnabled
 	}
 	m.questionsEnabled = nextEnabled
-	status := serverapi.QuestionsToggleStatusMessage(nextEnabled, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
+	return m, m.applySessionSettingFeedback(clientui.TranscriptSessionSettingFeedback{
+		Kind:      clientui.SessionSettingQuestions,
+		Changed:   changed,
+		Questions: &m.questionsEnabled,
+	})
 }
 
 func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Model, tea.Cmd) {
@@ -380,6 +397,9 @@ func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Mo
 		changed = currentEnabled != targetEnabled
 	}
 	m.autoCompactionEnabled = nextEnabled
-	status := serverapi.AutoCompactionToggleStatusMessage(nextEnabled, changed, currentCompactionMode)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
+	return m, m.applySessionSettingFeedback(clientui.TranscriptSessionSettingFeedback{
+		Kind:           clientui.SessionSettingAutoCompaction,
+		Changed:        changed,
+		AutoCompaction: &m.autoCompactionEnabled,
+	})
 }

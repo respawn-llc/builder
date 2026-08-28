@@ -41,6 +41,8 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessagePendingWorkRestored:
 		restoration := message.Payload().(clientui.TranscriptPendingWorkRestored).Restoration
 		m.inputController().restoreServerOrderedTextBeforeComposer(restoration.CanonicalInput)
+	case clientui.TranscriptMessageSessionSettingFeedback:
+		return m.applySessionSettingFeedback(message.Payload().(clientui.TranscriptSessionSettingFeedback))
 	case clientui.TranscriptMessageHumanInputInterrupted:
 		return m.applyTranscriptHumanInputInterrupted(message.Payload().(clientui.TranscriptHumanInputInterrupted))
 	case clientui.TranscriptMessageStepState:

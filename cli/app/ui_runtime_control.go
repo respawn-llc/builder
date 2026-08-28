@@ -7,7 +7,6 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeinput"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -276,11 +275,10 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		return sequenceCmds(tea.SetWindowTitle(sessionTitle(m.sessionName)), followUpCmd)
 	case runtimeControlSetThinkingLevel:
 		m.thinkingLevel = strings.TrimSpace(msg.text)
-		return sequenceCmds(m.sendThinkingLevelSetStatus(m.thinkingLevel), followUpCmd)
+		return followUpCmd
 	case runtimeControlSetFastMode:
 		m.fastModeEnabled = msg.enabled
-		status := serverapi.FastModeToggleStatusMessage(m.fastModeEnabled, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
+		return followUpCmd
 	case runtimeControlSetReviewer:
 		nextMode := strings.TrimSpace(msg.mode)
 		if nextMode == "" {
@@ -288,16 +286,13 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		}
 		m.reviewerMode = nextMode
 		m.reviewerEnabled = nextMode != "off"
-		status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
+		return followUpCmd
 	case runtimeControlSetAutoCompaction:
 		m.autoCompactionEnabled = msg.enabled
-		status := serverapi.AutoCompactionToggleStatusMessage(msg.enabled, msg.changed, msg.compactionMode)
-		return sequenceCmds(m.inputController().appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo), followUpCmd)
+		return followUpCmd
 	case runtimeControlSetQuestions:
 		m.questionsEnabled = msg.enabled
-		status := serverapi.QuestionsToggleStatusMessage(msg.enabled, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
+		return followUpCmd
 	case runtimeControlInterrupt:
 		var merge runtimeTupleMergeResult
 		if msg.runtimeTuple != nil {

@@ -394,7 +394,7 @@ func TestThinkingSetWithoutRuntimeUsesStatusOnly(t *testing.T) {
 	}
 }
 
-func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
+func TestThinkingRuntimeFeedbackUsesTypedSessionEvent(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
 	client := &runtimeControlFakeClient{}
@@ -421,8 +421,25 @@ func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
 	if updated.thinkingLevel != "high" {
 		t.Fatalf("thinking level = %q, want high", updated.thinkingLevel)
 	}
+	if updated.transientStatus != "" {
+		t.Fatalf("runtime response produced duplicate feedback %q before the server event", updated.transientStatus)
+	}
+
+	feedback := "high"
+	cmd = updated.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptSessionSettingFeedback{
+			Kind:     clientui.SessionSettingThinking,
+			Changed:  true,
+			Thinking: &feedback,
+		})),
+		runtimeTupleMergeResult{},
+	)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ = updated.Update(msg)
+		updated = next.(*uiModel)
+	}
 	if updated.transientStatus == "" || updated.transientStatusKind != uiStatusNoticeSuccess {
-		t.Fatalf("thinking runtime completion should surface a success status notice, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
+		t.Fatalf("typed thinking feedback should surface a success status notice, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
 	}
 }
 
