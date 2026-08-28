@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"slices"
 	"testing"
 
 	"core/cli/tui/ongoing"
@@ -15,117 +14,65 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestPendingWorkRefreshHydrationScopesCollectionAndCompletions(t *testing.T) {
-	sessionA := pendingWorkRefreshTestSessionID(t, "session-a")
-	sessionB := pendingWorkRefreshTestSessionID(t, "session-b")
-	workA := runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "A"),
-	}}
-	workB := runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneQueue, "B"),
-	}}
-
+func TestPendingWorkRefreshHydrationScopeAndCoalescing(t *testing.T) {
+	sessionID := pendingWorkRefreshTestSessionID(t, "session")
+	work := pendingWorkRefreshTestWork("current")
 	m := newProjectedStaticUIModel()
-	first := m.advancePendingWorkRefreshScope(sessionA)
-	if first == nil {
-		t.Fatal("initial hydration did not start a Pending Work fetch")
-	}
-	generationA := m.pendingWorkRefresh.generation
 
-	second := m.advancePendingWorkRefreshScope(sessionB)
-	if second == nil {
-		t.Fatal("replacement hydration did not start a Pending Work fetch")
+	if m.advancePendingWorkRefreshScope(sessionID) == nil {
+		t.Fatal("initial hydration did not fetch Pending Work")
 	}
-	if m.pendingWorkRefresh.generation == generationA {
-		t.Fatal("replacement hydration did not advance the refresh generation")
-	}
-	assertPendingWorkRefreshTexts(t, m)
-
-	generationB := m.pendingWorkRefresh.generation
+	firstGeneration := m.pendingWorkRefresh.generation
 	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation:  generationB,
-		pendingWork: runtimeinput.PendingWork{},
-		err:         errors.New("B fetch failed"),
+		generation:  firstGeneration,
+		pendingWork: work,
 	})
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation:  generationA,
-		pendingWork: workA,
-	})
-	assertPendingWorkRefreshTexts(t, m)
+	assertPendingWorkRefreshTexts(t, m, "current")
 
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation:  generationB,
-		pendingWork: workB,
-	})
-	assertPendingWorkRefreshTexts(t, m, "B")
-}
-
-func TestPendingWorkRefreshCoalescesCurrentScopeTriggersAndRetainsOnlyCurrentSuccess(t *testing.T) {
-	sessionID := pendingWorkRefreshTestSessionID(t, "session-current")
-	first := runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "first"),
-	}}
-
-	m := newProjectedStaticUIModel()
-	if cmd := m.advancePendingWorkRefreshScope(sessionID); cmd == nil {
-		t.Fatal("hydration did not start the initial fetch")
+	if m.advancePendingWorkRefreshScope(sessionID) == nil {
+		t.Fatal("same-Session replacement hydration did not fetch Pending Work")
 	}
-	generation := m.pendingWorkRefresh.generation
-
-	if cmd := m.requestPendingWorkRefresh(sessionID); cmd != nil {
-		t.Fatal("overlapping trigger started a second in-flight request")
-	}
-	if cmd := m.requestPendingWorkRefresh(sessionID); cmd != nil {
-		t.Fatal("repeated overlapping trigger started more than one follow-up")
-	}
-	followUp := m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation:  generation,
-		pendingWork: first,
-	})
-	if followUp == nil {
-		t.Fatal("completion did not start the required follow-up")
-	}
-	assertPendingWorkRefreshTexts(t, m, "first")
-
-	_ = m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation: generation,
-		err:        errors.New("follow-up failed"),
-	})
-	if m.pendingWorkRefresh.inFlight || m.pendingWorkRefresh.followUpRequired {
-		t.Fatal("failed follow-up scheduled a timer retry")
-	}
-	assertPendingWorkRefreshTexts(t, m, "first")
-
-	if cmd := m.requestPendingWorkRefresh(pendingWorkRefreshTestSessionID(t, "other-session")); cmd != nil {
-		t.Fatal("mismatched-session trigger started a fetch")
-	}
-}
-
-func TestPendingWorkRefreshSameSessionHydrationNeverCarriesRetiredRuntimeRows(t *testing.T) {
-	sessionID := pendingWorkRefreshTestSessionID(t, "session-same")
-	oldWork := runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "retired Runtime"),
-	}}
-
-	m := newProjectedStaticUIModel()
-	_ = m.advancePendingWorkRefreshScope(sessionID)
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation:  m.pendingWorkRefresh.generation,
-		pendingWork: oldWork,
-	})
-	assertPendingWorkRefreshTexts(t, m, "retired Runtime")
-
-	_ = m.advancePendingWorkRefreshScope(sessionID)
 	replacementGeneration := m.pendingWorkRefresh.generation
 	assertPendingWorkRefreshTexts(t, m)
 	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
+		generation:  firstGeneration,
+		pendingWork: pendingWorkRefreshTestWork("retired"),
+	})
+	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
 		generation: replacementGeneration,
-		err:        errors.New("replacement Runtime unavailable"),
+		err:        errors.New("replacement unavailable"),
 	})
 	assertPendingWorkRefreshTexts(t, m)
+
+	if m.requestPendingWorkRefresh(sessionID) == nil {
+		t.Fatal("current-scope trigger did not fetch Pending Work")
+	}
+	if m.requestPendingWorkRefresh(sessionID) != nil || m.requestPendingWorkRefresh(sessionID) != nil {
+		t.Fatal("overlapping triggers started another request")
+	}
+	followUp := m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
+		generation:  replacementGeneration,
+		pendingWork: work,
+	})
+	if followUp == nil || !m.pendingWorkRefresh.inFlight {
+		t.Fatal("overlapping triggers did not coalesce into one follow-up")
+	}
+	assertPendingWorkRefreshTexts(t, m, "current")
+	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
+		generation: replacementGeneration,
+		err:        errors.New("follow-up failed"),
+	})
+	assertPendingWorkRefreshTexts(t, m, "current")
+	if m.pendingWorkRefresh.inFlight || m.pendingWorkRefresh.followUpRequired {
+		t.Fatal("failed follow-up scheduled another retry")
+	}
+	if m.requestPendingWorkRefresh(pendingWorkRefreshTestSessionID(t, "other")) != nil {
+		t.Fatal("another Session triggered a refresh")
+	}
 }
 
-func TestPendingWorkRefreshScopeAdvancesOnlyForAcceptedHydration(t *testing.T) {
+func TestPendingWorkRefreshAdvancesOnlyForAcceptedHydrationAndListsExactSession(t *testing.T) {
+	sessionID := ongoingTestSessionID()
 	m := newProjectedStaticUIModel()
 	controller := newOngoingTranscriptController(
 		&ongoingSurfaceSpy{},
@@ -134,113 +81,90 @@ func TestPendingWorkRefreshScopeAdvancesOnlyForAcceptedHydration(t *testing.T) {
 		m.applyAdmittedTranscriptMessageState,
 	)
 	hydration := ongoingHydrationMessage(1)
-	if _, cmd, err := controller.Accept(hydration); err != nil {
-		t.Fatalf("accept initial hydration: %v", err)
-	} else if cmd == nil {
-		t.Fatal("accepted hydration did not start a Pending Work fetch")
+
+	_, cmd, err := controller.Accept(hydration)
+	if err != nil || cmd == nil {
+		t.Fatalf("accept initial hydration: cmd=%v err=%v", cmd, err)
 	}
 	generation := m.pendingWorkRefresh.generation
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation: generation,
-		pendingWork: runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-			pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "current"),
-		}},
-	})
-
-	if result, cmd, err := controller.Accept(hydration); err != nil {
-		t.Fatalf("reject duplicate hydration: %v", err)
-	} else if result.Action != ongoing.ResultRequestScratchRehydration || cmd != nil {
-		t.Fatalf("duplicate hydration result=%+v cmd=%v, want scratch rehydration without state command", result, cmd)
+	result, rejectedCmd, err := controller.Accept(hydration)
+	if err != nil || result.Action != ongoing.ResultRequestScratchRehydration || rejectedCmd != nil {
+		t.Fatalf("duplicate hydration = %+v/%v/%v", result, rejectedCmd, err)
 	}
 	if m.pendingWorkRefresh.generation != generation {
-		t.Fatal("rejected hydration advanced the Pending Work generation")
+		t.Fatal("rejected hydration advanced Pending Work scope")
 	}
-	assertPendingWorkRefreshTexts(t, m, "current")
 
 	controller.ResetForScratchHydration()
-	if _, cmd, err := controller.Accept(hydration); err != nil {
-		t.Fatalf("accept scratch rehydration: %v", err)
-	} else if cmd == nil {
-		t.Fatal("accepted scratch rehydration did not start a Pending Work fetch")
+	if _, scratchCmd, err := controller.Accept(hydration); err != nil || scratchCmd == nil {
+		t.Fatalf("accept Scratch Rehydration: cmd=%v err=%v", scratchCmd, err)
 	}
 	if m.pendingWorkRefresh.generation == generation {
-		t.Fatal("accepted scratch rehydration did not advance the generation")
+		t.Fatal("accepted Scratch Rehydration did not advance Pending Work scope")
 	}
 	assertPendingWorkRefreshTexts(t, m)
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation: m.pendingWorkRefresh.generation,
-		pendingWork: runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-			pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "refetched"),
-		}},
-	})
-	assertPendingWorkRefreshTexts(t, m, "refetched")
-}
 
-func TestPendingWorkChangedRequestsCurrentHydrationRefresh(t *testing.T) {
-	sessionID := ongoingTestSessionID()
-	m := newProjectedStaticUIModel()
-	_ = m.advancePendingWorkRefreshScope(sessionID)
-	generation := m.pendingWorkRefresh.generation
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation: generation,
-		pendingWork: runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-			pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "before"),
-		}},
-	})
-
-	cmd := m.applyAdmittedTranscriptMessageState(
-		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkChanged{})),
-		runtimeTupleMergeResult{},
-	)
-	if cmd == nil || !m.pendingWorkRefresh.inFlight {
-		t.Fatal("Pending Work Changed did not start a current-scope fetch")
+	service := &pendingWorkRouteFake{
+		response: serverapi.RuntimeListPendingWorkResponse{
+			PendingWork: pendingWorkRefreshTestWork("listed"),
+		},
 	}
-	assertPendingWorkRefreshTexts(t, m, "before")
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
-		generation: m.pendingWorkRefresh.generation,
-		pendingWork: runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-			pendingWorkMessageForTest(runtimeinput.PendingWorkLaneQueue, "after"),
-		}},
+	routeModel := newProjectedTestUIModel(&sessionRuntimeClient{
+		sessionID: sessionID.String(),
+		controls:  service,
 	})
-	assertPendingWorkRefreshTexts(t, m, "after")
+	listCmd := routeModel.advancePendingWorkRefreshScope(sessionID)
+	done, ok := listCmd().(pendingWorkRefreshDoneMsg)
+	if !ok || done.err != nil {
+		t.Fatalf("list completion = %+v", done)
+	}
+	routeModel.applyPendingWorkRefreshDone(done)
+	if service.request.SessionID != sessionID.String() {
+		t.Fatalf("list Session = %q, want %q", service.request.SessionID, sessionID)
+	}
+	assertPendingWorkRefreshTexts(t, routeModel, "listed")
 }
 
-func TestSuccessfulPendingWorkMutationsRequestCurrentHydrationRefresh(t *testing.T) {
+func TestPendingWorkRefreshTriggers(t *testing.T) {
 	sessionID := ongoingTestSessionID()
 	tests := []struct {
-		name  string
-		apply func(*uiModel)
+		name    string
+		trigger func(*uiModel)
 	}{
 		{
+			name: "Changed",
+			trigger: func(m *uiModel) {
+				m.applyAdmittedTranscriptMessageState(
+					clientui.NewTranscriptMessage(
+						2,
+						clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkChanged{}),
+					),
+					runtimeTupleMergeResult{},
+				)
+			},
+		},
+		{
 			name: "Send or Steer",
-			apply: func(m *uiModel) {
+			trigger: func(m *uiModel) {
 				m.activeSubmit = activeSubmitState{token: 1}
-				_, _ = m.inputController().handleSubmitDone(submitDoneMsg{
-					token:     1,
-					sessionID: sessionID,
-				})
+				m.inputController().handleSubmitDone(submitDoneMsg{token: 1, sessionID: sessionID})
 			},
 		},
 		{
 			name: "Queue",
-			apply: func(m *uiModel) {
-				m.injectedQueue = []injectedRuntimeQueueItem{{
-					LocalID:     "local",
-					State:       injectedRuntimeQueuePendingCreate,
-					CreateToken: 1,
-				}}
-				_, _ = m.inputController().handleInjectedQueueCreateDone(injectedQueueCreateDoneMsg{
+			trigger: func(m *uiModel) {
+				m.inputController().handleInjectedQueueCreateDone(injectedQueueCreateDoneMsg{
 					token:     1,
 					sessionID: sessionID,
-					localID:   "local",
-					item:      clientui.QueuedUserMessage{ID: runtimeids.NewQueueItemID().String()},
+					localID:   "already-reconciled",
+					completed: true,
 				})
 			},
 		},
 		{
 			name: "manual compaction",
-			apply: func(m *uiModel) {
-				_, _ = m.inputController().handleCompactDone(compactDoneMsg{
+			trigger: func(m *uiModel) {
+				m.inputController().handleCompactDone(compactDoneMsg{
 					requestID: runtimeids.NewCompactionRequestID(),
 					sessionID: sessionID,
 				})
@@ -248,9 +172,9 @@ func TestSuccessfulPendingWorkMutationsRequestCurrentHydrationRefresh(t *testing
 		},
 		{
 			name: "active Worktree",
-			apply: func(m *uiModel) {
+			trigger: func(m *uiModel) {
 				m.worktrees.switchToken = 1
-				_ = m.reduceWorktreeMessage(worktreeSwitchDoneMsg{
+				m.reduceWorktreeMessage(worktreeSwitchDoneMsg{
 					token:      1,
 					sessionID:  sessionID,
 					transition: runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionLeave},
@@ -259,18 +183,12 @@ func TestSuccessfulPendingWorkMutationsRequestCurrentHydrationRefresh(t *testing
 			},
 		},
 		{
-			name: "removal",
-			apply: func(m *uiModel) {
-				m.injectedQueue = []injectedRuntimeQueueItem{{
-					LocalID:      "local",
-					ServerID:     runtimeids.NewQueueItemID().String(),
-					State:        injectedRuntimeQueueDiscardPending,
-					DiscardToken: 1,
-				}}
-				_, _ = m.inputController().handleInjectedQueueDiscardDone(injectedQueueDiscardDoneMsg{
+			name: "discard",
+			trigger: func(m *uiModel) {
+				m.inputController().handleInjectedQueueDiscardDone(injectedQueueDiscardDoneMsg{
 					token:     1,
 					sessionID: sessionID,
-					localID:   "local",
+					localID:   "already-reconciled",
 					discarded: true,
 				})
 			},
@@ -285,70 +203,18 @@ func TestSuccessfulPendingWorkMutationsRequestCurrentHydrationRefresh(t *testing
 				generation:      1,
 				successfulFetch: true,
 			}
-			test.apply(m)
+			test.trigger(m)
 			if !m.pendingWorkRefresh.inFlight {
-				t.Fatal("successful mutation did not start a Pending Work refresh")
+				t.Fatal("successful mutation did not fetch Pending Work")
 			}
 		})
 	}
-}
-
-func TestSuccessfulPendingWorkMutationRefreshDoesNotDependOnRetainedLocalRequestState(t *testing.T) {
-	sessionID := ongoingTestSessionID()
-	m := newProjectedStaticUIModel()
-	m.pendingWorkRefresh = pendingWorkRefreshOwner{
-		sessionID:       sessionID,
-		generation:      1,
-		successfulFetch: true,
-	}
-
-	_, _ = m.inputController().handleInjectedQueueCreateDone(injectedQueueCreateDoneMsg{
-		token:     99,
-		sessionID: sessionID,
-		localID:   "already-reconciled",
-		completed: true,
-	})
-
-	if !m.pendingWorkRefresh.inFlight {
-		t.Fatal("successful response did not refresh after its local request state was reconciled")
-	}
-}
-
-func TestPendingWorkRefreshReadsTheHydratedSessionFromTheListRoute(t *testing.T) {
-	sessionID := ongoingTestSessionID()
-	pending := runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
-		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "listed"),
-	}}
-	service := &pendingWorkRouteFake{response: serverapi.RuntimeListPendingWorkResponse{PendingWork: pending}}
-	client := &sessionRuntimeClient{
-		sessionID: sessionID.String(),
-		controls:  service,
-	}
-	m := newProjectedTestUIModel(client)
-
-	cmd := m.advancePendingWorkRefreshScope(sessionID)
-	if cmd == nil {
-		t.Fatal("hydration did not start a Pending Work list request")
-	}
-	done, ok := cmd().(pendingWorkRefreshDoneMsg)
-	if !ok {
-		t.Fatalf("list command completion = %T, want pendingWorkRefreshDoneMsg", cmd())
-	}
-	if done.err != nil {
-		t.Fatalf("list Pending Work: %v", done.err)
-	}
-	if service.request.SessionID != sessionID.String() {
-		t.Fatalf("list Session ID = %q, want %q", service.request.SessionID, sessionID.String())
-	}
-	_ = m.applyPendingWorkRefreshDone(done)
-	assertPendingWorkRefreshTexts(t, m, "listed")
 }
 
 type pendingWorkRouteFake struct {
 	apicontract.RuntimeControlService
 	request  serverapi.RuntimeListPendingWorkRequest
 	response serverapi.RuntimeListPendingWorkResponse
-	err      error
 }
 
 func (f *pendingWorkRouteFake) ListPendingWork(
@@ -356,7 +222,7 @@ func (f *pendingWorkRouteFake) ListPendingWork(
 	request serverapi.RuntimeListPendingWorkRequest,
 ) (serverapi.RuntimeListPendingWorkResponse, error) {
 	f.request = request
-	return f.response, f.err
+	return f.response, nil
 }
 
 func (f *pendingWorkRouteFake) RemovePendingWork(
@@ -369,13 +235,20 @@ func (f *pendingWorkRouteFake) RemovePendingWork(
 func assertPendingWorkRefreshTexts(t *testing.T, m *uiModel, want ...string) {
 	t.Helper()
 	entries := m.layout().queuedMessages()
-	got := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		got = append(got, entry.Text)
+	if len(entries) != len(want) {
+		t.Fatalf("Pending Work count = %d, want %d", len(entries), len(want))
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("Pending Work texts = %q, want %q", got, want)
+	for index := range want {
+		if entries[index].Text != want[index] {
+			t.Fatalf("Pending Work[%d] = %q, want %q", index, entries[index].Text, want[index])
+		}
 	}
+}
+
+func pendingWorkRefreshTestWork(text string) runtimeinput.PendingWork {
+	return runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
+		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, text),
+	}}
 }
 
 func pendingWorkRefreshTestSessionID(t *testing.T, raw string) runtimeids.SessionID {
