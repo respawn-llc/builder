@@ -67,7 +67,7 @@ func TestImmediateSettingsApplyCommittedStateOnPersistenceObserverFailure(t *tes
 	type controlCase struct {
 		name      string
 		newEngine func(*testing.T, *session.Store) *Engine
-		apply     func(*Engine, SessionSettingPublication) (bool, error)
+		apply     func(*Engine) (bool, error)
 		isApplied func(*Engine) bool
 	}
 	cases := []controlCase{
@@ -80,8 +80,8 @@ func TestImmediateSettingsApplyCommittedStateOnPersistenceObserverFailure(t *tes
 					IsOpenAIFirstParty:   true,
 				}}, Config{Model: "gpt-5.3-codex"})
 			},
-			apply: func(engine *Engine, publish SessionSettingPublication) (bool, error) {
-				return engine.SetFastModeEnabledWithPublication(context.Background(), true, publish)
+			apply: func(engine *Engine) (bool, error) {
+				return engine.SetFastModeEnabledWithPublication(context.Background(), true, nil)
 			},
 			isApplied: func(engine *Engine) bool { return engine.FastModeEnabled() },
 		},
@@ -90,8 +90,8 @@ func TestImmediateSettingsApplyCommittedStateOnPersistenceObserverFailure(t *tes
 			newEngine: func(t *testing.T, store *session.Store) *Engine {
 				return mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 			},
-			apply: func(engine *Engine, publish SessionSettingPublication) (bool, error) {
-				changed, _, err := engine.SetQuestionsEnabledWithPublication(context.Background(), false, publish)
+			apply: func(engine *Engine) (bool, error) {
+				changed, _, err := engine.SetQuestionsEnabledWithPublication(context.Background(), false, nil)
 				return changed, err
 			},
 			isApplied: func(engine *Engine) bool { return !engine.QuestionsEnabled() },
@@ -112,8 +112,8 @@ func TestImmediateSettingsApplyCommittedStateOnPersistenceObserverFailure(t *tes
 					},
 				})
 			},
-			apply: func(engine *Engine, publish SessionSettingPublication) (bool, error) {
-				changed, _, err := engine.SetReviewerEnabledWithPublication(context.Background(), true, publish)
+			apply: func(engine *Engine) (bool, error) {
+				changed, _, err := engine.SetReviewerEnabledWithPublication(context.Background(), true, nil)
 				return changed, err
 			},
 			isApplied: func(engine *Engine) bool { return engine.ReviewerFrequency() == "edits" },
@@ -128,16 +128,12 @@ func TestImmediateSettingsApplyCommittedStateOnPersistenceObserverFailure(t *tes
 			engine := testCase.newEngine(t, store)
 			gate.FailNext(observerErr)
 
-			publications := 0
-			changed, err := testCase.apply(engine, func(clientui.TranscriptSessionSettingFeedback) error {
-				publications++
-				return nil
-			})
+			changed, err := testCase.apply(engine)
 			if !errors.Is(err, observerErr) {
 				t.Fatalf("control error = %v, want observer error", err)
 			}
-			if !changed || !testCase.isApplied(engine) || publications != 1 {
-				t.Fatalf("committed setting did not apply and publish: changed=%v publications=%d", changed, publications)
+			if !changed || !testCase.isApplied(engine) {
+				t.Fatalf("committed setting did not apply: changed=%v", changed)
 			}
 			if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
 				t.Fatalf("immediate setting projected committed rows: %+v", rows)
@@ -161,11 +157,12 @@ func TestFastModePersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
 		changed bool
 		err     error
 	}, 1)
+	publishing := make(chan struct{})
+	releasePublication := make(chan struct{})
 	go func() {
-		changed, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, func(feedback clientui.TranscriptSessionSettingFeedback) error {
-			if feedback.Kind != clientui.SessionSettingFastMode || feedback.FastMode == nil || !*feedback.FastMode || !feedback.Changed {
-				t.Errorf("Fast Mode feedback = %+v", feedback)
-			}
+		changed, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, func(clientui.TranscriptSessionSettingFeedback) error {
+			close(publishing)
+			<-releasePublication
 			return nil
 		})
 		result <- struct {
@@ -188,58 +185,20 @@ func TestFastModePersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
 
 	release()
 	select {
-	case got := <-result:
-		if got.err != nil || !got.changed {
-			t.Fatalf("SetFastModeEnabledWithPublication = %+v", got)
-		}
+	case <-publishing:
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Fast Mode completion")
+		t.Fatal("timed out waiting for Fast Mode publication")
 	}
 	if !engine.FastModeEnabled() {
 		t.Fatal("Fast Mode was not applied after Session metadata persistence")
 	}
-	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
-		t.Fatalf("Fast Mode created committed transcript rows: %+v", rows)
-	}
-}
 
-func TestImmediateSettingSerializesThroughPublication(t *testing.T) {
-	store := mustCreateTestSession(t)
-	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
-		ProviderID:           "openai",
-		SupportsResponsesAPI: true,
-		IsOpenAIFirstParty:   true,
-	}}, Config{Model: "gpt-5.3-codex"})
-
-	firstPublishing := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, func(feedback clientui.TranscriptSessionSettingFeedback) error {
-			close(firstPublishing)
-			<-releaseFirst
-			return nil
-		})
-		firstDone <- err
-	}()
-	select {
-	case <-firstPublishing:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for first setting publication")
-	}
-
-	secondPublished := make(chan clientui.TranscriptSessionSettingFeedback, 1)
 	secondDone := make(chan error, 1)
 	go func() {
-		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), false, func(feedback clientui.TranscriptSessionSettingFeedback) error {
-			secondPublished <- feedback
-			return nil
-		})
+		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), false, nil)
 		secondDone <- err
 	}()
 	select {
-	case feedback := <-secondPublished:
-		t.Fatalf("second setting overtook first publication: %+v", feedback)
 	case err := <-secondDone:
 		t.Fatalf("second setting completed before first publication: %v", err)
 	case <-time.After(25 * time.Millisecond):
@@ -249,11 +208,11 @@ func TestImmediateSettingSerializesThroughPublication(t *testing.T) {
 		t.Fatal("second setting applied live before first publication completed")
 	}
 
-	close(releaseFirst)
+	close(releasePublication)
 	select {
-	case err := <-firstDone:
-		if err != nil {
-			t.Fatalf("first setting: %v", err)
+	case got := <-result:
+		if got.err != nil || !got.changed {
+			t.Fatalf("first Fast Mode setting = %+v", got)
 		}
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for first setting")
@@ -265,10 +224,6 @@ func TestImmediateSettingSerializesThroughPublication(t *testing.T) {
 		}
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for second setting")
-	}
-	feedback := <-secondPublished
-	if feedback.FastMode == nil || *feedback.FastMode || !feedback.Changed {
-		t.Fatalf("second setting feedback = %+v", feedback)
 	}
 	requireSessionFastModeOverride(t, store, false)
 	if engine.FastModeEnabled() {
@@ -289,12 +244,7 @@ func TestQuestionsPersistBeforeFeedbackAndLiveProjection(t *testing.T) {
 		err     error
 	}, 1)
 	go func() {
-		changed, enabled, err := engine.SetQuestionsEnabledWithPublication(t.Context(), false, func(feedback clientui.TranscriptSessionSettingFeedback) error {
-			if feedback.Questions == nil || *feedback.Questions || !feedback.Changed {
-				t.Errorf("Questions feedback = %+v", feedback)
-			}
-			return nil
-		})
+		changed, enabled, err := engine.SetQuestionsEnabledWithPublication(t.Context(), false, nil)
 		result <- struct {
 			changed bool
 			enabled bool
@@ -355,12 +305,7 @@ func TestReviewerPersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
 		err     error
 	}, 1)
 	go func() {
-		changed, mode, err := engine.SetReviewerEnabledWithPublication(t.Context(), true, func(feedback clientui.TranscriptSessionSettingFeedback) error {
-			if feedback.Supervisor == nil || *feedback.Supervisor != "edits" || !feedback.Changed {
-				t.Errorf("Supervisor feedback = %+v", feedback)
-			}
-			return nil
-		})
+		changed, mode, err := engine.SetReviewerEnabledWithPublication(t.Context(), true, nil)
 		result <- struct {
 			changed bool
 			mode    string

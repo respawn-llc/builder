@@ -14,7 +14,7 @@ import (
 	"core/shared/textutil"
 )
 
-func TestPausedWorkflowThinkingDoesNotBlockOperatorThinkingAndMayApplyLater(t *testing.T) {
+func TestOperatorThinkingRemainsIndependentFromWorkflowThinking(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
 		Model:                   "workflow-thinking-model",
@@ -56,34 +56,6 @@ func TestPausedWorkflowThinkingDoesNotBlockOperatorThinkingAndMayApplyLater(t *t
 	if got := engine.ThinkingLevel(); got != "max" {
 		t.Fatalf("Thinking after later Workflow write = %q, want max", got)
 	}
-}
-
-func TestOperatorThinkingAppliedAfterWorkflowMayReplaceIt(t *testing.T) {
-	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), &fakeClient{}, Config{
-		Model:         "workflow-thinking-model",
-		ThinkingLevel: "medium",
-	})
-	thinking, err := workflow.NewThinkingValue("max")
-	if err != nil {
-		t.Fatalf("NewThinkingValue: %v", err)
-	}
-	if err := engine.SetWorkflowThinkingValue(thinking); err != nil {
-		t.Fatalf("SetWorkflowThinkingValue: %v", err)
-	}
-	if err := engine.SetThinkingLevel(t.Context(), "low"); err != nil {
-		t.Fatalf("SetThinkingLevel: %v", err)
-	}
-	if got := engine.ThinkingLevel(); got != "low" {
-		t.Fatalf("Thinking after later operator write = %q, want low", got)
-	}
-}
-
-func TestOperatorThinkingPublicationFailureRemainsAppliedUntilLaterWorkflowWrite(t *testing.T) {
-	store := mustCreateTestSession(t)
-	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
-		Model:         "workflow-thinking-model",
-		ThinkingLevel: "medium",
-	})
 	publicationErr := errors.New("setting publication failed")
 	changed, err := engine.SetThinkingLevelWithPublication(t.Context(), "high", func(clientui.TranscriptSessionSettingFeedback) error {
 		return publicationErr
@@ -91,12 +63,7 @@ func TestOperatorThinkingPublicationFailureRemainsAppliedUntilLaterWorkflowWrite
 	if !errors.Is(err, publicationErr) || !changed || engine.ThinkingLevel() != "high" {
 		t.Fatalf("operator Thinking = changed %t value %q error %v", changed, engine.ThinkingLevel(), err)
 	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "high" {
-		t.Fatalf("durable operator Thinking = %+v, want high", meta.ChatSettings)
-	}
-
-	thinking, err := workflow.NewThinkingValue("low")
+	thinking, err = workflow.NewThinkingValue("low")
 	if err != nil {
 		t.Fatalf("NewThinkingValue: %v", err)
 	}

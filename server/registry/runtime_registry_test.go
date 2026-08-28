@@ -389,72 +389,50 @@ func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing
 }
 
 func TestSessionSettingPublicationBatchesAuthoritativeStateBeforeFeedback(t *testing.T) {
-	tests := []struct {
-		name      string
-		mutate    func(*testing.T, *runtime.Engine) clientui.TranscriptSessionSettingFeedback
-		stateKind clientui.TranscriptMessageKind
-	}{
-		{
-			name: "Session Identity",
-			mutate: func(t *testing.T, engine *runtime.Engine) clientui.TranscriptSessionSettingFeedback {
-				if err := engine.SetSessionName(t.Context(), "renamed"); err != nil {
-					t.Fatalf("SetSessionName: %v", err)
-				}
-				name := "renamed"
-				return clientui.TranscriptSessionSettingFeedback{
-					Kind:        clientui.SessionSettingSessionName,
-					Changed:     true,
-					SessionName: &name,
-				}
-			},
-			stateKind: clientui.TranscriptMessageSessionIdentity,
-		},
-		{
-			name: "Session Status",
-			mutate: func(t *testing.T, engine *runtime.Engine) clientui.TranscriptSessionSettingFeedback {
-				if _, _, err := engine.SetAutoCompactionEnabled(t.Context(), false); err != nil {
-					t.Fatalf("SetAutoCompactionEnabled: %v", err)
-				}
-				enabled := false
-				return clientui.TranscriptSessionSettingFeedback{
-					Kind:           clientui.SessionSettingAutoCompaction,
-					Changed:        true,
-					AutoCompaction: &enabled,
-				}
-			},
-			stateKind: clientui.TranscriptMessageSessionStatus,
-		},
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	subscription := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	if message := nextTranscriptMessage(t, subscription); message.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("first message kind = %q, want hydration", message.Kind())
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			registry := NewRuntimeRegistry()
-			engine := newRegistryTestRuntime(t, nil)
-			registerReady(t, registry, engine.SessionID(), engine)
-			subscription := subscribeTranscriptForTest(t, registry, engine.SessionID())
-			if message := nextTranscriptMessage(t, subscription); message.Kind() != clientui.TranscriptMessageHydration {
-				t.Fatalf("first message kind = %q, want hydration", message.Kind())
-			}
+	name := "renamed"
+	if err := engine.SetSessionName(t.Context(), name); err != nil {
+		t.Fatal(err)
+	}
+	feedback := clientui.TranscriptSessionSettingFeedback{
+		Kind: clientui.SessionSettingSessionName, Changed: true, SessionName: &name,
+	}
+	if err := registry.PublishSessionSettingFeedback(engine.SessionID(), feedback); err != nil {
+		t.Fatal(err)
+	}
+	state := nextTranscriptMessage(t, subscription)
+	publishedFeedback := nextTranscriptMessage(t, subscription)
+	if state.Kind() != clientui.TranscriptMessageSessionIdentity ||
+		publishedFeedback.Kind() != clientui.TranscriptMessageSessionSettingFeedback ||
+		publishedFeedback.Sequence != state.Sequence+1 ||
+		transcriptPayload[clientui.TranscriptSessionSettingFeedback](t, publishedFeedback).Kind != feedback.Kind {
+		t.Fatalf("setting publication order = state %+v, feedback %+v", state, publishedFeedback)
+	}
 
-			feedback := test.mutate(t, engine)
-			if err := registry.PublishSessionSettingFeedback(engine.SessionID(), feedback); err != nil {
-				t.Fatalf("PublishSessionSettingFeedback: %v", err)
-			}
-			state := nextTranscriptMessage(t, subscription)
-			if state.Kind() != test.stateKind {
-				t.Fatalf("first batch event kind = %q, want %q", state.Kind(), test.stateKind)
-			}
-			publishedFeedback := nextTranscriptMessage(t, subscription)
-			if publishedFeedback.Kind() != clientui.TranscriptMessageSessionSettingFeedback {
-				t.Fatalf("second batch event kind = %q, want setting feedback", publishedFeedback.Kind())
-			}
-			if got := transcriptPayload[clientui.TranscriptSessionSettingFeedback](t, publishedFeedback); got.Kind != feedback.Kind {
-				t.Fatalf("published feedback = %+v, want %+v", got, feedback)
-			}
-			if publishedFeedback.Sequence != state.Sequence+1 {
-				t.Fatalf("setting batch sequences = %d, %d; want consecutive", state.Sequence, publishedFeedback.Sequence)
-			}
-		})
+	enabled := false
+	if _, _, err := engine.SetAutoCompactionEnabled(t.Context(), enabled); err != nil {
+		t.Fatal(err)
+	}
+	feedback = clientui.TranscriptSessionSettingFeedback{
+		Kind: clientui.SessionSettingAutoCompaction, Changed: true, AutoCompaction: &enabled,
+	}
+	if err := registry.PublishSessionSettingFeedback(engine.SessionID(), feedback); err != nil {
+		t.Fatal(err)
+	}
+	state = nextTranscriptMessage(t, subscription)
+	publishedFeedback = nextTranscriptMessage(t, subscription)
+	if state.Kind() != clientui.TranscriptMessageSessionStatus ||
+		publishedFeedback.Kind() != clientui.TranscriptMessageSessionSettingFeedback ||
+		publishedFeedback.Sequence != state.Sequence+1 ||
+		transcriptPayload[clientui.TranscriptSessionSettingFeedback](t, publishedFeedback).Kind != feedback.Kind {
+		t.Fatalf("setting publication order = state %+v, feedback %+v", state, publishedFeedback)
 	}
 }
 

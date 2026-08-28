@@ -5,6 +5,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -553,12 +554,16 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 	})
 
 	t.Run("unsupported fast mode", func(t *testing.T) {
-		changed, err := eng.SetFastModeEnabled(true)
+		published := false
+		changed, err := eng.SetFastModeEnabledWithPublication(t.Context(), true, func(clientui.TranscriptSessionSettingFeedback) error {
+			published = true
+			return nil
+		})
 		if err == nil {
 			t.Fatal("expected fast mode unsupported error")
 		}
-		if changed {
-			t.Fatal("did not expect changed=true for unsupported fast mode")
+		if changed || published {
+			t.Fatalf("rejected fast mode = changed %t, published %t", changed, published)
 		}
 		if eng.FastModeEnabled() {
 			t.Fatal("did not expect fast mode enabled after failure")
@@ -752,7 +757,7 @@ func TestSetAutoCompactionEnabledRejectsAfterClose(t *testing.T) {
 	}
 }
 
-func TestSetAutoCompactionDisabledDuringBusyStepAppliesImmediately(t *testing.T) {
+func TestImmediateSessionSettingsApplyDuringBusyStepWithoutTranscriptRows(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -785,6 +790,12 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesImmediately(t *testing.T)
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model:                 "gpt-5",
 		AutoCompactTokenLimit: 350000,
+		Reviewer: ReviewerConfig{
+			Frequency:     "off",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			Client:        &fakeClient{},
+		},
 	})
 
 	submitDone := make(chan error, 1)
@@ -798,26 +809,51 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesImmediately(t *testing.T)
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for tool call to start")
 	}
-	type settingResult struct {
-		changed bool
-		enabled bool
-		err     error
+	before := mustTranscriptHydrationSnapshot(t, eng)
+	var feedback []clientui.TranscriptSessionSettingFeedback
+	publish := func(value clientui.TranscriptSessionSettingFeedback) error {
+		feedback = append(feedback, value)
+		return nil
 	}
-	settingDone := make(chan settingResult, 1)
-	go func() {
-		changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
-		settingDone <- settingResult{changed: changed, enabled: enabled, err: err}
-	}()
-	select {
-	case result := <-settingDone:
-		if result.err != nil || !result.changed || result.enabled {
-			t.Fatalf("setting result = %+v, want changed and disabled", result)
+	if _, err := eng.SetSessionNameWithPublication(t.Context(), "renamed", publish); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.SetThinkingLevelWithPublication(t.Context(), "high", publish); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.SetFastModeEnabledWithPublication(t.Context(), true, publish); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := eng.SetReviewerEnabledWithPublication(t.Context(), true, publish); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := eng.SetQuestionsEnabledWithPublication(t.Context(), false, publish); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := eng.SetAutoCompactionEnabledWithPublication(t.Context(), false, publish); err != nil {
+		t.Fatal(err)
+	}
+	if len(feedback) != 6 {
+		t.Fatalf("setting feedback = %+v, want six values", feedback)
+	}
+	for index, value := range feedback {
+		if err := value.Validate(); err != nil || !value.Changed {
+			t.Fatalf("feedback[%d] = %+v, validation error %v", index, value, err)
 		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("busy Agent Step blocked immediate Auto-compaction setting")
 	}
-	if eng.AutoCompactionEnabled() {
-		t.Fatal("Auto-compaction remained enabled during busy Agent Step")
+	meta := store.Meta()
+	if meta.Name != "renamed" || meta.ChatSettings == nil ||
+		meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "high" ||
+		meta.ChatSettings.Fast == nil || !*meta.ChatSettings.Fast ||
+		meta.ChatSettings.Supervisor == nil || *meta.ChatSettings.Supervisor != "edits" ||
+		meta.ChatSettings.Questions == nil || *meta.ChatSettings.Questions ||
+		meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction ||
+		eng.SessionName() != "renamed" || eng.ThinkingLevel() != "high" || !eng.FastModeEnabled() ||
+		eng.ReviewerFrequency() != "edits" || eng.QuestionsEnabled() || eng.AutoCompactionEnabled() {
+		t.Fatalf("immediate setting state = meta %+v, feedback %+v", meta, feedback)
+	}
+	if after := mustTranscriptHydrationSnapshot(t, eng); len(after.CommittedRows) != len(before.CommittedRows) {
+		t.Fatalf("immediate settings added transcript rows: before %d, after %d", len(before.CommittedRows), len(after.CommittedRows))
 	}
 
 	close(release)
