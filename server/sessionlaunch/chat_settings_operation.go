@@ -1,37 +1,22 @@
 package sessionlaunch
-
 import (
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
-
 	"core/server/launch"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
-
 type PreparedChatSettingsOperationInput struct {
-	Raw                session.ChatSettingsState
-	Effective          session.ChatSettings
-	PersistedQuestions bool
-	PersistedThinking  string
-	Catalog            launch.PreparedChatAgentCatalog
-	Locked             *session.LockedContract
-	WorkflowLocked     bool
-	CompactionMode     config.CompactionMode
+	Raw session.ChatSettingsState; Effective session.ChatSettings; PersistedQuestions bool; PersistedThinking string
+	Catalog launch.PreparedChatAgentCatalog; Locked *session.LockedContract; WorkflowLocked bool; CompactionMode config.CompactionMode
 }
 type PreparedChatSettingsOperationResult struct {
-	State     session.ChatSettingsState
-	Effective session.ChatSettings
-	Rejection *serverapi.ChatSettingsMutationRejectedResult
+	State session.ChatSettingsState; Effective session.ChatSettings; Rejection *serverapi.ChatSettingsMutationRejectedResult
 }
-
-func ProjectPreparedChatSettingsOperation(
-	input PreparedChatSettingsOperationInput,
-	operation serverapi.ChatSettingsMutationOperation,
-) (PreparedChatSettingsOperationResult, error) {
+func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInput, operation serverapi.ChatSettingsMutationOperation) (PreparedChatSettingsOperationResult, error) {
 	rawAgent := input.Raw.Agent
 	defaultEntry, ok := input.Catalog.Lookup(config.DefaultSubagentRole)
 	if !ok {
@@ -122,7 +107,6 @@ func rejectedChatSettingsOperation(
 ) PreparedChatSettingsOperationResult {
 	return PreparedChatSettingsOperationResult{State: input.Raw, Effective: input.Effective, Rejection: &serverapi.ChatSettingsMutationRejectedResult{Reason: reason}}
 }
-
 func completeChatSettingsOverrides(settings session.ChatSettings) *session.ChatSettingsOverrides {
 	return &session.ChatSettingsOverrides{Supervisor: &settings.Supervisor, Thinking: &settings.Thinking, Fast: &settings.Fast, Questions: &settings.Questions, AutoCompaction: &settings.AutoCompaction}
 }

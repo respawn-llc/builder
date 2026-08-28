@@ -200,14 +200,9 @@ const (
 	ChatSettingsMutationQuestions      ChatSettingsMutationOperationKind = "questions"
 	ChatSettingsMutationAutoCompaction ChatSettingsMutationOperationKind = "auto_compaction"
 )
-
 type ChatSettingsMutationOperation struct {
-	Kind    ChatSettingsMutationOperationKind `json:"kind"`
-	Role    *string                           `json:"role,omitempty"`
-	Value   *string                           `json:"value,omitempty"`
-	Enabled *bool                             `json:"enabled,omitempty"`
+	Kind ChatSettingsMutationOperationKind `json:"kind"`; Role *string `json:"role,omitempty"`; Value *string `json:"value,omitempty"`; Enabled *bool `json:"enabled,omitempty"`
 }
-
 func (o ChatSettingsMutationOperation) Validate() error {
 	switch o.Kind {
 	case ChatSettingsMutationAgent:
@@ -227,12 +222,9 @@ func (o ChatSettingsMutationOperation) Validate() error {
 	}
 	return nil
 }
-
 type ChatSettingsMutationRequest struct {
-	Target    ChatSettingsReadTarget        `json:"target"`
-	Operation ChatSettingsMutationOperation `json:"operation"`
+	Target ChatSettingsReadTarget `json:"target"`; Operation ChatSettingsMutationOperation `json:"operation"`
 }
-
 func (r ChatSettingsMutationRequest) Validate() error {
 	if err := r.Target.Validate(); err != nil {
 		return err
@@ -254,22 +246,9 @@ func (r *ChatSettingsMutationRequest) UnmarshalJSON(data []byte) error {
 }
 
 type ChatSettingsMutationResultKind string
-
-const (
-	ChatSettingsMutationApplied  ChatSettingsMutationResultKind = "applied"
-	ChatSettingsMutationRejected ChatSettingsMutationResultKind = "rejected"
-)
-
+const (ChatSettingsMutationApplied ChatSettingsMutationResultKind = "applied"; ChatSettingsMutationRejected ChatSettingsMutationResultKind = "rejected")
 type ChatSettingsMutationRejectionReason string
-
-const (
-	ChatSettingsMutationAgentLocked              ChatSettingsMutationRejectionReason = "agent_locked"
-	ChatSettingsMutationAgentUnavailable         ChatSettingsMutationRejectionReason = "agent_unavailable"
-	ChatSettingsMutationThinkingUnavailable      ChatSettingsMutationRejectionReason = "thinking_unavailable"
-	ChatSettingsMutationFastUnavailable          ChatSettingsMutationRejectionReason = "fast_unavailable"
-	ChatSettingsMutationAutoCompactionPolicyLock ChatSettingsMutationRejectionReason = "auto_compaction_policy_locked"
-)
-
+const (ChatSettingsMutationAgentLocked ChatSettingsMutationRejectionReason = "agent_locked"; ChatSettingsMutationAgentUnavailable ChatSettingsMutationRejectionReason = "agent_unavailable"; ChatSettingsMutationThinkingUnavailable ChatSettingsMutationRejectionReason = "thinking_unavailable"; ChatSettingsMutationFastUnavailable ChatSettingsMutationRejectionReason = "fast_unavailable"; ChatSettingsMutationAutoCompactionPolicyLock ChatSettingsMutationRejectionReason = "auto_compaction_policy_locked")
 func (r ChatSettingsMutationRejectionReason) Validate() error {
 	switch r {
 	case ChatSettingsMutationAgentLocked,
@@ -282,25 +261,12 @@ func (r ChatSettingsMutationRejectionReason) Validate() error {
 		return fmt.Errorf("Chat settings mutation rejection reason %q is invalid", r)
 	}
 }
-
-type ChatSettingsMutationAppliedResult struct {
-	Changed bool `json:"changed"`
-}
-type ChatSettingsMutationRejectedResult struct {
-	Reason ChatSettingsMutationRejectionReason `json:"reason"`
-}
+type ChatSettingsMutationAppliedResult struct { Changed bool `json:"changed"` }
+type ChatSettingsMutationRejectedResult struct { Reason ChatSettingsMutationRejectionReason `json:"reason"` }
 type ChatSettingsMutationResult struct {
-	Kind     ChatSettingsMutationResultKind      `json:"kind"`
-	Applied  *ChatSettingsMutationAppliedResult  `json:"applied,omitempty"`
-	Rejected *ChatSettingsMutationRejectedResult `json:"rejected,omitempty"`
+	Kind ChatSettingsMutationResultKind `json:"kind"`; Applied *ChatSettingsMutationAppliedResult `json:"applied,omitempty"`; Rejected *ChatSettingsMutationRejectedResult `json:"rejected,omitempty"`
 }
 
-func NewChatSettingsMutationApplied(changed bool) ChatSettingsMutationResult {
-	return ChatSettingsMutationResult{Kind: ChatSettingsMutationApplied, Applied: &ChatSettingsMutationAppliedResult{Changed: changed}}
-}
-func NewChatSettingsMutationRejected(reason ChatSettingsMutationRejectionReason) ChatSettingsMutationResult {
-	return ChatSettingsMutationResult{Kind: ChatSettingsMutationRejected, Rejected: &ChatSettingsMutationRejectedResult{Reason: reason}}
-}
 func (r ChatSettingsMutationResult) Validate() error {
 	switch r.Kind {
 	case ChatSettingsMutationApplied:
@@ -319,12 +285,8 @@ func (r ChatSettingsMutationResult) Validate() error {
 	}
 	return nil
 }
-
 type ChatSettingsMutationResponse struct {
-	Result   ChatSettingsMutationResult `json:"result"`
-	Settings ChatSettings               `json:"settings"`
-	Session  *ChatSettingsSessionFacts  `json:"session,omitempty"`
-	Context  ChatContext                `json:"context"`
+	Result ChatSettingsMutationResult `json:"result"`; Settings ChatSettings `json:"settings"`; Session *ChatSettingsSessionFacts `json:"session,omitempty"`; Context ChatContext `json:"context"`
 }
 
 func (r *ChatSettingsMutationResponse) UnmarshalJSON(data []byte) error {
