@@ -23,7 +23,7 @@ func completeReviewerActivityError(e *Engine, stepID string) error {
 	return nil
 }
 
-func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool {
+func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient *observedModelClient, patchEditsApplied bool) bool {
 	if reviewerClient == nil {
 		return false
 	}
@@ -42,7 +42,7 @@ func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient
 func (r *defaultReviewerPipeline) Prepare(
 	ctx context.Context,
 	stepID string,
-	reviewerClient llm.Client,
+	reviewerClient *observedModelClient,
 ) (preparedReviewerRequest, error) {
 	if reviewerClient == nil {
 		return preparedReviewerRequest{}, errors.New("Reviewer client is required")
@@ -55,18 +55,14 @@ func (r *defaultReviewerPipeline) Prepare(
 	if err != nil {
 		return preparedReviewerRequest{}, fmt.Errorf("build Reviewer request: %w", err)
 	}
-	cacheObservation, err := r.engine.modelRequests().RequestCache().Prepare(req)
+	observed, err := r.engine.prepareCacheObservedRequest(stepID, req, cacheResponseObservationRuntime)
 	if err != nil {
 		return preparedReviewerRequest{}, err
 	}
-	if err := r.engine.observePromptCacheRequest(stepID, cacheObservation); err != nil {
-		return preparedReviewerRequest{}, err
-	}
 	return preparedReviewerRequest{
-		originStepID:     originStepID,
-		client:           reviewerClient,
-		request:          req,
-		cacheObservation: cacheObservation,
+		originStepID: originStepID,
+		client:       reviewerClient,
+		request:      observed,
 	}, nil
 }
 
@@ -91,14 +87,13 @@ func (r *defaultReviewerPipeline) Run(
 	}
 	return reviewerProviderResult{
 		suggestions: result,
-		usage:       resp.Usage,
 	}
 }
 
 func (e *Engine) startReviewer(
 	ctx context.Context,
 	stepID string,
-	reviewerClient llm.Client,
+	reviewerClient *observedModelClient,
 	pipeline reviewerPipeline,
 ) error {
 	if e.ReviewerActive() {
@@ -182,12 +177,6 @@ func (e *Engine) applyReviewerProviderResult(
 			steerReviewerErrorIntent(result.err.Error()),
 		)
 		return errors.Join(persistErr, completeReviewerActivityError(e, originStepID))
-	}
-	if err := e.observePromptCacheResponseRuntime(
-		prepared.cacheObservation,
-		result.usage,
-	); err != nil {
-		return errors.Join(err, completeReviewerActivityError(e, originStepID))
 	}
 	suggestions := result.suggestions.Suggestions
 	if len(suggestions) == 0 {

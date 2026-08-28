@@ -78,7 +78,7 @@ type contextCompactor interface {
 
 type stepLoopOptions struct {
 	ReviewerFrequency              string
-	ReviewerClient                 llm.Client
+	ReviewerClient                 *observedModelClient
 	RefreshReviewerConfigOnResolve bool
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
 }
@@ -169,21 +169,19 @@ type messageLifecycle interface {
 }
 
 type reviewerPipeline interface {
-	ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool
-	Prepare(ctx context.Context, stepID string, reviewerClient llm.Client) (preparedReviewerRequest, error)
+	ShouldRunTurn(frequency string, reviewerClient *observedModelClient, patchEditsApplied bool) bool
+	Prepare(ctx context.Context, stepID string, reviewerClient *observedModelClient) (preparedReviewerRequest, error)
 	Run(ctx context.Context, prepared preparedReviewerRequest) reviewerProviderResult
 }
 
 type preparedReviewerRequest struct {
-	originStepID     runtimeids.StepID
-	client           llm.Client
-	request          llm.Request
-	cacheObservation preparedCacheRequestObservation
+	originStepID runtimeids.StepID
+	client       *observedModelClient
+	request      cacheObservedRequest
 }
 
 type reviewerProviderResult struct {
 	suggestions reviewerSuggestionsResult
-	usage       llm.Usage
 	err         error
 }
 

@@ -140,34 +140,15 @@ func openAIToolChoice(mode ToolChoiceMode) (responses.ToolChoiceOptions, error) 
 	}
 }
 
-func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAICompactionRequest) (responses.ResponseNewParams, error) {
-	if strings.TrimSpace(request.Model) == "" {
-		return responses.ResponseNewParams{}, fmt.Errorf("compaction model is required")
-	}
-	input, err := buildResponsesInput(request.InputItems)
+func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAIRequest, mode OpenAIAuthMode) (responses.ResponseNewParams, error) {
+	out, err := b.BuildResponse(request, mode)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
+	input := out.Input.OfInputItemList
 	trigger := responses.NewResponseInputItemCompactionTriggerParam()
 	input = append(input, responses.ResponseInputItemUnionParam{OfCompactionTrigger: &trigger})
-	out := responses.ResponseNewParams{
-		Model:             request.Model,
-		Store:             openai.Bool(b.store),
-		ParallelToolCalls: openai.Bool(false),
-		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
-		},
-		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
-	}
-	if cacheKey := strings.TrimSpace(request.PromptCacheKey); cacheKey != "" && SupportsPromptCacheKeyProvider(b.capabilities) {
-		out.PromptCacheKey = openai.String(cacheKey)
-	}
-	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
-		out.Instructions = openai.String(instructions)
-	}
-	if serviceTier := effectiveServiceTier(request.FastMode, b.capabilities); serviceTier != nil {
-		out.ServiceTier = *serviceTier
-	}
+	out.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: input}
 	return out, nil
 }
 

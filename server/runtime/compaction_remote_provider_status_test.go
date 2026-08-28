@@ -108,7 +108,7 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 			len(client.calls),
 		)
 	}
-	for _, item := range client.compactionCalls[1].InputItems {
+	for _, item := range client.compactionCalls[1].Items {
 		if item.Type == llm.ResponseItemTypeFunctionCallOutput &&
 			item.CallID != nil &&
 			*item.CallID == "call-1" &&

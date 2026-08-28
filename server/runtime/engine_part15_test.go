@@ -339,16 +339,16 @@ func TestAutoCompactionRetries400ByCollapsingShellOutput(t *testing.T) {
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("expected two compact calls (retry after 400), got %d", len(client.compactionCalls))
 	}
-	if len(client.compactionCalls[1].InputItems) != len(client.compactionCalls[0].InputItems) {
-		t.Fatalf("expected repair to preserve item count, first=%d second=%d", len(client.compactionCalls[0].InputItems), len(client.compactionCalls[1].InputItems))
+	if len(client.compactionCalls[1].Items) != len(client.compactionCalls[0].Items) {
+		t.Fatalf("expected repair to preserve item count, first=%d second=%d", len(client.compactionCalls[0].Items), len(client.compactionCalls[1].Items))
 	}
 	foundCollapsed := false
-	for _, item := range client.compactionCalls[1].InputItems {
+	for _, item := range client.compactionCalls[1].Items {
 		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call_1" {
 			foundCollapsed = isCollapsedCompactionOverflowShellOutput(item.Output)
 		}
 	}
 	if !foundCollapsed {
-		t.Fatalf("expected repaired retry to collapse shell output, got %+v", client.compactionCalls[1].InputItems)
+		t.Fatalf("expected repaired retry to collapse shell output, got %+v", client.compactionCalls[1].Items)
 	}
 }

@@ -60,6 +60,18 @@ type preparedCacheRequestObservation struct {
 	hasPreviousResponse       bool
 }
 
+type cacheResponseObservationMode uint8
+
+const (
+	cacheResponseObservationExactStep cacheResponseObservationMode = iota
+	cacheResponseObservationRuntime
+)
+
+type cacheObservedRequest struct {
+	request         llm.Request
+	observeResponse func(llm.Usage) error
+}
+
 type requestCacheTracker struct {
 	mu      sync.Mutex
 	lineage map[string]requestCacheLineage
@@ -219,6 +231,41 @@ func (e *Engine) observePromptCacheRequest(stepID string, prepared preparedCache
 	return nil
 }
 
+func (e *Engine) prepareCacheObservedRequest(
+	stepID string,
+	request llm.Request,
+	responseMode cacheResponseObservationMode,
+) (cacheObservedRequest, error) {
+	prepared, err := e.modelRequests().RequestCache().Prepare(request)
+	if err != nil {
+		return cacheObservedRequest{}, err
+	}
+	if err := e.observePromptCacheRequest(stepID, prepared); err != nil {
+		return cacheObservedRequest{}, err
+	}
+	observeResponse := func(usage llm.Usage) error {
+		switch responseMode {
+		case cacheResponseObservationExactStep:
+			return e.observePromptCacheResponse(stepID, prepared, usage)
+		case cacheResponseObservationRuntime:
+			return e.observePromptCacheResponseRuntime(prepared, usage)
+		default:
+			panic(fmt.Sprintf("unsupported cache response observation mode %d", responseMode))
+		}
+	}
+	return cacheObservedRequest{
+		request:         request,
+		observeResponse: observeResponse,
+	}, nil
+}
+
+func (r cacheObservedRequest) complete(usage llm.Usage) error {
+	if r.observeResponse == nil {
+		panic("cache-observed request has no response observer")
+	}
+	return r.observeResponse(usage)
+}
+
 func cacheWarningEntryVisibility(mode config.CacheWarningMode) transcript.EntryVisibility {
 	if normalized, ok := normalizeCacheWarningMode(mode); ok && normalized == config.CacheWarningModeVerbose {
 		return transcript.EntryVisibilityOngoing
@@ -295,7 +342,7 @@ func (e *Engine) observePromptCacheResponseWithProvenance(provenance steeringPro
 }
 
 func shouldWarnOnCacheReuseDrop(mode config.CacheWarningMode, prepared preparedCacheRequestObservation, usage llm.Usage) bool {
-	if mode != config.CacheWarningModeVerbose {
+	if mode == config.CacheWarningModeOff {
 		return false
 	}
 	if prepared.exactWarning != nil || !prepared.hasPreviousResponse || !prepared.previousHadReuse {

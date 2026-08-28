@@ -18,6 +18,7 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	t.Parallel()
 	const (
 		preBoundaryID  = "reasoning-before-boundary"
+		stablePrefixID = "stable-prefix"
 		checkpointID   = "reasoning-at-boundary"
 		postBoundaryID = "reasoning-after-boundary"
 	)
@@ -41,12 +42,19 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		checkpointStepID,
 		"local",
 		compactionModeManual,
-		llm.ItemsFromMessages([]llm.Message{{
-			Role:        llm.RoleDeveloper,
-			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-			SourcePath:  textutil.Value(checkpointID),
-			Content:     textutil.Value("checkpoint"),
-		}}),
+		llm.ItemsFromMessages([]llm.Message{
+			{
+				Role:       llm.RoleDeveloper,
+				SourcePath: textutil.Value(stablePrefixID),
+				Content:    textutil.Value("stable prefix"),
+			},
+			{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				SourcePath:  textutil.Value(checkpointID),
+				Content:     textutil.Value("checkpoint"),
+			},
+		}),
 	)
 	restoreStep()
 	if err != nil || !receipt.Committed {
@@ -65,8 +73,14 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		t.Fatalf("local compaction calls = %d, want one", len(client.calls))
 	}
 	seen := make(map[string]bool)
+	stablePrefixSeen := false
 	checkpointSeen := false
 	for _, item := range client.calls[0].Items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.SourcePath != nil &&
+			*item.SourcePath == stablePrefixID {
+			stablePrefixSeen = true
+		}
 		if item.Type == llm.ResponseItemTypeMessage &&
 			item.MessageType != nil &&
 			*item.MessageType == llm.MessageTypeCompactionSummary &&
@@ -78,9 +92,10 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 			seen[*item.ID] = true
 		}
 	}
-	if !checkpointSeen || !seen[postBoundaryID] || seen[preBoundaryID] {
+	if !stablePrefixSeen || !checkpointSeen || !seen[postBoundaryID] || seen[preBoundaryID] {
 		t.Fatalf(
-			"local compaction request checkpoint=%t IDs=%+v, want checkpoint/post present and pre-boundary absent",
+			"local compaction request stable-prefix=%t checkpoint=%t IDs=%+v, want stable prefix/checkpoint/post present and pre-boundary absent",
+			stablePrefixSeen,
 			checkpointSeen,
 			seen,
 		)

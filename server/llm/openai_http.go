@@ -270,7 +270,7 @@ func (t *HTTPTransport) streamingHTTPClient() *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionRequest) (OpenAICompactionResponse, error) {
+func (t *HTTPTransport) Compact(ctx context.Context, request OpenAIRequest) (OpenAICompactionResponse, error) {
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
@@ -342,8 +342,8 @@ func (t *HTTPTransport) prepareDispatch(
 	}, nil
 }
 
-func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, variant ProviderVariantContract, providerCaps ProviderCapabilities, windowTokens int, projection *codexDispatchProjection) (OpenAICompactionResponse, error) {
-	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, providerCaps).BuildCompactV2(request)
+func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAIRequest, authHeader string, mode OpenAIAuthMode, variant ProviderVariantContract, providerCaps ProviderCapabilities, windowTokens int, projection *codexDispatchProjection) (OpenAICompactionResponse, error) {
+	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, providerCaps).BuildCompactV2(request, mode)
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}

@@ -363,10 +363,10 @@ func TestGenerateWithRetryClient_FailedRequestDoesNotAdvanceLineage(t *testing.T
 	}
 }
 
-func TestGenerateWithRetryClient_PersistsVerboseReuseDropWarning(t *testing.T) {
+func TestGenerateWithRetryClient_PersistsReuseDropWarningInDefaultMode(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(4)}}, {Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(0)}}}}
-	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
+	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 
 	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
 		t.Fatalf("first generate: %v", err)
@@ -384,6 +384,22 @@ func TestGenerateWithRetryClient_PersistsVerboseReuseDropWarning(t *testing.T) {
 	}
 	if warnings[0].LostInputTokens == nil || *warnings[0].LostInputTokens != 4 {
 		t.Fatalf("warning lost input tokens = %d, want 4", warnings[0].LostInputTokens)
+	}
+}
+
+func TestGenerateWithRetryClient_OffModeSuppressesReuseDropWarning(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{CachedInputTokens: textutil.Value(4)}}, {Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}}}}
+	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeOff)
+
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-1", client, testPromptCacheRequest("cache-key-1", "alpha")); err != nil {
+		t.Fatalf("first generate: %v", err)
+	}
+	if _, err := generateTestActiveStep(context.Background(), eng, "step-2", client, testPromptCacheRequest("cache-key-1", "alpha", "omega")); err != nil {
+		t.Fatalf("second generate: %v", err)
+	}
+	if warnings := persistedCacheWarnings(t, store); len(warnings) != 0 {
+		t.Fatalf("warning count = %d, want 0", len(warnings))
 	}
 }
 
@@ -837,10 +853,10 @@ func TestGenerateWithRetryClient_CompactionResetsConversationAndReviewerCacheBas
 	reviewerKey := reviewerSessionID(cacheKey)
 	compactionStepID := runtimeTestStepID("step-compact")
 
-	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-before"), client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-before"), newObservedModelClient(client), testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("main baseline generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-before"), client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-before"), newObservedModelClient(client), testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer baseline generate: %v", err)
 	}
 	if _, err := newCompactionPersistence(eng).replaceHistory(compactionStepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
@@ -850,10 +866,10 @@ func TestGenerateWithRetryClient_CompactionResetsConversationAndReviewerCacheBas
 	}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-after"), client, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-after"), newObservedModelClient(client), testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
 		t.Fatalf("main post-compaction generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-after"), client, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-after"), newObservedModelClient(client), testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer post-compaction generate: %v", err)
 	}
 	if warnings := persistedCacheWarnings(t, store); len(warnings) != 0 {
@@ -872,10 +888,10 @@ func TestGenerateWithRetryClient_ReplayedCompactionResetsConversationAndReviewer
 	reviewerKey := reviewerSessionID(cacheKey)
 	compactionStepID := runtimeTestStepID("step-compact")
 
-	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-before"), client, testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("main-before"), newObservedModelClient(client), testPromptCacheRequest(cacheKey, "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("main baseline generate: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-before"), client, testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-before"), newObservedModelClient(client), testReviewerPromptCacheRequest(reviewerKey, "review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer baseline generate: %v", err)
 	}
 	if _, err := newCompactionPersistence(eng).replaceHistory(compactionStepID, "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
@@ -899,10 +915,10 @@ func TestGenerateWithRetryClient_ReplayedCompactionResetsConversationAndReviewer
 		Reviewer:         ReviewerConfig{Model: "gpt-5"},
 		CacheWarningMode: config.CacheWarningModeDefault,
 	})
-	if _, err := replayed.generateWithRetryClient(context.Background(), runtimeTestStepID("main-after"), replayClient, testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
+	if _, err := replayed.generateWithRetryClient(context.Background(), runtimeTestStepID("main-after"), newObservedModelClient(replayClient), testPromptCacheRequest(cacheKey, "beta"), nil, nil, nil); err != nil {
 		t.Fatalf("main replay generate: %v", err)
 	}
-	if _, err := replayed.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-after"), replayClient, testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
+	if _, err := replayed.generateWithRetryClient(context.Background(), runtimeTestStepID("reviewer-after"), newObservedModelClient(replayClient), testReviewerPromptCacheRequest(reviewerKey, "follow-up review"), nil, nil, nil); err != nil {
 		t.Fatalf("reviewer replay generate: %v", err)
 	}
 	if warnings := persistedCacheWarnings(t, reopened); len(warnings) != 0 {

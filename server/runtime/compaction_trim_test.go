@@ -52,14 +52,9 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 	}
 	instructions := compactionInstructions(instructionsInput)
 	input := eng.transcriptRuntimeState().SnapshotItems()
-	request, ok, err := eng.compactionCacheObservationRequest(context.Background(), llm.CompactionRequest{
-		Model: "gpt-5", Instructions: instructions, InputItems: input,
-	})
+	request, err := eng.compactionRequest(context.Background(), input, instructions)
 	if err != nil {
 		t.Fatalf("build compaction cache observation request: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected compaction cache observation request")
 	}
 
 	wantItems := append(
@@ -154,10 +149,10 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	}
 	cacheStepID := runtimeTestStepID("seed-cache")
 	if err := runTestActiveStep(eng, cacheStepID, func() error {
-		_, err := eng.generateWithRetryClient(context.Background(), cacheStepID, &fakeClient{responses: []llm.Response{{
+		_, err := eng.generateWithRetryClient(context.Background(), cacheStepID, newObservedModelClient(&fakeClient{responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded")},
 			Usage:     llm.Usage{CachedInputTokens: textutil.Value(512)},
-		}}}, seedRequest, nil, nil, nil)
+		}}}), seedRequest, nil, nil, nil)
 		return err
 	}); err != nil {
 		t.Fatalf("seed cache lineage: %v", err)
@@ -167,7 +162,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want overflow repair retry", len(client.compactionCalls))
 	}
-	firstJSON, err := json.Marshal(client.compactionCalls[0].InputItems)
+	firstJSON, err := json.Marshal(client.compactionCalls[0].Items[:len(initialInput)])
 	if err != nil {
 		t.Fatalf("marshal first compaction input: %v", err)
 	}
@@ -176,7 +171,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	}
 
 	var callPreserved, outputCollapsed, reasoningPreserved bool
-	for _, item := range client.compactionCalls[1].InputItems {
+	for _, item := range client.compactionCalls[1].Items {
 		switch item.Type {
 		case llm.ResponseItemTypeFunctionCall:
 			if item.CallID != nil && *item.CallID == "call-1" {
@@ -272,7 +267,7 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("compaction calls = %d, want no retry for unsupported payload", len(client.compactionCalls))
 	}
-	gotJSON, err := json.Marshal(client.compactionCalls[0].InputItems)
+	gotJSON, err := json.Marshal(client.compactionCalls[0].Items[:len(initialInput)])
 	if err != nil {
 		t.Fatalf("marshal sent input: %v", err)
 	}

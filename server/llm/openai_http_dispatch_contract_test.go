@@ -36,7 +36,7 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 			return err
 		},
 		"compact": func(transport *HTTPTransport, sessionID *string) error {
-			_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5", SessionID: sessionID})
+			_, err := transport.Compact(context.Background(), OpenAIRequest{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: sessionID})
 			return err
 		},
 	}
@@ -235,7 +235,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 			return err
 		},
 		"compact": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
-			_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: model, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch})
+			_, err := transport.Compact(context.Background(), OpenAIRequest{Model: model, ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch})
 			return err
 		},
 	}
@@ -281,7 +281,7 @@ func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T)
 			return err
 		},
 		"compact": func(transport *HTTPTransport) error {
-			_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: "unknown-model", SessionID: textutil.Value("session-1")})
+			_, err := transport.Compact(context.Background(), OpenAIRequest{Model: "unknown-model", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1")})
 			return err
 		},
 	}

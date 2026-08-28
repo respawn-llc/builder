@@ -9,7 +9,7 @@ import (
 
 type streamingOnlyTransport struct{}
 
-func (streamingOnlyTransport) Compact(context.Context, OpenAICompactionRequest) (OpenAICompactionResponse, error) {
+func (streamingOnlyTransport) Compact(context.Context, OpenAIRequest) (OpenAICompactionResponse, error) {
 	return OpenAICompactionResponse{}, nil
 }
 

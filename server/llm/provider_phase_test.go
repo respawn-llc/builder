@@ -171,7 +171,7 @@ func (t providerPhaseProjectionTransport) Generate(context.Context, OpenAIReques
 	return t.response, nil
 }
 
-func (providerPhaseProjectionTransport) Compact(context.Context, OpenAICompactionRequest) (OpenAICompactionResponse, error) {
+func (providerPhaseProjectionTransport) Compact(context.Context, OpenAIRequest) (OpenAICompactionResponse, error) {
 	return OpenAICompactionResponse{}, nil
 }
 

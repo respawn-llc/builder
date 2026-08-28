@@ -26,7 +26,7 @@ func reviewerSuggestionsStructuredOutput(contract jsoncontract.Structured) *llm.
 	}
 }
 
-func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Client) (llm.Request, error) {
+func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient *observedModelClient) (llm.Request, error) {
 	reviewerCfg := e.reviewerRequestConfigSnapshot()
 	reviewerItems, err := buildReviewerRequestItemsWithBuilder(e.transcriptRuntimeState().SnapshotItems(), newActiveMetaContextBuilder(e.store.Meta(), e.transcriptWorkingDir(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.SkillPolicy, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)
 	if err != nil {
@@ -64,7 +64,7 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 func (e *Engine) buildReviewerDispatchRequest(
 	ctx context.Context,
 	stepID string,
-	reviewerClient llm.Client,
+	reviewerClient *observedModelClient,
 ) (llm.Request, error) {
 	req, err := e.buildReviewerRequest(ctx, reviewerClient)
 	if err != nil {

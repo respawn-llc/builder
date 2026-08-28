@@ -68,16 +68,6 @@ type OpenAIResponse struct {
 	Usage             Usage
 }
 
-type OpenAICompactionRequest struct {
-	Model          string
-	Instructions   string
-	PromptCacheKey string
-	SessionID      *string
-	FastMode       bool
-	CodexDispatch  *CodexDispatchContext
-	InputItems     []ResponseItem
-}
-
 type OpenAICompactionResponse struct {
 	Checkpoint ResponseItem
 	Usage      Usage
@@ -85,7 +75,7 @@ type OpenAICompactionResponse struct {
 
 type OpenAITransport interface {
 	Generate(ctx context.Context, request OpenAIRequest, callbacks StreamCallbacks) (OpenAIResponse, error)
-	Compact(ctx context.Context, request OpenAICompactionRequest) (OpenAICompactionResponse, error)
+	Compact(ctx context.Context, request OpenAIRequest) (OpenAICompactionResponse, error)
 }
 
 type OpenAIModelContextWindowTransport interface {
@@ -169,22 +159,11 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	if c == nil || c.transport == nil {
 		return CompactionResponse{}, ErrMissingTransport
 	}
-	if request.Model == "" {
-		return CompactionResponse{}, fmt.Errorf("%w: compaction model is required", ErrInvalidRequest)
-	}
-	if err := validateSessionDispatchPairing(request.SessionID, request.CodexDispatch); err != nil {
+	if err := request.Validate(); err != nil {
 		return CompactionResponse{}, err
 	}
 
-	providerReq := OpenAICompactionRequest{
-		Model:          request.Model,
-		Instructions:   request.Instructions,
-		PromptCacheKey: request.PromptCacheKey,
-		SessionID:      request.SessionID,
-		FastMode:       request.FastMode,
-		CodexDispatch:  request.CodexDispatch,
-		InputItems:     CloneResponseItems(request.InputItems),
-	}
+	providerReq := RequestAsOpenAI(request)
 	providerResp, err := c.transport.Compact(ctx, providerReq)
 	if err != nil {
 		return CompactionResponse{}, fmt.Errorf("openai compact: %w", err)
