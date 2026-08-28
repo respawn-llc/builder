@@ -3,8 +3,15 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowPickerItem } from "@/api";
-import { InteractiveChip, Popover, PopoverContent, PopoverTrigger, RadioGroup, RadioGroupItem } from "@/ui";
-import { AnimatedBoardChipSummary } from "./BoardChipSummary";
+import {
+  AnimatedChipSummary,
+  InteractiveChip,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  RadioGroup,
+  RadioGroupItem,
+} from "@/ui";
 
 export function BoardWorkflowPicker({
   activeWorkflow,
@@ -27,7 +34,7 @@ export function BoardWorkflowPicker({
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger asChild>
         <InteractiveChip aria-label={activeWorkflow.name}>
-          <AnimatedBoardChipSummary text={activeWorkflow.name} />
+          <AnimatedChipSummary text={activeWorkflow.name} />
         </InteractiveChip>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64" level={4}>

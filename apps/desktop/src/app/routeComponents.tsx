@@ -1,5 +1,5 @@
 import { getRouteApi, Outlet, useMatch } from "@tanstack/react-router";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { BoardRoute } from "@/features/board";
@@ -134,11 +134,16 @@ export function ProjectTasksRoute() {
   const { t } = useTranslation();
   const params = projectTasksRouteApi.useParams();
   useWindowChromeTitle(t("home.prototype.tasks"));
-  const [viewMemory] = useState(createProjectTasksViewMemory);
+  const viewMemory = useMemo(() => createProjectTasksViewMemory(), [params.projectId]);
   return (
     <SidebarRootOwner>
       <section className="island-glass h-full min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
-        <ProjectTasksSurface projectID={params.projectId} sidebarMode="shift" viewMemory={viewMemory} />
+        <ProjectTasksSurface
+          key={params.projectId}
+          projectID={params.projectId}
+          sidebarMode="shift"
+          viewMemory={viewMemory}
+        />
       </section>
     </SidebarRootOwner>
   );

@@ -1,8 +1,9 @@
 import { useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 
-import { cx } from "@/ui";
+import { cx } from "./classes";
+import "./AnimatedChipSummary.css";
 
-export function AnimatedBoardChipSummary({ text }: Readonly<{ text: string }>) {
+export function AnimatedChipSummary({ text }: Readonly<{ text: string }>) {
   const measurementRef = useRef<HTMLSpanElement | null>(null);
   const [width, setWidth] = useState<number | null>(null);
   const deferredText = useDeferredValue(text);
@@ -17,7 +18,7 @@ export function AnimatedBoardChipSummary({ text }: Readonly<{ text: string }>) {
   }, [text]);
   return (
     <span
-      className="board-label-filter-summary relative inline-block overflow-hidden align-middle"
+      className="animated-chip-summary relative inline-block overflow-hidden align-middle"
       style={width === null ? undefined : { width }}
     >
       <span
@@ -30,7 +31,7 @@ export function AnimatedBoardChipSummary({ text }: Readonly<{ text: string }>) {
       {outgoingText === null ? null : (
         <span
           aria-hidden="true"
-          className="board-label-filter-summary-outgoing pointer-events-none absolute top-0 left-0 inline-block w-max whitespace-nowrap"
+          className="animated-chip-summary-outgoing pointer-events-none absolute top-0 left-0 inline-block w-max whitespace-nowrap"
           key={`outgoing-${outgoingText}`}
         >
           {outgoingText}
@@ -39,7 +40,7 @@ export function AnimatedBoardChipSummary({ text }: Readonly<{ text: string }>) {
       <span
         className={cx(
           "inline-block w-max whitespace-nowrap",
-          outgoingText !== null && "board-label-filter-summary-incoming",
+          outgoingText !== null && "animated-chip-summary-incoming",
         )}
         key={`incoming-${text}`}
       >

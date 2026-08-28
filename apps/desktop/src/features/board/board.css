@@ -151,10 +151,6 @@
   list-style: none;
 }
 
-.board-label-filter-summary {
-  transition: width var(--motion-morph);
-}
-
 .board-label-filter-trigger {
   transition:
     background-color var(--motion-fast),
@@ -169,26 +165,6 @@
     width var(--motion-fast),
     opacity var(--motion-fast),
     transform var(--motion-fast);
-}
-
-@keyframes board-label-filter-summary-crossfade-in {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes board-label-filter-summary-crossfade-out {
-  from {
-    opacity: 1;
-  }
-
-  to {
-    opacity: 0;
-  }
 }
 
 @keyframes manual-move-dialog-phase-enter {
@@ -211,14 +187,6 @@
   .manual-move-dialog-phase {
     animation: none;
   }
-}
-
-.board-label-filter-summary-incoming {
-  animation: board-label-filter-summary-crossfade-in var(--motion-morph) both;
-}
-
-.board-label-filter-summary-outgoing {
-  animation: board-label-filter-summary-crossfade-out var(--motion-morph) both;
 }
 
 @keyframes board-card-enter-reveal {
