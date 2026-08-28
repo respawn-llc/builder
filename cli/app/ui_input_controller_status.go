@@ -16,6 +16,5 @@ func (m *uiModel) reviewerInvocationState() (bool, string) {
 }
 
 func (m *uiModel) fastModeState() (bool, bool) {
-	status := m.cachedRuntimeStatus()
-	return status.FastModeAvailable, status.FastModeEnabled
+	return m.fastModeAvailable, m.fastModeEnabled
 }
