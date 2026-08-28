@@ -274,14 +274,13 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 		t.Fatalf("compaction request id = %s, want %s", client.compactRequest.RequestID, requestID)
 	}
 	if client.compactRequest.Admission.Guidance == nil ||
-		*client.compactRequest.Admission.Guidance != "tighten  summary" ||
-		client.compactRequest.Admission.RestorationInput != "  /compact   tighten  summary  " {
+		*client.compactRequest.Admission.Guidance != "tighten  summary" {
 		t.Fatalf("compaction admission = %+v", client.compactRequest.Admission)
 	}
 	buttonClient := &runtimeControlFakeClient{}
 	_ = newProjectedTestUIModel(buttonClient).inputController().compactCmd(runtimeids.NewCompactionRequestID(), "", "")()
-	if buttonClient.compactRequest.Admission.RestorationInput != "/compact" {
-		t.Fatal("button compaction restoration input")
+	if buttonClient.compactRequest.Admission.Guidance != nil {
+		t.Fatalf("button compaction guidance = %q, want absent", *buttonClient.compactRequest.Admission.Guidance)
 	}
 	if model.isCompacting() || model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {
 		t.Fatalf("compaction state = compacting %t, blocked %t, prefix %q", model.isCompacting(), model.blocksRuntimeInput(), model.layout().mainInputPrefix())

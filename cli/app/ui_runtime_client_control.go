@@ -285,13 +285,10 @@ func (c *sessionRuntimeClient) RemovePendingWork(queueItemID string) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+	_, err = runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeRemovePendingWorkResponse, error) {
 		return pendingWork.RemovePendingWork(ctx, serverapi.RuntimeRemovePendingWorkRequest{SessionID: c.sessionID, ItemID: itemID})
 	})
-	if err != nil {
-		return false
-	}
-	return resp.Restoration.Message != nil
+	return err == nil
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {

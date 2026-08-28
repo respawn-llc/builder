@@ -206,18 +206,13 @@ func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, 
 		if value := strings.TrimSpace(args); value != "" {
 			guidance = &value
 		}
-		restorationInput := submittedText
-		if strings.TrimSpace(restorationInput) == "" {
-			restorationInput = "/compact"
-		}
 		return compactDoneMsg{
 			requestID:     requestID,
 			submittedText: submittedText,
 			err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
 				RequestID: requestID,
 				Admission: runtimeinput.ManualCompactionAdmission{
-					Guidance:         guidance,
-					RestorationInput: restorationInput,
+					Guidance: guidance,
 				},
 			}),
 		}

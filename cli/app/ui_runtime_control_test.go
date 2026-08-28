@@ -334,6 +334,25 @@ func TestInterruptedHumanInputRestoresServerOrderBeforeComposer(t *testing.T) {
 	}
 }
 
+func TestPendingWorkTechnicalRestorationMergesBeforeComposer(t *testing.T) {
+	m := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	testSetMainInput(m, "composer")
+
+	m.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkRestored{
+			Restoration: runtimeinput.PendingWorkTechnicalRestoration{
+				ItemID:         runtimeids.NewQueueItemID(),
+				Kind:           runtimeinput.PendingWorkItemKindWorktreeTransition,
+				CanonicalInput: "/wt leave",
+			},
+		})),
+		runtimeTupleMergeResult{},
+	)
+	if got, want := testMainInput(m), "/wt leave\n\ncomposer"; got != want {
+		t.Fatalf("composer = %q, want %q", got, want)
+	}
+}
+
 func TestThinkingQueryUsesStatusOnly(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
