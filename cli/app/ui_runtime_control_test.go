@@ -120,7 +120,7 @@ func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSe
 		f.status.ThinkingLevel = *operation.Value
 	}
 	return serverapi.ChatSettingsMutationResponse{
-		Result:   serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationApplied, Applied: &serverapi.ChatSettingsMutationAppliedResult{Changed: true}},
+		Result:   serverapi.NewChatSettingsMutationApplied(true),
 		Settings: serverapi.ChatSettings{SelectedAgent: serverapi.ChatSettingsAgentSummary{Thinking: f.status.ThinkingLevel}},
 	}, f.err
 }
