@@ -49,7 +49,7 @@ func (s chatSettingsService) MutateChatSettings(
 	if err := req.Validate(); err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	result := serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationApplied, Applied: &serverapi.ChatSettingsMutationAppliedResult{Changed: false}}
+	result := serverapi.NewChatSettingsMutationApplied(false)
 	switch req.Target.TargetKind {
 	case serverapi.ChatSettingsReadTargetLazy:
 		projectCtx, err := s.core.resolveProjectContext(ctx, *req.Target.ProjectID, *req.Target.WorkspaceID, "")
@@ -62,9 +62,11 @@ func (s chatSettingsService) MutateChatSettings(
 			return serverapi.ChatSettingsMutationResponse{}, err
 		}
 		if projected.Rejection != nil {
-			result = serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationRejected, Rejected: &serverapi.ChatSettingsMutationRejectedResult{Reason: projected.Rejection.Reason}}
+			result = serverapi.NewChatSettingsMutationRejected(projected.Rejection.Reason)
 		}
-		if result.Applied != nil { result.Applied.Changed = changed }
+		if result.Applied != nil {
+			result.Applied.Changed = changed
+		}
 		settings, err := service.LazyChatSettings(ctx)
 		if err != nil {
 			return serverapi.ChatSettingsMutationResponse{}, err
@@ -105,7 +107,7 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 			return false, err
 		}
 		if projected.Rejection != nil {
-			result = serverapi.ChatSettingsMutationResult{Kind: serverapi.ChatSettingsMutationRejected, Rejected: &serverapi.ChatSettingsMutationRejectedResult{Reason: projected.Rejection.Reason}}
+			result = serverapi.NewChatSettingsMutationRejected(projected.Rejection.Reason)
 			return false, nil
 		}
 		if engine != nil && projected.State.Agent == input.Raw.Agent {

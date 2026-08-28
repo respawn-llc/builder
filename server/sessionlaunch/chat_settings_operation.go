@@ -1,21 +1,32 @@
 package sessionlaunch
+
 import (
-	"errors"
-	"fmt"
-	"slices"
-	"strings"
 	"core/server/launch"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 )
+
 type PreparedChatSettingsOperationInput struct {
-	Raw session.ChatSettingsState; Effective session.ChatSettings; PersistedQuestions bool; PersistedThinking string
-	Catalog launch.PreparedChatAgentCatalog; Locked *session.LockedContract; WorkflowLocked bool; CompactionMode config.CompactionMode
+	Raw                session.ChatSettingsState
+	Effective          session.ChatSettings
+	PersistedQuestions bool
+	PersistedThinking  string
+	Catalog            launch.PreparedChatAgentCatalog
+	Locked             *session.LockedContract
+	WorkflowLocked     bool
+	CompactionMode     config.CompactionMode
 }
 type PreparedChatSettingsOperationResult struct {
-	State session.ChatSettingsState; Effective session.ChatSettings; Rejection *serverapi.ChatSettingsMutationRejectedResult
+	State     session.ChatSettingsState
+	Effective session.ChatSettings
+	Rejection *serverapi.ChatSettingsMutationRejectedResult
 }
+
 func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInput, operation serverapi.ChatSettingsMutationOperation) (PreparedChatSettingsOperationResult, error) {
 	rawAgent := input.Raw.Agent
 	defaultEntry, ok := input.Catalog.Lookup(config.DefaultSubagentRole)
