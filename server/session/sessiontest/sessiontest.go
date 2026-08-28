@@ -220,9 +220,17 @@ func CommitChatSettingsTestState(t testing.TB, store *session.Store, update func
 	if err != nil {
 		t.Fatalf("read Chat settings: %v", err)
 	}
-	if state.Settings == nil {
-		t.Fatal("Chat settings are required")
+	settings, err := session.ResolveEffectiveChatSettings(nil, state.Settings, session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "medium",
+		Fast:           false,
+		Questions:      true,
+		AutoCompaction: true,
+	})
+	if err != nil {
+		t.Fatalf("complete Chat settings: %v", err)
 	}
+	state = CompleteChatSettingsState(t, state.Agent, settings.Supervisor, settings.Thinking, settings.Fast, settings.Questions, settings.AutoCompaction)
 	update(state.Settings)
 	if _, err := store.CommitChatSettingsState(state); err != nil {
 		t.Fatalf("commit Chat settings: %v", err)
