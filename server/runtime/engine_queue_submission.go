@@ -3,12 +3,15 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"time"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/runtimeinput"
+	"core/shared/serverapi"
 )
 
 var ErrWorktreeDeleteBlockedByQueuedWork = errors.New("worktree deletion is blocked by accepted Session work")
@@ -78,11 +81,120 @@ func (e *Engine) RunIfIdleBeforeQueuedUserWork(ctx context.Context, activeKind A
 	return started, err
 }
 
-// RunWorktreeTransition runs immediately when idle or suspends an active Agent
-// Turn at its next Step Boundary. Queued user steering remains paused until the
-// execution target and its model-visible reminder are updated together.
-func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) error {
-	return e.runWorktreeTransition(ctx, nil, fn)
+func (e *Engine) ScheduleWorktreeTransition(
+	ctx context.Context,
+	operationID serverapi.WorktreeOperationID,
+	transition runtimeinput.PendingWorkWorktreeTransition,
+	fn func(context.Context) WorktreeApplicationResult,
+) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	return e.ScheduleWorktreeTransitionWithAcceptance(ctx, operationID, transition, nil, fn)
+}
+
+func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
+	ctx context.Context,
+	operationID serverapi.WorktreeOperationID,
+	transition runtimeinput.PendingWorkWorktreeTransition,
+	accept CommandAcceptance,
+	fn func(context.Context) WorktreeApplicationResult,
+) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	if fn == nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, errors.New("worktree transition executor is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	if err := transition.Validate(); err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	if err := e.requirePendingWorkCapacity(); err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	itemID, err := serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+	if err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	canonicalInput, err := transition.CanonicalInput()
+	if err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	transitionCopy := transition
+	if transition.Selector != nil {
+		selector := *transition.Selector
+		transitionCopy.Selector = &selector
+	}
+	pendingItem := runtimeinput.PendingWorkItem{
+		ID:                 itemID,
+		Lane:               runtimeinput.PendingWorkLaneSteer,
+		Kind:               runtimeinput.PendingWorkItemKindWorktreeTransition,
+		State:              runtimeinput.PendingWorkItemStatePending,
+		CanonicalInput:     canonicalInput,
+		WorktreeTransition: &transitionCopy,
+	}
+	if err := pendingItem.Validate(); err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+
+	e.ensureOrchestrationCollaborators()
+	reservation := &exclusiveStepReservation{
+		Kind:      exclusiveStepReservationWorktreeTransition,
+		queueable: true,
+	}
+	pendingCtx, cancelPending := context.WithCancelCause(context.Background())
+	committed, acceptErr := runCommandAcceptance(accept, func() (bool, error) {
+		err := e.mutatePendingWork(true, func(order *pendingWorkSteerAdmission) (bool, error) {
+			reservation.pendingWork = &pendingOperationalWork{
+				order:  *order,
+				item:   pendingItem,
+				cancel: cancelPending,
+			}
+			if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
+				reservation.pendingWork = nil
+				return false, err
+			}
+			return true, nil
+		}, nil)
+		return err == nil, err
+	})
+	if err := commandAcceptanceResult(committed, acceptErr); err != nil {
+		if committed {
+			e.stepLifecycle.ReleaseReservation(reservation)
+		}
+		cancelPending(err)
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+		stopLifecycleCancellation := context.AfterFunc(lifecycleCtx, func() {
+			cancelPending(context.Cause(lifecycleCtx))
+		})
+		defer stopLifecycleCancellation()
+		defer cancelPending(context.Canceled)
+		defer e.stepLifecycle.ReleaseReservation(reservation)
+		e.pauseQueuedUserAutoDrain()
+		defer e.resumeQueuedUserAutoDrain()
+		runErr := runExclusiveStepWhenIdle(
+			pendingCtx,
+			e.stepLifecycle,
+			ActiveKindRuntimeMaintenance,
+			reservation,
+			func(stepCtx context.Context, _ string) error {
+				return worktreeApplicationError(fn(stepCtx))
+			},
+		)
+		fatal, abort := resultGroupFatalFromError(runErr)
+		if abort {
+			return fatal
+		}
+		return nil
+	})
+	if !launched {
+		e.stepLifecycle.ReleaseReservation(reservation)
+		cancelPending(ErrEngineClosed)
+		return serverapi.WorktreeScheduledAcknowledgement{}, ErrEngineClosed
+	}
+	return serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}, nil
 }
 
 func (e *Engine) RunExecutionTargetTransition(ctx context.Context, onScheduled func(), fn func() error) error {
@@ -114,84 +226,37 @@ func (e *Engine) RunExecutionTargetTransition(ctx context.Context, onScheduled f
 	)
 }
 
-func (e *Engine) runWorktreeTransition(ctx context.Context, admit func() error, fn func() error) error {
-	if fn == nil {
-		return nil
-	}
-	e.ensureOrchestrationCollaborators()
-	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[struct{}], error) {
-		reservation := &exclusiveStepReservation{
-			Kind:      exclusiveStepReservationWorktreeTransition,
-			queueable: true,
-		}
-		if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
-			return runtimeDeferred[struct{}]{}, err
-		}
-		deferred := newRuntimeDeferred[struct{}]()
-		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
-			defer e.stepLifecycle.ReleaseReservation(reservation)
-			transitionCtx, cancel := context.WithCancelCause(lifecycleCtx)
-			stopCallerCancellation := context.AfterFunc(ctx, func() {
-				cancel(context.Cause(ctx))
-			})
-			defer func() {
-				stopCallerCancellation()
-				cancel(context.Canceled)
-			}()
-			e.pauseQueuedUserAutoDrain()
-			defer e.resumeQueuedUserAutoDrain()
-			runErr := runExclusiveStepWhenIdle(
-				transitionCtx,
-				e.stepLifecycle,
-				ActiveKindRuntimeMaintenance,
-				reservation,
-				func(context.Context, string) error {
-					if admit != nil {
-						if err := admit(); err != nil {
-							return err
-						}
-					}
-					return fn()
-				},
-			)
-			deferred.complete(struct{}{}, runErr)
-			fatal, abort := resultGroupFatalFromError(runErr)
-			if abort {
-				return fatal
-			}
-			return nil
-		})
-		if !launched {
-			e.stepLifecycle.ReleaseReservation(reservation)
-			deferred.complete(struct{}{}, ErrEngineClosed)
-		}
-		return deferred, nil
-	})
-	if err != nil {
-		return err
-	}
-	_, err = terminal.Await(ctx)
-	return err
-}
-
 func (e *Engine) ApplyWorktreeTransitionTerminal(
 	ctx context.Context,
-	apply func(context.Context) error,
-) error {
+	apply func(context.Context) WorktreeApplicationResult,
+) WorktreeApplicationResult {
 	if apply == nil {
-		return errors.New("worktree transition terminal mutation is required")
+		return UnappliedWorktreeApplication(errors.New("worktree transition terminal mutation is required"))
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := context.Cause(ctx); err != nil {
-		return err
+		return UnappliedWorktreeApplication(err)
 	}
+	var result WorktreeApplicationResult
+	applied := false
 	deferred := submitEngineRuntimeOperation(e, func(operationCtx context.Context) (struct{}, error) {
-		return struct{}{}, apply(operationCtx)
+		applied = true
+		result = apply(operationCtx)
+		return struct{}{}, nil
 	})
 	_, err := deferred.Await(context.WithoutCancel(ctx))
-	return err
+	if !applied {
+		return UnappliedWorktreeApplication(err)
+	}
+	if validationErr := result.Validate(); validationErr != nil {
+		return IndeterminateWorktreeApplication(errors.Join(
+			result.Err,
+			fmt.Errorf("invalid Worktree terminal application result: %w", validationErr),
+		))
+	}
+	return result
 }
 
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user

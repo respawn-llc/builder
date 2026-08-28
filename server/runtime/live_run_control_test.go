@@ -327,13 +327,13 @@ func TestInstantStopBroadcastsRemovedHumanInputInAcceptanceOrder(t *testing.T) {
 	releaseTransition := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- eng.RunWorktreeTransition(t.Context(), func() error {
+		transitionDone <- runScheduledWorktreeTransitionForTest(t.Context(), eng, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil
 		})
 	}()
-	waitForAcceptedRuntimeOperationCount(t, eng, 3)
+	waitForAcceptedRuntimeOperationCount(t, eng, 2)
 	close(releaseFirstApplication)
 	first := <-firstDone
 	if first.err != nil || !first.accepted {

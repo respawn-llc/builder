@@ -12,6 +12,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
@@ -34,22 +35,60 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	enterSelector := "feature/pending-work"
+	enterID := serverapi.NewWorktreeOperationID()
+	enterAck, err := engine.ScheduleWorktreeTransition(
+		context.Background(),
+		enterID,
+		runtimeinput.PendingWorkWorktreeTransition{
+			Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+			Selector:   &enterSelector,
+		},
+		func(context.Context) WorktreeApplicationResult {
+			return CommittedWorktreeApplication(nil)
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enterAck.OperationID != enterID {
+		t.Fatalf("enter acknowledgement ID = %s, want %s", enterAck.OperationID, enterID)
+	}
 	secondSteer := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
 		return engine.QueueUserMessageForAutoDrain(context.Background(), "second steer")
 	})
+	leaveID := serverapi.NewWorktreeOperationID()
+	leaveAck, err := engine.ScheduleWorktreeTransition(
+		context.Background(),
+		leaveID,
+		runtimeinput.PendingWorkWorktreeTransition{
+			Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+		},
+		func(context.Context) WorktreeApplicationResult {
+			return CommittedWorktreeApplication(nil)
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaveAck.OperationID != leaveID {
+		t.Fatalf("leave acknowledgement ID = %s, want %s", leaveAck.OperationID, leaveID)
+	}
 	queued := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
 		return engine.QueueUserMessage(context.Background(), "post-turn queue")
 	})
 
 	snapshot := pendingWorkTestSnapshot(t, engine)
-	if len(snapshot.Items) != 4 {
+	if len(snapshot.Items) != 6 {
 		t.Fatalf("Pending Work = %+v", snapshot.Items)
 	}
 	if snapshot.Items[0].ID.String() != queued.ID ||
 		snapshot.Items[1].ID.String() != firstSteer.ID ||
 		snapshot.Items[2].Kind != runtimeinput.PendingWorkItemKindManualCompaction ||
 		snapshot.Items[2].ID.String() != requestID.String() ||
-		snapshot.Items[3].ID.String() != secondSteer.ID {
+		snapshot.Items[3].ID.String() != enterID.String() ||
+		snapshot.Items[4].ID.String() != secondSteer.ID ||
+		snapshot.Items[5].ID.String() != leaveID.String() {
 		t.Fatalf("Pending Work order = %+v", snapshot.Items)
 	}
 	if snapshot.Items[2].ManualCompaction == nil ||
@@ -58,11 +97,268 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 		snapshot.Items[2].CanonicalInput != "/compact keep details" {
 		t.Fatalf("manual compaction = %+v", snapshot.Items[2])
 	}
+	if snapshot.Items[3].CanonicalInput != "/wt switch feature/pending-work" ||
+		snapshot.Items[5].CanonicalInput != "/wt leave" {
+		t.Fatalf("Worktree canonical inputs = %q/%q", snapshot.Items[3].CanonicalInput, snapshot.Items[5].CanonicalInput)
+	}
 	if snapshot.Items[0].Lane != runtimeinput.PendingWorkLaneQueue {
 		t.Fatalf("post-turn item lane = %q", snapshot.Items[0].Lane)
 	}
 
 	releaseMaintenance()
+}
+
+func TestWorktreeTransitionPendingWorkLifecycle(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		transition runtimeinput.PendingWorkWorktreeTransition
+		canonical  string
+	}{
+		{
+			name: "enter",
+			transition: runtimeinput.PendingWorkWorktreeTransition{
+				Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+				Selector:   textutil.Value("feature/runtime-owned"),
+			},
+			canonical: "/wt switch feature/runtime-owned",
+		},
+		{
+			name: "leave",
+			transition: runtimeinput.PendingWorkWorktreeTransition{
+				Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+			},
+			canonical: "/wt leave",
+		},
+	} {
+		t.Run(testCase.name+"/remove before start", func(t *testing.T) {
+			engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
+			releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+			operationID := serverapi.NewWorktreeOperationID()
+			started := make(chan struct{}, 1)
+
+			ack, err := engine.ScheduleWorktreeTransition(
+				t.Context(),
+				operationID,
+				testCase.transition,
+				func(context.Context) WorktreeApplicationResult {
+					started <- struct{}{}
+					return CommittedWorktreeApplication(nil)
+				},
+			)
+			if err != nil {
+				t.Fatalf("schedule Worktree transition: %v", err)
+			}
+			if ack.OperationID != operationID {
+				t.Fatalf("acknowledgement ID = %s, want %s", ack.OperationID, operationID)
+			}
+			itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+				return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+			})
+			snapshot := pendingWorkTestSnapshot(t, engine)
+			if len(snapshot.Items) != 1 || snapshot.Items[0].ID != itemID ||
+				snapshot.Items[0].CanonicalInput != testCase.canonical {
+				t.Fatalf("Pending Work = %+v", snapshot.Items)
+			}
+
+			restoration, err := engine.RemovePendingWork(t.Context(), itemID)
+			if err != nil || restoration.Kind != runtimeinput.PendingWorkItemKindWorktreeTransition ||
+				restoration.CanonicalInput != testCase.canonical {
+				t.Fatalf("remove Worktree transition = %+v/%v", restoration, err)
+			}
+			releaseMaintenance()
+			waitEngineLifecycleTasks(t, engine)
+			select {
+			case <-started:
+				t.Fatal("removed Worktree transition executed")
+			default:
+			}
+		})
+
+		t.Run(testCase.name+"/not pending after start", func(t *testing.T) {
+			engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
+			operationID := serverapi.NewWorktreeOperationID()
+			itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+				return serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+			})
+			started := make(chan struct{})
+			release := make(chan struct{})
+			finished := make(chan struct{})
+
+			ack, err := engine.ScheduleWorktreeTransition(
+				t.Context(),
+				operationID,
+				testCase.transition,
+				func(ctx context.Context) WorktreeApplicationResult {
+					close(started)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						t.Errorf("started Worktree transition was canceled: %v", context.Cause(ctx))
+					}
+					close(finished)
+					return CommittedWorktreeApplication(nil)
+				},
+			)
+			if err != nil {
+				t.Fatalf("schedule Worktree transition: %v", err)
+			}
+			if ack.OperationID != operationID {
+				t.Fatalf("acknowledgement ID = %s, want %s", ack.OperationID, operationID)
+			}
+			pendingWorkTestWait(t, started, "Worktree transition start")
+			if pendingWorkTestContains(pendingWorkTestSnapshot(t, engine), itemID) {
+				t.Fatal("started Worktree transition remained pending")
+			}
+			if _, err := engine.RemovePendingWork(t.Context(), itemID); !errors.Is(err, runtimeinput.ErrPendingWorkNotPending) {
+				t.Fatalf("remove started Worktree transition = %v", err)
+			}
+			close(release)
+			pendingWorkTestWait(t, finished, "Worktree transition finish")
+			waitEngineLifecycleTasks(t, engine)
+		})
+	}
+}
+
+func TestWorktreeTransitionPendingWorkCapacity(t *testing.T) {
+	seedMixedProjection := func(t *testing.T, engine *Engine, itemCount int) {
+		t.Helper()
+		if itemCount < 2 {
+			t.Fatalf("mixed Pending Work item count = %d, want at least 2", itemCount)
+		}
+		for index := range itemCount - 2 {
+			if _, err := engine.QueueUserMessage(t.Context(), fmt.Sprintf("queued %d", index)); err != nil {
+				t.Fatalf("queue item %d: %v", index, err)
+			}
+		}
+		if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
+			t.Context(),
+			runtimeids.NewCompactionRequestID(),
+			runtimeinput.ManualCompactionAdmission{},
+			nil,
+		); err != nil {
+			t.Fatalf("schedule manual compaction: %v", err)
+		}
+		if _, err := engine.ScheduleWorktreeTransition(
+			t.Context(),
+			serverapi.NewWorktreeOperationID(),
+			runtimeinput.PendingWorkWorktreeTransition{
+				Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+			},
+			func(context.Context) WorktreeApplicationResult {
+				return CommittedWorktreeApplication(nil)
+			},
+		); err != nil {
+			t.Fatalf("schedule Worktree transition: %v", err)
+		}
+		if got := len(pendingWorkTestSnapshot(t, engine).Items); got != itemCount {
+			t.Fatalf("seeded Pending Work count = %d, want %d", got, itemCount)
+		}
+	}
+
+	t.Run("rejects a completed mixed capacity projection", func(t *testing.T) {
+		engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
+		releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+		defer releaseMaintenance()
+		seedMixedProjection(t, engine, runtimeinput.PendingWorkCapacity)
+
+		_, err := engine.ScheduleWorktreeTransition(
+			t.Context(),
+			serverapi.NewWorktreeOperationID(),
+			runtimeinput.PendingWorkWorktreeTransition{
+				Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+				Selector:   textutil.Value("feature/rejected"),
+			},
+			func(context.Context) WorktreeApplicationResult {
+				return CommittedWorktreeApplication(nil)
+			},
+		)
+		var typed *serverapi.PendingWorkCapacityError
+		if !errors.Is(err, runtimeinput.ErrPendingWorkCapacity) || !errors.As(err, &typed) {
+			t.Fatalf("capacity error = %T %v", err, err)
+		}
+		if got := len(pendingWorkTestSnapshot(t, engine).Items); got != runtimeinput.PendingWorkCapacity {
+			t.Fatalf("Pending Work count after rejection = %d", got)
+		}
+	})
+
+	t.Run("admits from a completed mixed 99 item projection", func(t *testing.T) {
+		engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
+		releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+		defer releaseMaintenance()
+		seedMixedProjection(t, engine, runtimeinput.PendingWorkCapacity-1)
+
+		if _, err := engine.ScheduleWorktreeTransition(
+			t.Context(),
+			serverapi.NewWorktreeOperationID(),
+			runtimeinput.PendingWorkWorktreeTransition{
+				Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+				Selector:   textutil.Value("feature/admitted"),
+			},
+			func(context.Context) WorktreeApplicationResult {
+				return CommittedWorktreeApplication(nil)
+			},
+		); err != nil {
+			t.Fatalf("admit Worktree transition: %v", err)
+		}
+		if got := len(pendingWorkTestSnapshot(t, engine).Items); got != runtimeinput.PendingWorkCapacity {
+			t.Fatalf("Pending Work count after admission = %d", got)
+		}
+	})
+
+	t.Run("preserves concurrent overshoot from a completed mixed 99 item projection", func(t *testing.T) {
+		engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
+		releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
+		defer releaseMaintenance()
+		seedMixedProjection(t, engine, runtimeinput.PendingWorkCapacity-1)
+
+		reachedAcceptance := make(chan struct{}, 2)
+		releaseAcceptance := make(chan struct{})
+		accept := CommandAcceptance(func(commit func() (bool, error)) (bool, error) {
+			reachedAcceptance <- struct{}{}
+			<-releaseAcceptance
+			return commit()
+		})
+		type admissionResult struct {
+			operationID serverapi.WorktreeOperationID
+			ack         serverapi.WorktreeScheduledAcknowledgement
+			err         error
+		}
+		results := make(chan admissionResult, 2)
+		for index := range 2 {
+			index := index
+			go func() {
+				operationID := serverapi.NewWorktreeOperationID()
+				ack, err := engine.ScheduleWorktreeTransitionWithAcceptance(
+					t.Context(),
+					operationID,
+					runtimeinput.PendingWorkWorktreeTransition{
+						Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+						Selector:   textutil.Value(fmt.Sprintf("feature/concurrent-%d", index)),
+					},
+					accept,
+					func(context.Context) WorktreeApplicationResult {
+						return CommittedWorktreeApplication(nil)
+					},
+				)
+				results <- admissionResult{operationID: operationID, ack: ack, err: err}
+			}()
+		}
+		pendingWorkTestWait(t, reachedAcceptance, "first Worktree acceptance")
+		pendingWorkTestWait(t, reachedAcceptance, "second Worktree acceptance")
+		close(releaseAcceptance)
+		for range 2 {
+			result := <-results
+			if result.err != nil {
+				t.Fatalf("concurrent Worktree admission: %v", result.err)
+			}
+			if result.ack.OperationID != result.operationID {
+				t.Fatalf("concurrent acknowledgement ID = %s, want %s", result.ack.OperationID, result.operationID)
+			}
+		}
+		if got := len(pendingWorkTestSnapshot(t, engine).Items); got != runtimeinput.PendingWorkCapacity+1 {
+			t.Fatalf("Pending Work count after concurrent admission = %d", got)
+		}
+	})
 }
 
 func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {

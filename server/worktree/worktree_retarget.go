@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"core/server/metadata"
+	"core/server/runtime"
 	"core/server/session"
 	"core/shared/clientui"
 )
@@ -34,6 +35,45 @@ type worktreeSessionRetargetCompensation struct {
 	service    *Service
 	pending    []pendingWorktreeSessionRetarget
 	targetSync worktreeSessionTargetSync
+}
+
+func applyWorktreeTargetMutation[T any](
+	write func() error,
+	finish func() (T, runtime.WorktreeApplicationResult),
+	rollback func() runtime.WorktreeApplicationResult,
+) (T, runtime.WorktreeApplicationResult) {
+	var zero T
+	if write == nil || finish == nil || rollback == nil {
+		return zero, runtime.UnappliedWorktreeApplication(errors.New("Worktree target mutation callbacks are required"))
+	}
+	if err := write(); err != nil {
+		return zero, runtime.UnappliedWorktreeApplication(err)
+	}
+	value, result := finish()
+	if err := result.Validate(); err != nil {
+		result = runtime.IndeterminateWorktreeApplication(fmt.Errorf("invalid Worktree target mutation result: %w", err))
+	}
+	switch result.Certainty {
+	case runtime.WorktreeApplicationCommitted:
+		return value, result
+	case runtime.WorktreeApplicationUnapplied, runtime.WorktreeApplicationIndeterminate:
+	default:
+		panic("validated Worktree application certainty is invalid")
+	}
+	rollbackResult := rollback()
+	if err := rollbackResult.Validate(); err != nil {
+		return value, runtime.IndeterminateWorktreeApplication(errors.Join(
+			result.Err,
+			rollbackResult.Err,
+			fmt.Errorf("invalid Worktree target rollback result: %w", err),
+		))
+	}
+	err := errors.Join(result.Err, rollbackResult.Err)
+	if result.Certainty == runtime.WorktreeApplicationUnapplied &&
+		rollbackResult.Certainty == runtime.WorktreeApplicationCommitted {
+		return value, runtime.UnappliedWorktreeApplication(err)
+	}
+	return value, runtime.IndeterminateWorktreeApplication(err)
 }
 
 func (compensation worktreeSessionRetargetCompensation) rollback(ctx context.Context) error {
@@ -181,9 +221,13 @@ func (s *Service) rollbackRetargetedSessions(
 }
 
 func (s *Service) switchSessionTarget(ctx context.Context, workspaceCtx sessionWorkspaceContext, previous *syncedWorktree, next syncedWorktree) (clientui.SessionExecutionTarget, error) {
-	return s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, next, nil, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-		return s.syncExecutionTarget(syncCtx, workspaceCtx.sessionID, target, reminder)
+	target, result := s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, next, nil, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) runtime.WorktreeApplicationResult {
+		if err := s.syncExecutionTarget(syncCtx, workspaceCtx.sessionID, target, reminder); err != nil {
+			return runtime.UnappliedWorktreeApplication(err)
+		}
+		return runtime.CommittedWorktreeApplication(nil)
 	})
+	return target, result.Err
 }
 
 func (s *Service) switchSessionTargetWithSync(
@@ -193,18 +237,18 @@ func (s *Service) switchSessionTargetWithSync(
 	next syncedWorktree,
 	stepAuthority transitionAuthority,
 	sync transitionTargetSync,
-) (clientui.SessionExecutionTarget, error) {
+) (clientui.SessionExecutionTarget, runtime.WorktreeApplicationResult) {
 	if sync == nil {
-		return clientui.SessionExecutionTarget{}, errors.New("execution target synchronizer is required")
+		return clientui.SessionExecutionTarget{}, runtime.UnappliedWorktreeApplication(errors.New("execution target synchronizer is required"))
 	}
 	if stepAuthority == nil {
 		sessionIDs, err := parseSessionStartAdmissionIDs([]string{workspaceCtx.sessionID})
 		if err != nil {
-			return clientui.SessionExecutionTarget{}, err
+			return clientui.SessionExecutionTarget{}, runtime.UnappliedWorktreeApplication(err)
 		}
 		release, err := s.acquireSessionStartAdmission(ctx, sessionIDs, sessionStartAdmissionWait)
 		if err != nil {
-			return clientui.SessionExecutionTarget{}, err
+			return clientui.SessionExecutionTarget{}, runtime.UnappliedWorktreeApplication(err)
 		}
 		defer releaseSessionStarts(release)
 		ctx = authorizeSessionMaintenance(ctx, release)
@@ -219,35 +263,36 @@ func (s *Service) switchSessionTargetWithSync(
 	}
 	previousTarget := workspaceCtx.target
 	if err := validatePresentExecutionTargetWorktreeID(previousTarget); err != nil {
-		return clientui.SessionExecutionTarget{}, err
+		return clientui.SessionExecutionTarget{}, runtime.UnappliedWorktreeApplication(err)
 	}
 	cwdRelpath := clampCwdRelpath(previousTarget.CwdRelpath, nextBaseRoot)
-	if err := s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-		SessionID:  workspaceCtx.sessionID,
-		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: workspaceCtx.workspaceID},
-		Worktree:   nextWorktree,
-		CwdRelpath: cwdRelpath,
-	}); err != nil {
-		return clientui.SessionExecutionTarget{}, err
-	}
-	nextTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, workspaceCtx.sessionID)
-	if err != nil {
-		return clientui.SessionExecutionTarget{}, errors.Join(err, s.rollbackSessionTargetWithSync(ctx, workspaceCtx, previousTarget, sync))
-	}
-	reminder, ok, err := worktreeReminderStateForTransition(previous, previousTarget, next, nextTarget)
-	if err != nil {
-		return clientui.SessionExecutionTarget{}, errors.Join(err, s.rollbackSessionTargetWithSync(ctx, workspaceCtx, previousTarget, sync))
-	}
-	if ok {
-		if err := sync(ctx, nextTarget, &reminder); err != nil {
-			return clientui.SessionExecutionTarget{}, errors.Join(err, s.rollbackSessionTargetWithSync(ctx, workspaceCtx, previousTarget, sync))
-		}
-		return nextTarget, nil
-	}
-	if err := sync(ctx, nextTarget, nil); err != nil {
-		return clientui.SessionExecutionTarget{}, errors.Join(err, s.rollbackSessionTargetWithSync(ctx, workspaceCtx, previousTarget, sync))
-	}
-	return nextTarget, nil
+	return applyWorktreeTargetMutation(
+		func() error {
+			return s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+				SessionID:  workspaceCtx.sessionID,
+				Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: workspaceCtx.workspaceID},
+				Worktree:   nextWorktree,
+				CwdRelpath: cwdRelpath,
+			})
+		},
+		func() (clientui.SessionExecutionTarget, runtime.WorktreeApplicationResult) {
+			nextTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, workspaceCtx.sessionID)
+			if err != nil {
+				return clientui.SessionExecutionTarget{}, runtime.UnappliedWorktreeApplication(err)
+			}
+			reminder, ok, err := worktreeReminderStateForTransition(previous, previousTarget, next, nextTarget)
+			if err != nil {
+				return clientui.SessionExecutionTarget{}, runtime.UnappliedWorktreeApplication(err)
+			}
+			if ok {
+				return nextTarget, sync(ctx, nextTarget, &reminder)
+			}
+			return nextTarget, sync(ctx, nextTarget, nil)
+		},
+		func() runtime.WorktreeApplicationResult {
+			return s.rollbackSessionTargetWithSync(ctx, workspaceCtx, previousTarget, sync)
+		},
+	)
 }
 
 func (s *Service) rollbackSessionTargetWithSync(
@@ -255,22 +300,41 @@ func (s *Service) rollbackSessionTargetWithSync(
 	workspaceCtx sessionWorkspaceContext,
 	previousTarget clientui.SessionExecutionTarget,
 	sync transitionTargetSync,
-) error {
+) runtime.WorktreeApplicationResult {
 	rollbackCtx, cancel := liveRollbackContext(ctx)
 	defer cancel()
 	var collected []error
+	indeterminate := false
 	if err := s.metadata.UpdateSessionExecutionTarget(rollbackCtx, metadata.SessionExecutionTargetUpdateFromReadModel(workspaceCtx.sessionID, previousTarget)); err != nil {
 		collected = append(collected, fmt.Errorf("rollback execution target: %w", err))
+		indeterminate = true
 	}
 	if err := s.authority.ClearWorktreeReminder(rollbackCtx, workspaceCtx.sessionID); err != nil {
 		collected = append(collected, fmt.Errorf("rollback worktree reminder: %w", err))
+		indeterminate = true
 	}
 	if strings.TrimSpace(previousTarget.EffectiveWorkdir) != "" {
-		if err := sync(rollbackCtx, previousTarget, nil); err != nil {
-			collected = append(collected, fmt.Errorf("rollback runtime target: %w", err))
+		result := sync(rollbackCtx, previousTarget, nil)
+		if err := result.Validate(); err != nil {
+			collected = append(collected, fmt.Errorf("validate rollback runtime target: %w", err))
+			indeterminate = true
+		} else {
+			if result.Err != nil {
+				collected = append(collected, fmt.Errorf("rollback runtime target: %w", result.Err))
+			}
+			if result.Certainty != runtime.WorktreeApplicationCommitted {
+				indeterminate = true
+			}
 		}
 	}
-	return errors.Join(collected...)
+	err := errors.Join(collected...)
+	if indeterminate {
+		if err == nil {
+			err = errors.New("Worktree target rollback is indeterminate")
+		}
+		return runtime.IndeterminateWorktreeApplication(err)
+	}
+	return runtime.CommittedWorktreeApplication(err)
 }
 
 func (s *Service) syncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
