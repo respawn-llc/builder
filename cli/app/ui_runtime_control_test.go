@@ -400,11 +400,7 @@ func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
 
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client)
-	value := "high"
-	cmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-		Kind:  serverapi.ChatSettingsMutationThinking,
-		Value: &value,
-	})
+	cmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{Kind: serverapi.ChatSettingsMutationThinking, Value: textutil.Value("high")})
 	msgs := collectCmdMessages(t, cmd)
 
 	var done chatSettingsDoneMsg
@@ -437,11 +433,7 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 	m.startupCmds = nil
 
 	sessionCmd := m.runtimeControlCommand(runtimeControlSetSessionName, "incident triage", false, "")
-	value := "high"
-	thinkingCmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{
-		Kind:  serverapi.ChatSettingsMutationThinking,
-		Value: &value,
-	})
+	thinkingCmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{Kind: serverapi.ChatSettingsMutationThinking, Value: textutil.Value("high")})
 	sessionMsgs := collectCmdMessages(t, sessionCmd)
 	thinkingMsgs := collectCmdMessages(t, thinkingCmd)
 

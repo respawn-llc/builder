@@ -797,17 +797,7 @@ func TestPlanLaunchSessionAgentSelectionUsesCompletePreparedBaseline(t *testing.
 		!selected.Plan.AutoCompactionEnabled {
 		t.Fatalf("selected plan = %+v, want complete worker baseline", selected.Plan)
 	}
-	wantSelectionSettings := session.ChatSettings{
-		Supervisor:     "all",
-		Thinking:       "high",
-		Fast:           true,
-		Questions:      true,
-		AutoCompaction: true,
-	}
-	wantSelection, err := session.ChatSettingsStateFromCompleteSettings("worker", wantSelectionSettings)
-	if err != nil {
-		t.Fatalf("build expected Agent selection: %v", err)
-	}
+	wantSelection := sessiontest.CompleteChatSettingsState(t, "worker", "all", "high", true, true, true)
 	if selected.Plan.ActivationAgentSelection == nil ||
 		!reflect.DeepEqual(*selected.Plan.ActivationAgentSelection, wantSelection) {
 		t.Fatalf(
@@ -838,16 +828,7 @@ func TestPlanLaunchSessionProjectsUnavailableAgentWithCompleteDefaultBaseline(t 
 	containerDir := t.TempDir()
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	removed := "removed"
-	target, err := session.ChatSettingsStateFromCompleteSettings(removed, session.ChatSettings{
-		Supervisor:     "all",
-		Thinking:       "high",
-		Fast:           true,
-		Questions:      false,
-		AutoCompaction: false,
-	})
-	if err != nil {
-		t.Fatalf("build removed Agent settings: %v", err)
-	}
+	target := sessiontest.CompleteChatSettingsState(t, removed, "all", "high", true, false, false)
 	if _, err := store.CommitChatSettingsState(target); err != nil {
 		t.Fatalf("seed removed Agent: %v", err)
 	}

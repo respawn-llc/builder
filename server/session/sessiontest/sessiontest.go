@@ -207,9 +207,28 @@ func AgentRole(value string) *string {
 	return &value
 }
 
-func CompleteChatSettingsOverrides() *session.ChatSettingsOverrides {
-	return &session.ChatSettingsOverrides{Supervisor: textutil.Value("off"), Thinking: textutil.Value("medium"), Fast: textutil.Value(false), Questions: textutil.Value(true), AutoCompaction: textutil.Value(true)}
+func CompleteChatSettingsState(t testing.TB, agent, supervisor, thinking string, fast, questions, autoCompaction bool) session.ChatSettingsState {
+	state, err := session.ChatSettingsStateFromCompleteSettings(agent, session.ChatSettings{Supervisor: supervisor, Thinking: thinking, Fast: fast, Questions: questions, AutoCompaction: autoCompaction})
+	if err != nil {
+		t.Fatalf("build Chat settings: %v", err)
+	}
+	return state
 }
+
+func CommitChatSettingsTestState(t testing.TB, store *session.Store, update func(*session.ChatSettingsOverrides)) {
+	state, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		t.Fatalf("read Chat settings: %v", err)
+	}
+	if state.Settings == nil {
+		t.Fatal("Chat settings are required")
+	}
+	update(state.Settings)
+	if _, err := store.CommitChatSettingsState(state); err != nil {
+		t.Fatalf("commit Chat settings: %v", err)
+	}
+}
+
 // Snapshot mirrors the durable session state a test commonly asserts against:
 // metadata, the full event history, and conversation freshness.
 type Snapshot struct {

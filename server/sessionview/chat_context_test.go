@@ -10,11 +10,11 @@ import (
 	"core/server/auth"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/textutil"
 )
 
 type sessionChatContextWorkspaceResolver struct {
@@ -55,25 +55,7 @@ func TestReadDormantSessionChatContextUsesExactExecutionRootAndBoundedFacts(t *t
 		t.Fatalf("SetSessionContextFacts: %v", err)
 	}
 	autoCompaction := false
-	state, err := session.ChatSettingsStateFromMeta(store.Meta())
-	if err != nil {
-		t.Fatalf("read Chat settings: %v", err)
-	}
-	overrides := session.ChatSettingsOverrides{
-		Supervisor:     textutil.Value("off"),
-		Thinking:       textutil.Value("medium"),
-		Fast:           textutil.Value(false),
-		Questions:      textutil.Value(true),
-		AutoCompaction: &autoCompaction,
-	}
-	if state.Settings != nil {
-		overrides = *state.Settings
-	}
-	overrides.AutoCompaction = &autoCompaction
-	state.Settings = &overrides
-	if _, err := store.CommitChatSettingsState(state); err != nil {
-		t.Fatalf("commit Chat settings: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.AutoCompaction = &autoCompaction })
 	settings := config.DefaultOnboardingSettings()
 	settings.ModelContextWindow = 100_000
 	settings.ContextCompactionThresholdTokens = 75_000

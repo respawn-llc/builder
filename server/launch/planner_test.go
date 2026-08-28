@@ -27,17 +27,6 @@ type failingUpdateMetadataExecutionTargetStore struct {
 	updatedSessionID string
 }
 
-func commitChatSettingsTestState(t *testing.T, store *session.Store, update func(*session.ChatSettingsOverrides)) error {
-	state, err := session.ChatSettingsStateFromMeta(store.Meta())
-	if err != nil {
-		t.Fatalf("read Chat settings: %v", err)
-	}
-	state.Settings = sessiontest.CompleteChatSettingsOverrides()
-	update(state.Settings)
-	_, err = store.CommitChatSettingsState(state)
-	return err
-}
-
 func (s *failingUpdateMetadataExecutionTargetStore) ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
 	return s.base.ResolveSessionExecutionTarget(ctx, sessionID)
 }
@@ -205,15 +194,9 @@ func TestResolvePromptFacingSnapshotPlanIncludesEffectiveSessionChatSettings(t *
 	persistence := sessiontest.NewPersistence()
 	containerDir := filepath.Join(t.TempDir(), "projects", testProjectID, "sessions")
 	store := createTestSessionInContainer(t, containerDir, testWorkspaceContainer, workspace, persistence.Options()...)
-	if err := commitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
-		settings.Supervisor = textutil.Value("all")
-		settings.Thinking = textutil.Value("high")
-		settings.Fast = textutil.Value(true)
-		settings.Questions = textutil.Value(true)
-		settings.AutoCompaction = textutil.Value(true)
-	}); err != nil {
-		t.Fatalf("commit Chat settings: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
+		settings.Supervisor, settings.Thinking, settings.Fast, settings.Questions, settings.AutoCompaction = textutil.Value("all"), textutil.Value("high"), textutil.Value(true), textutil.Value(true), textutil.Value(true)
+	})
 
 	plan, err := ResolvePromptFacingSnapshotPlan(loaded, store, false)
 	if err != nil {
@@ -1064,11 +1047,7 @@ func TestApplyRunPromptOverridesPreservesExplicitThinkingOverSessionSetting(t *t
 	loaded := loadLaunchConfig(t, workspace)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 	store := testStoreForPlan(t, plan)
-	if err := commitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
-		settings.Thinking = textutil.Value("low")
-	}); err != nil {
-		t.Fatalf("persist Session Thinking: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.Thinking = textutil.Value("low") })
 
 	updated, warnings, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
 		plan,
@@ -1099,11 +1078,7 @@ func TestApplyRunPromptOverridesRejectsPersistedThinkingUnsupportedByModelOverri
 	loaded.Settings.ThinkingLevel = "high"
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 	store := testStoreForPlan(t, plan)
-	if err := commitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
-		settings.Thinking = textutil.Value("ultra")
-	}); err != nil {
-		t.Fatalf("persist Session Thinking: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.Thinking = textutil.Value("ultra") })
 
 	_, _, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
 		plan,
@@ -1125,11 +1100,7 @@ func TestApplyRunPromptOverridesValidatesExplicitThinkingInsteadOfPersistedThink
 	loaded.Settings.ThinkingLevel = "high"
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 	store := testStoreForPlan(t, plan)
-	if err := commitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
-		settings.Thinking = textutil.Value("ultra")
-	}); err != nil {
-		t.Fatalf("persist Session Thinking: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.Thinking = textutil.Value("ultra") })
 
 	updated, _, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
 		plan,
@@ -1152,11 +1123,7 @@ func TestApplyRunPromptOverridesRejectsPersistedFastUnsupportedByProviderOverrid
 	loaded := loadLaunchConfig(t, workspace)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 	store := testStoreForPlan(t, plan)
-	if err := commitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
-		settings.Fast = textutil.Value(true)
-	}); err != nil {
-		t.Fatalf("persist Session Fast: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.Fast = textutil.Value(true) })
 
 	_, _, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
 		plan,
@@ -1183,11 +1150,7 @@ func TestApplyPreparedRunPromptOverridesRejectsPersistedFastUnsupportedByActiveP
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 	store := testStoreForPlan(t, plan)
-	if err := commitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
-		settings.Fast = textutil.Value(true)
-	}); err != nil {
-		t.Fatalf("persist Session Fast: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.Fast = textutil.Value(true) })
 	prepared, err := PrepareRunPromptOverrides(loaded, serverapi.RunPromptOverrides{}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("PrepareRunPromptOverrides: %v", err)
@@ -1213,11 +1176,7 @@ func TestApplyPreparedRunPromptOverridesRejectsPersistedThinkingUnsupportedAfter
 	loaded.Settings.ThinkingLevel = "high"
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 	store := testStoreForPlan(t, plan)
-	if err := commitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) {
-		settings.Thinking = textutil.Value("ultra")
-	}); err != nil {
-		t.Fatalf("persist Session Thinking: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.Thinking = textutil.Value("ultra") })
 
 	reloaded := loaded
 	reloaded.Settings.Model = "gpt-5"

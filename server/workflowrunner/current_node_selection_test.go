@@ -7,6 +7,7 @@ import (
 
 	"core/internal/testharness/workflowfixture"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
@@ -66,17 +67,7 @@ func TestCurrentNodeStartUsesMaterializedSelectedRoleAtCompactionBoundary(t *tes
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("persist retained Session: %v", err)
 	}
-	state, err := session.ChatSettingsStateFromMeta(store.Meta())
-	if err != nil {
-		t.Fatalf("read retained Session Chat settings: %v", err)
-	}
-	if state.Settings == nil {
-		t.Fatal("retained Session Chat settings are required")
-	}
-	state.Settings.AutoCompaction = textutil.Value(false)
-	if _, err := store.CommitChatSettingsState(state); err != nil {
-		t.Fatalf("disable retained Session Auto-compaction: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.AutoCompaction = textutil.Value(false) })
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse retained Session ID: %v", err)
