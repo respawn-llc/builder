@@ -68,6 +68,9 @@ func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(
 	if id, err = o.workspaceID(id); err != nil {
 		return runtimeids.SessionID{}, err
 	}
+	if resolve == nil {
+		return runtimeids.SessionID{}, errors.New("workspace Chat draft resolver is required")
+	}
 	if materialize == nil {
 		return runtimeids.SessionID{}, errors.New("workspace Chat materializer is required")
 	}
@@ -76,9 +79,6 @@ func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(
 		return runtimeids.SessionID{}, err
 	}
 	defer lane.Release()
-	if resolve == nil {
-		return runtimeids.SessionID{}, errors.New("workspace Chat draft resolver is required")
-	}
 	input, err := resolve(ctx)
 	if err != nil {
 		return runtimeids.SessionID{}, err
@@ -135,6 +135,9 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 	if id, err = o.workspaceID(id); err != nil {
 		return WorkspaceChatDraft{}, err
 	}
+	if resolve == nil {
+		return WorkspaceChatDraft{}, errors.New("workspace Chat draft resolver is required")
+	}
 	if transform == nil {
 		return WorkspaceChatDraft{}, errors.New("workspace Chat draft transform is required")
 	}
@@ -143,9 +146,6 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 		return WorkspaceChatDraft{}, err
 	}
 	defer lane.Release()
-	if resolve == nil {
-		return WorkspaceChatDraft{}, errors.New("workspace Chat draft resolver is required")
-	}
 	input, err := resolve(ctx)
 	if err != nil {
 		return WorkspaceChatDraft{}, err

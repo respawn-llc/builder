@@ -44,7 +44,7 @@ func commitSessionChatSettingsTestState(t *testing.T, store *session.Store, upda
 	if err != nil {
 		t.Fatalf("read Chat settings: %v", err)
 	}
-	state.Settings = sessiontest.CompleteChatSettingsOverrides(state.Settings)
+	state.Settings = &session.ChatSettingsOverrides{Supervisor: textutil.Value("off"), Thinking: textutil.Value("medium"), Fast: textutil.Value(false), Questions: textutil.Value(true), AutoCompaction: textutil.Value(true)}
 	update(state.Settings)
 	if _, err := store.CommitChatSettingsState(state); err != nil {
 		t.Fatalf("commit Chat settings: %v", err)
