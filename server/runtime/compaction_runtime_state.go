@@ -38,8 +38,13 @@ type compactionRuntimeState struct {
 	manualEligible                 bool
 	historyReplacementMode         *session.CompactionMode
 	workflowPostCompletionBoundary bool
-	active                         *TranscriptCompactionState
+	active                         *activeCompactionState
 	contextFacts                   session.SessionContextFacts
+}
+
+type activeCompactionState struct {
+	transcript TranscriptCompactionState
+	activeKind ActiveKind
 }
 
 type liveChatContextCompactionSnapshot struct {
@@ -111,16 +116,20 @@ func (s *compactionRuntimeState) SetActive(
 	requestID *runtimeids.CompactionRequestID,
 	mode string,
 	count int,
+	activeKind ActiveKind,
 ) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	s.active = &TranscriptCompactionState{
-		StepID:    strings.TrimSpace(stepID),
-		RequestID: requestID,
-		Mode:      strings.TrimSpace(mode),
-		Count:     count,
+	s.active = &activeCompactionState{
+		transcript: TranscriptCompactionState{
+			StepID:    strings.TrimSpace(stepID),
+			RequestID: requestID,
+			Mode:      strings.TrimSpace(mode),
+			Count:     count,
+		},
+		activeKind: activeKind,
 	}
 	s.mu.Unlock()
 }
@@ -130,10 +139,22 @@ func (s *compactionRuntimeState) ClearActive(stepID string) {
 		return
 	}
 	s.mu.Lock()
-	if s.active != nil && s.active.StepID == strings.TrimSpace(stepID) {
+	if s.active != nil && s.active.transcript.StepID == strings.TrimSpace(stepID) {
 		s.active = nil
 	}
 	s.mu.Unlock()
+}
+
+func (s *compactionRuntimeState) ActiveKindSnapshot() (string, ActiveKind, bool) {
+	if s == nil {
+		return "", "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil {
+		return "", "", false
+	}
+	return s.active.transcript.StepID, s.active.activeKind, true
 }
 
 func (s *compactionRuntimeState) ActiveSnapshot() *TranscriptCompactionState {
@@ -145,7 +166,7 @@ func (s *compactionRuntimeState) ActiveSnapshot() *TranscriptCompactionState {
 	if s.active == nil {
 		return nil
 	}
-	active := *s.active
+	active := s.active.transcript
 	return &active
 }
 

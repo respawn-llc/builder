@@ -544,13 +544,16 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 			}
 			return result, err
 		}
+		committedQueueItemIDs := queuedUserMessageIDSet(group.queueItems)
 		if result.queueItemIDs == nil {
-			result.queueItemIDs = queuedUserMessageIDSet(group.queueItems)
+			result.queueItemIDs = committedQueueItemIDs
 		} else {
-			for queueItemID := range queuedUserMessageIDSet(group.queueItems) {
+			for queueItemID := range committedQueueItemIDs {
 				result.queueItemIDs[queueItemID] = struct{}{}
 			}
 		}
+		e.unmarkQueuedUserInjectionForAutoDrainSet(committedQueueItemIDs)
+		e.completeLiveRunQueueItems(committedQueueItemIDs)
 		result.startedStep = result.startedStep || startsAgentStep(group.message)
 		result.flushed++
 	}

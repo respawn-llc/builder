@@ -206,10 +206,11 @@ type steeringQueuedUserMessageRestore struct {
 }
 
 type steeringCompactionActivity struct {
-	active    bool
-	requestID *runtimeids.CompactionRequestID
-	mode      string
-	count     int
+	active     bool
+	requestID  *runtimeids.CompactionRequestID
+	mode       string
+	count      int
+	activeKind ActiveKind
 }
 
 type steeringMessageEventPolicy uint8
@@ -400,14 +401,16 @@ func steerCompactionActivityIntent(
 	requestID *runtimeids.CompactionRequestID,
 	mode string,
 	count int,
+	activeKind ActiveKind,
 ) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{compactionActivity: &steeringCompactionActivity{
-			active:    active,
-			requestID: requestID,
-			mode:      strings.TrimSpace(mode),
-			count:     count,
+			active:     active,
+			requestID:  requestID,
+			mode:       strings.TrimSpace(mode),
+			count:      count,
+			activeKind: activeKind,
 		}}},
 	}
 }
@@ -765,11 +768,14 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 		}
 		activity := item.compactionActivity
 		if activity.active {
-			e.compactionRuntimeState().SetActive(stepID, activity.requestID, activity.mode, activity.count)
+			if !activity.activeKind.Valid() {
+				return errors.New("compaction activity requires a valid active kind")
+			}
+			e.compactionRuntimeState().SetActive(stepID, activity.requestID, activity.mode, activity.count, activity.activeKind)
 		} else {
 			e.compactionRuntimeState().ClearActive(stepID)
 		}
-		return nil
+		return e.emitRaw(Event{Kind: EventRuntimeActivityChanged})
 	}
 	if item.missingToolOutputRepair != nil {
 		repair := item.missingToolOutputRepair

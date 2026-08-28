@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"core/server/llm"
@@ -92,8 +93,10 @@ func TestPreSubmitCompactionLocalCarriesPreservedUserMessageInOrder(t *testing.T
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("pre-submit summary")},
 	}}}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
-		Model:          "gpt-5",
-		CompactionMode: "local",
+		Model:                 "gpt-5",
+		CompactionMode:        "local",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 300,
 	})
 	if err := steerTestActiveStep(engine, "user", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
@@ -104,7 +107,7 @@ func TestPreSubmitCompactionLocalCarriesPreservedUserMessageInOrder(t *testing.T
 		t.Fatalf("persist pre-submit carryover prompt: %v", err)
 	}
 
-	if err := engine.CompactContextForPreSubmit(context.Background()); err != nil {
+	if err := engine.CompactContextForPreSubmit(context.Background(), strings.Repeat("next ", 1_000)); err != nil {
 		t.Fatalf("pre-submit compaction: %v", err)
 	}
 	if len(client.calls) != 1 {

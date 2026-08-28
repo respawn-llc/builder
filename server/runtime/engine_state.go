@@ -174,7 +174,19 @@ func (e *Engine) ActiveRun() *RunSnapshot {
 }
 
 func (e *Engine) ActiveStepSnapshot() *RunSnapshot {
-	return e.ActiveRun()
+	snapshot := e.ActiveRun()
+	if snapshot == nil {
+		return nil
+	}
+	stepID, activeKind, active := e.compactionRuntimeState().ActiveKindSnapshot()
+	if !active {
+		return snapshot
+	}
+	projected := *snapshot
+	projected.StepID = stepID
+	projected.ActiveKind = activeKind
+	projected.GoalLoop = false
+	return &projected
 }
 
 var ErrActiveStepInactive = errors.New("originating model step is no longer active")
