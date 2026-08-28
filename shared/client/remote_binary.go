@@ -266,9 +266,6 @@ func binaryCallFrame(
 	if err != nil {
 		return rpcwire.Frame{}, protoapi.Operation{}, err
 	}
-	if operation.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_UNARY {
-		return rpcwire.Frame{}, protoapi.Operation{}, fmt.Errorf("operation %s is not unary", operation.Name)
-	}
 	if operation.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER {
 		return rpcwire.Frame{}, protoapi.Operation{}, fmt.Errorf("operation %s is not client-to-server", operation.Name)
 	}
