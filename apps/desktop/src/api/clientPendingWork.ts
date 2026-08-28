@@ -151,62 +151,30 @@ export function decodePendingWorkError(error: unknown): PendingWorkError | null 
 }
 
 function decodeDirectPendingWorkFailure(error: RpcError): PendingWorkFailure | null {
-  for (const decode of directFailureDecoders) {
-    const decoded = decode(error);
-    if (decoded !== null) return decoded;
-  }
-  return null;
-}
-
-type FailureDecoder = (error: RpcError) => PendingWorkFailure | null;
-const directFailureDecoders: readonly FailureDecoder[] = [
-  decodeRuntimeUnavailable,
-  decodeCapacity,
-  decodeNotPending,
-  decodeManualCompaction,
-];
-
-function decodeRuntimeUnavailable(error: RpcError): PendingWorkFailure | null {
   if (error.code === rpcErrorCodes.runtimeUnavailable && isPendingWorkMethod(error.method)) {
     return error.data === undefined ? { kind: "runtime_unavailable" } : null;
   }
-  return null;
-}
-
-function decodeCapacity(error: RpcError): PendingWorkFailure | null {
   if (isPendingWorkAdmissionMethod(error.method) && error.code === rpcErrorCodes.pendingWorkCapacity) {
     return capacityErrorSchema.safeParse(error.data).success ? { kind: "capacity" } : null;
   }
-  return null;
-}
-
-function decodeNotPending(error: RpcError): PendingWorkFailure | null {
   if (error.method === methods.remove && error.code === rpcErrorCodes.pendingWorkNotPending) {
     const parsed = notPendingErrorSchema.safeParse(error.data);
     return parsed.success ? { kind: "not_pending", itemID: parsed.data.item_id } : null;
   }
-  return null;
+  return decodeManualCompactionFailure(error);
 }
 
-function decodeManualCompaction(error: RpcError): PendingWorkFailure | null {
+function decodeManualCompactionFailure(error: RpcError): PendingWorkFailure | null {
   if (error.method !== methods.compact) return null;
-  const reason = manualCompactionReason(error.code);
-  if (reason === null) return null;
-  const parsed = strict({ reason: z.literal(reason) }).safeParse(error.data);
-  return parsed.success ? { kind: "manual_compaction", reason } : null;
-}
-
-function manualCompactionReason(code: number): ManualCompactionErrorReason | null {
-  switch (code) {
-    case rpcErrorCodes.manualCompactionTooSoon:
-      return "too_soon";
-    case rpcErrorCodes.manualCompactionDisabled:
-      return "disabled";
-    case rpcErrorCodes.manualCompactionActive:
-      return "active";
-    default:
-      return null;
-  }
+  const reason = new Map<number, ManualCompactionErrorReason>([
+    [rpcErrorCodes.manualCompactionTooSoon, "too_soon"],
+    [rpcErrorCodes.manualCompactionDisabled, "disabled"],
+    [rpcErrorCodes.manualCompactionActive, "active"],
+  ]).get(error.code);
+  if (reason === undefined) return null;
+  return strict({ reason: z.literal(reason) }).safeParse(error.data).success
+    ? { kind: "manual_compaction", reason }
+    : null;
 }
 
 function isPendingWorkMethod(method: string): boolean {

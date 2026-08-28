@@ -191,8 +191,6 @@ export type PendingWorkChangedEvent = Readonly<z.output<typeof pendingWorkChange
 
 const feedbackBase = {
   Changed: z.boolean(),
-};
-const absentFeedbackValues = {
   SessionName: z.null(),
   Thinking: z.null(),
   FastMode: z.null(),
@@ -207,68 +205,31 @@ const normalizedNonBlank = z.string().refine((value) => value.trim().length > 0 
   message: "Expected normalized non-blank value.",
 });
 
-export const sessionSettingFeedbackSchema = z.discriminatedUnion("Kind", [
-  strict({
-    ...feedbackBase,
-    ...absentFeedbackValues,
-    Kind: z.literal("session_name"),
-    SessionName: normalizedSessionName,
-  }).transform((value) => ({
-    kind: value.Kind,
-    changed: value.Changed,
-    value: value.SessionName,
-  })),
-  strict({
-    ...feedbackBase,
-    ...absentFeedbackValues,
-    Kind: z.literal("thinking"),
-    Thinking: normalizedNonBlank,
-  }).transform((value) => ({
-    kind: value.Kind,
-    changed: value.Changed,
-    value: value.Thinking,
-  })),
-  strict({
-    ...feedbackBase,
-    ...absentFeedbackValues,
-    Kind: z.literal("fast_mode"),
-    FastMode: z.boolean(),
-  }).transform((value) => ({
-    kind: value.Kind,
-    changed: value.Changed,
-    value: value.FastMode,
-  })),
-  strict({
-    ...feedbackBase,
-    ...absentFeedbackValues,
-    Kind: z.literal("supervisor"),
-    Supervisor: z.enum(["off", "edits", "all"]),
-  }).transform((value) => ({
-    kind: value.Kind,
-    changed: value.Changed,
-    value: value.Supervisor,
-  })),
-  strict({
-    ...feedbackBase,
-    ...absentFeedbackValues,
-    Kind: z.literal("questions"),
-    Questions: z.boolean(),
-  }).transform((value) => ({
-    kind: value.Kind,
-    changed: value.Changed,
-    value: value.Questions,
-  })),
-  strict({
-    ...feedbackBase,
-    ...absentFeedbackValues,
-    Kind: z.literal("auto_compaction"),
-    AutoCompaction: z.boolean(),
-  }).transform((value) => ({
-    kind: value.Kind,
-    changed: value.Changed,
-    value: value.AutoCompaction,
-  })),
+const sessionSettingFeedbackWireSchema = z.discriminatedUnion("Kind", [
+  strict({ ...feedbackBase, Kind: z.literal("session_name"), SessionName: normalizedSessionName }),
+  strict({ ...feedbackBase, Kind: z.literal("thinking"), Thinking: normalizedNonBlank }),
+  strict({ ...feedbackBase, Kind: z.literal("fast_mode"), FastMode: z.boolean() }),
+  strict({ ...feedbackBase, Kind: z.literal("supervisor"), Supervisor: z.enum(["off", "edits", "all"]) }),
+  strict({ ...feedbackBase, Kind: z.literal("questions"), Questions: z.boolean() }),
+  strict({ ...feedbackBase, Kind: z.literal("auto_compaction"), AutoCompaction: z.boolean() }),
 ]);
+export const sessionSettingFeedbackSchema = sessionSettingFeedbackWireSchema.transform((value) => {
+  const shared = { kind: value.Kind, changed: value.Changed } as const;
+  switch (value.Kind) {
+    case "session_name":
+      return { ...shared, value: value.SessionName };
+    case "thinking":
+      return { ...shared, value: value.Thinking };
+    case "fast_mode":
+      return { ...shared, value: value.FastMode };
+    case "supervisor":
+      return { ...shared, value: value.Supervisor };
+    case "questions":
+      return { ...shared, value: value.Questions };
+    case "auto_compaction":
+      return { ...shared, value: value.AutoCompaction };
+  }
+});
 export type SessionSettingFeedback = Readonly<z.output<typeof sessionSettingFeedbackSchema>>;
 
 function uuidSchema<Domain extends string>(parse: (value: string) => UUIDv4Value<Domain>, message: string) {

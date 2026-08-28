@@ -69,7 +69,12 @@ describe("Desktop Pending Work client", () => {
     for (const invalid of [
       { items: [{ ...message, id: "not-a-uuid" }] },
       { items: [{ ...message, canonical_input: "different" }] },
-      { items: [{ ...message, lane: "steer" }, { ...message, id: ids[1] }] },
+      {
+        items: [
+          { ...message, lane: "steer" },
+          { ...message, id: ids[1] },
+        ],
+      },
       { items: [{ ...message, manual_compaction: {} }] },
     ]) {
       expect(pendingWorkSchema.safeParse(invalid).success).toBe(false);
@@ -134,10 +139,15 @@ describe("Desktop Pending Work client", () => {
     const transport = new FakeRpcTransport([
       { method: "runtime.compactContext", result: {} },
       { method: "runtime.pendingWork.list", result: { pending_work: { items: [message] } } },
-      { method: "runtime.pendingWork.remove", result: { restoration: {
-        kind: "message",
-        canonical_input: "queued",
-      } } },
+      {
+        method: "runtime.pendingWork.remove",
+        result: {
+          restoration: {
+            kind: "message",
+            canonical_input: "queued",
+          },
+        },
+      },
     ]);
     vi.spyOn(crypto, "randomUUID").mockReturnValue(ids[1]);
     const client = new ApiClient(transport);
