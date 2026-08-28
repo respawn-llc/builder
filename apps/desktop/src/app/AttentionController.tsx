@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { NativeNotificationActivation, NativeNotificationTarget } from "@app/native-bridge";
 
@@ -26,18 +27,76 @@ import {
 } from "./attentionNotificationSurfaces";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
+import { queryKeys } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 
-export function AttentionNotificationController() {
+export function AttentionController() {
   return (
     <SidebarRootOwner>
-      <OwnedAttentionNotificationController />
+      <OwnedAttentionController />
     </SidebarRootOwner>
   );
 }
 
-function OwnedAttentionNotificationController() {
+function OwnedAttentionController() {
+  const { api, logger } = useAppServices();
+  const queryClient = useQueryClient();
+  const { handlePending, handleResolved, reconcileSurfacedNotifications } = useAttentionSurfacePresenter();
+
+  const refreshAttentionProjection = useCallback((): void => {
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.allAttention,
+      refetchType: "active",
+    });
+  }, [queryClient]);
+
+  useEffect(() => {
+    let subscription: ApiSubscription | null = api.subscribeAttentionNotifications({
+      onOpen() {
+        refreshAttentionProjection();
+      },
+      onEvent(event) {
+        if (event.type !== "snapshot_complete") {
+          refreshAttentionProjection();
+        }
+        if (event.type === "pending") {
+          void handlePending(event.pending);
+          return;
+        }
+        if (event.type === "resolved") {
+          handleResolved(event.id);
+        }
+      },
+      onComplete(code) {
+        if (code === 0) {
+          subscription = null;
+        }
+      },
+      onError(error) {
+        refreshAttentionProjection();
+        void logger.append("warn", "Attention notification stream failed.", {
+          error: errorMessage(error),
+        });
+        reconcileSurfacedNotifications();
+      },
+    });
+    return () => {
+      subscription?.close();
+    };
+  }, [
+    api,
+    handlePending,
+    handleResolved,
+    logger,
+    reconcileSurfacedNotifications,
+    refreshAttentionProjection,
+  ]);
+
+  return null;
+}
+
+function useAttentionSurfacePresenter() {
   const { t } = useTranslation();
   const { api, logger, nativeBridge: bridge } = useAppServices();
   const { open } = useOwnedSidebarRoots();
@@ -303,34 +362,6 @@ function OwnedAttentionNotificationController() {
   }, [connection.generation, connection.phase, reconcileSurfacedNotifications]);
 
   useEffect(() => {
-    let subscription: ApiSubscription | null = api.subscribeAttentionNotifications({
-      onEvent(event) {
-        if (event.type === "pending") {
-          void handlePending(event.pending);
-          return;
-        }
-        if (event.type === "resolved") {
-          handleResolved(event.id);
-        }
-      },
-      onComplete(code) {
-        if (code === 0) {
-          subscription = null;
-        }
-      },
-      onError(error) {
-        void logger.append("warn", "Attention notification stream failed.", {
-          error: errorMessage(error),
-        });
-        reconcileSurfacedNotifications();
-      },
-    });
-    return () => {
-      subscription?.close();
-    };
-  }, [api, handlePending, handleResolved, logger, reconcileSurfacedNotifications]);
-
-  useEffect(() => {
     let unlisten: (() => void) | null = null;
     let active = true;
     void bridge.notifications
@@ -355,5 +386,5 @@ function OwnedAttentionNotificationController() {
     };
   }, [bridge.notifications, logger, openTarget]);
 
-  return null;
+  return { handlePending, handleResolved, reconcileSurfacedNotifications };
 }

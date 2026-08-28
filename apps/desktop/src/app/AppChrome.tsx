@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next";
 import { WorkflowEditorDraftBridgeProvider } from "@/features/workflow-editor";
 import { TaskSearchGlobalTrigger, TaskSearchHost, TaskSearchProvider } from "@/features/board";
 import { toggleInMemoryThemeOverride } from "./startup/appEnvironment";
-import { AttentionNotificationController } from "./AttentionNotificationController";
+import { AttentionController } from "./AttentionController";
 import { AppUpdateChip } from "./AppUpdateChip";
 import { useDesktopUpdate, type DesktopUpdateState } from "./useDesktopUpdate";
 import {
@@ -122,7 +122,7 @@ function AppChromeContent({ children }: AppChromeProps) {
       ) : null}
       <WorkflowEditorDraftBridgeProvider>
         <ProjectDeletionEventHandler />
-        <AttentionNotificationController />
+        <AttentionController />
         <div
           className="app-region-no-drag relative flex min-h-0 min-w-0 w-full overflow-hidden"
           data-testid="app-shell-content"

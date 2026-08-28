@@ -11,7 +11,7 @@ import { flushQueuedWork, installAnimationFrameTestSupport } from "@/test-suppor
 import { createTestSidebarController, createTestSidebarNavigator } from "@/test-support/sidebar";
 import { workflowAttentionCalls, workflowAttentionRpcMethods } from "@/test-support/workflow-attention";
 import { SidebarInboxNav } from "./SidebarInboxNav";
-import { useGlobalAttentionEvents, useGlobalAttentionPages } from "./useHomeData";
+import { useGlobalAttentionPages } from "./useHomeData";
 
 describe("Home global attention data", () => {
   beforeEach(() => {
@@ -20,80 +20,6 @@ describe("Home global attention data", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  it("opens the stream before the initial attention load, refreshes for events, and reconciles after recovery", async () => {
-    const services = createAttentionServices();
-    renderHome(services, <HomeAttentionEventsHarness />);
-
-    await waitFor(() => {
-      expect(services.transport.subscriptions).toHaveLength(1);
-    });
-    expect(workflowAttentionCalls(services.transport)).toHaveLength(0);
-
-    act(() => {
-      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
-    });
-    await flushQueuedWork();
-    expect(attentionPageTokens(services.transport)).toEqual([""]);
-
-    act(() => {
-      services.transport.emit(workflowAttentionRpcMethods.projectEvent, attentionChangingProjectEvent);
-    });
-    await expectAttentionCalls(services.transport, 2);
-
-    act(() => {
-      services.transport.fail(workflowAttentionRpcMethods.subscribeProject, new Error("stream failed"));
-    });
-    await flushQueuedWork();
-    expect(attentionPageTokens(services.transport)).toHaveLength(2);
-
-    act(() => {
-      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
-    });
-    await expectAttentionCalls(services.transport, 3);
-  });
-
-  it("reconciles a stream that fails before its first successful open", async () => {
-    const services = createAttentionServices();
-    renderHome(services, <HomeAttentionEventsHarness />);
-
-    await waitFor(() => {
-      expect(services.transport.subscriptions).toHaveLength(1);
-    });
-    expect(workflowAttentionCalls(services.transport)).toHaveLength(0);
-
-    act(() => {
-      services.transport.fail(
-        workflowAttentionRpcMethods.subscribeProject,
-        new Error("stream failed before open"),
-      );
-    });
-    await flushQueuedWork();
-    expect(attentionPageTokens(services.transport)).toEqual([]);
-
-    act(() => {
-      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
-    });
-    await expectAttentionCalls(services.transport, 1);
-  });
-
-  it("reconciles after a decoder error while the Project stream remains open", async () => {
-    const services = createAttentionServices();
-    renderHome(services, <HomeAttentionEventsHarness />);
-
-    await waitFor(() => {
-      expect(services.transport.subscriptions).toHaveLength(1);
-    });
-    act(() => {
-      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
-    });
-    await flushQueuedWork();
-
-    act(() => {
-      services.transport.emit(workflowAttentionRpcMethods.projectEvent, invalidProjectEvent);
-    });
-    await expectAttentionCalls(services.transport, 2);
   });
 
   it("does not refetch Sidebar navigation when Home already owns populated attention data", async () => {
@@ -233,12 +159,6 @@ function renderHome(services: TestAppServices, children: ReactNode) {
   );
 }
 
-function HomeAttentionEventsHarness() {
-  const attentionSubscriptionReady = useGlobalAttentionEvents();
-  useGlobalAttentionPages(attentionSubscriptionReady);
-  return null;
-}
-
 function HomeAttentionQueryHarness({
   onQuery,
 }: Readonly<{
@@ -321,29 +241,6 @@ const taskDetailDestination = {
 const sidebarController = createTestSidebarController();
 const sidebarNavigator = createTestSidebarNavigator();
 const workflowID = "11111111-1111-4111-8111-111111111111";
-
-const attentionChangingProjectEvent = {
-  event: {
-    action: "updated",
-    occurred_at_unix_ms: 2,
-    primary_entity_id: "task-1",
-    project_id: "project-1",
-    related_ids: [],
-    resource: "task",
-    workflow_id: workflowID,
-  },
-} as const;
-
-const invalidProjectEvent = {
-  event: {
-    action: "updated",
-    occurred_at_unix_ms: 3,
-    primary_entity_id: "task-1",
-    project_id: "project-1",
-    related_ids: [],
-    resource: "task",
-  },
-} as const;
 
 const attentionRequestParamsSchema = z
   .object({

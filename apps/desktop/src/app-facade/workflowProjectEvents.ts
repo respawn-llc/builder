@@ -1,9 +1,5 @@
 import type { WorkflowProjectEvent } from "@/api";
 
-export function workflowProjectEventCanChangeAttention(event: WorkflowProjectEvent): boolean {
-  return attentionResources.has(event.resource);
-}
-
 export function workflowProjectQuestionTaskID(event: WorkflowProjectEvent): string | null {
   if (event.resource !== "task" || !questionActions.has(event.action)) {
     return null;
@@ -27,5 +23,4 @@ export function workflowProjectEventAffectsTask(event: WorkflowProjectEvent, tas
   return event.resource === "task" && event.primaryEntityID === trimmedTaskID;
 }
 
-const attentionResources = new Set(["task", "workflow", "workflow_link"]);
 const questionActions = new Set(["question_waiting", "question_cleared"]);
