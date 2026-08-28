@@ -244,12 +244,6 @@ describe("Desktop Pending Work client", () => {
         "not_pending",
       ],
       [
-        rpcError("worktree.enter", rpcErrorCodes.pendingWorkIdentityConflict, {
-          item_id: ids[0],
-        }),
-        "identity_conflict",
-      ],
-      [
         rpcError("runtime.compactContext", rpcErrorCodes.manualCompactionDisabled, {
           reason: "disabled",
         }),
@@ -261,16 +255,6 @@ describe("Desktop Pending Work client", () => {
             code: rpcErrorCodes.pendingWorkCapacity,
             message: "Pending Work capacity reached",
             data: { reason: "capacity" },
-          },
-        }),
-        "not_accepted",
-      ],
-      [
-        rpcError("runtime.compactContext", rpcErrorCodes.runtimeCommandNotAccepted, {
-          cause: {
-            code: rpcErrorCodes.pendingWorkIdentityConflict,
-            message: "Pending Work identity is already pending",
-            data: { item_id: ids[0] },
           },
         }),
         "not_accepted",

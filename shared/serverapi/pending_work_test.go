@@ -39,40 +39,6 @@ func TestPendingWorkCapacityStructuredRPCDirectAndNested(t *testing.T) {
 	}
 }
 
-func TestPendingWorkIdentityConflictStructuredRPCDirectAndNested(t *testing.T) {
-	itemID := runtimeids.NewQueueItemID()
-	direct := &PendingWorkIdentityConflictError{ItemID: itemID}
-	decoded := DecodePendingWorkIdentityConflictError(direct.RPCErrorData())
-	var typed *PendingWorkIdentityConflictError
-	if direct.RPCErrorCode() != protocol.ErrCodePendingWorkIdentityConflict ||
-		!errors.Is(decoded, ErrPendingWorkIdentityConflict) ||
-		!errors.As(decoded, &typed) ||
-		typed.ItemID != itemID {
-		t.Fatalf("direct identity-conflict error = %T %v", decoded, decoded)
-	}
-
-	nested := NewRuntimeCommandNotAcceptedError(direct)
-	var payload struct {
-		Cause protocol.ResponseError `json:"cause"`
-	}
-	if err := json.Unmarshal(nested.RPCErrorData(), &payload); err != nil {
-		t.Fatalf("decode nested identity-conflict error: %v", err)
-	}
-	if payload.Cause.Code != protocol.ErrCodePendingWorkIdentityConflict {
-		t.Fatalf("nested identity-conflict code = %d", payload.Cause.Code)
-	}
-	decoded = DecodePendingWorkIdentityConflictError(payload.Cause.Data)
-	if !errors.Is(decoded, ErrPendingWorkIdentityConflict) ||
-		!errors.As(decoded, &typed) ||
-		typed.ItemID != itemID {
-		t.Fatalf("nested identity-conflict error = %T %v", decoded, decoded)
-	}
-
-	if err := DecodePendingWorkIdentityConflictError(json.RawMessage(`{"item_id":""}`)); err == nil {
-		t.Fatal("invalid identity-conflict item id decoded as typed conflict")
-	}
-}
-
 func TestPendingWorkIdentityViewsReuseDomainUUID(t *testing.T) {
 	t.Parallel()
 

@@ -96,7 +96,6 @@ const methods = {
 export type ManualCompactionErrorReason = "too_soon" | "disabled" | "active";
 export type PendingWorkFailure =
   | Readonly<{ kind: "capacity" }>
-  | Readonly<{ kind: "identity_conflict"; itemID: PendingWorkItemID }>
   | Readonly<{ kind: "not_pending"; itemID: PendingWorkItemID }>
   | Readonly<{ kind: "runtime_unavailable" }>
   | Readonly<{ kind: "manual_compaction"; reason: ManualCompactionErrorReason }>;
@@ -163,7 +162,6 @@ type FailureDecoder = (error: RpcError) => PendingWorkFailure | null;
 const directFailureDecoders: readonly FailureDecoder[] = [
   decodeRuntimeUnavailable,
   decodeCapacity,
-  decodeIdentityConflict,
   decodeNotPending,
   decodeManualCompaction,
 ];
@@ -178,17 +176,6 @@ function decodeRuntimeUnavailable(error: RpcError): PendingWorkFailure | null {
 function decodeCapacity(error: RpcError): PendingWorkFailure | null {
   if (isPendingWorkAdmissionMethod(error.method) && error.code === rpcErrorCodes.pendingWorkCapacity) {
     return capacityErrorSchema.safeParse(error.data).success ? { kind: "capacity" } : null;
-  }
-  return null;
-}
-
-function decodeIdentityConflict(error: RpcError): PendingWorkFailure | null {
-  if (
-    isPendingWorkAdmissionMethod(error.method) &&
-    error.code === rpcErrorCodes.pendingWorkIdentityConflict
-  ) {
-    const parsed = notPendingErrorSchema.safeParse(error.data);
-    return parsed.success ? { kind: "identity_conflict", itemID: parsed.data.item_id } : null;
   }
   return null;
 }

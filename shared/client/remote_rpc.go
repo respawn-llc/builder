@@ -624,8 +624,6 @@ func protocolError(resp *protocol.ResponseError) error {
 		return serverapi.DecodePendingWorkNotPendingError(resp.Data)
 	case protocol.ErrCodePendingWorkCapacity:
 		return serverapi.DecodePendingWorkCapacityError(resp.Data)
-	case protocol.ErrCodePendingWorkIdentityConflict:
-		return serverapi.DecodePendingWorkIdentityConflictError(resp.Data)
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
@@ -688,10 +686,6 @@ func decodeRuntimeCommandNotAcceptedError(data json.RawMessage) error {
 	case protocol.ErrCodePendingWorkCapacity:
 		if !errors.Is(cause, serverapi.ErrPendingWorkCapacity) {
 			return errors.New("runtime command not-accepted response contains invalid Pending Work capacity cause data")
-		}
-	case protocol.ErrCodePendingWorkIdentityConflict:
-		if !errors.Is(cause, serverapi.ErrPendingWorkIdentityConflict) {
-			return errors.New("runtime command not-accepted response contains invalid Pending Work identity-conflict cause data")
 		}
 	}
 	return errors.Join(serverapi.ErrRuntimeCommandNotAccepted, cause)

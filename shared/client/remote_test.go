@@ -1485,27 +1485,6 @@ func TestProtocolErrorDecodesPendingWorkCapacityDirectly(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorDecodesPendingWorkIdentityConflictDirectly(t *testing.T) {
-	id := runtimeids.NewQueueItemID()
-	source := &serverapi.PendingWorkIdentityConflictError{ItemID: id}
-	decoded := protocolError(&protocol.ResponseError{
-		Code:    source.RPCErrorCode(),
-		Message: source.Error(),
-		Data:    source.RPCErrorData(),
-	})
-	var typed *serverapi.PendingWorkIdentityConflictError
-	if !errors.Is(decoded, serverapi.ErrPendingWorkIdentityConflict) ||
-		!errors.As(decoded, &typed) ||
-		typed.ItemID != id {
-		t.Fatalf("decoded = %T %v, want typed Pending Work identity conflict", decoded, decoded)
-	}
-	if err := serverapi.DecodePendingWorkIdentityConflictError(
-		(&serverapi.PendingWorkIdentityConflictError{}).RPCErrorData(),
-	); err == nil {
-		t.Fatal("invalid Pending Work identity-conflict item id decoded as typed conflict")
-	}
-}
-
 func TestRemotePendingWorkContractsPreserveTypedResults(t *testing.T) {
 	guidance, exact := "keep details", "/compact keep details"
 	requestID := runtimeids.NewCompactionRequestID()
@@ -1623,12 +1602,6 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 			var typed *serverapi.PendingWorkCapacityError
 			if !errors.Is(err, serverapi.ErrPendingWorkCapacity) || !errors.As(err, &typed) {
 				t.Fatalf("decoded cause = %T %v, want typed Pending Work capacity", err, err)
-			}
-		}},
-		{name: "Pending Work identity conflict", cause: &serverapi.PendingWorkIdentityConflictError{ItemID: runtimeids.NewQueueItemID()}, check: func(t *testing.T, err error) {
-			var typed *serverapi.PendingWorkIdentityConflictError
-			if !errors.Is(err, serverapi.ErrPendingWorkIdentityConflict) || !errors.As(err, &typed) {
-				t.Fatalf("decoded cause = %T %v, want typed Pending Work identity conflict", err, err)
 			}
 		}},
 	} {

@@ -46,11 +46,6 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 	admitted := false
 	committed, acceptErr := runCommandAcceptance(request.accept, func() (bool, error) {
 		err := e.mutatePendingWork(true, func(order *pendingWorkSteerAdmission) (bool, error) {
-			for _, pending := range e.pendingWork.latest.Load().Items {
-				if pending.ID == item.ID {
-					return false, &serverapi.PendingWorkIdentityConflictError{ItemID: item.ID}
-				}
-			}
 			reservation.pendingWork = &pendingOperationalWork{
 				order:  *order,
 				item:   item,
