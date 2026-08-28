@@ -713,11 +713,36 @@ func (s *Store) EnsureDurable() error {
 }
 
 func (s *Store) SetName(name string) error {
-	return s.mutateAndPersist(func() error {
-		s.meta.Name = strings.TrimSpace(name)
-		s.meta.UpdatedAt = time.Now().UTC()
-		return nil
-	})
+	_, err := s.MutateName(name)
+	return err
+}
+
+type NameMutationResult struct {
+	CommitReceipt
+	Changed bool
+}
+
+func (s *Store) MutateName(name string) (NameMutationResult, error) {
+	normalized := strings.TrimSpace(name)
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	s.mu.Lock()
+	if s.meta.Name == normalized {
+		s.mu.Unlock()
+		return NameMutationResult{}, nil
+	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		s.mu.Unlock()
+		return NameMutationResult{}, err
+	}
+	checkpoint := s.metadataMutationCheckpointLocked()
+	s.meta.Name = normalized
+	s.meta.UpdatedAt = storeTimestamp(s.options)
+	receipt, err := s.persistMetadataMutationWithCommitReceiptLocked(checkpoint)
+	return NameMutationResult{
+		CommitReceipt: receipt,
+		Changed:       receipt.Committed,
+	}, err
 }
 
 func (s *Store) SetListingMetadata(name string, firstPromptPreview string) error {

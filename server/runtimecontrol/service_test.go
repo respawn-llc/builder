@@ -42,6 +42,29 @@ type sequenceRuntimeActivityResolver struct {
 	calls     int
 }
 
+type settingFeedbackActivity struct {
+	mu       sync.Mutex
+	feedback []clientui.TranscriptSessionSettingFeedback
+	err      error
+}
+
+func (*settingFeedbackActivity) RuntimeReadModelFeedSnapshot(context.Context, string) (clientui.RuntimeReadModelUpdate, error) {
+	return clientui.RuntimeReadModelUpdate{}, nil
+}
+
+func (a *settingFeedbackActivity) PublishSessionSettingFeedback(_ string, feedback clientui.TranscriptSessionSettingFeedback) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.feedback = append(a.feedback, feedback)
+	return a.err
+}
+
+func (a *settingFeedbackActivity) Feedback() []clientui.TranscriptSessionSettingFeedback {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]clientui.TranscriptSessionSettingFeedback(nil), a.feedback...)
+}
+
 type runtimeControlPromptFeed struct {
 	mu            sync.Mutex
 	pending       chan struct{}
@@ -1909,6 +1932,8 @@ func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
+	activity := &settingFeedbackActivity{}
+	service.WithRuntimeActivityResolver(activity)
 
 	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
 		SessionID: store.Meta().SessionID,
@@ -1919,6 +1944,9 @@ func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T)
 	}
 	if !engine.AutoCompactionEnabled() {
 		t.Fatal("auto-compaction disabled despite durable workflow session marker")
+	}
+	if feedback := activity.Feedback(); len(feedback) != 0 {
+		t.Fatalf("rejected Auto-compaction feedback = %+v, want none", feedback)
 	}
 }
 
@@ -1938,6 +1966,145 @@ func TestServiceSetThinkingLevelAcceptsProviderSpecificValue(t *testing.T) {
 	meta := store.Meta()
 	if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
 		t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
+	}
+}
+
+func TestServiceImmediateSessionControlsPublishTypedFeedbackWithoutTranscriptRows(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  runtime.Config
+		run  func(*Service, string) error
+		want func(clientui.TranscriptSessionSettingFeedback) bool
+	}{
+		{
+			name: "Session Name",
+			run: func(service *Service, sessionID string) error {
+				return service.SetSessionName(t.Context(), serverapi.RuntimeSetSessionNameRequest{SessionID: sessionID, Name: "renamed"})
+			},
+			want: func(feedback clientui.TranscriptSessionSettingFeedback) bool {
+				return feedback.Kind == clientui.SessionSettingSessionName &&
+					feedback.SessionName != nil && *feedback.SessionName == "renamed"
+			},
+		},
+		{
+			name: "Thinking",
+			run: func(service *Service, sessionID string) error {
+				return service.SetThinkingLevel(t.Context(), serverapi.RuntimeSetThinkingLevelRequest{SessionID: sessionID, Level: "provider-depth"})
+			},
+			want: func(feedback clientui.TranscriptSessionSettingFeedback) bool {
+				return feedback.Kind == clientui.SessionSettingThinking &&
+					feedback.Thinking != nil && *feedback.Thinking == "provider-depth"
+			},
+		},
+		{
+			name: "Fast Mode",
+			cfg: runtime.Config{
+				Model:                        "gpt-5.3-codex",
+				ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+			},
+			run: func(service *Service, sessionID string) error {
+				_, err := service.SetFastModeEnabled(t.Context(), serverapi.RuntimeSetFastModeEnabledRequest{SessionID: sessionID, Enabled: true})
+				return err
+			},
+			want: func(feedback clientui.TranscriptSessionSettingFeedback) bool {
+				return feedback.Kind == clientui.SessionSettingFastMode &&
+					feedback.FastMode != nil && *feedback.FastMode
+			},
+		},
+		{
+			name: "Supervisor",
+			cfg: runtime.Config{Reviewer: runtime.ReviewerConfig{
+				ClientFactory: func() (llm.Client, error) { return &runtimeControlFakeClient{}, nil },
+			}},
+			run: func(service *Service, sessionID string) error {
+				_, err := service.SetReviewerEnabled(t.Context(), serverapi.RuntimeSetReviewerEnabledRequest{SessionID: sessionID, Enabled: true})
+				return err
+			},
+			want: func(feedback clientui.TranscriptSessionSettingFeedback) bool {
+				return feedback.Kind == clientui.SessionSettingSupervisor &&
+					feedback.Supervisor != nil && *feedback.Supervisor == "edits"
+			},
+		},
+		{
+			name: "Questions",
+			run: func(service *Service, sessionID string) error {
+				_, err := service.SetQuestionsEnabled(t.Context(), serverapi.RuntimeSetQuestionsEnabledRequest{SessionID: sessionID, Enabled: false})
+				return err
+			},
+			want: func(feedback clientui.TranscriptSessionSettingFeedback) bool {
+				return feedback.Kind == clientui.SessionSettingQuestions &&
+					feedback.Questions != nil && !*feedback.Questions
+			},
+		},
+		{
+			name: "Auto-compaction",
+			run: func(service *Service, sessionID string) error {
+				_, err := service.SetAutoCompactionEnabled(t.Context(), serverapi.RuntimeSetAutoCompactionEnabledRequest{SessionID: sessionID, Enabled: false})
+				return err
+			},
+			want: func(feedback clientui.TranscriptSessionSettingFeedback) bool {
+				return feedback.Kind == clientui.SessionSettingAutoCompaction &&
+					feedback.AutoCompaction != nil && !*feedback.AutoCompaction
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, engine, service := newRuntimeControlTestService(t, nil, nil, test.cfg)
+			activity := &settingFeedbackActivity{}
+			service.WithRuntimeActivityResolver(activity)
+
+			if err := test.run(service, store.Meta().SessionID); err != nil {
+				t.Fatalf("mutate immediate Session setting: %v", err)
+			}
+			feedback := activity.Feedback()
+			if len(feedback) != 1 || !test.want(feedback[0]) {
+				t.Fatalf("typed setting feedback = %+v", feedback)
+			}
+			if err := feedback[0].Validate(); err != nil {
+				t.Fatalf("validate typed setting feedback: %v", err)
+			}
+			if !feedback[0].Changed {
+				t.Fatalf("setting feedback did not report a change: %+v", feedback[0])
+			}
+			if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+				if len(snapshot.CommittedRows) != 0 {
+					t.Fatalf("immediate setting committed transcript rows: %+v", snapshot.CommittedRows)
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("read transcript hydration: %v", err)
+			}
+		})
+	}
+}
+
+func TestServiceCommittedImmediateSettingRemainsAppliedAfterPublicationFailure(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		Model:                        "gpt-5.3-codex",
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	publicationErr := errors.New("setting feed unavailable")
+	activity := &settingFeedbackActivity{err: publicationErr}
+	service.WithRuntimeActivityResolver(activity)
+
+	response, err := service.SetFastModeEnabled(t.Context(), serverapi.RuntimeSetFastModeEnabledRequest{
+		SessionID: store.Meta().SessionID,
+		Enabled:   true,
+	})
+	if !errors.Is(err, publicationErr) || !response.Changed {
+		t.Fatalf("SetFastModeEnabled response = %+v, error = %v", response, err)
+	}
+	if !engine.FastModeEnabled() {
+		t.Fatal("publication failure rolled back live Fast Mode")
+	}
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Fast == nil || !*meta.ChatSettings.Fast {
+		t.Fatalf("publication failure rolled back durable Fast Mode: %+v", meta.ChatSettings)
+	}
+	if feedback := activity.Feedback(); len(feedback) != 1 {
+		t.Fatalf("publication attempts = %+v, want one", feedback)
 	}
 }
 
@@ -2691,7 +2858,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
 		SessionID: store.Meta().SessionID,
 		RequestID: runtimeids.NewCompactionRequestID(),
-		Admission: serverapi.ManualCompactionAdmission{RestorationInput: "/compact"},
+		Admission: serverapi.ManualCompactionAdmission{},
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)
 	}
@@ -2814,7 +2981,8 @@ func TestServiceRemovePendingWorkIsRuntimeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemovePendingWork: %v", err)
 	}
-	if removed.Restoration.Message == nil || removed.Restoration.Message.Text != "discard runtime only" {
+	if removed.Restoration.Kind != serverapi.PendingWorkItemKindMessage ||
+		removed.Restoration.CanonicalInput != "discard runtime only" {
 		t.Fatalf("restoration = %+v", removed.Restoration)
 	}
 	if engine.HasQueuedUserWork() {

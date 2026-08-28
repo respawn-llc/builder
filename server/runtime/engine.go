@@ -136,15 +136,16 @@ type Engine struct {
 	mu               sync.Mutex
 	workflowTerminal WorkflowTerminalState
 
-	lifecycleMu     sync.Mutex
-	lifecycleOnce   sync.Once
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
-	lifecycleWG     sync.WaitGroup
-	lifecycleClosed bool
-	closed          atomic.Bool
-	runtimeFIFO     *runtimeOperationFIFO
-	pendingWork     *pendingWorkCoordinator
+	lifecycleMu       sync.Mutex
+	lifecycleOnce     sync.Once
+	lifecycleCtx      context.Context
+	lifecycleCancel   context.CancelFunc
+	lifecycleWG       sync.WaitGroup
+	lifecycleClosed   bool
+	closed            atomic.Bool
+	runtimeFIFO       *runtimeOperationFIFO
+	pendingWork       *pendingWorkCoordinator
+	immediateSettings immediateSessionSettingOwner
 
 	store                       *session.Store
 	eventLog                    session.MaterializedEventLog

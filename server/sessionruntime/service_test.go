@@ -253,7 +253,7 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	})
 }
 
-func TestSessionFastModeRemainsEngineLocalAcrossActivationMutationAndReopen(t *testing.T) {
+func TestSessionFastModeRemainsSessionScopedAcrossActivationMutationAndReopen(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	second, err := session.Create(
 		filepath.Dir(fixture.store.Dir()),
@@ -265,7 +265,7 @@ func TestSessionFastModeRemainsEngineLocalAcrossActivationMutationAndReopen(t *t
 	if err != nil {
 		t.Fatalf("create second Session: %v", err)
 	}
-	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{Fast: textutil.Value(true)}); err != nil {
+	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{Fast: textutil.Value(false)}); err != nil {
 		t.Fatalf("persist first Fast: %v", err)
 	}
 	if _, err := second.MutateChatSettings(session.ChatSettingsMutation{Fast: textutil.Value(false)}); err != nil {
@@ -277,21 +277,25 @@ func TestSessionFastModeRemainsEngineLocalAcrossActivationMutationAndReopen(t *t
 	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RuntimeClientFactory: factory,
 	})
-	firstSettings := sessionRuntimeFastSettings(true)
+	firstSettings := sessionRuntimeFastSettings(false)
 	secondSettings := sessionRuntimeFastSettings(false)
 	first := activateSessionRuntimeForFastTest(t, fixture.api, fixture.store.Meta().SessionID, "fast-first", firstSettings)
 	secondAttachment := activateSessionRuntimeForFastTest(t, fixture.api, second.Meta().SessionID, "fast-second", secondSettings)
 
 	firstEngine := currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID)
 	secondEngine := currentSessionRuntimeEngine(t, fixture.authority, second.Meta().SessionID)
-	if !firstEngine.FastModeEnabled() {
-		t.Error("first Session Fast = false, want true")
+	if firstEngine.FastModeEnabled() {
+		t.Error("first Session Fast = true, want false before mutation")
 	}
 	if secondEngine.FastModeEnabled() {
 		t.Error("second Session Fast = true, want false")
 	}
-	if _, err := firstEngine.SetFastModeEnabled(true); err != nil {
+	changed, err := firstEngine.SetFastModeEnabled(true)
+	if err != nil {
 		t.Fatalf("set first Fast: %v", err)
+	}
+	if !changed || !firstEngine.FastModeEnabled() {
+		t.Fatalf("first Session Fast mutation = changed %t enabled %t, want changed and enabled", changed, firstEngine.FastModeEnabled())
 	}
 	if secondEngine.FastModeEnabled() {
 		t.Error("mutating first Session changed second Session Fast")

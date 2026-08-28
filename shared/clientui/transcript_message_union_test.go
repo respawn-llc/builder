@@ -42,6 +42,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 		CreatedAt: time.Unix(1_700_000_000, 0),
 	}
 	queueText := "queued input"
+	fastModeEnabled := true
 	tests := []struct {
 		name  string
 		event TranscriptEvent
@@ -107,6 +108,11 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 				CanonicalInput: "/compact",
 			},
 		}), TranscriptMessagePendingWorkRestored},
+		{"session setting feedback", NewTranscriptEvent(TranscriptSessionSettingFeedback{
+			Kind:     SessionSettingFastMode,
+			Changed:  true,
+			FastMode: &fastModeEnabled,
+		}), TranscriptMessageSessionSettingFeedback},
 		{"interrupted human input", NewTranscriptEvent(TranscriptHumanInputInterrupted{
 			Items: []TranscriptInterruptedHumanInputItem{{
 				QueueItemID: transcriptTestQueueItemID(t),
@@ -172,5 +178,20 @@ func TestTranscriptMessageValidationDelegatesToItsTypedEvent(t *testing.T) {
 func TestTranscriptMessageRejectsUninitializedEvent(t *testing.T) {
 	if err := NewTranscriptMessage(2, TranscriptEvent{}).ValidatePayload(); err == nil {
 		t.Fatal("accepted uninitialized transcript event")
+	}
+}
+
+func TestSessionSettingFeedbackRequiresOneTypedResultForItsKind(t *testing.T) {
+	name := "renamed"
+	enabled := true
+	tests := []TranscriptSessionSettingFeedback{
+		{Kind: SessionSettingFastMode},
+		{Kind: SessionSettingFastMode, SessionName: &name},
+		{Kind: SessionSettingFastMode, FastMode: &enabled, Questions: &enabled},
+	}
+	for _, feedback := range tests {
+		if err := feedback.Validate(); err == nil {
+			t.Fatalf("accepted incoherent setting feedback: %+v", feedback)
+		}
 	}
 }

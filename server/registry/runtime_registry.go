@@ -480,15 +480,10 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 		return nil
 	}
 	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
-		identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+		identity, err := r.sessionIdentity(entry, id)
 		if err != nil {
 			return nil, err
 		}
-		target, err := r.resolveSessionExecutionTarget(context.Background(), id)
-		if err != nil {
-			return nil, err
-		}
-		identity.ExecutionTarget = target
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(identity)}, nil
 	})
 }
@@ -502,12 +497,70 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 		return nil
 	}
 	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
-		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		status, err := r.sessionStatus(entry)
 		if err != nil {
 			return nil, err
 		}
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
 	})
+}
+
+func (r *RuntimeRegistry) PublishSessionSettingFeedback(
+	sessionID string,
+	feedback clientui.TranscriptSessionSettingFeedback,
+) error {
+	if r == nil {
+		return nil
+	}
+	if err := feedback.Validate(); err != nil {
+		return err
+	}
+	id := strings.TrimSpace(sessionID)
+	entry := r.authorityEntryBySession(id)
+	if entry == nil {
+		return nil
+	}
+	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
+		feedbackEvent := clientui.NewTranscriptEvent(feedback)
+		if feedback.Kind == clientui.SessionSettingSessionName {
+			identity, err := r.sessionIdentity(entry, id)
+			if err != nil {
+				return nil, err
+			}
+			return []clientui.TranscriptEvent{
+				clientui.NewTranscriptEvent(identity),
+				feedbackEvent,
+			}, nil
+		}
+		status, err := r.sessionStatus(entry)
+		if err != nil {
+			return nil, err
+		}
+		return []clientui.TranscriptEvent{
+			clientui.NewTranscriptEvent(status),
+			feedbackEvent,
+		}, nil
+	})
+}
+
+func (r *RuntimeRegistry) sessionIdentity(
+	entry *authorityRuntimeEntry,
+	sessionID string,
+) (clientui.TranscriptSessionIdentity, error) {
+	identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+	if err != nil {
+		return clientui.TranscriptSessionIdentity{}, err
+	}
+	target, err := r.resolveSessionExecutionTarget(context.Background(), sessionID)
+	if err != nil {
+		return clientui.TranscriptSessionIdentity{}, err
+	}
+	identity.ExecutionTarget = target
+	return identity, nil
+}
+
+func (r *RuntimeRegistry) sessionStatus(entry *authorityRuntimeEntry) (clientui.TranscriptSessionStatus, error) {
+	return runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 }
 
 func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {

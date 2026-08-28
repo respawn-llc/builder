@@ -24,6 +24,7 @@ const (
 	TranscriptMessageQueuedMessageState        TranscriptMessageKind = "queued_message_state"
 	TranscriptMessagePendingWorkReplaced       TranscriptMessageKind = "pending_work_replaced"
 	TranscriptMessagePendingWorkRestored       TranscriptMessageKind = "pending_work_restored"
+	TranscriptMessageSessionSettingFeedback    TranscriptMessageKind = "session_setting_feedback"
 	TranscriptMessageHumanInputInterrupted     TranscriptMessageKind = "human_input_interrupted"
 	TranscriptMessageStepState                 TranscriptMessageKind = "step_state"
 	TranscriptMessageRuntimeReadModelUpdate    TranscriptMessageKind = "runtime_read_model_update"
@@ -63,6 +64,7 @@ type transcriptEventPayloadValue interface {
 		TranscriptQueuedMessageState |
 		TranscriptPendingWorkReplaced |
 		TranscriptPendingWorkRestored |
+		TranscriptSessionSettingFeedback |
 		TranscriptHumanInputInterrupted |
 		TranscriptStepState |
 		RuntimeReadModelUpdate |
@@ -231,6 +233,8 @@ func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (Transcri
 		return decodeTranscriptPayload[TranscriptPendingWorkReplaced](data)
 	case TranscriptMessagePendingWorkRestored:
 		return decodeTranscriptPayload[TranscriptPendingWorkRestored](data)
+	case TranscriptMessageSessionSettingFeedback:
+		return decodeTranscriptPayload[TranscriptSessionSettingFeedback](data)
 	case TranscriptMessageHumanInputInterrupted:
 		return decodeTranscriptPayload[TranscriptHumanInputInterrupted](data)
 	case TranscriptMessageStepState:
@@ -320,6 +324,10 @@ func (TranscriptPendingWorkReplaced) transcriptEventKind() TranscriptMessageKind
 
 func (TranscriptPendingWorkRestored) transcriptEventKind() TranscriptMessageKind {
 	return TranscriptMessagePendingWorkRestored
+}
+
+func (TranscriptSessionSettingFeedback) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageSessionSettingFeedback
 }
 
 func (TranscriptHumanInputInterrupted) transcriptEventKind() TranscriptMessageKind {

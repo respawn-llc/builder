@@ -25,12 +25,8 @@ type RuntimeActivityResolver interface {
 	RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error)
 }
 
-type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string) error
-}
-
-type sessionStatusPublisher interface {
-	PublishSessionStatus(sessionID string) error
+type sessionSettingPublisher interface {
+	PublishSessionSettingFeedback(sessionID string, feedback clientui.TranscriptSessionSettingFeedback) error
 }
 
 type PromptHistoryStore interface {
@@ -302,13 +298,8 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 		return err
 	}
 	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		if err := engine.SetSessionName(callbackCtx, req.Name); err != nil {
-			return err
-		}
-		if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-			return publisher.PublishSessionIdentity(req.SessionID)
-		}
-		return nil
+		_, err := engine.SetSessionNameWithPublication(callbackCtx, req.Name, s.settingPublication(req.SessionID))
+		return err
 	})
 }
 
@@ -317,10 +308,8 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 		return err
 	}
 	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		if err := engine.SetThinkingLevel(callbackCtx, req.Level); err != nil {
-			return err
-		}
-		return s.publishSessionStatus(req.SessionID)
+		_, err := engine.SetThinkingLevelWithPublication(callbackCtx, req.Level, s.settingPublication(req.SessionID))
+		return err
 	})
 }
 
@@ -328,24 +317,32 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetFastModeEnabledResponse{}, err
 	}
-	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(callbackCtx context.Context, engine *runtime.Engine) (serverapi.RuntimeSetFastModeEnabledResponse, session.CommitReceipt, error) {
-		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(callbackCtx, req.Enabled, func(changed bool) string {
-			return serverapi.FastModeToggleStatusMessage(req.Enabled, changed)
-		})
-		return serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}, receipt, err
+	var response serverapi.RuntimeSetFastModeEnabledResponse
+	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		changed, mutationErr := engine.SetFastModeEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
+		if mutationErr != nil && !changed {
+			return mutationErr
+		}
+		response = serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}
+		return mutationErr
 	})
+	return response, err
 }
 
 func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetReviewerEnabledResponse{}, err
 	}
-	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(callbackCtx context.Context, engine *runtime.Engine) (serverapi.RuntimeSetReviewerEnabledResponse, session.CommitReceipt, error) {
-		changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(callbackCtx, req.Enabled, func(enabled bool, mode string, changed bool) string {
-			return serverapi.ReviewerToggleStatusMessage(enabled, mode, changed)
-		})
-		return serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}, receipt, err
+	var response serverapi.RuntimeSetReviewerEnabledResponse
+	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		changed, mode, mutationErr := engine.SetReviewerEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
+		if mutationErr != nil && !changed {
+			return mutationErr
+		}
+		response = serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}
+		return mutationErr
 	})
+	return response, err
 }
 
 func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
@@ -359,12 +356,12 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 				return err
 			}
 		}
-		changed, enabled, err := engine.SetAutoCompactionEnabled(callbackCtx, req.Enabled)
-		if err != nil {
+		changed, enabled, err := engine.SetAutoCompactionEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
+		if err != nil && !changed {
 			return err
 		}
 		resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
-		return s.publishSessionStatus(req.SessionID)
+		return err
 	})
 	return resp, err
 }
@@ -373,37 +370,16 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
 	}
-	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(callbackCtx context.Context, engine *runtime.Engine) (serverapi.RuntimeSetQuestionsEnabledResponse, session.CommitReceipt, error) {
-		changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(callbackCtx, req.Enabled, func(enabled bool, changed bool) string {
-			return serverapi.QuestionsToggleStatusMessage(enabled, changed)
-		})
-		return serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}, receipt, err
-	})
-}
-
-func committedRuntimeMutation[Resp any](
-	service *Service,
-	ctx context.Context,
-	sessionID string,
-	run func(context.Context, *runtime.Engine) (Resp, session.CommitReceipt, error),
-) (Resp, error) {
-	var zero Resp
-	var response Resp
-	var resultErr error
-	err := service.withRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		var receipt session.CommitReceipt
-		var mutationErr error
-		response, receipt, mutationErr = run(callbackCtx, engine)
-		if !receipt.Committed {
+	var response serverapi.RuntimeSetQuestionsEnabledResponse
+	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		changed, enabled, mutationErr := engine.SetQuestionsEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
+		if mutationErr != nil && !changed {
 			return mutationErr
 		}
-		resultErr = errors.Join(mutationErr, service.publishSessionStatus(sessionID))
-		return nil
+		response = serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}
+		return mutationErr
 	})
-	if err != nil {
-		return zero, err
-	}
-	return response, resultErr
+	return response, err
 }
 
 func runRuntimeCommand[Resp any](
@@ -428,11 +404,14 @@ func runtimeCommandNotAccepted(cause error) error {
 	return serverapi.NewRuntimeCommandNotAcceptedError(cause)
 }
 
-func (s *Service) publishSessionStatus(sessionID string) error {
-	if publisher, ok := s.activity.(sessionStatusPublisher); ok {
-		return publisher.PublishSessionStatus(sessionID)
+func (s *Service) settingPublication(sessionID string) runtime.SessionSettingPublication {
+	publisher, ok := s.activity.(sessionSettingPublisher)
+	if !ok {
+		return nil
 	}
-	return nil
+	return func(feedback clientui.TranscriptSessionSettingFeedback) error {
+		return publisher.PublishSessionSettingFeedback(sessionID, feedback)
+	}
 }
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {

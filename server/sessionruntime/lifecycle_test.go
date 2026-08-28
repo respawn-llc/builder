@@ -330,9 +330,7 @@ func TestChatSettingsDurabilityAbortRetiresCurrentResourceGeneration(t *testing.
 	}
 
 	err := authority.WithCurrentRuntime(t.Context(), sessionID, func(ctx context.Context, engine *runtime.Engine) error {
-		_, _, _, mutationErr := engine.SetQuestionsEnabledWithCommittedFeedback(ctx, false, func(bool, bool) string {
-			return "feedback"
-		})
+		_, _, mutationErr := engine.SetQuestionsEnabledWithPublication(ctx, false, nil)
 		return mutationErr
 	})
 	if err == nil {

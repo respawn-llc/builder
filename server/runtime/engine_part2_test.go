@@ -699,10 +699,9 @@ func TestFastModeCanChangeAfterLock(t *testing.T) {
 	}
 }
 
-func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
+func TestSetFastModePersistsSessionSetting(t *testing.T) {
 	store := mustCreateTestSession(t)
-	cfg := Config{Model: "gpt-5.3-codex"}
-	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, cfg)
+	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{Model: "gpt-5.3-codex"})
 
 	changed, err := eng.SetFastModeEnabled(true)
 	if err != nil {
@@ -711,10 +710,9 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	if !changed || !eng.FastModeEnabled() {
 		t.Fatalf("expected fast mode enabled, changed=%v enabled=%v", changed, eng.FastModeEnabled())
 	}
-
-	restarted := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, cfg)
-	if restarted.FastModeEnabled() {
-		t.Fatal("expected fast mode disabled after restart")
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Fast == nil || !*meta.ChatSettings.Fast {
+		t.Fatalf("Session Fast Mode override = %+v, want true", meta.ChatSettings)
 	}
 }
 
@@ -754,7 +752,7 @@ func TestSetAutoCompactionEnabledRejectsAfterClose(t *testing.T) {
 	}
 }
 
-func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) {
+func TestSetAutoCompactionDisabledDuringBusyStepAppliesImmediately(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -812,30 +810,29 @@ func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) 
 	}()
 	select {
 	case result := <-settingDone:
-		t.Fatalf("setting applied during protected Step: %+v", result)
-	case <-time.After(50 * time.Millisecond):
+		if result.err != nil || !result.changed || result.enabled {
+			t.Fatalf("setting result = %+v, want changed and disabled", result)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("busy Agent Step blocked immediate Auto-compaction setting")
 	}
-	close(release)
+	if eng.AutoCompactionEnabled() {
+		t.Fatal("Auto-compaction remained enabled during busy Agent Step")
+	}
 
+	close(release)
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit while disabling auto-compaction: %v", err)
-	}
-	result := <-settingDone
-	if result.err != nil {
-		t.Fatalf("disable auto-compaction: %v", result.err)
-	}
-	if !result.changed || result.enabled {
-		t.Fatalf("setting result = %+v, want changed and disabled", result)
 	}
 	if got := len(client.compactionCalls); got != 0 {
 		t.Fatalf("expected no compaction call for in-flight run after disabling auto-compaction, got %d", got)
 	}
 }
 
-func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
+func TestSetReviewerEnabledPersistsSessionSetting(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
-	cfg := Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "off",
@@ -843,8 +840,7 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 			ThinkingLevel: "low",
 			Client:        &fakeClient{},
 		},
-	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
+	})
 	changed, mode, err := eng.SetReviewerEnabled(true)
 	if err != nil {
 		t.Fatalf("enable reviewer: %v", err)
@@ -855,10 +851,9 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 	if got := eng.ReviewerFrequency(); got != "edits" {
 		t.Fatalf("reviewer frequency = %q, want edits", got)
 	}
-
-	restarted := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
-	if got := restarted.ReviewerFrequency(); got != "off" {
-		t.Fatalf("reviewer frequency after restart = %q, want off", got)
+	meta := store.Meta()
+	if meta.ChatSettings == nil || meta.ChatSettings.Supervisor == nil || *meta.ChatSettings.Supervisor != "edits" {
+		t.Fatalf("Session Supervisor override = %+v, want edits", meta.ChatSettings)
 	}
 }
 

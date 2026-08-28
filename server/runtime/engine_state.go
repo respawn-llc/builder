@@ -346,9 +346,7 @@ func (e *Engine) applyStreamingStateMutationForStep(stepID string, mutate func(*
 }
 
 func (e *Engine) SetSessionName(ctx context.Context, name string) error {
-	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
-		return struct{}{}, e.store.SetName(name)
-	})
+	_, err := e.SetSessionNameWithPublication(ctx, name, nil)
 	return err
 }
 
@@ -357,18 +355,12 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	if normalized == "" {
 		return errors.New("thinking level is required")
 	}
-	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
-		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Thinking: &normalized})
-		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
-			return struct{}{}, settingsErr
-		}
-		return struct{}{}, errors.Join(settingsErr, e.setThinkingValue(normalized))
-	})
+	_, err := e.SetThinkingLevelWithPublication(ctx, normalized, nil)
 	return err
 }
 
 // SetWorkflowThinkingValue applies a workflow-owned thinking value through the
-// same ordered Runtime mutation owner as operator settings.
+// ordered Runtime mutation owner used by Workflow execution.
 func (e *Engine) SetWorkflowThinkingValue(value workflow.ThinkingValue) error {
 	if err := value.Validate(); err != nil {
 		return err
@@ -396,20 +388,7 @@ func (e *Engine) setThinkingValue(value string) error {
 }
 
 func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
-	if enabled && !e.FastModeAvailable() {
-		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
-	}
-	return awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (bool, error) {
-		changed := e.localFastModeEnabledChange(enabled)
-		e.applyFastModeEnabled(enabled)
-		return changed, nil
-	})
-}
-
-func (e *Engine) localFastModeEnabledChange(enabled bool) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.cfg.FastModeEnabled != enabled
+	return e.SetFastModeEnabledWithPublication(context.Background(), enabled, nil)
 }
 
 func (e *Engine) applyFastModeEnabled(enabled bool) bool {
@@ -420,33 +399,11 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 		changed = true
 	}
 	e.mu.Unlock()
-	if changed {
-	}
 	return changed
 }
 
 func (e *Engine) SetAutoCompactionEnabled(ctx context.Context, enabled bool) (bool, bool, error) {
-	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
-		changed bool
-		enabled bool
-	}, error) {
-		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{AutoCompaction: &enabled})
-		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
-			return struct {
-				changed bool
-				enabled bool
-			}{enabled: e.AutoCompactionEnabled()}, settingsErr
-		}
-		e.applyAutoCompactionEnabled(enabled)
-		return struct {
-			changed bool
-			enabled bool
-		}{changed: settings.Changed, enabled: enabled}, settingsErr
-	})
-	if err != nil {
-		return false, e.AutoCompactionEnabled(), err
-	}
-	return result.changed, result.enabled, nil
+	return e.SetAutoCompactionEnabledWithPublication(ctx, enabled, nil)
 }
 
 func (e *Engine) applyAutoCompactionEnabled(enabled bool) {
@@ -468,34 +425,11 @@ func (e *Engine) QuestionsEnabled() bool {
 }
 
 func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
-	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
-		changed bool
-		enabled bool
-	}, error) {
-		changed, current := e.questionsEnabledChange(enabled)
-		if changed {
-			e.applyQuestionsEnabled(enabled)
-			current = enabled
-		}
-		return struct {
-			changed bool
-			enabled bool
-		}{changed: changed, enabled: current}, nil
-	})
+	changed, current, err := e.SetQuestionsEnabledWithPublication(context.Background(), enabled, nil)
 	if err != nil {
 		return false, e.QuestionsEnabled()
 	}
-	return result.changed, result.enabled
-}
-
-func (e *Engine) questionsEnabledChange(enabled bool) (bool, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	current := true
-	if e.cfg.QuestionsEnabled != nil {
-		current = *e.cfg.QuestionsEnabled
-	}
-	return current != enabled, current
+	return changed, current
 }
 
 func (e *Engine) applyQuestionsEnabled(enabled bool) bool {
@@ -516,24 +450,7 @@ func (e *Engine) applyQuestionsEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	result, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct {
-		changed bool
-		mode    string
-	}, error) {
-		changed, mode, err := e.reviewerEnabledChange(enabled)
-		if err != nil {
-			return struct {
-				changed bool
-				mode    string
-			}{mode: mode}, err
-		}
-		e.applyReviewerEnabled(enabled, mode)
-		return struct {
-			changed bool
-			mode    string
-		}{changed: changed, mode: mode}, nil
-	})
-	return result.changed, result.mode, err
+	return e.SetReviewerEnabledWithPublication(context.Background(), enabled, nil)
 }
 
 func (e *Engine) PrepareReviewerFrequency(frequency string) (string, error) {
@@ -564,9 +481,7 @@ func (e *Engine) setReviewerFrequency(frequency string) bool {
 }
 
 func (e *Engine) SetReviewerFrequency(frequency string) bool {
-	changed, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (bool, error) {
-		return e.setReviewerFrequency(frequency), nil
-	})
+	changed, _, err := e.SetReviewerFrequencyWithPublication(context.Background(), frequency, nil)
 	return err == nil && changed
 }
 
@@ -594,33 +509,6 @@ func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
 	}
 	e.mu.Unlock()
 	return true, "off", nil
-}
-
-func (e *Engine) applyReviewerEnabled(enabled bool, targetMode string) (bool, string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	current, ok := NormalizeReviewerFrequency(e.cfg.Reviewer.Frequency)
-	if !ok {
-		current = "off"
-	}
-	if enabled {
-		if current != "off" {
-			return false, current
-		}
-		target, ok := NormalizeReviewerFrequency(targetMode)
-		if !ok || target == "off" {
-			target = "edits"
-		}
-		e.cfg.Reviewer.Frequency = target
-		return true, target
-	}
-
-	if current == "off" {
-		return false, current
-	}
-	e.cfg.Reviewer.Frequency = "off"
-	return true, "off"
 }
 
 func (e *Engine) ThinkingLevel() string {
