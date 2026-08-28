@@ -4,6 +4,7 @@ export const rpcErrorCodes = {
   projectNotFound: -32014,
   projectUnavailable: -32015,
   authRequired: -32018,
+  runtimeUnavailable: -32019,
   serverNotReady: -32032,
   workspacePathIdentity: -32049,
   workspaceDetachConflict: -32050,
@@ -17,4 +18,10 @@ export const rpcErrorCodes = {
   workflowTaskCreateSelection: -32045,
   workflowTaskDependency: -32049,
   workflowTaskSearch: -32052,
+  manualCompactionTooSoon: -32054,
+  manualCompactionDisabled: -32055,
+  manualCompactionActive: -32056,
+  runtimeCommandNotAccepted: -32061,
+  pendingWorkNotPending: -32064,
+  pendingWorkCapacity: -32065,
 } as const;

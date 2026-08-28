@@ -291,6 +291,21 @@ describe("Desktop Worktree client", () => {
         new FakeRpcTransport([{ method: "worktree.enter", result: { operation_id: ids[1] } }]),
       ).switchWorktree("session-1", operation),
     ).rejects.toThrow("different Worktree operation identity");
+    await expect(
+      new ApiClient(
+        new FakeRpcTransport([
+          {
+            method: "worktree.enter",
+            error: new RpcError({
+              method: "worktree.enter",
+              code: rpcErrorCodes.pendingWorkCapacity,
+              message: "Pending Work capacity reached",
+              data: { reason: "capacity" },
+            }),
+          },
+        ]),
+      ).switchWorktree("session-1", operation),
+    ).rejects.toMatchObject({ detail: { kind: "capacity" } });
     const selector = (kind: "not_found" | "ambiguous" | "unavailable") => ({
       type: "worktree_selector_error",
       kind,

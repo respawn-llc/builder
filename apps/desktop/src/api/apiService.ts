@@ -79,6 +79,12 @@ import type * as worktree from "./schemas/worktree";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
+import type {
+  CompactionRequestID,
+  PendingWork,
+  PendingWorkIdentity,
+  PendingWorkRestoration,
+} from "./pendingWork";
 
 export type ApiConnectionSource = Readonly<{
   snapshot(): ConnectionSnapshot;
@@ -178,6 +184,9 @@ export interface ApiService {
   deleteComment(commentID: string): Promise<void>;
   answerPromptBatch(input: PromptAnswerBatchInput): Promise<PromptAnswerBatchResponse>;
   listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]>;
+  submitManualCompaction(sessionID: string, guidance: string | null): Promise<CompactionRequestID>;
+  listPendingWork(sessionID: string): Promise<PendingWork>;
+  removePendingWork(sessionID: string, itemID: PendingWorkIdentity): Promise<PendingWorkRestoration>;
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): ApiSubscription;

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { parseRpcResponse } from "./clientParse";
+import { decodePendingWorkError } from "./clientPendingWork";
 import { ContractError, RpcError } from "./errors";
 import type { JsonValue } from "./json";
 import { rpcErrorCodes } from "./rpcErrorCodes";
@@ -127,7 +128,7 @@ async function call<T>(
   try {
     return parseRpcResponse(method, schema, await transport.call(method, params, options));
   } catch (error) {
-    throw decodeWorktreeError(error) ?? error;
+    throw decodeWorktreeError(error) ?? decodePendingWorkError(error) ?? error;
   }
 }
 
