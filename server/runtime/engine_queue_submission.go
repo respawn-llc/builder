@@ -109,95 +109,33 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 	if err := transition.Validate(); err != nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, err
 	}
-	if err := e.requirePendingWorkCapacity(); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
-	itemID, err := serverapi.PendingWorkItemIDFromWorktreeOperation(operationID)
+	err := e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
+		worktreeOperationID: &operationID,
+		reservationKind:     exclusiveStepReservationWorktreeTransition,
+		worktreeTransition:  &transition,
+		accept:              accept,
+		run: func(pendingCtx context.Context, reservation *exclusiveStepReservation, pendingItem runtimeinput.PendingWorkItem) error {
+			e.pauseQueuedUserAutoDrain()
+			defer e.resumeQueuedUserAutoDrain()
+			runErr := runExclusiveStepWhenIdle(
+				pendingCtx,
+				e.stepLifecycle,
+				ActiveKindRuntimeMaintenance,
+				reservation,
+				func(stepCtx context.Context, _ string) error {
+					result := fn(stepCtx)
+					runErr := worktreeApplicationError(result)
+					if result.RequiresTechnicalRestoration() {
+						runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
+					}
+					return runErr
+				},
+			)
+			return runErr
+		},
+	})
 	if err != nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
-	canonicalInput, err := transition.CanonicalInput()
-	if err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
-	transitionCopy := transition
-	if transition.Selector != nil {
-		selector := *transition.Selector
-		transitionCopy.Selector = &selector
-	}
-	pendingItem := runtimeinput.PendingWorkItem{
-		ID:                 itemID,
-		Lane:               runtimeinput.PendingWorkLaneSteer,
-		Kind:               runtimeinput.PendingWorkItemKindWorktreeTransition,
-		State:              runtimeinput.PendingWorkItemStatePending,
-		CanonicalInput:     canonicalInput,
-		WorktreeTransition: &transitionCopy,
-	}
-	if err := pendingItem.Validate(); err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
-
-	e.ensureOrchestrationCollaborators()
-	reservation := &exclusiveStepReservation{
-		Kind:      exclusiveStepReservationWorktreeTransition,
-		queueable: true,
-	}
-	pendingCtx, cancelPending := context.WithCancelCause(context.Background())
-	committed, acceptErr := runCommandAcceptance(accept, func() (bool, error) {
-		err := e.mutatePendingWork(true, func(order *pendingWorkSteerAdmission) (bool, error) {
-			reservation.pendingWork = &pendingOperationalWork{
-				order:  *order,
-				item:   pendingItem,
-				cancel: cancelPending,
-			}
-			if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
-				reservation.pendingWork = nil
-				return false, err
-			}
-			return true, nil
-		}, nil)
-		return err == nil, err
-	})
-	if err := commandAcceptanceResult(committed, acceptErr); err != nil {
-		if committed {
-			e.stepLifecycle.ReleaseReservation(reservation)
-		}
-		cancelPending(err)
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
-	launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
-		stopLifecycleCancellation := context.AfterFunc(lifecycleCtx, func() {
-			cancelPending(context.Cause(lifecycleCtx))
-		})
-		defer stopLifecycleCancellation()
-		defer cancelPending(context.Canceled)
-		defer e.stepLifecycle.ReleaseReservation(reservation)
-		e.pauseQueuedUserAutoDrain()
-		defer e.resumeQueuedUserAutoDrain()
-		runErr := runExclusiveStepWhenIdle(
-			pendingCtx,
-			e.stepLifecycle,
-			ActiveKindRuntimeMaintenance,
-			reservation,
-			func(stepCtx context.Context, _ string) error {
-				result := fn(stepCtx)
-				runErr := worktreeApplicationError(result)
-				if result.RequiresTechnicalRestoration() {
-					runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
-				}
-				return runErr
-			},
-		)
-		fatal, abort := resultGroupFatalFromError(runErr)
-		if abort {
-			return fatal
-		}
-		return nil
-	})
-	if !launched {
-		e.stepLifecycle.ReleaseReservation(reservation)
-		cancelPending(ErrEngineClosed)
-		return serverapi.WorktreeScheduledAcknowledgement{}, ErrEngineClosed
 	}
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: operationID}, nil
 }

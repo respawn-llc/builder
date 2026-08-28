@@ -6,6 +6,14 @@ import (
 	"core/shared/runtimeids"
 )
 
+func TestNormalizePendingWorkArgument(t *testing.T) {
+	t.Parallel()
+
+	if got := NormalizePendingWorkArgument(" \tfeature   with\nspaces "); got != "feature with spaces" {
+		t.Fatalf("normalized Pending Work argument = %q", got)
+	}
+}
+
 func TestPendingWorkClosedContract(t *testing.T) {
 	t.Parallel()
 

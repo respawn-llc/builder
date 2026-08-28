@@ -24,4 +24,5 @@ export const rpcErrorCodes = {
   runtimeCommandNotAccepted: -32061,
   pendingWorkNotPending: -32064,
   pendingWorkCapacity: -32065,
+  pendingWorkIdentityConflict: -32066,
 } as const;

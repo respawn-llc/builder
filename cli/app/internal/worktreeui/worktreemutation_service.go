@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/apicontract"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
 
@@ -85,7 +86,19 @@ func (s Service) Enter(selector string) (serverapi.WorktreeScheduledAcknowledgem
 				OperationID: operationID,
 				SessionID:   s.SessionID,
 			},
-			Selector: strings.TrimSpace(selector),
+			Selector: runtimeinput.NormalizePendingWorkArgument(selector),
+		})
+	})
+}
+
+func (s Service) Leave() (serverapi.WorktreeScheduledAcknowledgement, error) {
+	operationID := s.operationID()
+	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeScheduledAcknowledgement, error) {
+		return s.Client.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
+			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+				OperationID: operationID,
+				SessionID:   s.SessionID,
+			},
 		})
 	})
 }

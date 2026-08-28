@@ -203,7 +203,7 @@ func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, 
 			}
 		}
 		var guidance *string
-		if value := strings.TrimSpace(args); value != "" {
+		if value := runtimeinput.NormalizePendingWorkArgument(args); value != "" {
 			guidance = &value
 		}
 		return compactDoneMsg{

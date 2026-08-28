@@ -2,12 +2,12 @@ package app
 
 import (
 	"errors"
-	"strings"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
 	"core/shared/invariant"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -187,7 +187,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		m.worktrees.switchPending = false
 		followUp := tea.Cmd(nil)
 		if msg.err != nil {
-			followUp = m.takeQueuedWorktreeSwitchCmd()
+			followUp = m.takeQueuedWorktreeTransitionCmd()
 			if !m.worktrees.open {
 				status := runtimeattach.FormatSubmissionError(msg.err)
 				m.layout().syncViewport()
@@ -202,9 +202,12 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			overlayCmd = m.restoreTranscriptSurface()
 			m.closeWorktreeOverlay()
 		}
-		status := "Scheduled worktree switch to " + strings.TrimSpace(msg.target)
+		status := "Scheduled worktree leave"
+		if msg.transition.Transition == runtimeinput.PendingWorkWorktreeTransitionEnter {
+			status = "Scheduled worktree switch to " + *msg.transition.Selector
+		}
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
-		followUp = m.takeQueuedWorktreeSwitchCmd()
+		followUp = m.takeQueuedWorktreeTransitionCmd()
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, followUp, m.reconcileSpinnerTicking(false)))
 	case worktreeDeleteDoneMsg:

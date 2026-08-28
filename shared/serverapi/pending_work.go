@@ -12,8 +12,9 @@ import (
 const PendingWorkCapacity = runtimeinput.PendingWorkCapacity
 
 var (
-	ErrPendingWorkCapacity   = runtimeinput.ErrPendingWorkCapacity
-	ErrPendingWorkNotPending = runtimeinput.ErrPendingWorkNotPending
+	ErrPendingWorkCapacity         = runtimeinput.ErrPendingWorkCapacity
+	ErrPendingWorkNotPending       = runtimeinput.ErrPendingWorkNotPending
+	ErrPendingWorkIdentityConflict = errors.New("Pending Work identity is already pending")
 )
 
 type PendingWorkRemovalError = runtimeinput.PendingWorkRemovalError
@@ -51,6 +52,45 @@ func DecodePendingWorkCapacityError(data json.RawMessage) error {
 	}
 	return &PendingWorkCapacityError{}
 }
+
+type PendingWorkIdentityConflictError struct {
+	ItemID runtimeids.QueueItemID
+}
+
+func (e *PendingWorkIdentityConflictError) Error() string {
+	if e == nil || e.ItemID.IsZero() {
+		return ErrPendingWorkIdentityConflict.Error()
+	}
+	return "Pending Work item " + e.ItemID.String() + " is already pending"
+}
+func (*PendingWorkIdentityConflictError) Unwrap() error {
+	return ErrPendingWorkIdentityConflict
+}
+func (*PendingWorkIdentityConflictError) RPCErrorCode() int {
+	return protocol.ErrCodePendingWorkIdentityConflict
+}
+func (e *PendingWorkIdentityConflictError) RPCErrorData() json.RawMessage {
+	if e == nil || e.ItemID.IsZero() {
+		return marshalRPCErrorData(struct {
+			InvalidItemID bool `json:"invalid_item_id"`
+		}{true})
+	}
+	return marshalRPCErrorData(struct {
+		ItemID runtimeids.QueueItemID `json:"item_id"`
+	}{e.ItemID})
+}
+
+func DecodePendingWorkIdentityConflictError(data json.RawMessage) error {
+	var payload struct {
+		ItemID runtimeids.QueueItemID `json:"item_id"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.ItemID.IsZero() {
+		return errors.New("Pending Work identity-conflict error has invalid item id")
+	}
+	return &PendingWorkIdentityConflictError{ItemID: payload.ItemID}
+}
+
+var _ protocol.StructuredRPCError = (*PendingWorkIdentityConflictError)(nil)
 
 type PendingWorkNotPendingError struct {
 	ItemID runtimeids.QueueItemID

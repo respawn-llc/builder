@@ -144,7 +144,7 @@ func (c ManualCompactionAdmission) Validate() error {
 	if *c.Guidance == "" {
 		return errors.New("Pending Work compaction guidance must not be blank")
 	}
-	if normalizePendingWorkArgument(*c.Guidance) != *c.Guidance {
+	if NormalizePendingWorkArgument(*c.Guidance) != *c.Guidance {
 		return errors.New("Pending Work compaction guidance must be normalized")
 	}
 	return nil
@@ -166,7 +166,7 @@ func (t PendingWorkWorktreeTransition) Validate() error {
 		if t.Selector == nil || *t.Selector == "" {
 			return errors.New("Pending Work Worktree enter selector is required")
 		}
-		if normalizePendingWorkArgument(*t.Selector) != *t.Selector {
+		if NormalizePendingWorkArgument(*t.Selector) != *t.Selector {
 			return errors.New("Pending Work Worktree enter selector must be normalized")
 		}
 	case PendingWorkWorktreeTransitionLeave:
@@ -272,6 +272,6 @@ func (r PendingWorkTechnicalRestoration) Validate() error {
 	}).Validate()
 }
 
-func normalizePendingWorkArgument(value string) string {
+func NormalizePendingWorkArgument(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }

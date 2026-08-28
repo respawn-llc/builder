@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/cli/app/internal/worktreeui"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -114,6 +115,49 @@ func TestWorktreeListControllerEnterWorktreeSubmitsSwitch(t *testing.T) {
 	}
 }
 
+func TestWorktreeCommandSchedulesLeaveAndRejectsArguments(t *testing.T) {
+	client := &worktreeCommandTestClient{}
+	model := newWorktreeTestModel(t, client)
+
+	_, cmd := model.inputController().handleWorktreeCommand("leave")
+	if cmd == nil {
+		t.Fatal("leave command did not schedule a mutation")
+	}
+	result := cmd()
+	done, ok := result.(worktreeSwitchDoneMsg)
+	if !ok {
+		t.Fatalf("leave command message type = %T, want worktreeSwitchDoneMsg", result)
+	}
+	if len(client.leaveRequests) != 1 ||
+		client.leaveRequests[0].OperationID.Validate() != nil ||
+		done.ack.OperationID != client.leaveRequests[0].OperationID {
+		t.Fatalf("leave scheduling = requests %+v acknowledgement %+v", client.leaveRequests, done.ack)
+	}
+
+	_, rejectedCmd := model.inputController().handleWorktreeCommand("leave unexpected")
+	if rejectedCmd == nil {
+		t.Fatal("leave arguments were not rejected with usage feedback")
+	}
+	_ = rejectedCmd()
+	if len(client.leaveRequests) != 1 {
+		t.Fatalf("leave arguments scheduled requests: %+v", client.leaveRequests)
+	}
+}
+
+func TestWorktreeCommandSwitchUsesCompleteNormalizedSelector(t *testing.T) {
+	client := &worktreeCommandTestClient{}
+	model := newWorktreeTestModel(t, client)
+
+	_, cmd := model.inputController().handleWorktreeCommand("switch   feature   with spaces")
+	if cmd == nil {
+		t.Fatal("switch command did not schedule a mutation")
+	}
+	_ = cmd()
+	if len(client.enterRequests) != 1 || client.enterRequests[0].Selector != "feature with spaces" {
+		t.Fatalf("enter requests = %+v, want complete normalized selector", client.enterRequests)
+	}
+}
+
 func TestWorktreeListControllerQueuesStableSwitchTarget(t *testing.T) {
 	fixture := newWorktreeListFixture(t, nil)
 	fixture.model.worktrees.selection = 1
@@ -123,8 +167,12 @@ func TestWorktreeListControllerQueuesStableSwitchTarget(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("queued switch returned a command while another switch is pending")
 	}
-	if fixture.model.worktrees.queuedSwitch.TargetToken != "wt-feature" {
-		t.Fatalf("queued switch = %+v, want stable worktree ID", fixture.model.worktrees.queuedSwitch)
+	queued := fixture.model.worktrees.queuedTransition
+	if queued == nil ||
+		queued.Transition != runtimeinput.PendingWorkWorktreeTransitionEnter ||
+		queued.Selector == nil ||
+		*queued.Selector != "wt-feature" {
+		t.Fatalf("queued transition = %+v, want stable worktree ID", queued)
 	}
 }
 

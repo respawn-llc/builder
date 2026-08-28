@@ -274,7 +274,7 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 		t.Fatalf("compaction request id = %s, want %s", client.compactRequest.RequestID, requestID)
 	}
 	if client.compactRequest.Admission.Guidance == nil ||
-		*client.compactRequest.Admission.Guidance != "tighten  summary" {
+		*client.compactRequest.Admission.Guidance != "tighten summary" {
 		t.Fatalf("compaction admission = %+v", client.compactRequest.Admission)
 	}
 	buttonClient := &runtimeControlFakeClient{}

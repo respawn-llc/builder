@@ -33,6 +33,8 @@ type worktreeCommandTestClient struct {
 	createErr         error
 	enterRequests     []serverapi.WorktreeEnterRequest
 	enterErr          error
+	leaveRequests     []serverapi.WorktreeLeaveRequest
+	leaveErr          error
 	deleteCtx         context.Context
 	deleteResp        serverapi.WorktreeDeleteResult
 	deleteErr         error
@@ -95,8 +97,9 @@ func (c *worktreeCommandTestClient) EnterWorktree(_ context.Context, req servera
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: req.OperationID}, c.enterErr
 }
 
-func (c *worktreeCommandTestClient) LeaveWorktree(context.Context, serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return serverapi.WorktreeScheduledAcknowledgement{}, nil
+func (c *worktreeCommandTestClient) LeaveWorktree(_ context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	c.leaveRequests = append(c.leaveRequests, req)
+	return serverapi.WorktreeScheduledAcknowledgement{OperationID: req.OperationID}, c.leaveErr
 }
 
 func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {

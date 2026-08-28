@@ -27,6 +27,9 @@ type testWorktreeClient struct {
 	enterCtx         context.Context
 	enterResp        serverapi.WorktreeScheduledAcknowledgement
 	enterRequests    []serverapi.WorktreeEnterRequest
+	leaveCtx         context.Context
+	leaveResp        serverapi.WorktreeScheduledAcknowledgement
+	leaveRequests    []serverapi.WorktreeLeaveRequest
 	deleteCtx        context.Context
 	deleteResp       serverapi.WorktreeDeleteResult
 	deleteRequests   []serverapi.WorktreeDeleteRequest
@@ -75,8 +78,10 @@ func (c *testWorktreeClient) EnterWorktree(ctx context.Context, req serverapi.Wo
 	return c.enterResp, c.nextErr()
 }
 
-func (c *testWorktreeClient) LeaveWorktree(context.Context, serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return serverapi.WorktreeScheduledAcknowledgement{}, c.nextErr()
+func (c *testWorktreeClient) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	c.leaveCtx = ctx
+	c.leaveRequests = append(c.leaveRequests, req)
+	return c.leaveResp, c.nextErr()
 }
 
 func (c *testWorktreeClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
@@ -165,8 +170,11 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	if _, err := service.Create(serverapi.WorktreeCreateRequest{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/a"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := service.Enter(" feature/a "); err != nil {
+	if _, err := service.Enter(" feature/a   with spaces "); err != nil {
 		t.Fatalf("Enter: %v", err)
+	}
+	if _, err := service.Leave(); err != nil {
+		t.Fatalf("Leave: %v", err)
 	}
 	if _, err := service.Delete(" wt-3 ", true, serverapi.WorktreeBranchCleanupModeDeleteSafe); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -174,8 +182,11 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	if got := client.createRequests[0]; got.SetupOperationID.Validate() != nil || got.SessionID != "session-1" || got.BranchName != "feature/a" {
 		t.Fatalf("create request = %+v", got)
 	}
-	if got := client.enterRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "feature/a" {
+	if got := client.enterRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "feature/a with spaces" {
 		t.Fatalf("enter request = %+v", got)
+	}
+	if got := client.leaveRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" {
+		t.Fatalf("leave request = %+v", got)
 	}
 	if got := client.deleteRequests[0]; got.SessionID != "session-1" || got.Selector != "wt-3" || !got.ForceFolderRemoval || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 		t.Fatalf("delete request = %+v", got)

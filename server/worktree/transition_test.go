@@ -55,7 +55,7 @@ func TestWorktreeTransitionUsesActiveRuntimeReservationAndDormantDirectExecution
 					OperationID: operationID,
 					SessionID:   env.session.Meta().SessionID,
 				},
-				Selector: "missing-worktree",
+				Selector: "  missing   worktree  ",
 			}
 
 			var releaseRuntime func()
@@ -225,6 +225,44 @@ func TestApplyWorktreeTargetMutationCertainty(t *testing.T) {
 				t.Fatal("committed target mutation rolled back")
 			}
 		})
+	}
+}
+
+func TestCommittedWorktreeIdentityPublicationFailurePreservesCompletion(t *testing.T) {
+	publicationErr := errors.New("identity publication failed")
+	publisher := &serviceTestPublisher{}
+	service := &Service{publisher: publisher}
+	request := worktreeTransitionRequest{
+		operationID: serverapi.NewWorktreeOperationID(),
+		sessionID:   "session-1",
+		kind:        clientui.WorktreeTransitionEnter,
+	}
+	failureSteers := 0
+
+	result := service.publishWorktreeTransitionResult(
+		request,
+		runtime.CommittedWorktreeApplication(publicationErr),
+		func(clientui.WorktreeTransitionOutcome) error {
+			failureSteers++
+			return nil
+		},
+	)
+
+	if result.Certainty != runtime.WorktreeApplicationCommitted ||
+		!errors.Is(result.Err, publicationErr) {
+		t.Fatalf("application result = %+v", result)
+	}
+	if failureSteers != 0 {
+		t.Fatalf("ordinary failure steers = %d, want 0", failureSteers)
+	}
+	publisher.mu.Lock()
+	outcomes := append([]clientui.WorktreeTransitionOutcome(nil), publisher.outcomes...)
+	publisher.mu.Unlock()
+	if len(outcomes) != 1 ||
+		outcomes[0].OperationID != request.operationID ||
+		outcomes[0].State != clientui.WorktreeTransitionCompleted ||
+		outcomes[0].Failure != nil {
+		t.Fatalf("Worktree outcomes = %+v", outcomes)
 	}
 }
 

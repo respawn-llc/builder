@@ -237,102 +237,34 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 	accept CommandAcceptance,
 ) (session.CommitReceipt, error) {
 	e := c.engine
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := context.Cause(ctx); err != nil {
-		return session.CommitReceipt{}, err
-	}
-	if err := e.requirePendingWorkCapacity(); err != nil {
-		return session.CommitReceipt{}, err
-	}
-	itemID, err := serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
-	if err != nil {
-		return session.CommitReceipt{}, err
-	}
-	canonicalInput, err := admission.CanonicalInput()
-	if err != nil {
-		return session.CommitReceipt{}, err
-	}
-	admissionCopy := admission
-	pendingItem := runtimeinput.PendingWorkItem{
-		ID:               itemID,
-		Lane:             runtimeinput.PendingWorkLaneSteer,
-		Kind:             runtimeinput.PendingWorkItemKindManualCompaction,
-		State:            runtimeinput.PendingWorkItemStatePending,
-		CanonicalInput:   canonicalInput,
-		ManualCompaction: &admissionCopy,
-	}
-	if err := pendingItem.Validate(); err != nil {
-		return session.CommitReceipt{}, err
-	}
-
-	reservation := &exclusiveStepReservation{
-		Kind:      exclusiveStepReservationManualCompaction,
-		queueable: true,
-	}
-	pendingCtx, cancelPending := context.WithCancelCause(context.Background())
-	committed, acceptErr := runCommandAcceptance(accept, func() (bool, error) {
-		err := e.mutatePendingWork(true, func(order *pendingWorkSteerAdmission) (bool, error) {
-			reservation.pendingWork = &pendingOperationalWork{
-				order:  *order,
-				item:   pendingItem,
-				cancel: cancelPending,
+	err := e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
+		compactionRequestID: &requestID,
+		reservationKind:     exclusiveStepReservationManualCompaction,
+		manualCompaction:    &admission,
+		accept:              accept,
+		run: func(pendingCtx context.Context, reservation *exclusiveStepReservation, pendingItem runtimeinput.PendingWorkItem) error {
+			receipt, runErr := c.compactContext(
+				pendingCtx,
+				compactionModeManual,
+				&requestID,
+				instructions,
+				true,
+				reservation,
+				onActive,
+				nil,
+				true,
+			)
+			var selectionFailure *manualCompactionSelectionFailure
+			if runErr != nil &&
+				!receipt.Committed &&
+				!errors.As(runErr, &selectionFailure) &&
+				!errors.Is(runErr, errPendingOperationalWorkRemoved) {
+				runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
 			}
-			if err := c.steps.AcquireReservation(reservation); err != nil {
-				reservation.pendingWork = nil
-				return false, err
-			}
-			return true, nil
-		}, nil)
-		if err != nil {
-			cancelPending(err)
-			return false, err
-		}
-		return true, nil
+			return runErr
+		},
 	})
-	if err := commandAcceptanceResult(committed, acceptErr); err != nil {
-		c.steps.ReleaseReservation(reservation)
-		cancelPending(err)
-		return session.CommitReceipt{}, err
-	}
-	launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
-		stopLifecycleCancellation := context.AfterFunc(lifecycleCtx, func() {
-			cancelPending(context.Cause(lifecycleCtx))
-		})
-		defer stopLifecycleCancellation()
-		defer cancelPending(context.Canceled)
-		defer c.steps.ReleaseReservation(reservation)
-		receipt, runErr := c.compactContext(
-			pendingCtx,
-			compactionModeManual,
-			&requestID,
-			instructions,
-			true,
-			reservation,
-			onActive,
-			nil,
-			true,
-		)
-		var selectionFailure *manualCompactionSelectionFailure
-		if runErr != nil &&
-			!receipt.Committed &&
-			!errors.As(runErr, &selectionFailure) &&
-			!errors.Is(runErr, errPendingOperationalWorkRemoved) {
-			runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
-		}
-		fatal, abort := resultGroupFatalFromError(runErr)
-		if abort {
-			return fatal
-		}
-		return nil
-	})
-	if !launched {
-		c.steps.ReleaseReservation(reservation)
-		cancelPending(ErrEngineClosed)
-		return session.CommitReceipt{}, ErrEngineClosed
-	}
-	return session.CommitReceipt{}, nil
+	return session.CommitReceipt{}, err
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {

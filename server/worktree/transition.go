@@ -37,7 +37,7 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 		operationID: req.OperationID,
 		sessionID:   strings.TrimSpace(req.SessionID),
 		kind:        clientui.WorktreeTransitionEnter,
-		selector:    strings.TrimSpace(req.Selector),
+		selector:    runtimeinput.NormalizePendingWorkArgument(req.Selector),
 	}
 	selector := request.selector
 	return s.runWorktreeTransition(ctx, request, runtimeinput.PendingWorkWorktreeTransition{
@@ -113,34 +113,42 @@ func (s *Service) runWorktreeTransition(
 			if result.Certainty == runtime.WorktreeApplicationIndeterminate {
 				return result
 			}
-			outcome := worktreeTransitionOutcome(request, result.Err)
-			if result.Err != nil && syncFailure != nil {
-				if syncErr := syncFailure(outcome); syncErr != nil {
-					result = result.WithError(errors.Join(result.Err, syncErr))
-				}
-			}
-			s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
-			return result
+			return s.publishWorktreeTransitionResult(request, result, syncFailure)
 		},
 	)
 }
 
+func (s *Service) publishWorktreeTransitionResult(
+	request worktreeTransitionRequest,
+	result runtime.WorktreeApplicationResult,
+	syncFailure func(clientui.WorktreeTransitionOutcome) error,
+) runtime.WorktreeApplicationResult {
+	outcome := worktreeTransitionOutcome(request, result)
+	if result.Certainty == runtime.WorktreeApplicationUnapplied && syncFailure != nil {
+		if syncErr := syncFailure(outcome); syncErr != nil {
+			result = result.WithError(errors.Join(result.Err, syncErr))
+		}
+	}
+	s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
+	return result
+}
+
 func worktreeTransitionOutcome(
 	request worktreeTransitionRequest,
-	err error,
+	result runtime.WorktreeApplicationResult,
 ) clientui.WorktreeTransitionOutcome {
 	outcome := clientui.WorktreeTransitionOutcome{
 		OperationID: request.operationID,
 		Transition:  request.kind,
 		State:       clientui.WorktreeTransitionCompleted,
 	}
-	if err == nil {
+	if result.Certainty == runtime.WorktreeApplicationCommitted {
 		return outcome
 	}
 	outcome.State = clientui.WorktreeTransitionFailed
-	outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
+	outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: result.Err.Error()}
 	var precondition *serverapi.WorktreeDeletePreconditionError
-	if errors.As(err, &precondition) {
+	if errors.As(result.Err, &precondition) {
 		dirtyState := precondition.DirtyState
 		outcome.Failure.DeletePrecondition = &dirtyState
 	}
