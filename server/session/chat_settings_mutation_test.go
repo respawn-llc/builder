@@ -148,7 +148,7 @@ func TestMutateChatSettingsRepairsUnavailableUnlockedAgentToDefaultBaseline(t *t
 		Agent:    "removed-agent",
 		Settings: completeChatSettingsOverrides("all", "custom-depth", true, false, false),
 	})
-	result, err := store.CommitChatSettingsState(ChatSettingsState{
+	_, err := store.CommitChatSettingsState(ChatSettingsState{
 		Agent:    "default",
 		Settings: completeChatSettingsOverrides("edits", "provider-default", false, true, true),
 	})

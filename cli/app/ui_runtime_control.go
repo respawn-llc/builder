@@ -147,7 +147,6 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
 	m.modelContractLocked = settings.AgentLocked
 	m.status.snapshot.AgentRole = textutil.OptionalTrimmedString(config.NormalizeSubagentSelector(settings.SelectedAgent.Role))
-	m.status.snapshot.CompactionMode = string(response.Context.CompactionMode)
 	m.status.snapshot.CompactionCount = int(response.Context.CompletedCompactionCount)
 	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), clientui.RuntimeContextUsage{UsedTokens: int(response.Context.UsedTokens), WindowTokens: int(response.Context.ContextWindowTokens)})
 	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
