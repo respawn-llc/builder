@@ -634,10 +634,7 @@ func (m *uiModel) hasEnqueuedInjectedRuntimeWork() bool {
 
 func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreateDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
-	var pendingWorkRefreshCmd tea.Cmd
-	if msg.err == nil {
-		pendingWorkRefreshCmd = m.requestPendingWorkRefresh(msg.sessionID)
-	}
+	pendingWorkRefreshCmd := m.requestPendingWorkRefreshIfSuccessful(msg.sessionID, msg.err == nil)
 	index := m.injectedQueueIndexByAnyID(msg.localID)
 	if index < 0 {
 		return m, pendingWorkRefreshCmd
@@ -723,10 +720,7 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 
 func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDiscardDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
-	var pendingWorkRefreshCmd tea.Cmd
-	if msg.discarded {
-		pendingWorkRefreshCmd = m.requestPendingWorkRefresh(msg.sessionID)
-	}
+	pendingWorkRefreshCmd := m.requestPendingWorkRefreshIfSuccessful(msg.sessionID, msg.discarded)
 	id := strings.TrimSpace(msg.localID)
 	if id == "" {
 		id = strings.TrimSpace(msg.serverID)

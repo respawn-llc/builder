@@ -181,10 +181,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		return handledUIFeatureUpdate(m, worktreeSetupEventCmd(msg.events))
 	case worktreeSwitchDoneMsg:
-		var pendingWorkRefreshCmd tea.Cmd
-		if msg.err == nil && msg.ack != nil {
-			pendingWorkRefreshCmd = m.requestPendingWorkRefresh(msg.sessionID)
-		}
+		pendingWorkRefreshCmd := m.requestPendingWorkRefreshIfSuccessful(msg.sessionID, msg.err == nil && msg.ack != nil)
 		if msg.token != m.worktrees.switchToken {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, pendingWorkRefreshCmd)

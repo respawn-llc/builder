@@ -261,10 +261,7 @@ func (c uiInputController) turnQueueDrained() bool {
 
 func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
-	var pendingWorkRefreshCmd tea.Cmd
-	if msg.err == nil {
-		pendingWorkRefreshCmd = m.requestPendingWorkRefresh(msg.sessionID)
-	}
+	pendingWorkRefreshCmd := m.requestPendingWorkRefreshIfSuccessful(msg.sessionID, msg.err == nil)
 	if msg.token == 0 && m.activeSubmit.token != 0 && strings.TrimSpace(msg.submittedText) != "" {
 		return m, pendingWorkRefreshCmd
 	}

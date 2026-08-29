@@ -14,8 +14,12 @@ func TestPendingWorkRefreshHydrationScopeAndCoalescing(t *testing.T) {
 	sessionA, sessionB := ongoingTestSessionID(), runtimeids.NewSessionID()
 	m := newProjectedStaticUIModel()
 	m.pendingWorkRefresh.collection = pendingWorkRefreshTestWork("prior")
-	if m.advancePendingWorkRefreshScope(sessionA) == nil {
-		t.Fatal("hydration did not request Pending Work")
+	controller := newOngoingTranscriptController(
+		&ongoingSurfaceSpy{}, m.ongoingFrameInput,
+		noopOngoingTranscriptRuntimeAdmission, m.applyAdmittedTranscriptMessageState,
+	)
+	if _, cmd, err := controller.Accept(ongoingHydrationMessage(1)); err != nil || cmd == nil {
+		t.Fatalf("accepted hydration = cmd %v, error %v", cmd, err)
 	}
 	assertPendingWorkTexts(t, m)
 	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{pendingWork: pendingWorkRefreshTestWork("stale")})
@@ -45,61 +49,51 @@ func TestPendingWorkRefreshHydrationScopeAndCoalescing(t *testing.T) {
 	assertPendingWorkTexts(t, m)
 }
 
-func TestAcceptedHydrationClearsAndRefreshesPendingWork(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.pendingWorkRefresh.collection = pendingWorkRefreshTestWork("prior")
-	controller := newOngoingTranscriptController(
-		&ongoingSurfaceSpy{}, m.ongoingFrameInput,
-		noopOngoingTranscriptRuntimeAdmission, m.applyAdmittedTranscriptMessageState,
-	)
-	if _, cmd, err := controller.Accept(ongoingHydrationMessage(1)); err != nil || cmd == nil {
-		t.Fatalf("accepted hydration = cmd %v, error %v", cmd, err)
-	}
-	assertPendingWorkTexts(t, m)
-}
-
 func TestPendingWorkRefreshTriggersUseCapturedSession(t *testing.T) {
 	sessionID := ongoingTestSessionID()
-	changed := newProjectedStaticUIModel()
-	changed.pendingWorkRefresh = pendingWorkRefreshOwner{sessionID: sessionID, generation: 1}
-	if cmd := changed.applyAdmittedTranscriptMessageState(
-		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkChanged{})),
-		runtimeTupleMergeResult{},
-	); cmd == nil {
-		t.Fatal("Changed did not refresh Pending Work")
-	}
-	triggers := []func(*uiModel, runtimeids.SessionID){
-		func(m *uiModel, id runtimeids.SessionID) {
+	triggers := []struct {
+		name            string
+		capturesSession bool
+		apply           func(*uiModel, runtimeids.SessionID)
+	}{
+		{"Changed", false, func(m *uiModel, _ runtimeids.SessionID) {
+			m.applyAdmittedTranscriptMessageState(
+				clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkChanged{})),
+				runtimeTupleMergeResult{},
+			)
+		}},
+		{"Send/Steer", true, func(m *uiModel, id runtimeids.SessionID) {
 			m.activeSubmit = activeSubmitState{token: 1}
 			m.inputController().handleSubmitDone(submitDoneMsg{token: 1, sessionID: id})
-		},
-		func(m *uiModel, id runtimeids.SessionID) {
+		}},
+		{"Queue", true, func(m *uiModel, id runtimeids.SessionID) {
 			m.injectedQueue = []injectedRuntimeQueueItem{{LocalID: "local", State: injectedRuntimeQueuePendingCreate, CreateToken: 1}}
 			m.inputController().handleInjectedQueueCreateDone(injectedQueueCreateDoneMsg{token: 1, sessionID: id, localID: "local", completed: true})
-		},
-		func(m *uiModel, id runtimeids.SessionID) {
+		}},
+		{"compact", true, func(m *uiModel, id runtimeids.SessionID) {
 			m.inputController().handleCompactDone(compactDoneMsg{requestID: runtimeids.NewCompactionRequestID(), sessionID: id})
-		},
-		func(m *uiModel, id runtimeids.SessionID) {
+		}},
+		{"active Worktree", true, func(m *uiModel, id runtimeids.SessionID) {
 			m.worktrees.switchToken = 1
 			m.reduceWorktreeMessage(worktreeSwitchDoneMsg{
 				token: 1, sessionID: id,
 				transition: runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionLeave},
 				ack:        &worktreepb.ScheduledAcknowledgement{OperationId: runtimeids.NewQueueItemID().String()},
 			})
-		},
-		func(m *uiModel, id runtimeids.SessionID) {
+		}},
+		{"remove", true, func(m *uiModel, id runtimeids.SessionID) {
 			m.injectedQueue = []injectedRuntimeQueueItem{{LocalID: "local", State: injectedRuntimeQueueDiscardPending, DiscardToken: 1}}
 			m.inputController().handleInjectedQueueDiscardDone(injectedQueueDiscardDoneMsg{token: 1, sessionID: id, localID: "local", discarded: true})
-		},
+		}},
 	}
-	for index, trigger := range triggers {
+	for _, trigger := range triggers {
 		for _, captured := range []runtimeids.SessionID{sessionID, runtimeids.NewSessionID()} {
 			m := newProjectedStaticUIModel()
 			m.pendingWorkRefresh = pendingWorkRefreshOwner{sessionID: sessionID, generation: 1}
-			trigger(m, captured)
-			if got, want := m.pendingWorkRefresh.inFlight, captured == sessionID; got != want {
-				t.Fatalf("trigger %d refresh in flight = %t, want %t", index, got, want)
+			trigger.apply(m, captured)
+			want := !trigger.capturesSession || captured == sessionID
+			if got := m.pendingWorkRefresh.inFlight; got != want {
+				t.Fatalf("%s refresh in flight = %t, want %t", trigger.name, got, want)
 			}
 		}
 	}

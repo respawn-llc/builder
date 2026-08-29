@@ -34,28 +34,37 @@ func (m *uiModel) advancePendingWorkRefreshScope(sessionID runtimeids.SessionID)
 	if m == nil || sessionID.IsZero() {
 		return nil
 	}
-	owner := &m.pendingWorkRefresh
-	owner.sessionID = sessionID
-	owner.generation++
-	if owner.generation == 0 {
+	generation := m.pendingWorkRefresh.generation + 1
+	if generation == 0 {
 		panic("Pending Work hydration generation overflow")
 	}
-	owner.inFlight = false
-	owner.followUpRequired = false
-	owner.collection = runtimeinput.PendingWork{}
-	owner.successfulFetch = false
+	m.pendingWorkRefresh = pendingWorkRefreshOwner{
+		sessionID:  sessionID,
+		generation: generation,
+	}
 	return m.startPendingWorkRefresh()
 }
 
 func (m *uiModel) requestPendingWorkRefresh(sessionID runtimeids.SessionID) tea.Cmd {
-	if m == nil || sessionID.IsZero() || sessionID != m.pendingWorkRefresh.sessionID {
+	if m == nil || sessionID.IsZero() {
 		return nil
 	}
-	if m.pendingWorkRefresh.inFlight {
-		m.pendingWorkRefresh.followUpRequired = true
+	owner := &m.pendingWorkRefresh
+	if sessionID != owner.sessionID {
+		return nil
+	}
+	if owner.inFlight {
+		owner.followUpRequired = true
 		return nil
 	}
 	return m.startPendingWorkRefresh()
+}
+
+func (m *uiModel) requestPendingWorkRefreshIfSuccessful(sessionID runtimeids.SessionID, successful bool) tea.Cmd {
+	if !successful {
+		return nil
+	}
+	return m.requestPendingWorkRefresh(sessionID)
 }
 
 func (m *uiModel) startPendingWorkRefresh() tea.Cmd {
@@ -68,17 +77,10 @@ func (m *uiModel) startPendingWorkRefresh() tea.Cmd {
 	client, ok := m.runtimeClient().(pendingWorkListClient)
 	return func() tea.Msg {
 		if !ok {
-			return pendingWorkRefreshDoneMsg{
-				generation: generation,
-				err:        errors.New("runtime Pending Work list is unavailable"),
-			}
+			return pendingWorkRefreshDoneMsg{generation: generation, err: errors.New("runtime Pending Work list is unavailable")}
 		}
 		pendingWork, err := client.ListPendingWork(sessionID)
-		return pendingWorkRefreshDoneMsg{
-			generation:  generation,
-			pendingWork: pendingWork,
-			err:         err,
-		}
+		return pendingWorkRefreshDoneMsg{generation: generation, pendingWork: pendingWork, err: err}
 	}
 }
 
@@ -109,9 +111,8 @@ func (m *uiModel) applyPendingWorkRefreshDone(msg pendingWorkRefreshDoneMsg) tea
 			"",
 		)
 	}
-	var followUp tea.Cmd
-	if followUpRequired {
-		followUp = m.startPendingWorkRefresh()
+	if !followUpRequired {
+		return errorCmd
 	}
-	return tea.Batch(errorCmd, followUp)
+	return tea.Batch(errorCmd, m.startPendingWorkRefresh())
 }
