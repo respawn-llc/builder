@@ -10,9 +10,130 @@ import (
 	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
+
+func completeManualEligibilityAgentStep(t *testing.T, engine *Engine) {
+	t.Helper()
+	engine.compactionRuntimeState().SetManualCompactionEligible(true)
+}
+
+func TestManualCompactionRevalidatesAtBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		activeKind ActiveKind
+		mutate     func(*Engine)
+		wantEvent  EventKind
+	}{
+		{
+			name:       "accepted during Agent Step",
+			activeKind: ActiveKindUserTurn,
+			wantEvent:  EventCompactionCompleted,
+		},
+		{
+			name:       "disabled policy",
+			activeKind: ActiveKindRuntimeMaintenance,
+			mutate: func(engine *Engine) {
+				engine.contextPolicy.CompactionMode = serverapi.ChatContextCompactionModeDisabled
+			},
+			wantEvent: EventCompactionFailed,
+		},
+		{
+			name:       "active compaction",
+			activeKind: ActiveKindRuntimeMaintenance,
+			mutate: func(engine *Engine) {
+				engine.compactionRuntimeState().SetActive(
+					runtimeTestStepID("other-compaction"),
+					nil,
+					string(compactionModeManual),
+					1,
+				)
+			},
+			wantEvent: EventCompactionFailed,
+		},
+		{
+			name:       "too soon",
+			activeKind: ActiveKindRuntimeMaintenance,
+			mutate: func(engine *Engine) {
+				engine.compactionRuntimeState().SetManualCompactionEligible(false)
+			},
+			wantEvent: EventCompactionFailed,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestID := runtimeids.NewCompactionRequestID()
+			var terminal *Event
+			client := &fakeCompactionClient{responses: []llm.Response{{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+			}}}
+			engine := mustNewTestEngine(
+				t,
+				mustCreateTestSession(t),
+				client,
+				newTestToolRegistry(t),
+				Config{
+					Model:          "gpt-5",
+					CompactionMode: "local",
+					OnEvent: func(event Event) {
+						if event.Compaction != nil &&
+							event.Compaction.RequestID != nil &&
+							*event.Compaction.RequestID == requestID {
+							copyEvent := event
+							terminal = &copyEvent
+						}
+					},
+				},
+			)
+			engine.compactionRuntimeState().SetManualCompactionEligible(true)
+
+			started, release, stepDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+			go func() {
+				stepDone <- engine.stepLifecycle.Run(
+					t.Context(),
+					exclusiveStepOptions{ActiveKind: test.activeKind},
+					func(context.Context, string) error {
+						close(started)
+						<-release
+						return nil
+					},
+				)
+			}()
+			pendingWorkTestWait(t, started, "active Step")
+
+			admitted := make(chan error, 1)
+			go func() {
+				_, err := engine.CompactContextAdmissionForRequestWithAcceptance(
+					t.Context(),
+					requestID,
+					runtimeinput.ManualCompactionAdmission{},
+					nil,
+				)
+				admitted <- err
+			}()
+			pendingWorkTestNoError(t, pendingWorkTestWaitValue(t, admitted, "manual compaction admission"))
+
+			pending := pendingWorkTestSnapshot(t, engine)
+			if len(pending.Items) != 1 || pending.Items[0].Kind != runtimeinput.PendingWorkItemKindManualCompaction {
+				t.Fatalf("accepted manual compaction Pending Work = %+v", pending.Items)
+			}
+			if test.mutate != nil {
+				test.mutate(engine)
+			}
+
+			close(release)
+			pendingWorkTestNoError(t, <-stepDone)
+			waitEngineLifecycleTasks(t, engine)
+
+			if terminal == nil || terminal.Kind != test.wantEvent {
+				t.Fatalf("terminal compaction event = %+v, want %s for request %s", terminal, test.wantEvent, requestID)
+			}
+		})
+	}
+}
 
 func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testing.T) {
 	t.Parallel()
