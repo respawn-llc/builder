@@ -82,9 +82,8 @@ type RuntimeMainView struct {
 }
 
 type QueuedUserMessage struct {
-	ID              string
-	Text            string
-	ClientRequestID string
+	ID   string
+	Text string
 }
 
 type UserTurnResultKind string

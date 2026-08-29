@@ -138,7 +138,6 @@ type activeSubmitState struct {
 	text            string
 	queuedID        string
 	origin          activeSubmitOrigin
-	clientRequestID runtimeids.RuntimeClientRequestID
 	submissionOrder inputSubmissionOrder
 }
 

@@ -69,9 +69,8 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 			return displayErr
 		}
 		resp = serverapi.RuntimeLiveSteerResponse{
-			ClientRequestID: req.ClientRequestID,
-			QueueItemID:     item.ID,
-			Text:            displayText,
+			QueueItemID: item.ID,
+			Text:        displayText,
 		}
 		if s != nil && s.promptStore != nil {
 			if _, err := s.recordPromptHistory(callbackCtx, sessionID.String(), queueText); err != nil {

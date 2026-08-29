@@ -13,8 +13,7 @@ func TestRuntimeClientInputMakesOneExplicitCall(t *testing.T) {
 	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls, nil).(*sessionRuntimeClient)
 
 	if _, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		ClientRequestID: "request-1",
-		Input:           runtimeinput.Text("hello"),
+		Input: runtimeinput.Text("hello"),
 	}); err != nil {
 		t.Fatalf("SubmitRuntimeInput: %v", err)
 	}

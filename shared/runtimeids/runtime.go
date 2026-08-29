@@ -2,12 +2,6 @@ package runtimeids
 
 import "fmt"
 
-type RuntimeClientRequestID struct{ uuidv4Value }
-
-func NewRuntimeClientRequestID() RuntimeClientRequestID {
-	return RuntimeClientRequestID{uuidv4Value: newUUIDv4Value()}
-}
-
 type ExecutionScopeID struct{ uuidv4Value }
 
 func NewExecutionScopeID() ExecutionScopeID {

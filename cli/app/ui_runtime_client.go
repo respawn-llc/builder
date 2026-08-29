@@ -10,8 +10,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 const uiRuntimeControlTimeout = 3 * time.Second
@@ -104,11 +102,10 @@ func (c *sessionRuntimeClient) appendRuntimeReconnectWarning() {
 	warningCtx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
 	if err := c.controls.AppendCommittedEntry(warningCtx, serverapi.RuntimeAppendCommittedEntryRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       c.sessionID,
-		Role:            "warning",
-		Text:            runtimeReconnectWarningText,
-		Visibility:      string(clientui.EntryVisibilityOngoing),
+		SessionID:  c.sessionID,
+		Role:       "warning",
+		Text:       runtimeReconnectWarningText,
+		Visibility: string(clientui.EntryVisibilityOngoing),
 	}); err != nil {
 		c.notifyRuntimeReconnectWarning(runtimeReconnectWarningText, clientui.EntryVisibilityOngoing)
 	}
@@ -121,20 +118,21 @@ func isRecoverableRuntimeControlError(err error) bool {
 	return errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }
 
-func runtimeControlCall[T any](c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
+func runtimeControlCall[T any](c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
 	return runtimeRequestCall(ctx, c, appendWarning, call)
 }
 
-func runtimeRequestCall[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
-	requestID := uuid.NewString()
-	return runtimeRequestCallWithID(ctx, c, appendWarning, requestID, call)
+func runtimeRequestCall[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context) (T, error)) (T, error) {
+	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
+		return call(ctx)
+	})
 }
 
-func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.Context, requestID string) error) error {
-	_, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (struct{}, error) {
-		return struct{}{}, call(ctx, requestID)
+func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.Context) error) error {
+	_, err := runtimeControlCall(c, true, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, call(ctx)
 	})
 	return err
 }

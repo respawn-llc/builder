@@ -205,9 +205,25 @@ func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, 
 		return compactDoneMsg{
 			requestID:     requestID,
 			submittedText: submittedText,
-			err:           m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{Args: args}),
+			err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
+				RequestID: requestID,
+				Admission: manualCompactionAdmission(submittedText, args),
+			}),
 		}
 	}
+}
+
+func manualCompactionAdmission(submittedText, args string) runtimeinput.ManualCompactionAdmission {
+	restorationInput := submittedText
+	if strings.TrimSpace(restorationInput) == "" {
+		restorationInput = "/compact"
+	}
+	admission := runtimeinput.ManualCompactionAdmission{RestorationInput: restorationInput}
+	if strings.TrimSpace(args) != "" {
+		guidance := args
+		admission.Guidance = &guidance
+	}
+	return admission
 }
 
 func (c uiInputController) startRuntimeOperationAffordance() {

@@ -58,7 +58,7 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	blank := ""
 	blankKind := clientui.UserTurnResultKindSilentFinal
 	withBlank := userTurnSubmissionFromResponse(
-		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: blankKind}, "turn", "request-1")
+		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: blankKind}, "turn")
 	if withBlank.Message == nil || *withBlank.Message != "" {
 		t.Fatalf("blank submission message = %v, want present empty message", withBlank.Message)
 	}
@@ -67,7 +67,7 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	}
 
 	withoutMessage := userTurnSubmissionFromResponse(
-		serverapi.RuntimeSubmitUserTurnResponse{}, "turn", "request-2")
+		serverapi.RuntimeSubmitUserTurnResponse{}, "turn")
 	if withoutMessage.Message != nil {
 		t.Fatalf("omitted submission message = %v, want absent", withoutMessage.Message)
 	}
@@ -204,7 +204,7 @@ func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string
 }
 func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
 	f.compactRequest = req
-	return f.compactContext(ctx, req.Args)
+	return f.compactContext(ctx, req.Admission.RestorationInput)
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++

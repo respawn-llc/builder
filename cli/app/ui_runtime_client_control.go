@@ -8,8 +8,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 func (c *sessionRuntimeClient) sessionRuntimeBoundary() {}
@@ -47,22 +45,16 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 	return response, nil
 }
 
-func runtimeRequestCallWithID[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, requestID string, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
-	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
-		return call(ctx, requestID)
-	})
-}
-
-func runtimeRequestCallNoResult(ctx context.Context, c *sessionRuntimeClient, call func(ctx context.Context, requestID string) error) error {
-	_, err := runtimeRequestCall(ctx, c, true, func(ctx context.Context, requestID string) (struct{}, error) {
-		return struct{}{}, call(ctx, requestID)
+func runtimeRequestCallNoResult(ctx context.Context, c *sessionRuntimeClient, call func(ctx context.Context) error) error {
+	_, err := runtimeRequestCall(ctx, c, true, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, call(ctx)
 	})
 	return err
 }
 
 func (c *sessionRuntimeClient) SetSessionName(name string) error {
-	if err := runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{ClientRequestID: requestID, SessionID: c.sessionID, Name: name})
+	if err := runtimeControlCallNoResult(c, func(ctx context.Context) error {
+		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{SessionID: c.sessionID, Name: name})
 	}); err != nil {
 		return err
 	}
@@ -73,7 +65,7 @@ func (c *sessionRuntimeClient) SetSessionName(name string) error {
 }
 
 func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
-	resp, err := runtimeControlCall(c, false, func(ctx context.Context, _ string) (serverapi.RuntimeGoalShowResponse, error) {
+	resp, err := runtimeControlCall(c, false, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: c.sessionID})
 	})
 	if err != nil {
@@ -83,8 +75,8 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: c.sessionID, Objective: objective, Actor: "user"})
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
+		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{SessionID: c.sessionID, Objective: objective, Actor: "user"})
 	})
 	return runtimeGoalMutationFromResponse(resp), err
 }
@@ -108,15 +100,15 @@ func (c *sessionRuntimeClient) CompleteGoal() (clientui.GoalMutationResult, erro
 }
 
 func (c *sessionRuntimeClient) ClearGoal() (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
+		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{SessionID: c.sessionID, Actor: "user"})
 	})
 	return runtimeGoalMutationFromResponse(resp), err
 }
 
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)) (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
+		return call(ctx, serverapi.RuntimeGoalStatusRequest{SessionID: c.sessionID, Actor: "user"})
 	})
 	return runtimeGoalMutationFromResponse(resp), err
 }
@@ -151,8 +143,8 @@ func (c *sessionRuntimeClient) AppendCommittedEntry(role, text string) error {
 }
 
 func (c *sessionRuntimeClient) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
-	return runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: requestID, SessionID: c.sessionID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
+	return runtimeControlCallNoResult(c, func(ctx context.Context) error {
+		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{SessionID: c.sessionID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
 	})
 }
 
@@ -160,15 +152,13 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 	if err := req.Validate(); err != nil {
 		return clientui.UserTurnSubmission{}, err
 	}
-	requestID := req.ClientRequestID
-	resp, err := runtimeRequestCallWithID(ctx, c, true, requestID, func(ctx context.Context, id string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+	resp, err := runtimeRequestCall(ctx, c, true, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{
-			ClientRequestID: id,
-			SessionID:       c.sessionID,
-			Input:           req.Input,
+			SessionID: c.sessionID,
+			Input:     req.Input,
 		})
 	})
-	return userTurnSubmissionFromResponse(resp, runtimeSubmitInputText(req), requestID), err
+	return userTurnSubmissionFromResponse(resp, runtimeSubmitInputText(req)), err
 }
 
 func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {
@@ -179,13 +169,13 @@ func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {
 	return text
 }
 
-func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string, requestID string) clientui.UserTurnSubmission {
+func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string) clientui.UserTurnSubmission {
 	submission := clientui.UserTurnSubmission{
 		Message:    resp.Message,
 		ResultKind: resp.ResultKind,
 	}
 	if resp.Steered && strings.TrimSpace(resp.QueueItemID) != "" {
-		submission.Queued = clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: text, ClientRequestID: requestID}
+		submission.Queued = clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: text}
 	}
 	return submission
 }
@@ -194,8 +184,8 @@ func (c *sessionRuntimeClient) RunUserShell(ctx context.Context, req clientui.Ru
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return runtimeRequestCallNoResult(ctx, c, func(ctx context.Context, requestID string) error {
-		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: requestID, SessionID: c.sessionID, Command: req.Command})
+	return runtimeRequestCallNoResult(ctx, c, func(ctx context.Context) error {
+		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{SessionID: c.sessionID, Command: req.Command})
 	})
 }
 
@@ -203,7 +193,7 @@ func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Args: req.Args})
+	return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{SessionID: c.sessionID, RequestID: req.RequestID, Admission: req.Admission})
 }
 
 func (c *sessionRuntimeClient) Interrupt() error {
@@ -212,8 +202,8 @@ func (c *sessionRuntimeClient) Interrupt() error {
 }
 
 func (c *sessionRuntimeClient) interruptRuntimeCandidate() (runtimeTupleCandidate, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeInterruptResponse, error) {
-		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{ClientRequestID: requestID, SessionID: c.sessionID})
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeInterruptResponse, error) {
+		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{SessionID: c.sessionID})
 	})
 	if err != nil {
 		return runtimeTupleCandidate{}, err
@@ -234,7 +224,7 @@ func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool
 	if err != nil {
 		return false
 	}
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, _ string) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeRemovePendingWorkResponse, error) {
 		return pendingWork.RemovePendingWork(ctx, serverapi.RuntimeRemovePendingWorkRequest{SessionID: c.sessionID, ItemID: itemID})
 	})
 	if err != nil {
@@ -244,7 +234,7 @@ func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {
-	return runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.RecordPromptHistory(ctx, serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text})
+	return runtimeControlCallNoResult(c, func(ctx context.Context) error {
+		return c.controls.RecordPromptHistory(ctx, serverapi.RuntimeRecordPromptHistoryRequest{SessionID: c.sessionID, Text: text})
 	})
 }

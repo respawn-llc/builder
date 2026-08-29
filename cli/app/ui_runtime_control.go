@@ -13,7 +13,6 @@ import (
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 )
 
 type runtimeInterruptCandidateClient interface {
@@ -250,8 +249,7 @@ func (m *uiModel) clearRuntimeGoal() (clientui.GoalMutationResult, error) {
 
 func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
 	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
-		ClientRequestID: uuid.NewString(),
-		Input:           runtimeinput.Text(text),
+		Input: runtimeinput.Text(text),
 	})
 }
 

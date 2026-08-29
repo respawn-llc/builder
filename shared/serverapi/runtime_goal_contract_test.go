@@ -47,9 +47,8 @@ func TestRuntimeGoalShowResponseRejectsUnknownGoalStatus(t *testing.T) {
 
 func TestRuntimeSubmitUserShellCommandRejectsBlankCommand(t *testing.T) {
 	err := (RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID: "00000000-0000-4000-8000-000000000001",
-		SessionID:       "session-1",
-		Command:         " \t\n",
+		SessionID: "session-1",
+		Command:   " \t\n",
 	}).Validate()
 	if err == nil {
 		t.Fatal("RuntimeSubmitUserShellCommandRequest accepted a blank command")

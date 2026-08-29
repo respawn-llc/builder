@@ -2633,9 +2633,11 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Args:            "",
+		SessionID: store.Meta().SessionID,
+		RequestID: runtimeids.NewCompactionRequestID(),
+		Admission: runtimeinput.ManualCompactionAdmission{
+			RestorationInput: "/compact",
+		},
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)
 	}
@@ -2646,8 +2648,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
+		SessionID: store.Meta().SessionID,
 	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
 		t.Fatalf("targeted Interrupt while compacting error = %v, want Runtime Command not accepted", err)
 	}
@@ -2845,16 +2846,14 @@ func countUserMessagesWithContent(t *testing.T, store *session.Store, content st
 
 func runtimeControlUserTurnRequest(store *session.Store, _ string, text string) serverapi.RuntimeSubmitUserTurnRequest {
 	return serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Input:           runtimeinput.Text(text),
+		SessionID: store.Meta().SessionID,
+		Input:     runtimeinput.Text(text),
 	}
 }
 
 func runtimeControlShellCommandRequest(store *session.Store, _ string, command string) serverapi.RuntimeSubmitUserShellCommandRequest {
 	return serverapi.RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       store.Meta().SessionID,
-		Command:         command,
+		SessionID: store.Meta().SessionID,
+		Command:   command,
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"core/shared/runtimeinput"
 )
 
-func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T) {
+func TestRuntimeInputRequestsUseTypedInputsWithoutOperationRefs(t *testing.T) {
 	requests := []struct {
 		name      string
 		request   interface{ Validate() error }
@@ -17,35 +17,32 @@ func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T
 		{
 			name: "submit",
 			request: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
-				Input:           runtimeinput.Text("hello"),
+				SessionID: "session-1",
+				Input:     runtimeinput.Text("hello"),
 			},
 			forbidden: []string{"operation_ref", "pre_submit_compaction_operation_ref"},
 		},
 		{
 			name: "shell",
 			request: RuntimeSubmitUserShellCommandRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
-				Command:         "pwd",
+				SessionID: "session-1",
+				Command:   "pwd",
 			},
 			forbidden: []string{"operation_ref"},
 		},
 		{
 			name: "compact",
 			request: RuntimeCompactContextRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
-				Args:            "notes",
+				SessionID: "session-1",
+				RequestID: runtimeids.NewCompactionRequestID(),
+				Admission: runtimeinput.ManualCompactionAdmission{RestorationInput: "/compact notes"},
 			},
 			forbidden: []string{"operation_ref"},
 		},
 		{
 			name: "interrupt",
 			request: RuntimeInterruptRequest{
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-				SessionID:       "session-1",
+				SessionID: "session-1",
 			},
 			forbidden: []string{"target_operation_ref", "pending_operation_refs"},
 		},
@@ -74,8 +71,7 @@ func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T
 
 func TestRuntimeSubmitUserShellCommandRequestRejectsBlankCommand(t *testing.T) {
 	request := RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       "session-1",
+		SessionID: "session-1",
 	}
 	for _, command := range []string{"", " \t\n"} {
 		request.Command = command
