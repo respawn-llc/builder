@@ -280,23 +280,16 @@ func (g *Gateway) authorizeChatSettingsTarget(
 ) error {
 	switch target.TargetKind {
 	case serverapi.ChatSettingsReadTargetLazy:
-		activeProjectID, err := g.activeProjectID(ctx, state)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(*target.ProjectID) != strings.TrimSpace(activeProjectID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		if state == nil || strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(*target.WorkspaceID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		binding, err := g.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, *target.WorkspaceID)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(activeProjectID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
+		return newRoutePolicyExecutor(g).authorizeScopeFacts(
+			ctx,
+			state,
+			apicontract.ScopeProjectWorkspaceBinding,
+			protocol.MethodChatSettingsRead,
+			routeScopeParams{
+				projectID:   *target.ProjectID,
+				workspaceID: *target.WorkspaceID,
+			},
+		)
 	case serverapi.ChatSettingsReadTargetSession:
 		return g.requireSessionInActiveProject(ctx, state, target.Session.String())
 	default:

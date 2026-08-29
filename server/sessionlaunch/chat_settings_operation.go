@@ -62,9 +62,9 @@ func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInp
 			}
 		}
 	}
-	base := session.ChatSettingsState{
-		Agent:    baseAgent,
-		Settings: completeChatSettingsOverrides(baseSettings),
+	base, err := session.ChatSettingsStateFromCompleteSettings(baseAgent, baseSettings)
+	if err != nil {
+		return PreparedChatSettingsOperationResult{}, err
 	}
 	target := base
 	switch operation.Kind {
@@ -81,7 +81,10 @@ func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInp
 			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationAgentLocked), nil
 		}
 		if agent != rawAgent || !selectedAvailable {
-			target = session.ChatSettingsState{Agent: entry.Choice.Role, Settings: completeChatSettingsOverrides(entry.Settings.Baseline)}
+			target, err = session.ChatSettingsStateFromCompleteSettings(entry.Choice.Role, entry.Settings.Baseline)
+			if err != nil {
+				return PreparedChatSettingsOperationResult{}, err
+			}
 		}
 		selectedEntry = entry
 	case serverapi.ChatSettingsMutationSupervisor:
@@ -125,7 +128,4 @@ func rejectedChatSettingsOperation(
 	reason serverapi.ChatSettingsMutationRejectionReason,
 ) PreparedChatSettingsOperationResult {
 	return PreparedChatSettingsOperationResult{State: input.Raw, Effective: input.Effective, Rejection: &serverapi.ChatSettingsMutationRejectedResult{Reason: reason}}
-}
-func completeChatSettingsOverrides(settings session.ChatSettings) *session.ChatSettingsOverrides {
-	return &session.ChatSettingsOverrides{Supervisor: &settings.Supervisor, Thinking: &settings.Thinking, Fast: &settings.Fast, Questions: &settings.Questions, AutoCompaction: &settings.AutoCompaction}
 }
