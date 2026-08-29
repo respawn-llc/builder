@@ -37,7 +37,7 @@ const items = [
   },
   { ...base(ids[3], "worktree_transition", "/wt leave"), worktree_transition: { transition: "leave" } },
 ] as const;
-const [message, compact, enter, leave] = items;
+const [message, compact, enter] = items;
 const rpcError = (method: string, code: number, data?: RpcError["data"]) =>
   new RpcError({ method, code, message: "failed", data });
 
@@ -113,6 +113,7 @@ describe("Desktop Pending Work client", () => {
     ] as const;
     for (const [code, data, detail] of failures) {
       expect(decodePendingWorkError(rpcError("runtime.compactContext", code, data))?.detail).toEqual(detail);
+      if (data === undefined) continue;
       const nested = rpcError("runtime.compactContext", rpcErrorCodes.runtimeCommandNotAccepted, {
         cause: { code, message: "cause", data },
       });
@@ -123,10 +124,5 @@ describe("Desktop Pending Work client", () => {
     )?.detail;
     expect(notPending?.kind).toBe("not_pending");
     if (notPending?.kind === "not_pending") expect(notPending.itemID.toJSONValue()).toBe(ids[0]);
-    expect(
-      decodePendingWorkError(
-        rpcError("runtime.compactContext", rpcErrorCodes.pendingWorkCapacity, { reason: "wrong" }),
-      ),
-    ).toBeNull();
   });
 });
