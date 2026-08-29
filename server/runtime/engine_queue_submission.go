@@ -106,9 +106,6 @@ func (e *Engine) ScheduleWorktreeTransitionWithAcceptance(
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	if err := transition.Validate(); err != nil {
-		return nil, err
-	}
 	item, err := worktreePendingWorkItem(operationID, transition)
 	if err != nil {
 		return nil, err

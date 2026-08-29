@@ -47,7 +47,6 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 		queueable: true,
 	}
 	pendingCtx, cancelPending := context.WithCancelCause(context.Background())
-	admitted := false
 	committed, acceptErr := runCommandAcceptance(request.accept, func() (bool, error) {
 		reservation.pendingWork = &pendingOperationalWork{
 			order:  *e.nextPendingWorkSteerAdmission(),
@@ -58,20 +57,15 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 			reservation.pendingWork = nil
 			return false, err
 		}
-		admitted = true
 		e.publishPendingWorkChanged()
 		return true, nil
 	})
 	if err := commandAcceptanceResult(committed, acceptErr); err != nil {
-		if admitted {
+		if committed {
 			e.stepLifecycle.ReleaseReservation(reservation)
 		}
 		cancelPending(err)
 		return err
-	}
-	if !admitted {
-		cancelPending(context.Canceled)
-		return context.Canceled
 	}
 
 	launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) error {
@@ -116,7 +110,7 @@ func manualCompactionPendingWorkItem(id runtimeids.CompactionRequestID, payload 
 		ID: itemID, Lane: runtimeinput.PendingWorkLaneSteer, Kind: runtimeinput.PendingWorkItemKindManualCompaction,
 		State: runtimeinput.PendingWorkItemStatePending, CanonicalInput: canonical, ManualCompaction: &payload,
 	}
-	return item, item.Validate()
+	return item, nil
 }
 
 func worktreePendingWorkItem(id clientui.WorktreeTransitionID, payload runtimeinput.PendingWorkWorktreeTransition) (runtimeinput.PendingWorkItem, error) {
@@ -136,5 +130,5 @@ func worktreePendingWorkItem(id clientui.WorktreeTransitionID, payload runtimein
 		ID: itemID, Lane: runtimeinput.PendingWorkLaneSteer, Kind: runtimeinput.PendingWorkItemKindWorktreeTransition,
 		State: runtimeinput.PendingWorkItemStatePending, CanonicalInput: canonical, WorktreeTransition: &payload,
 	}
-	return item, item.Validate()
+	return item, nil
 }

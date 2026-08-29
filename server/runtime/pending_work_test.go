@@ -99,7 +99,10 @@ func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 	admittedID := clientui.NewWorktreeTransitionID()
 	_, err = engine.ScheduleWorktreeTransition(t.Context(), admittedID, leave, run)
 	pendingWorkTestNoError(t, err)
-	_, err = engine.RemovePendingWork(t.Context(), pendingWorkTestID(t, admittedID.String()))
+	admittedQueueID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+		return runtimeids.ParseQueueItemID(admittedID.String())
+	})
+	_, err = engine.RemovePendingWork(t.Context(), admittedQueueID)
 	pendingWorkTestNoError(t, err)
 	reached, unblock, results := make(chan struct{}, 2), make(chan struct{}), make(chan error, 2)
 	accept := CommandAcceptance(func(commit func() (bool, error)) (bool, error) { reached <- struct{}{}; <-unblock; return commit() })
@@ -115,8 +118,10 @@ func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 	close(unblock)
 	pendingWorkTestNoError(t, <-results)
 	pendingWorkTestNoError(t, <-results)
-	pendingWorkTestRequire(t, len(pendingWorkTestSnapshot(t, engine).Items) == runtimeinput.PendingWorkCapacity+1,
-		"concurrent Pending Work = %+v", pendingWorkTestSnapshot(t, engine).Items)
+	concurrent := pendingWorkTestSnapshot(t, engine)
+	if len(concurrent.Items) != runtimeinput.PendingWorkCapacity+1 {
+		t.Fatalf("concurrent Pending Work = %+v", concurrent.Items)
+	}
 	releaseMaintenance()
 }
 
@@ -218,6 +223,10 @@ func pendingWorkTestEngine(t *testing.T, cfg Config) *Engine {
 }
 
 func pendingWorkTestHoldMaintenance(t *testing.T, engine *Engine) func() {
+	return pendingWorkTestHoldStep(t, engine, ActiveKindRuntimeMaintenance)
+}
+
+func pendingWorkTestHoldStep(t *testing.T, engine *Engine, kind ActiveKind) func() {
 	t.Helper()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -225,7 +234,7 @@ func pendingWorkTestHoldMaintenance(t *testing.T, engine *Engine) func() {
 	go func() {
 		done <- engine.stepLifecycle.Run(
 			context.Background(),
-			exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance},
+			exclusiveStepOptions{ActiveKind: kind},
 			func(context.Context, string) error {
 				close(started)
 				<-release
@@ -249,13 +258,6 @@ func pendingWorkTestSnapshot(t *testing.T, engine *Engine) runtimeinput.PendingW
 		t.Fatal(err)
 	}
 	return snapshot
-}
-
-func pendingWorkTestID(t *testing.T, value string) runtimeids.QueueItemID {
-	t.Helper()
-	id, err := runtimeids.ParseQueueItemID(value)
-	pendingWorkTestNoError(t, err)
-	return id
 }
 
 func pendingWorkTestContains(pending runtimeinput.PendingWork, id runtimeids.QueueItemID) bool {
@@ -283,26 +285,11 @@ func pendingWorkTestNoError(t *testing.T, err error) {
 	}
 }
 
-func pendingWorkTestRequire(t *testing.T, condition bool, format string, args ...any) {
-	t.Helper()
-	if !condition {
-		t.Fatalf(format, args...)
-	}
-}
-
 func pendingWorkTestWait(t *testing.T, signal <-chan struct{}, name string) {
 	t.Helper()
-	pendingWorkTestWaitValue(t, signal, name)
-}
-
-func pendingWorkTestWaitValue[T any](t *testing.T, signal <-chan T, name string) T {
-	t.Helper()
 	select {
-	case value := <-signal:
-		return value
+	case <-signal:
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatalf("%s did not complete", name)
-		var zero T
-		return zero
 	}
 }
