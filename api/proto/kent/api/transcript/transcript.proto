@@ -857,9 +857,7 @@ message LiveRunFinished {
   };
 }
 
-message PendingWorkReplaced {
-  kent.api.runtime.PendingWork pending_work = 1 [(buf.validate.field).required = true];
-}
+message PendingWorkChanged {}
 
 message PendingWorkTechnicalRestoration {
   string item_id = 1 [
@@ -929,7 +927,6 @@ message Hydration {
   repeated BackgroundActivity background_activities = 14 [(buf.validate.field).repeated.items.required = true];
   optional ContextUsage context_usage = 15;
   optional GoalStatus goal_status = 16;
-  kent.api.runtime.PendingWork pending_work = 17 [(buf.validate.field).required = true];
   option (buf.validate.message).cel = {
     id: "kent.transcript.hydration_goal_status"
     message: "hydration requires goal availability"
@@ -1015,7 +1012,7 @@ message Message {
     WorktreeTransitionOutcome worktree_transition_outcome = 23;
     OperationalDiagnostic operational_diagnostic = 24;
     LiveRunFinished live_run_finished = 25;
-    PendingWorkReplaced pending_work_replaced = 26;
+    PendingWorkChanged pending_work_changed = 26;
     PendingWorkRestored pending_work_restored = 27;
     SessionSettingFeedback session_setting_feedback = 28;
   }
