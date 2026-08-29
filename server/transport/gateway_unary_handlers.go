@@ -287,6 +287,16 @@ func (g *Gateway) authorizeChatSettingsTarget(
 		if strings.TrimSpace(*target.ProjectID) != strings.TrimSpace(activeProjectID) {
 			return serverapi.ErrWorkspaceNotRegistered
 		}
+		if state == nil || strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(*target.WorkspaceID) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
+		binding, err := g.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, *target.WorkspaceID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(activeProjectID) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
 	case serverapi.ChatSettingsReadTargetSession:
 		return g.requireSessionInActiveProject(ctx, state, target.Session.String())
 	default:

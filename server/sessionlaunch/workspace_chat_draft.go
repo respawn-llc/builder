@@ -131,47 +131,26 @@ func (o *WorkspaceChatDraftOwner) ResolveWorkspaceChatDraft(ctx context.Context,
 	return ResolveWorkspaceChatDraft(input, stored)
 }
 func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Context, id string, resolve WorkspaceChatDraftInputResolver, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
-	var err error
-	if id, err = o.workspaceID(id); err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	if resolve == nil {
-		return WorkspaceChatDraft{}, errors.New("workspace Chat draft resolver is required")
-	}
 	if transform == nil {
 		return WorkspaceChatDraft{}, errors.New("workspace Chat draft transform is required")
 	}
-	lane, err := o.lanes.Acquire(ctx, id)
-	if err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	defer lane.Release()
-	input, err := resolve(ctx)
-	if err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
-	if err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	current, err := ResolveWorkspaceChatDraft(input, stored)
-	if err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	current.Draft.Questions = current.PersistedQuestionsPolicy
-	next, err := transform(current)
-	if err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	next.Agent = normalizeWorkspaceChatDraftAgent(next.Agent)
-	if err := validateWorkspaceChatDraftTransform(next, current); err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	replacement := canonicalWorkspaceChatDraft(next, current.Baselines[config.DefaultSubagentRole])
-	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	return next, nil
+	var (
+		next WorkspaceChatDraft
+		err  error
+	)
+	err = o.withWorkspaceChatDraftMutation(ctx, id, resolve, func(
+		mutationCtx context.Context,
+		current WorkspaceChatDraftResolution,
+		stored *WorkspaceChatDraft,
+	) error {
+		next, err = transform(current)
+		if err != nil {
+			return err
+		}
+		next, _, err = o.persistWorkspaceChatDraft(mutationCtx, id, current, stored, next, true)
+		return err
+	})
+	return next, err
 }
 
 func (o *WorkspaceChatDraftOwner) MutateWorkspaceChatSettings(
@@ -180,68 +159,112 @@ func (o *WorkspaceChatDraftOwner) MutateWorkspaceChatSettings(
 	resolve WorkspaceChatDraftInputResolver,
 	operation serverapi.ChatSettingsMutationOperation,
 ) (PreparedChatSettingsOperationResult, bool, error) {
+	var (
+		projected PreparedChatSettingsOperationResult
+		changed   bool
+	)
+	err := o.withWorkspaceChatDraftMutation(ctx, id, resolve, func(
+		mutationCtx context.Context,
+		resolved WorkspaceChatDraftResolution,
+		stored *WorkspaceChatDraft,
+	) error {
+		raw := resolved.Baselines[config.DefaultSubagentRole]
+		if stored != nil {
+			raw = *stored
+			raw.Agent = normalizeWorkspaceChatDraftAgent(raw.Agent)
+		}
+		rawState, err := session.ChatSettingsStateFromCompleteSettings(raw.Agent, session.ChatSettings{
+			Supervisor: raw.Supervisor, Thinking: raw.Thinking, Fast: raw.Fast,
+			Questions: raw.Questions, AutoCompaction: raw.AutoCompaction,
+		})
+		if err != nil {
+			return err
+		}
+		projected, err = ProjectPreparedChatSettingsOperation(PreparedChatSettingsOperationInput{
+			Raw: rawState, Effective: session.ChatSettings{
+				Supervisor: resolved.Draft.Supervisor, Thinking: resolved.Draft.Thinking, Fast: resolved.Draft.Fast,
+				Questions: resolved.Draft.Questions, AutoCompaction: resolved.Draft.AutoCompaction,
+			}, PersistedQuestions: resolved.PersistedQuestionsPolicy, PersistedThinking: resolved.PersistedThinking,
+			Catalog: resolved.Catalog, CompactionMode: resolved.CompactionMode,
+		}, operation)
+		if err != nil || projected.Rejection != nil {
+			return err
+		}
+		settings := projected.State.Settings
+		next := WorkspaceChatDraft{
+			Message:        raw.Message,
+			Agent:          projected.State.Agent,
+			Supervisor:     *settings.Supervisor,
+			Thinking:       *settings.Thinking,
+			Fast:           *settings.Fast,
+			Questions:      *settings.Questions,
+			AutoCompaction: *settings.AutoCompaction,
+		}
+		_, changed, err = o.persistWorkspaceChatDraft(mutationCtx, id, resolved, stored, next, false)
+		return err
+	})
+	return projected, changed, err
+}
+
+func (o *WorkspaceChatDraftOwner) withWorkspaceChatDraftMutation(
+	ctx context.Context,
+	id string,
+	resolve WorkspaceChatDraftInputResolver,
+	mutate func(context.Context, WorkspaceChatDraftResolution, *WorkspaceChatDraft) error,
+) error {
 	var err error
 	if id, err = o.workspaceID(id); err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
+		return err
+	}
+	if resolve == nil {
+		return errors.New("workspace Chat draft resolver is required")
+	}
+	if mutate == nil {
+		return errors.New("workspace Chat draft mutation is required")
 	}
 	lane, err := o.lanes.Acquire(ctx, id)
 	if err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
+		return err
 	}
 	defer lane.Release()
 	input, err := resolve(ctx)
 	if err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
+		return err
 	}
 	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
 	if err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
+		return err
 	}
-	resolved, err := ResolveWorkspaceChatDraft(input, stored)
+	current, err := ResolveWorkspaceChatDraft(input, stored)
 	if err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
+		return err
 	}
-	raw := resolved.Baselines[config.DefaultSubagentRole]
-	if stored != nil {
-		raw = *stored
-		raw.Agent = normalizeWorkspaceChatDraftAgent(raw.Agent)
+	current.Draft.Questions = current.PersistedQuestionsPolicy
+	return mutate(ctx, current, stored)
+}
+
+func (o *WorkspaceChatDraftOwner) persistWorkspaceChatDraft(
+	ctx context.Context,
+	id string,
+	current WorkspaceChatDraftResolution,
+	stored *WorkspaceChatDraft,
+	next WorkspaceChatDraft,
+	writeIfUnchanged bool,
+) (WorkspaceChatDraft, bool, error) {
+	next.Agent = normalizeWorkspaceChatDraftAgent(next.Agent)
+	if err := validateWorkspaceChatDraftTransform(next, current); err != nil {
+		return WorkspaceChatDraft{}, false, err
 	}
-	rawState, err := session.ChatSettingsStateFromCompleteSettings(raw.Agent, session.ChatSettings{Supervisor: raw.Supervisor, Thinking: raw.Thinking, Fast: raw.Fast, Questions: raw.Questions, AutoCompaction: raw.AutoCompaction})
-	if err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
+	replacement := canonicalWorkspaceChatDraft(next, current.Baselines[config.DefaultSubagentRole])
+	changed := stored == nil && replacement != nil ||
+		stored != nil && replacement == nil ||
+		stored != nil && replacement != nil && *stored != *replacement
+	if changed || writeIfUnchanged {
+		if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
+			return WorkspaceChatDraft{}, false, err
+		}
 	}
-	projected, err := ProjectPreparedChatSettingsOperation(PreparedChatSettingsOperationInput{
-		Raw: rawState, Effective: session.ChatSettings{
-			Supervisor: resolved.Draft.Supervisor, Thinking: resolved.Draft.Thinking, Fast: resolved.Draft.Fast,
-			Questions: resolved.Draft.Questions, AutoCompaction: resolved.Draft.AutoCompaction,
-		}, PersistedQuestions: resolved.PersistedQuestionsPolicy, PersistedThinking: resolved.PersistedThinking,
-		Catalog: resolved.Catalog, CompactionMode: resolved.CompactionMode,
-	}, operation)
-	if err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
-	}
-	if projected.Rejection != nil {
-		return projected, false, nil
-	}
-	settings := projected.State.Settings
-	next := WorkspaceChatDraft{
-		Message:        raw.Message,
-		Agent:          projected.State.Agent,
-		Supervisor:     *settings.Supervisor,
-		Thinking:       *settings.Thinking,
-		Fast:           *settings.Fast,
-		Questions:      *settings.Questions,
-		AutoCompaction: *settings.AutoCompaction,
-	}
-	replacement := canonicalWorkspaceChatDraft(next, resolved.Baselines[config.DefaultSubagentRole])
-	if stored == nil && replacement == nil ||
-		stored != nil && replacement != nil && *stored == *replacement {
-		return projected, false, nil
-	}
-	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
-	}
-	return projected, true, nil
+	return next, changed, nil
 }
 
 func (o *WorkspaceChatDraftOwner) ClearWorkspaceChatDraft(ctx context.Context, id string) error {
