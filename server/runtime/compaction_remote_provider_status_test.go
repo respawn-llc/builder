@@ -303,6 +303,39 @@ func TestRemoteCompactionInheritsEffectiveFastMode(t *testing.T) {
 	}
 }
 
+func TestRemoteCompactionPreservesNativeWebSearchDeclaration(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{remoteCompactionReplacement(1_000, 100, 2_500)},
+		caps:                openAIFirstPartyNativeWebSearchCaps(),
+	}
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		Model:          "gpt-5",
+		CompactionMode: "native",
+		WebSearchMode:  "native",
+		EnabledTools:   []toolspec.ID{toolspec.ToolWebSearch},
+	})
+	if err := steerTestActiveStep(engine, "native-web-search-input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist compaction input: %v", err)
+	}
+
+	if err := engine.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("compact context: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if len(client.compactionCalls) != 1 {
+		t.Fatalf("compaction calls = %d, want one", len(client.compactionCalls))
+	}
+	if !client.compactionCalls[0].EnableNativeWebSearch {
+		t.Fatal("remote compaction dropped the native web-search declaration")
+	}
+}
+
 func TestRemoteCompactionTransientRetryReusesUnchangedDispatchState(t *testing.T) {
 	withCompactionRetryDelays(t, []time.Duration{0})
 	store := mustCreateTestSession(t)

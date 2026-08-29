@@ -620,6 +620,19 @@ func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls
 	if len(client.calls) != 4 {
 		t.Fatalf("expected original summary request and three retries, got %d", len(client.calls))
 	}
+	feedbackCount := 0
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			feedbackCount++
+		}
+	}
+	if feedbackCount != 4 {
+		t.Fatalf(
+			"developer-error feedback entries = %d, want one per rejected tool-call response; entries=%+v",
+			feedbackCount,
+			eng.ChatSnapshot().Entries,
+		)
+	}
 	for idx, call := range client.calls {
 		if call.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
 			t.Fatalf("handoff compaction request %d tool choice mode = %q, want automatic", idx, call.ToolChoiceMode)

@@ -188,7 +188,14 @@ func (e *Engine) compactionRequestFromItems(ctx context.Context, items []llm.Res
 	if err != nil {
 		return llm.CompactionRequest{}, err
 	}
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
+	nativeWebSearch, err := e.enableNativeWebSearch(ctx)
+	if err != nil {
+		return llm.CompactionRequest{}, err
+	}
+	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{
+		ChoiceMode:            llm.ToolChoiceModeAutomatic,
+		EnableNativeWebSearch: nativeWebSearch,
+	})
 	if err != nil {
 		return llm.CompactionRequest{}, err
 	}
@@ -315,6 +322,7 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID st
 			return "", toolCallRejectionCount, err
 		}
 		if len(resp.ToolCalls) > 0 {
+			toolCallRejectionCount++
 			if attempt >= localCompactionToolCallRetries {
 				return "", toolCallRejectionCount, errLocalCompactionAttemptedToolCalls
 			}
@@ -323,7 +331,6 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID st
 				return "", toolCallRejectionCount, err
 			}
 			items = append(items, retryItems...)
-			toolCallRejectionCount++
 			continue
 		}
 		if resp.Assistant.Content == nil {
