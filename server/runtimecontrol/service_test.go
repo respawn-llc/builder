@@ -1241,6 +1241,31 @@ func TestServiceLiveWaitUnavailableRuntimeStaysUnavailable(t *testing.T) {
 	}
 }
 
+func TestServiceListPendingWorkReturnsEmptyCollectionForUnavailableRuntime(t *testing.T) {
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	response, err := service.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{
+		SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("ListPendingWork unavailable runtime: %v", err)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal ListPendingWork response: %v", err)
+	}
+	var payload struct {
+		PendingWork struct {
+			Items []json.RawMessage `json:"items"`
+		} `json:"pending_work"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode ListPendingWork response: %v", err)
+	}
+	if payload.PendingWork.Items == nil || len(payload.PendingWork.Items) != 0 {
+		t.Fatalf("Pending Work items = %#v, want encoded empty collection", payload.PendingWork.Items)
+	}
+}
+
 func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})

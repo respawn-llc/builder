@@ -390,6 +390,8 @@ message CreateFailureDetails {
 
 message BlockedDetails {}
 
+message PendingWorkCapacityDetails {}
+
 message StatusRequest {
   string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
@@ -836,6 +838,10 @@ message EnterError {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "server_not_ready"
     }];
+    PendingWorkCapacityDetails pending_work_capacity = 8 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "pending_work_capacity"
+    }];
   }
 }
 
@@ -864,6 +870,10 @@ message LeaveError {
     kent.api.server.ServerNotReadyDetails server_not_ready = 6 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "server_not_ready"
+    }];
+    PendingWorkCapacityDetails pending_work_capacity = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "pending_work_capacity"
     }];
   }
 }

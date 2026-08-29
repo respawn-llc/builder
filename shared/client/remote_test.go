@@ -68,6 +68,45 @@ func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesWorktreePendingWorkCapacity(t *testing.T) {
+	tests := []struct {
+		name   string
+		decode func() error
+	}{
+		{
+			name: "enter",
+			decode: func() error {
+				return worktreeError(&worktreepb.EnterError{
+					Code: "pending_work_capacity",
+					Detail: &worktreepb.EnterError_PendingWorkCapacity{
+						PendingWorkCapacity: &worktreepb.PendingWorkCapacityDetails{},
+					},
+				})
+			},
+		},
+		{
+			name: "leave",
+			decode: func() error {
+				return worktreeError(&worktreepb.LeaveError{
+					Code: "pending_work_capacity",
+					Detail: &worktreepb.LeaveError_PendingWorkCapacity{
+						PendingWorkCapacity: &worktreepb.PendingWorkCapacityDetails{},
+					},
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.decode()
+			var typed *serverapi.PendingWorkCapacityError
+			if !errors.Is(err, serverapi.ErrPendingWorkCapacity) || !errors.As(err, &typed) {
+				t.Fatalf("decoded error = %T %v, want Pending Work capacity", err, err)
+			}
+		})
+	}
+}
+
 func TestProtocolErrorMapsWorkspaceNotRegisteredSentinel(t *testing.T) {
 	workspaceID := "workspace"
 	_, err := decodeGeneratedResult(

@@ -481,7 +481,9 @@ func (s *Service) ListPendingWork(ctx context.Context, req serverapi.RuntimeList
 		return snapshotErr
 	})
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return serverapi.RuntimeListPendingWorkResponse{}, nil
+		return serverapi.RuntimeListPendingWorkResponse{
+			PendingWork: serverapi.PendingWork{Items: []serverapi.PendingWorkItem{}},
+		}, nil
 	}
 	return response, err
 }

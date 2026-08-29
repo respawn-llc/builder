@@ -170,6 +170,12 @@ func worktreeError[Failure worktreeFailure](failure Failure) error {
 		}); ok && typed.GetWorktreeBlocked() != nil {
 			return worktreecontract.ErrWorktreeBlocked
 		}
+	case "pending_work_capacity":
+		if typed, ok := any(failure).(interface {
+			GetPendingWorkCapacity() *worktreepb.PendingWorkCapacityDetails
+		}); ok && typed.GetPendingWorkCapacity() != nil {
+			return &serverapi.PendingWorkCapacityError{}
+		}
 	case "delete_precondition":
 		if typed, ok := any(failure).(interface {
 			GetDeletePrecondition() *worktreepb.DeletePreconditionDetails

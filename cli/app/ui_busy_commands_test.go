@@ -248,8 +248,11 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 		t.Fatal("expected compaction command")
 	}
 	requestID := runtimeids.NewCompactionRequestID()
-	guidance := "tighten  summary"
-	_ = model.inputController().compactCmd(requestID, "  /compact   tighten  summary  ", &guidance)()
+	_ = model.inputController().compactCmd(
+		requestID,
+		"  /compact   tighten  summary  ",
+		optionalCompactionGuidance("tighten  summary"),
+	)()
 	if got := client.compactRequest.RequestID; got != requestID {
 		t.Fatalf("compaction request ID = %v, want %v", got, requestID)
 	}
