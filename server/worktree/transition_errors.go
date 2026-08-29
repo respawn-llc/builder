@@ -55,7 +55,7 @@ func isWorktreeApplied(err error) bool {
 }
 
 func isWorktreeIndeterminate(err error) bool {
-	var target *worktreeIndeterminateError
+	var target interface{ WorktreeTransitionIndeterminate() }
 	return errors.As(err, &target)
 }
 

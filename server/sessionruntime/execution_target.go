@@ -70,15 +70,9 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 	})
 }
 
-type WorktreeTransitionAuthority func(
-	func(context.Context) error,
-) error
+type WorktreeTransitionAuthority func(func(context.Context) error) error
 
-type WorktreeTransitionTargetSync func(
-	context.Context,
-	clientui.SessionExecutionTarget,
-	*session.WorktreeReminderState,
-) error
+type WorktreeTransitionTargetSync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
 
 type WorktreeTransitionExecutor func(
 	context.Context,
@@ -150,7 +144,10 @@ func (a *Authority) RunWorktreeTransition(
 						if err != nil {
 							return err
 						}
-						_, syncErr := syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+						retire, syncErr := syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+						if retire {
+							return &indeterminateWorktreeTargetSyncError{syncErr}
+						}
 						return syncErr
 					},
 					func(outcome clientui.WorktreeTransitionOutcome) error {
@@ -172,6 +169,9 @@ type indeterminateWorktreeTransition interface {
 	WorktreeTransitionIndeterminate()
 }
 
+type indeterminateWorktreeTargetSyncError struct{ error }
+
+func (*indeterminateWorktreeTargetSyncError) WorktreeTransitionIndeterminate() {}
 func worktreeTransitionIsIndeterminate(err error) bool {
 	var indeterminate indeterminateWorktreeTransition
 	return errors.As(err, &indeterminate)

@@ -18,6 +18,10 @@ import (
 	"core/shared/worktreecontract"
 )
 
+type externalIndeterminateWorktreeError struct{ error }
+
+func (*externalIndeterminateWorktreeError) WorktreeTransitionIndeterminate() {}
+
 func TestWorktreeTransitionTerminalCases(t *testing.T) {
 	writeFailure, syncFailure, publicationFailure, rollbackFailure := errors.New("write target"), errors.New("synchronize target"), errors.New("publish Session identity"), errors.New("rollback target")
 	selectorFailure, publicationDiagnostic, rollbackDiagnostic := worktreecontract.NewSelectorError(worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_NOT_FOUND, "missing-worktree", nil), errors.New("publish session identity: "+publicationFailure.Error()), errors.Join(syncFailure, rollbackFailure)
@@ -33,6 +37,7 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 		{name: "selector user-correctable failure", selector: true, outcome: &failed, diagnostic: selectorFailure},
 		{name: "applied target then identity publication failure", outcome: &completed, publication: publicationFailure, surface: publicationDiagnostic},
 		{name: "active rollback failure", finish: syncFailure, rollback: rollbackFailure, surface: rollbackDiagnostic},
+		{name: "runtime target rollback failure", finish: &externalIndeterminateWorktreeError{syncFailure}, rollback: worktreeApplied(rollbackFailure), surface: rollbackDiagnostic},
 		{name: "dormant rollback failure", dormant: true, finish: syncFailure, rollback: rollbackFailure, diagnostic: rollbackDiagnostic},
 	}
 	for _, test := range tests {
