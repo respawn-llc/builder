@@ -144,6 +144,7 @@ func (r currentNodeTestPublicationRunner) StartAgentCurrentNode(
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
 	assignment CurrentNodeAssignmentSteer,
+	_ *WorkflowSessionContinuation,
 	onRetire func(),
 	controller workflowruntime.Controller,
 ) (sessionruntime.ExecutionHandle, error) {

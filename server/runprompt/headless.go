@@ -15,13 +15,16 @@ import (
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
+	"core/server/workflowexecution"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
+	"slices"
 )
 
 var ErrHeadlessGoalSession = errors.New("headless runs cannot continue sessions with goals; clear the goal first")
@@ -38,9 +41,10 @@ type promptHistoryStore interface {
 }
 
 type HeadlessBootstrap struct {
-	SessionLaunch    *sessionlaunch.Service
-	PromptHistory    promptHistoryStore
-	RuntimeAuthority *sessionruntime.Authority
+	SessionLaunch              *sessionlaunch.Service
+	PromptHistory              promptHistoryStore
+	RuntimeAuthority           *sessionruntime.Authority
+	WorkflowSessionReactivator workflowexecution.WorkflowSessionReactivatorWithAcceptance
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
 	ManagedWorktreeBaseDir string
 }
@@ -82,6 +86,84 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
+	if openingExisting && l.boot.WorkflowSessionReactivator != nil && l.boot.RuntimeAuthority != nil {
+		retained := false
+		retainedErr := l.boot.RuntimeAuthority.WithRetainedWorkflowRuntime(
+			ctx,
+			selectedSessionID,
+			func(context.Context, *runtime.Engine) error {
+				retained = true
+				return nil
+			},
+		)
+		if retainedErr != nil &&
+			!errors.Is(retainedErr, serverapi.ErrRuntimeUnavailable) &&
+			!errors.Is(retainedErr, serverapi.ErrRuntimeNoActiveRun) {
+			return nil, retainedErr
+		}
+		if retained {
+			if err := validateRetainedWorkflowAssertions(plan, req.Overrides); err != nil {
+				return nil, err
+			}
+			continuationText := req.Prompt
+			if agentSteer != nil {
+				continuationText = ""
+			}
+			continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuation(continuationText, agentSteer)
+			if continuationErr != nil {
+				return nil, continuationErr
+			}
+			continuation.SetProgressSink(func(event runtime.Event) {
+				PublishRunPromptProgress(progress, event)
+			})
+			var continuationResult workflowexecution.WorkflowSessionContinuationResult
+			var reactivateErr error
+			attempt := runtime.NewCommandAttempt(ctx)
+			acceptedCtx := attempt.Context()
+			if l.boot.WorkflowSessionReactivator != nil {
+				continuationResult, reactivateErr = l.boot.WorkflowSessionReactivator.ReactivateWorkflowSessionWithAcceptance(
+					ctx,
+					selectedSessionID,
+					attempt.Accept,
+					attempt.Context(),
+					continuation,
+				)
+			} else {
+				attempt.Finish()
+				return nil, errors.New("retained Workflow continuation acceptance is unavailable")
+			}
+			if reactivateErr != nil {
+				var historyErr error
+				if continuationResult.Accepted() && l.boot.PromptHistory != nil {
+					historyText := req.Prompt
+					input := continuation.Input()
+					if input.Steer != nil && input.Steer.Message().Content != nil {
+						historyText = *input.Steer.Message().Content
+					}
+					_, historyErr = l.boot.PromptHistory.RecordPromptHistoryEntry(acceptedCtx, metadata.PromptHistoryEntry{
+						SessionID: selectedSessionID.String(),
+						Text:      historyText,
+					})
+				}
+				attempt.Finish()
+				return nil, errors.Join(reactivateErr, historyErr)
+			}
+			sessionName := ""
+			if plan.SessionName != nil {
+				sessionName = *plan.SessionName
+			}
+			return &headlessPromptRuntime{
+				retainedAdmission:    continuationResult,
+				retainedSessionID:    selectedSessionID,
+				retainedContinuation: continuation,
+				technicalContext:     acceptedCtx,
+				technicalCancel:      attempt.Finish,
+				sessionName:          sessionName,
+				warnings:             append(append([]string(nil), result.Warnings...), formatWorkflowResumeDiagnostics(continuationResult.SiblingDiagnostics)...),
+				progress:             progress,
+			}, nil
+		}
+	}
 	runtimePlan, err := l.prepareRuntime(ctx, plan, progress, agentSteer)
 	if err != nil {
 		return nil, err
@@ -101,6 +183,54 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		progress:       progress,
 		sessionStarted: sessionStarted,
 	}, nil
+}
+
+func validateRetainedWorkflowAssertions(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) error {
+	role, err := overrides.AgentRoleOverride()
+	if err != nil {
+		return err
+	}
+	var expectedRole string
+	if plan.Continuation != nil && plan.Continuation.AgentRole != nil {
+		expectedRole = strings.TrimSpace(string(*plan.Continuation.AgentRole))
+	}
+	if expectedRole == "" && plan.ActivationAgentSelection != nil {
+		expectedRole = strings.TrimSpace(plan.ActivationAgentSelection.Agent)
+	}
+	if role.Present {
+		requestedRole := role.Role
+		if role.Default {
+			requestedRole = config.DefaultSubagentRole
+		}
+		if expectedRole != "" && requestedRole != expectedRole {
+			return fmt.Errorf("retained Workflow Session Agent assertion %q conflicts with authoritative Assignee %q", requestedRole, expectedRole)
+		}
+	}
+	expectedModel := plan.ActiveSettings.Model
+	if plan.Locked != nil && strings.TrimSpace(plan.Locked.Model) != "" {
+		expectedModel = plan.Locked.Model
+	}
+	if requestedModel := strings.TrimSpace(overrides.Model); requestedModel != "" &&
+		requestedModel != strings.TrimSpace(expectedModel) {
+		return fmt.Errorf("retained Workflow Session model assertion %q conflicts with locked model %q", requestedModel, expectedModel)
+	}
+	if requestedTools := strings.TrimSpace(overrides.Tools); requestedTools != "" {
+		parsed, err := config.ParseEnabledToolsCSV(requestedTools)
+		if err != nil {
+			return err
+		}
+		expectedTools := plan.EnabledTools
+		if plan.Locked != nil {
+			expectedTools, err = launch.ActiveToolIDsForPlan(plan.ActiveSettings, plan.Source, plan.Locked)
+			if err != nil {
+				return err
+			}
+		}
+		if !slices.Equal(launch.DedupeSortToolIDs(parsed), launch.DedupeSortToolIDs(expectedTools)) {
+			return fmt.Errorf("retained Workflow Session tools assertion %q conflicts with locked tools %v", requestedTools, expectedTools)
+		}
+	}
+	return nil
 }
 
 func agentSteerForRunPrompt(req serverapi.RunPromptRequest, openingExisting bool) (*runtime.AgentSteer, error) {
@@ -290,13 +420,80 @@ func preservePresentAssistantContent(current string, message llm.Message) string
 }
 
 type headlessPromptRuntime struct {
-	plan           *headlessRuntimePlan
-	warnings       []string
-	progress       serverapi.RunPromptProgressSink
-	sessionStarted *serverapi.RunPromptSessionStarted
+	plan                 *headlessRuntimePlan
+	retainedAdmission    workflowexecution.WorkflowSessionContinuationResult
+	retainedSessionID    runtimeids.SessionID
+	retainedContinuation *workflowexecution.WorkflowSessionContinuation
+	sessionName          string
+	technicalContext     context.Context
+	technicalCancel      context.CancelFunc
+	warnings             []string
+	progress             serverapi.RunPromptProgressSink
+	sessionStarted       *serverapi.RunPromptSessionStarted
+}
+
+func (r *headlessPromptRuntime) promptHistoryContext(fallback context.Context) context.Context {
+	if r != nil && r.technicalContext != nil {
+		return r.technicalContext
+	}
+	return fallback
+}
+
+func (r *headlessPromptRuntime) releaseTechnicalContext() {
+	if r == nil || r.technicalCancel == nil {
+		return
+	}
+	r.technicalCancel()
+	r.technicalCancel = nil
+}
+
+func (r *headlessPromptRuntime) promptHistorySessionID() string {
+	if r == nil {
+		return ""
+	}
+	if r.retainedSessionID != (runtimeids.SessionID{}) {
+		return r.retainedSessionID.String()
+	}
+	if r.plan != nil {
+		return r.plan.sessionID
+	}
+	return ""
+}
+
+func (r *headlessPromptRuntime) promptHistoryText(prompt string) string {
+	if r != nil && r.plan != nil {
+		return r.plan.PromptHistoryText(prompt)
+	}
+	if r != nil && r.retainedContinuation != nil {
+		input := r.retainedContinuation.Input()
+		if input.Steer != nil && input.Steer.Message().Content != nil {
+			return *input.Steer.Message().Content
+		}
+		if strings.TrimSpace(input.Text) != "" {
+			return input.Text
+		}
+	}
+	return prompt
+}
+
+func (r *headlessPromptRuntime) closeWithFailure(failed bool) error {
+	if r == nil {
+		return nil
+	}
+	r.releaseTechnicalContext()
+	if r.plan != nil {
+		return r.plan.CloseWithFailure(failed)
+	}
+	if r.retainedContinuation != nil {
+		r.retainedContinuation.CloseProgress()
+	}
+	return nil
 }
 
 func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt string) (serverapi.RunPromptResponse, error) {
+	if r != nil && r.retainedContinuation != nil {
+		return r.submitRetainedWorkflowMessage(ctx, prompt)
+	}
 	if r.plan == nil || r.plan.handle == nil {
 		return serverapi.RunPromptResponse{}, errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("headless runtime is unavailable"))
 	}
@@ -316,6 +513,50 @@ func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt st
 		Result:      r.plan.content,
 		Warnings:    append([]string(nil), r.warnings...),
 	}, err
+}
+
+func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Context, prompt string) (serverapi.RunPromptResponse, error) {
+	if r == nil || r.retainedContinuation == nil || r.retainedSessionID.IsZero() {
+		return serverapi.RunPromptResponse{}, errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("retained workflow runtime is unavailable"))
+	}
+	_, admissionErr := r.retainedAdmission.WaitAdmission(ctx)
+	if admissionErr != nil {
+		r.retainedContinuation.CloseProgress()
+		return serverapi.RunPromptResponse{
+			SessionID:   r.retainedSessionID.String(),
+			SessionName: firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
+			Warnings:    append([]string(nil), r.warnings...),
+		}, errors.Join(admissionErr, r.retainedAdmission.DiagnosticsError())
+	}
+	turn, turnErr := r.retainedContinuation.WaitTurn(ctx)
+	_, exactErr := r.retainedContinuation.WaitExact(ctx)
+	r.retainedContinuation.CloseProgress()
+	content := ""
+	if turn.FinalAnswer != nil && turn.FinalAnswer.Content != nil {
+		content = *turn.FinalAnswer.Content
+	}
+	err := errors.Join(exactErr, turnErr, r.retainedAdmission.DiagnosticsError())
+	return serverapi.RunPromptResponse{
+		SessionID:   r.retainedSessionID.String(),
+		SessionName: firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
+		Result:      content,
+		Warnings:    append([]string(nil), r.warnings...),
+	}, err
+}
+
+func firstNonBlank(primary, fallback string) string {
+	if strings.TrimSpace(primary) != "" {
+		return primary
+	}
+	return fallback
+}
+
+func formatWorkflowResumeDiagnostics(diagnostics []workflowexecution.WorkflowSessionResumeDiagnostic) []string {
+	formatted := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		formatted = append(formatted, diagnostic.Error())
+	}
+	return formatted
 }
 
 func (r *headlessPromptRuntime) publishSessionStarted() {

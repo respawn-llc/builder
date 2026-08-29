@@ -19,9 +19,6 @@ import (
 // context must be prepared. Individual prompt families are owned here and by
 // meta_context.go; request entry points must not append those prompts directly.
 func (e *Engine) ensureMetaContextForRequest(ctx context.Context, stepID string) error {
-	if err := e.preflightWorkflowResumeAssignment(); err != nil {
-		return err
-	}
 	if !e.baseMetaInjected {
 		pendingRebind := e.store.Meta().RebindReminder != nil
 		if err := e.steerFreshMetaContext(ctx, stepID); err != nil {
@@ -42,6 +39,32 @@ func (e *Engine) ensureMetaContextForRequest(ctx context.Context, stepID string)
 		return err
 	}
 	return e.materializePendingSessionRebindReminder(stepID)
+}
+
+func (e *Engine) InitializeWorkflowAssignment(ctx context.Context) error {
+	if e == nil || e.closed.Load() {
+		return ErrEngineClosed
+	}
+	if !e.workflowPromptActive() {
+		return errors.New("workflow prompt is unavailable")
+	}
+	return e.withResolvedWorkflowMetaContext(
+		ctx,
+		workflowTaskPromptTriggerTaskDelivery,
+		workflowMetaContextDeliveryConsume,
+		baseMetaContextBuildOptions(true),
+		func(options metaContextBuildOptions, shouldInject bool) error {
+			if !shouldInject {
+				return nil
+			}
+			metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(options)
+			if err != nil {
+				return err
+			}
+			_, err = e.steerDormantMetaContextBuildResult(metaResult)
+			return err
+		},
+	)
 }
 
 func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error {
@@ -96,30 +119,6 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 		return e.store.SetHeadlessActive(e.cfg.HeadlessMode)
 	}
 	return nil
-}
-
-func (e *Engine) preflightWorkflowResumeAssignment() error {
-	if !e.workflowPromptActive() {
-		return nil
-	}
-	delivery := e.currentNodeExecutionSnapshot().delivery
-	if delivery == nil {
-		return errors.New("workflow prompt delivery state is unavailable")
-	}
-	trigger := delivery.trigger(workflowTaskPromptTriggerTaskDelivery)
-	if trigger != workflowTaskPromptTriggerResumeDelivery {
-		return nil
-	}
-	prompt, configured := e.workflowPrompt()
-	if !configured {
-		return errors.New("workflow prompt is unavailable")
-	}
-	_, _, err := selectWorkflowTaskPrompt(
-		e.transcriptRuntimeState().SnapshotItems(),
-		prompt.Identity,
-		trigger,
-	)
-	return err
 }
 
 func (e *Engine) ensureMetaContextForCompaction(ctx context.Context, stepID string) error {
@@ -192,10 +191,6 @@ func latestActiveMetaContextForSlot(items []llm.ResponseItem, kind metaContextKi
 }
 
 type workflowTaskPromptTrigger uint8
-
-var errWorkflowResumeAssignmentUnavailable = errors.New(
-	"workflow Resume requires the current Node assignment in model context",
-)
 
 const (
 	workflowTaskPromptTriggerUnknown workflowTaskPromptTrigger = iota
@@ -301,10 +296,13 @@ func selectWorkflowTaskPrompt(
 	}
 	current, hasWorkflowPrompt := latestActiveMetaContextForSlot(items, metaContextKindWorkflow)
 	if trigger == workflowTaskPromptTriggerResumeDelivery {
-		if !hasWorkflowPrompt || !sameMetaContextIdentity(current, desired) {
-			return prompts.WorkflowTaskPromptInitialAssignment, false, errWorkflowResumeAssignmentUnavailable
+		if !hasWorkflowPrompt {
+			return prompts.WorkflowTaskPromptInitialAssignment, true, nil
 		}
-		return prompts.WorkflowTaskPromptInitialAssignment, false, nil
+		if sameMetaContextIdentity(current, desired) {
+			return prompts.WorkflowTaskPromptInitialAssignment, false, nil
+		}
+		return prompts.WorkflowTaskPromptReassignment, true, nil
 	}
 	if !hasWorkflowPrompt {
 		return prompts.WorkflowTaskPromptInitialAssignment, true, nil

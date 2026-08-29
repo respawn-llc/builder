@@ -47,6 +47,7 @@ type CurrentNodeAgentRunner interface {
 		workflow.CurrentNodeReference,
 		workflowruntime.TaskPromptDelivery,
 		CurrentNodeAssignmentSteer,
+		*WorkflowSessionContinuation,
 		func(),
 		workflowruntime.Controller,
 	) (sessionruntime.ExecutionHandle, error)

@@ -669,6 +669,7 @@ func (e *Engine) emitQueuedUserMessageStatus(
 	status QueuedUserMessageStatus,
 	reason QueuedUserMessageFailureReason,
 	restore bool,
+	stepID *string,
 ) {
 	if e == nil || item.ID == "" {
 		return
@@ -690,7 +691,11 @@ func (e *Engine) emitQueuedUserMessageStatus(
 	if status == QueuedUserMessageAccepted {
 		event.Text = text
 	}
-	if err := e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event}); err != nil {
+	if err := e.emitRaw(Event{
+		Kind:                    EventQueuedUserMessageStatus,
+		StepID:                  cloneOptionalStepID(stepID),
+		QueuedUserMessageStatus: event,
+	}); err != nil {
 		e.surfaceRunError(fmt.Errorf("publish queued user message status: %w", err))
 	}
 }
@@ -726,7 +731,7 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 	messages := make([]QueuedUserMessage, 0, len(pending))
 	for _, item := range pending {
 		messages = append(messages, item)
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true, nil)
 	}
 	if len(pending) != 0 {
 		e.publishPendingWorkSnapshot()

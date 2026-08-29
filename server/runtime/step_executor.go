@@ -296,8 +296,10 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
-				if err := s.commitPendingUserSteer(stepID, options, &mismatchWarningCommitted); err != nil {
-					return llm.Request{}, err
+				if !(stepNo == 1 && options.SkipPendingUserOnFirstDispatch) {
+					if err := s.commitPendingUserSteer(stepID, options, &mismatchWarningCommitted); err != nil {
+						return llm.Request{}, err
+					}
 				}
 				return e.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
 			},

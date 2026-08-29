@@ -10,9 +10,10 @@ import (
 )
 
 type exclusiveStepOptions struct {
-	EmitRunState bool
-	ActiveKind   ActiveKind
-	Reservation  *exclusiveStepReservation
+	EmitRunState  bool
+	ActiveKind    ActiveKind
+	Reservation   *exclusiveStepReservation
+	OnStepStarted func(string)
 }
 
 type exclusiveStepReservationKind uint8
@@ -68,8 +69,8 @@ type backgroundNoticeScheduler interface {
 type contextCompactor interface {
 	CompactContextWithAcceptance(ctx context.Context, requestID runtimeids.CompactionRequestID, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	CompactContextAdmissionWithAcceptance(ctx context.Context, requestID runtimeids.CompactionRequestID, admission runtimeinput.ManualCompactionAdmission, accept CommandAcceptance) (session.CommitReceipt, error)
-	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
-	CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error)
+	CompactContextForWorkflowContinuation(ctx context.Context, stepHooks ...func(string)) (session.CommitReceipt, error)
+	CompactContextForWorkflowPostCompletion(ctx context.Context, stepHooks ...func(string)) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithAcceptance(ctx context.Context, text string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
@@ -81,6 +82,7 @@ type stepLoopOptions struct {
 	ReviewerClient                 *observedModelClient
 	RefreshReviewerConfigOnResolve bool
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
+	SkipPendingUserOnFirstDispatch bool
 }
 
 func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {

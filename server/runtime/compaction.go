@@ -10,6 +10,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -99,15 +100,15 @@ func (e *Engine) CompactContextForPreSubmit(ctx context.Context, text string) er
 	return err
 }
 
-func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context) error {
+func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context, stepHooks ...func(string)) error {
 	e.ensureOrchestrationCollaborators()
-	_, err := e.compactionFlow.CompactContextForWorkflowContinuation(ctx)
+	_, err := e.compactionFlow.CompactContextForWorkflowContinuation(ctx, stepHooks...)
 	return err
 }
 
-func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error) {
+func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context, stepHooks ...func(string)) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextForWorkflowPostCompletion(ctx)
+	return e.compactionFlow.CompactContextForWorkflowPostCompletion(ctx, stepHooks...)
 }
 
 // SubmitWorkflowContinuationTurn runs the existing lazy CAC operation and
@@ -115,15 +116,60 @@ func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) (s
 // turn succeeds. A failed target attempt therefore preserves the boundary for
 // the existing Resume path.
 func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (WorkflowTurnResult, error) {
+	return e.submitWorkflowContinuationTurn(ctx, nil, "", nil)
+}
+
+func (e *Engine) SubmitWorkflowContinuationTurnWithInput(
+	ctx context.Context,
+	currentNode workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+) (WorkflowTurnResult, error) {
+	return e.submitWorkflowContinuationTurn(ctx, &currentNode, text, steer)
+}
+
+func (e *Engine) SubmitWorkflowContinuationTurnWithInputAndStepHook(
+	ctx context.Context,
+	currentNode workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+	onStepStarted func(string),
+) (WorkflowTurnResult, error) {
+	return e.submitWorkflowContinuationTurnWithStepHook(ctx, &currentNode, text, steer, onStepStarted)
+}
+
+func (e *Engine) submitWorkflowContinuationTurn(
+	ctx context.Context,
+	currentNode *workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+) (WorkflowTurnResult, error) {
+	return e.submitWorkflowContinuationTurnWithStepHook(ctx, currentNode, text, steer, nil)
+}
+
+func (e *Engine) submitWorkflowContinuationTurnWithStepHook(
+	ctx context.Context,
+	currentNode *workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+	onStepStarted func(string),
+) (WorkflowTurnResult, error) {
 	if e == nil {
 		return WorkflowTurnResult{}, errors.New("runtime engine is required")
 	}
 	if !e.compactionRuntimeState().WorkflowPostCompletionBoundary() {
-		if err := e.CompactContextForWorkflowContinuation(ctx); err != nil {
+		err := e.CompactContextForWorkflowContinuation(ctx, onStepStarted)
+		if err != nil {
 			return WorkflowTurnResult{}, err
 		}
 	}
-	result, err := e.SubmitWorkflowTurn(ctx)
+	var result WorkflowTurnResult
+	var err error
+	if currentNode == nil {
+		result, err = e.SubmitWorkflowTurn(ctx)
+	} else {
+		result, err = e.submitWorkflowTurnWithStepHook(ctx, currentNode, text, steer, onStepStarted)
+	}
 	if err != nil {
 		return WorkflowTurnResult{}, err
 	}
@@ -292,11 +338,18 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 	})
 }
 
-func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
-	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, nil, false)
+func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context, stepHooks ...func(string)) (session.CommitReceipt, error) {
+	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, nil, false, stepHooks...)
 }
 
-func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context, stepHooks ...func(string)) (session.CommitReceipt, error) {
+	var stepHook func(string)
+	if len(stepHooks) > 1 {
+		panic("workflow post-completion compaction received multiple step-start hooks")
+	}
+	if len(stepHooks) == 1 {
+		stepHook = stepHooks[0]
+	}
 	return c.compactContext(
 		ctx,
 		ActiveKindCompaction,
@@ -309,10 +362,11 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 		nil,
 		false,
 		nil,
+		stepHook,
 	)
 }
 
-func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), accept CommandAcceptance, requireEligibility bool, stepHooks ...func(string)) (session.CommitReceipt, error) {
 	if requireEligibility {
 		if snapshot := c.steps.Snapshot(); snapshot != nil &&
 			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
@@ -327,7 +381,7 @@ func (c *defaultContextCompactor) compactManualContext(ctx context.Context, inst
 		return session.CommitReceipt{}, err
 	}
 	defer c.steps.ReleaseReservation(reservation)
-	return c.compactContext(ctx, ActiveKindCompaction, compactionModeManual, nil, instructions, true, reservation, onActive, accept, requireEligibility, nil)
+	return c.compactContext(ctx, ActiveKindCompaction, compactionModeManual, nil, instructions, true, reservation, onActive, accept, requireEligibility, nil, stepHooks...)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithAcceptance(ctx context.Context, text string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
@@ -387,12 +441,20 @@ func (c *defaultContextCompactor) compactContext(
 	accept CommandAcceptance,
 	requireEligibility bool,
 	preSubmitText *string,
+	stepHooks ...func(string),
 ) (session.CommitReceipt, error) {
 	e := c.engine
 	e.pauseQueuedUserAutoDrain()
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
-	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
+	var onStepStarted func(string)
+	if len(stepHooks) > 1 {
+		panic("compact context received multiple step-start hooks")
+	}
+	if len(stepHooks) == 1 {
+		onStepStarted = stepHooks[0]
+	}
+	err := runExclusiveStepWhenIdleWithStepHook(ctx, c.steps, activeKind, reservation, onStepStarted, func(stepCtx context.Context, stepID string) error {
 		if reservation != nil && reservation.pendingManualCompaction != nil {
 			e.publishPendingWorkSnapshot()
 		}

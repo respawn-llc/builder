@@ -61,7 +61,25 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 			_ = closeFn()
 		}
 	}()
-	return runPrompt(ctx, runClient, workspaceConfig.Options, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
+	runOptions := workspaceConfig.Options
+	if strings.TrimSpace(opts.SessionID) != "" && strings.TrimSpace(opts.ThinkingLevel) != "" {
+		controls, closeControls, controlErr := startRuntimeControlClient(ctx, workspaceConfig.Options)
+		if controlErr != nil {
+			return RunPromptResult{}, controlErr
+		}
+		thinkingErr := controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{
+			SessionID: strings.TrimSpace(opts.SessionID),
+			Level:     strings.TrimSpace(opts.ThinkingLevel),
+		})
+		if closeControls != nil {
+			thinkingErr = errors.Join(thinkingErr, closeControls())
+		}
+		if thinkingErr != nil {
+			return RunPromptResult{}, thinkingErr
+		}
+		runOptions.ThinkingLevel = ""
+	}
+	return runPrompt(ctx, runClient, runOptions, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
 }
 
 func runnerRequestFromOptions(opts Options) runner.Request {

@@ -67,6 +67,18 @@ func startRunPromptClientWithWorkspaceConfig(ctx context.Context, workspaceConfi
 }
 
 func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontract.RuntimeLiveControlService, func() error, error) {
+	remote, closeFn, err := startRuntimeControlRemote(ctx, opts)
+	if err != nil {
+		return nil, closeFn, err
+	}
+	return remote, closeFn, nil
+}
+
+func startRuntimeControlClient(ctx context.Context, opts Options) (apicontract.RuntimeControlService, func() error, error) {
+	return startRuntimeControlRemote(ctx, opts)
+}
+
+func startRuntimeControlRemote(ctx context.Context, opts Options) (*client.Remote, func() error, error) {
 	cfg, err := loadRemoteAttachConfig(opts)
 	if err != nil {
 		return nil, nil, err

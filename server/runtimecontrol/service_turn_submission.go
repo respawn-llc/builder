@@ -8,6 +8,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/workflowexecution"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -18,6 +19,23 @@ import (
 type userTurnProjection struct {
 	ExecutionText string
 	HistoryText   string
+}
+
+func runtimeControlResponseFromWorkflowTurn(result runtime.UserTurnResult) serverapi.RuntimeSubmitUserTurnResponse {
+	response := serverapi.RuntimeSubmitUserTurnResponse{
+		ResultKind: clientui.UserTurnResultKindNoFinal,
+	}
+	switch result.Kind {
+	case runtime.UserTurnResultAssistantFinal:
+		response.ResultKind = clientui.UserTurnResultKindAssistantFinal
+		if result.FinalAnswer != nil && result.FinalAnswer.Content != nil {
+			response.Message = result.FinalAnswer.Content
+		}
+	case runtime.UserTurnResultSilentFinal:
+		response.ResultKind = clientui.UserTurnResultKindSilentFinal
+		response.Message = textutil.Value("")
+	}
+	return response
 }
 
 func queuedUserTurnResponse(compacted bool, queueItemID string) serverapi.RuntimeSubmitUserTurnResponse {
@@ -66,7 +84,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		if err != nil {
 			return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
 		}
-		attempt := newRuntimeCommandAttempt(ctx)
+		attempt := runtime.NewCommandAttempt(ctx)
 		defer attempt.Finish()
 		response, commandErr := s.submitUserTurn(attempt, request, projection, req)
 		if commandErr == nil {
@@ -77,7 +95,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 }
 
 func (s *Service) submitUserTurn(
-	attempt *runtimeCommandAttempt,
+	attempt *runtime.CommandAttempt,
 	request sessionUserTurnRequest,
 	projection userTurnProjection,
 	req serverapi.RuntimeSubmitUserTurnRequest,
@@ -166,6 +184,7 @@ func (s *Service) submitUserTurn(
 			runTurn,
 		)
 	}
+	workflowHistoryRecorded := false
 	err = executeTurn()
 	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
 		preparing := false
@@ -181,38 +200,44 @@ func (s *Service) submitUserTurn(
 				return runTurn(runCtx, engine, attempt.Accept)
 			})
 		case s.reactivator != nil:
-			var workflowState *runtime.WorkflowSessionState
-			stateErr := s.withRuntime(attempt.Context(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-				var err error
-				workflowState, err = engine.WorkflowSessionState()
-				return err
-			})
-			if stateErr != nil {
-				err = stateErr
+			var reactivateErr error
+			continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuation(projection.ExecutionText, nil)
+			if continuationErr != nil {
+				err = continuationErr
 				break
 			}
-			if workflowState == nil {
-				err = errors.New("retained Workflow Session has no Current Node binding")
-				break
+			var continuationResult workflowexecution.WorkflowSessionContinuationResult
+			continuationResult, reactivateErr = s.reactivator.ReactivateWorkflowSessionWithAcceptance(
+				attempt.Caller(),
+				sessionID,
+				attempt.Accept,
+				attempt.Context(),
+				continuation,
+			)
+			if reactivateErr == nil {
+				if attempt.Accepted() {
+					s.recordAcceptedUserTurnHistory(request, projection)
+					workflowHistoryRecorded = true
+				}
+				_, admissionErr := continuationResult.WaitAdmission(attempt.Caller())
+				if admissionErr != nil {
+					err = admissionErr
+					break
+				}
+				turn, turnErr := continuation.WaitTurn(attempt.Caller())
+				_, exactErr := continuation.WaitExact(attempt.Caller())
+				response = runtimeControlResponseFromWorkflowTurn(turn)
+				err = exactErr
+				if err == nil {
+					err = turnErr
+				}
 			}
-			handle, reactivateErr := s.reactivator.ReactivateWorkflowSession(attempt.Context(), sessionID)
 			if reactivateErr != nil {
 				err = reactivateErr
-			} else {
-				_, err = s.authority.ValidateLiveWorkflowAgentExecution(
-					handle,
-					sessionID,
-					workflowState.CurrentNode,
-				)
-				if err == nil {
-					err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-						return runTurn(runCtx, engine, attempt.Accept)
-					})
-				}
 			}
 		}
 	}
-	if attempt.Accepted() {
+	if attempt.Accepted() && !workflowHistoryRecorded {
 		s.recordAcceptedUserTurnHistory(request, projection)
 	}
 	return response, err
@@ -235,7 +260,7 @@ func (s *Service) runPreSubmitCompaction(
 	engine *runtime.Engine,
 	text string,
 ) (bool, error) {
-	attempt := newRuntimeCommandAttempt(ctx)
+	attempt := runtime.NewCommandAttempt(ctx)
 	defer attempt.Finish()
 	receipt, err := engine.CompactContextForPreSubmitWithAcceptance(attempt.Context(), text, attempt.Accept)
 	return receipt.Committed, err

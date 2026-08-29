@@ -13,6 +13,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -535,7 +536,7 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 			if queueErr != nil {
 				return false, queueErr
 			}
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false, nil)
 			return true, nil
 		})
 		if err := commandAcceptanceResult(committed, err); err != nil {
@@ -569,7 +570,7 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 				return false, queueErr
 			}
 			item = queuedItem
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false, nil)
 			e.outputMutationMu.Unlock()
 			return true, nil
 		})
@@ -609,7 +610,7 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 		if queueErr != nil {
 			return false, queueErr
 		}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false, nil)
 		return true, nil
 	})
 	if err := commandAcceptanceResult(committed, err); err != nil {
@@ -756,6 +757,44 @@ func (e *Engine) submitUserMessageWithOutcome(ctx context.Context, text string, 
 }
 
 func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (result WorkflowTurnResult, err error) {
+	return e.submitWorkflowTurn(ctx, nil, "", nil)
+}
+
+func (e *Engine) SubmitWorkflowTurnWithInput(
+	ctx context.Context,
+	currentNode workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+) (result WorkflowTurnResult, err error) {
+	return e.submitWorkflowTurnWithStepHook(ctx, &currentNode, text, steer, nil)
+}
+
+func (e *Engine) SubmitWorkflowTurnWithInputAndStepHook(
+	ctx context.Context,
+	currentNode workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+	onStepStarted func(string),
+) (WorkflowTurnResult, error) {
+	return e.submitWorkflowTurnWithStepHook(ctx, &currentNode, text, steer, onStepStarted)
+}
+
+func (e *Engine) submitWorkflowTurn(
+	ctx context.Context,
+	expectedCurrentNode *workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+) (result WorkflowTurnResult, err error) {
+	return e.submitWorkflowTurnWithStepHook(ctx, expectedCurrentNode, text, steer, nil)
+}
+
+func (e *Engine) submitWorkflowTurnWithStepHook(
+	ctx context.Context,
+	expectedCurrentNode *workflow.CurrentNodeReference,
+	text string,
+	steer *AgentSteer,
+	onStepStarted func(string),
+) (result WorkflowTurnResult, err error) {
 	if !e.currentNodeExecutionActive() {
 		return WorkflowTurnResult{}, errors.New("workflow turn requires an active Current Node execution")
 	}
@@ -764,20 +803,64 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (result WorkflowTurnRes
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn, OnStepStarted: onStepStarted}, func(stepCtx context.Context, stepID string) error {
+		if expectedCurrentNode != nil {
+			config, configured := e.currentNodeExecutionConfig()
+			if !configured || !config.Instructions.CurrentNode.Equal(*expectedCurrentNode) {
+				return fmt.Errorf("workflow continuation Current Node %v is no longer active", *expectedCurrentNode)
+			}
+			if e.WorkflowTerminalState().Completed {
+				return fmt.Errorf("workflow continuation Current Node %v is already complete", *expectedCurrentNode)
+			}
+		}
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
-		msg, runErr := e.runStepLoop(stepCtx, stepID)
-		result.Assistant = msg
+		if expectedCurrentNode != nil {
+			var message llm.Message
+			if steer != nil {
+				message = steer.Message()
+			} else {
+				message = llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}
+			}
+			receipt, steerErr := e.steerWithCommitReceipt(stepID, steerUserMessageWithFlushIntent(message))
+			if steerErr != nil {
+				return steerErr
+			}
+			if !receipt.Committed {
+				return errors.New("workflow continuation input was not committed")
+			}
+		}
+		msgResult, runErr := e.runStepLoopWithWorkflowOptions(stepCtx, stepID, stepLoopOptions{
+			SkipPendingUserOnFirstDispatch: expectedCurrentNode != nil,
+		})
+		outcome := userTurnResultFromStepLoop(msgResult)
+		if outcome.Kind == UserTurnResultAssistantFinal && outcome.FinalAnswer != nil {
+			e.recordLiveRunAssistantFinalAnswer(stepID, *outcome.FinalAnswer)
+		}
+		if msgResult.FinalAnswer != nil {
+			result.Assistant = *msgResult.FinalAnswer
+		}
+		if terminal := e.WorkflowTerminalState(); terminal.Completed &&
+			terminal.StepID != nil && terminal.StepID.String() == stepID {
+			completion := terminal.Completion
+			result.Completion = &completion
+		}
 		return runErr
 	})
-	if terminal := e.WorkflowTerminalState(); terminal.Completed {
-		completion := terminal.Completion
-		result.Completion = &completion
-	}
 	e.surfaceRunError(err)
 	return result, err
+}
+
+func (e *Engine) runStepLoopWithWorkflowOptions(
+	ctx context.Context,
+	stepID string,
+	options stepLoopOptions,
+) (stepLoopResult, error) {
+	options.ReviewerFrequency = e.ReviewerFrequency()
+	options.ReviewerClient = e.reviewerRuntimeState().Client()
+	options.RefreshReviewerConfigOnResolve = true
+	return e.stepFlow.RunStepLoopWithOptions(ctx, stepID, options)
 }
 
 func (e *Engine) SubmitUserShellCommand(ctx context.Context, command string) (result tools.Result, err error) {

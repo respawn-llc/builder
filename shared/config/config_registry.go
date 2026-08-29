@@ -1324,7 +1324,7 @@ func (toolsSetting) applyEnv(lookup envLookup, state *settingsState, sources map
 	if !ok {
 		return nil
 	}
-	enabled, err := parseEnabledToolsCSV(value)
+	enabled, err := ParseEnabledToolsCSV(value)
 	if err != nil {
 		return fmt.Errorf("invalid KENT_TOOLS: %w", err)
 	}
@@ -1340,7 +1340,7 @@ func (toolsSetting) applyCLI(opts LoadOptions, state *settingsState, sources map
 	if err != nil || !ok {
 		return err
 	}
-	enabled, err := parseEnabledToolsCSV(value)
+	enabled, err := ParseEnabledToolsCSV(value)
 	if err != nil {
 		return fmt.Errorf("invalid tools flag: %w", err)
 	}

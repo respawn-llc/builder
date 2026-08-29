@@ -283,6 +283,9 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 			if options.OnEvent != nil {
 				options.OnEvent(event)
 			}
+			if handler, ok := resource.selectedProgress.Load().(selectedProgressHandler); ok && handler.fn != nil {
+				handler.fn(event)
+			}
 		},
 	}
 	return runtimewire.NewRuntimeWiringWithBackground(

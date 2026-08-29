@@ -172,7 +172,7 @@ func (e *Engine) ApplyWorkflowAgentCompletion(
 		if err != nil {
 			return err
 		}
-		e.recordWorkflowTerminalState(workflowCompletionSource(execution.CompletionMode), result)
+		e.recordWorkflowTerminalState(workflowCompletionSource(execution.CompletionMode), result, stepID)
 		return nil
 	})
 	return result, err

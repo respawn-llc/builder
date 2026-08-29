@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -335,18 +337,6 @@ func (r staticRuntimeControlWorkflowTaskResolver) SessionHasWorkflowTask(context
 	return r.workflow, nil
 }
 
-type runtimeControlWorkflowSessionReactivatorFunc func(
-	context.Context,
-	runtimeids.SessionID,
-) (sessionruntime.ExecutionHandle, error)
-
-func (f runtimeControlWorkflowSessionReactivatorFunc) ReactivateWorkflowSession(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-) (sessionruntime.ExecutionHandle, error) {
-	return f(ctx, sessionID)
-}
-
 type runtimeControlFakeClient struct {
 	mu                  sync.Mutex
 	responses           []llm.Response
@@ -354,6 +344,37 @@ type runtimeControlFakeClient struct {
 	capabilities        llm.ProviderCapabilities
 	calls               int
 	compactionCalls     int
+}
+
+type runtimeControlAssignmentOrderClient struct {
+	assigned atomic.Bool
+	called   atomic.Bool
+	mu       sync.Mutex
+	request  llm.Request
+}
+
+func (c *runtimeControlAssignmentOrderClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
+	c.called.Store(true)
+	c.mu.Lock()
+	c.request = request
+	c.mu.Unlock()
+	if !c.assigned.Load() {
+		return llm.Response{}, errors.New("provider request preceded Workflow assignment")
+	}
+	return llm.Response{}, &llm.APIStatusError{
+		StatusCode: 400,
+		Body:       "provider stopped after assignment",
+	}
+}
+
+func (c *runtimeControlAssignmentOrderClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return runtimeControlOpenAICapabilities, nil
+}
+
+func (c *runtimeControlAssignmentOrderClient) requestSnapshot() llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.request
 }
 
 type blockingRuntimeControlClient struct {
@@ -760,183 +781,132 @@ func finalResponseRuntimeControlClient() *runtimeControlFakeClient {
 	}}}
 }
 
-func TestServiceSubmitUserTurnReactivatesRetainedWorkflowSessionBeforeSubmitting(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(
-		t,
-		finalResponseRuntimeControlClient(),
-		nil,
-		runtime.Config{Model: "gpt-5"},
-	)
+type runtimeControlWorkflowReactivatorFunc func(
+	context.Context,
+	runtimeids.SessionID,
+	runtime.CommandAcceptance,
+	context.Context,
+	*workflowexecution.WorkflowSessionContinuation,
+) (workflowexecution.WorkflowSessionContinuationResult, error)
+
+func (f runtimeControlWorkflowReactivatorFunc) ReactivateWorkflowSessionWithAcceptance(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	accept runtime.CommandAcceptance,
+	acceptedCtx context.Context,
+	continuation *workflowexecution.WorkflowSessionContinuation,
+) (workflowexecution.WorkflowSessionContinuationResult, error) {
+	return f(ctx, sessionID, accept, acceptedCtx, continuation)
+}
+
+func TestServiceSubmitUserTurnRetainedWorkflowReinjectsAssignmentBeforeProvider(t *testing.T) {
+	provider := &runtimeControlAssignmentOrderClient{}
+	store, engine, service := newRuntimeControlTestService(t, provider, nil, runtime.Config{Model: "gpt-5"})
 	config := runtimeControlExactExecution(t)
-	workflowRef := sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "runtime-control-test-project",
-		WorkflowID:  runtimeids.NewWorkflowID(),
-		CurrentNode: config.Instructions.CurrentNode,
-	}
-	config.Instructions.WorkflowID = workflowRef.WorkflowID
+	config.Instructions.WorkflowID = runtimeids.NewWorkflowID()
+	config.CompletionMode = workflowruntime.CompletionModeUnstructuredOutput
 	binding, err := engine.BindCurrentNodeExecution(config)
 	if err != nil {
 		t.Fatalf("bind retained Workflow activation: %v", err)
 	}
 	bindingClosed := false
-	var execution sessionruntime.ExecutionHandle
 	t.Cleanup(func() {
-		if execution != nil {
-			execution.RequestStop()
-			_ = execution.Close(context.Background())
-		}
 		if !bindingClosed {
-			_ = binding.Close()
+			if err := binding.Close(); err != nil && !errors.Is(err, runtime.ErrEngineClosed) {
+				t.Errorf("close retained Workflow activation: %v", err)
+			}
 		}
 	})
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
-		t.Fatalf("parse session id: %v", err)
+		t.Fatalf("parse Session id: %v", err)
 	}
-	reactivations := 0
-	service.WithWorkflowSessionReactivator(runtimeControlWorkflowSessionReactivatorFunc(
-		func(_ context.Context, got runtimeids.SessionID) (sessionruntime.ExecutionHandle, error) {
-			reactivations++
-			if got != sessionID {
-				t.Fatalf("reactivated session = %s, want %s", got, sessionID)
+	workflowRef := sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "runtime-control-test-project",
+		WorkflowID:  config.Instructions.WorkflowID,
+		CurrentNode: config.Instructions.CurrentNode,
+	}
+	service.WithWorkflowSessionReactivator(runtimeControlWorkflowReactivatorFunc(
+		func(
+			ctx context.Context,
+			gotSessionID runtimeids.SessionID,
+			accept runtime.CommandAcceptance,
+			acceptedCtx context.Context,
+			continuation *workflowexecution.WorkflowSessionContinuation,
+		) (workflowexecution.WorkflowSessionContinuationResult, error) {
+			if gotSessionID != sessionID {
+				t.Fatalf("reactivated Session = %s, want %s", gotSessionID, sessionID)
+			}
+			committed, err := accept(func() (bool, error) {
+				provider.assigned.Store(true)
+				return true, nil
+			})
+			if err != nil || !committed {
+				return workflowexecution.WorkflowSessionContinuationResult{}, errors.Join(err, errors.New("Resume was not accepted"))
+			}
+			if err := binding.Close(); err != nil {
+				return workflowexecution.WorkflowSessionContinuationResult{}, err
 			}
 			bindingClosed = true
-			if err := binding.Close(); err != nil {
-				return nil, err
-			}
 			descriptor, err := session.NewOpenSessionDescriptor(sessionID)
 			if err != nil {
-				return nil, err
+				return workflowexecution.WorkflowSessionContinuationResult{}, err
 			}
 			handle, err := service.authority.StartAgentExecution(
-				context.Background(),
+				acceptedCtx,
 				sessionruntime.AgentExecutionRequest{
 					Descriptor: descriptor,
 					Workflow: &sessionruntime.WorkflowAgentExecution{
-						Reference: workflowRef,
-						Config:    config,
+						Reference:        workflowRef,
+						Config:           config,
+						OnSelectedResult: continuation.RecordExact,
 					},
 					Resource: sessionruntime.CurrentAgentResource{},
-					Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-						<-ctx.Done()
-						return context.Cause(ctx)
+					Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+						return bridge.WithEngine(runCtx, func(engineCtx context.Context, current *runtime.Engine) error {
+							result, turnErr := current.SubmitWorkflowTurnWithInput(
+								engineCtx,
+								workflowRef.CurrentNode,
+								continuation.Input().Text,
+								nil,
+							)
+							continuation.RecordTurn(runtime.WorkflowTurnUserResult(result), turnErr)
+							return turnErr
+						})
 					},
 				},
 			)
 			if err != nil {
-				return nil, err
+				return workflowexecution.WorkflowSessionContinuationResult{}, err
 			}
-			execution = handle
-			return handle, nil
+			_ = ctx
+			return workflowexecution.WorkflowSessionContinuationResult{Handle: handle}, nil
 		},
 	))
 
 	response, err := service.SubmitUserTurn(
 		context.Background(),
-		runtimeControlUserTurnRequest(store, "reactivate-retained", "continue"),
+		runtimeControlUserTurnRequest(store, "retained-assignment-order", "continue"),
 	)
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "provider stopped after assignment") {
+		t.Fatalf("SubmitUserTurn error = %v, want provider failure after assignment", err)
 	}
-	if reactivations != 1 {
-		t.Fatalf("workflow reactivations = %d, want 1", reactivations)
+	if !provider.called.Load() || !provider.assigned.Load() {
+		t.Fatalf("provider called=%t assignment committed=%t, want both", provider.called.Load(), provider.assigned.Load())
 	}
-	if response.ResultKind != clientui.UserTurnResultKindQueued || response.QueueItemID == "" {
-		t.Fatalf("SubmitUserTurn response = %+v, want queued acceptance", response)
-	}
-	if !engine.HasQueuedUserWork() {
-		t.Fatal("original input was not accepted by the reactivated Workflow execution")
-	}
-}
-
-func TestServiceSubmitUserTurnRejectsMismatchedReactivatedWorkflowExecution(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(
-		t,
-		finalResponseRuntimeControlClient(),
-		nil,
-		runtime.Config{Model: "gpt-5"},
-	)
-	selected := runtimeControlExactExecution(t)
-	binding, err := engine.BindCurrentNodeExecution(selected)
-	if err != nil {
-		t.Fatalf("bind retained Workflow activation: %v", err)
-	}
-	bindingClosed := false
-	var execution sessionruntime.ExecutionHandle
-	t.Cleanup(func() {
-		if execution != nil {
-			execution.RequestStop()
-			_ = execution.Close(context.Background())
+	request := provider.requestSnapshot()
+	foundWorkflowAssignment := false
+	for _, message := range llm.MessagesFromItems(request.Items) {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeWorkflowMode {
+			foundWorkflowAssignment = true
+			break
 		}
-		if !bindingClosed {
-			_ = binding.Close()
-		}
-	})
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
 	}
-	mismatchedNode, err := workflow.NewCurrentNodeReference(
-		selected.Instructions.CurrentNode.TaskID,
-		"mismatched-node",
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("create mismatched Current Node: %v", err)
+	if !foundWorkflowAssignment {
+		t.Fatalf("provider request omitted the Workflow assignment: %+v", request)
 	}
-	service.WithWorkflowSessionReactivator(runtimeControlWorkflowSessionReactivatorFunc(
-		func(_ context.Context, got runtimeids.SessionID) (sessionruntime.ExecutionHandle, error) {
-			if got != sessionID {
-				t.Fatalf("reactivated session = %s, want %s", got, sessionID)
-			}
-			bindingClosed = true
-			if err := binding.Close(); err != nil {
-				return nil, err
-			}
-			config := runtimeControlExactExecution(t)
-			config.Instructions.CurrentNode = mismatchedNode
-			workflowRef := sessionruntime.WorkflowExecutionRef{
-				ProjectID:   "runtime-control-test-project",
-				WorkflowID:  runtimeids.NewWorkflowID(),
-				CurrentNode: mismatchedNode,
-			}
-			config.Instructions.WorkflowID = workflowRef.WorkflowID
-			descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-			if err != nil {
-				return nil, err
-			}
-			handle, err := service.authority.StartAgentExecution(
-				context.Background(),
-				sessionruntime.AgentExecutionRequest{
-					Descriptor: descriptor,
-					Workflow: &sessionruntime.WorkflowAgentExecution{
-						Reference: workflowRef,
-						Config:    config,
-					},
-					Resource: sessionruntime.CurrentAgentResource{},
-					Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-						<-ctx.Done()
-						return context.Cause(ctx)
-					},
-				},
-			)
-			if err != nil {
-				return nil, err
-			}
-			execution = handle
-			return handle, nil
-		},
-	))
-
-	_, err = service.SubmitUserTurn(
-		context.Background(),
-		runtimeControlUserTurnRequest(store, "reject-mismatched-reactivation", "do not accept"),
-	)
-	if err == nil {
-		t.Fatal("SubmitUserTurn accepted mismatched reactivated Workflow execution")
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("original input was accepted by a mismatched Workflow execution")
+	if response.ResultKind != clientui.UserTurnResultKindNoFinal {
+		t.Fatalf("SubmitUserTurn response = %+v, want no-final response on provider failure", response)
 	}
 }
 

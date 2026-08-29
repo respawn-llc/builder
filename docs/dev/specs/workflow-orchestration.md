@@ -273,8 +273,8 @@
 - `new_session` creates a new Session, and `compact_and_continue_session` creates a new Session Contract generation. Only these Context-Preservation Modes may select a different effective completion mode for the target Agent Node.
 - Resume resolves the latest Runtime Parameter Contract from the current Workflow definition. A live Exact Execution Scope keeps the completion contract already advertised for that scope until it stops.
 - Forced `structured_output` fails fast with an actionable error when unsupported. Forced `tool` always uses dynamic tool mode. Forced `shell_command` fails execution start when the resolved runtime shell tool is unavailable.
-- `[workflow].use_required_tool_calls` defaults to `true`. When enabled, each model response in `shell_command` and `tool` modes must call at least one available tool. This requirement does not add, remove, or reorder tools.
-- When `[workflow].use_required_tool_calls` is `false`, model requests in `shell_command` and `tool` modes use automatic tool selection. The selected completion mode still rejects ordinary assistant final answers.
+- `[workflow].use_required_tool_calls` defaults to `true`. When enabled, each workflow-controlled model response in `shell_command` and `tool` modes must call at least one available tool. This requirement does not add, remove, or reorder tools.
+- When `[workflow].use_required_tool_calls` is `false`, workflow-controlled model requests in `shell_command` and `tool` modes use automatic tool selection. The selected completion mode still rejects ordinary assistant final answers while its Workflow Node is incomplete.
 - Accepted live user steering re-enters the same live completion policy. `structured_output` and `unstructured_output` generation use automatic tool selection.
 - Manual interruption releases the specialized Exact Execution Scope.
 - If the retained Workflow Session still belongs to the interrupted Current Node, Kent may retain its Active Session Runtime for passive control without an Exact Execution Scope.
@@ -282,12 +282,28 @@
 - A human Send/Steer to the retained Session and explicit Workflow Resume are two entry points into the same Current Node reactivation path. Both durably resume the interrupted Current Node and start a fresh Workflow Exact Execution Scope; Send/Steer additionally submits its human input to that reactivated execution.
 - Send/Steer reactivation never starts an ordinary non-Workflow Session execution and never creates a second Transition authority. If the retained Session no longer belongs to that Current Node, reactivation fails before accepting the input.
 - Send/Steer reactivation has the same completion contract and tool-choice policy as explicit Resume. It does not create a separate interactive completion mode.
+- User input submitted to an idle retained Workflow Session whose incomplete Current Node is interrupted and resumable is a Task Resume with steering to that Session, not an ordinary interactive activation.
+- This Resume retains Task-wide parallel semantics: every eligible interrupted Current Node resumes, while the submitted input is delivered only to the selected Session.
+- For TUI submission, the selected Current Node's successful `ResumeCurrentNode` commit is the command-acceptance boundary. Caller cancellation before that commit prevents acceptance and prompt-history recording; cancellation after that commit ends only the caller's wait and cannot retract the accepted Resume or selected input attempt. The later input append is not another acceptance boundary.
+- Kent must durably initialize or confirm the authoritative Current-Node assignment before it admits the submitted input into the selected Workflow turn. Successful admission places the input before that turn's first provider request and returns that turn's result. Admission failure does not roll back or retry a successful Resume.
+- If the selected Current Node resumes while a parallel sibling reports a Resume diagnostic, the selected execution continues. Headless Run exposes sibling diagnostics through its existing warnings while preserving the selected result and successful exit status. The TUI remains Workflow-agnostic and does not duplicate sibling diagnostics; Task lifecycle surfaces remain authoritative for them.
+- Prompt history records the combined submission exactly once only after the selected Resume commit. Authorization, assertion, lifecycle, and no-op rejection record nothing. A later selected admission, delivery, or execution failure retains the accepted history entry.
+- A retained Workflow Session becomes eligible for ordinary interactive conversation as soon as its Workflow Node completes, including while the Workflow Task continues.
+- The completed Session retains its established Session Contract generation and provider cache lineage:
+  - `structured_output` rejects ordinary continuation because accepting an ordinary final answer would require changing the provider-enforced response schema.
+  - `tool` retains `complete_node`. A later invocation returns model-visible guidance that the Workflow Node is already complete and the model may finish with an ordinary final answer.
+  - `shell_command` retains its completion command. A later invocation exits with status `1` and returns the same guidance.
+  - `unstructured_output` accepts an ordinary plain-text final answer without Workflow completion handling.
+- Ordinary interactive turns append to the retained Session and may therefore become context if later Workflow execution selects that Session.
+- Whenever later Workflow execution selects that retained Session for the same or a different Node, Workflow execution reclaims it. A dormant Session returns directly to Workflow control; an actively interactive Session is interrupted before restarting under the selected Node's Workflow instructions and completion contract.
 - Resume starts a fresh Exact Execution Scope while retaining the Session Contract generation's effective completion mode.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
 - `shell_command` mode requires external structured completion rather than an ordinary assistant final answer.
 - `unstructured_output` mode requires the assistant's final answer to be exactly one raw JSON object.
+- Forced completion outside an agent Session applies only to one unambiguous idle executable Current Node. It does not create a lasting execution selection.
+- While its Workflow Node is incomplete, `unstructured_output` mode requires the assistant's final answer to be exactly one raw JSON object.
 - Any assistant answer that would otherwise complete an active workflow-controlled Node must pass through that Node's current completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.
-- Normal assistant final answers are invalid in `tool` and `shell_command` modes. Kent explains the invalid completion and continues until the agent completes correctly, asks a Question, is interrupted, reaches the invalid-attempt limit, or encounters an error.
+- While its Workflow Node is incomplete, normal assistant final answers are invalid in `tool` and `shell_command` modes. Kent explains the invalid completion and continues until the agent completes correctly, asks a Question, is interrupted, reaches the invalid-attempt limit, or encounters an error.
 - A completion payload contains only optional `transition`, optional `commentary`, and possible Transition Parameters as top-level properties. It never exposes `next_node`.
 - Transition Parameter outputs are strings. Kent converts non-string JSON values to strings before binding them. A later Node never receives a structured Parameter value.
 - Possible Transition Parameters are optional until Kent knows which Transition the agent selected. The selected Transition then determines which Parameters are required.
@@ -354,9 +370,12 @@
 - Abrupt process death may occur before startup finishes.
 - On the next startup, Kent marks affected executable Current Nodes interrupted.
 - A direct Transition that continues the same Session without an Approval, pause, Session change, or intervening Node keeps that Active Session Runtime and Steers exactly one next assignment. Kent does not close and reopen the Runtime for that continuation.
+- Every newly constructed Workflow runtime resource for a Current Node must durably initialize its authoritative assignment while still private, before Kent exposes that resource to other Session operations.
 - Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
 - When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
-- Resume must not steer or append a Current Node assignment.
+- A retained Session compacted before its Current Node was ever activated may validly lack that exact `workflow_mode` assignment in active model context. Resume may create the Exact Execution Scope for this state while assignment delivery remains pending.
+- Before any operation on a retained Workflow resource mutates model-visible input or context or invokes a provider, Kent must use the shared model-context preparation boundary to idempotently establish the authoritative Current-Node assignment. An exact active assignment requires no new message, no active Workflow assignment uses the initial-assignment instructions, and another or compacted assignment uses the reassignment instructions.
+- If that assignment commit fails, Kent must fail only the ordinary operation before model-visible input or context mutation and provider work, preserve pending Resume delivery, and retry the same idempotent repair when the next existing operation reaches the shared preparation boundary. Kent must not add a separate assignment retry loop or coordination owner.
 - When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
 - When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
 - Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
@@ -460,6 +479,7 @@
 - Workflow validation rejects statically known Assignee incompatibility, runtime rejects retained-Session Assignee incompatibility, and valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
 - Transition-selected Assignees never rotate or invalidate an established Session's prompt-cache lineage.
 - A retained Session may adopt the target Current Node's materialized thinking without rotating or invalidating its prompt-cache lineage.
+- A persistent Session Chat Thinking mutation is Session-wide rather than a one-turn Workflow override. When present, it takes final precedence over the retained Current Node's materialized thinking until another Session Thinking mutation changes it. It updates an already-open runtime immediately, so older queued work and later activations of that Session use the mutated value.
 - `compact_and_continue_session` compacts the reused Session and establishes the target Current Node's materialized Assignee and thinking in a fresh contract generation, resolving current role configuration for model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and prompt-facing request content.
 - `new_session` establishes the target Current Node's materialized Assignee and thinking at its fresh context boundary and resolves current role configuration for that Assignee.
 - Kent derives `compact_and_continue_session` timing from the accepted Workflow path. Workflow authors do not configure eager or lazy timing.
@@ -533,14 +553,17 @@
 - Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
 - Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
 - Retained-Session Send/Steer resolves one exact Session, Current Node, and parallel branch.
-- Retained-Session Send/Steer requeues and starts only that selected Current Node.
+- Retained-Session Send/Steer resumes every eligible interrupted Current Node on the Task and delivers input only to the selected Session.
 - Sibling validation or startup failure cannot fail the selected submission or start sibling work.
-- Retained-Session input is accepted only after that selected Current Node has a matching fresh live Workflow Agent execution.
+- Retained-Session input is accepted at the selected Current Node's durable Resume commit and remains pending until its matching fresh Workflow Agent execution reaches its typed turn outcome.
 - Matching live Agent execution remains interruptible while running or waiting for a Question or live Approval.
 - A running Script is also interruptible.
 - A queued Agent or Script alone does not authorize Interrupt.
 - If startup admission is in progress, an otherwise authorized Task Interrupt waits for that short Workflow decision to finish, then interrupts matching live work if present.
 - A Workflow-completed Agent Step and a finalizing Agent are not interruptible while their Exact Execution Scope remains only for Step closure or retirement.
+- A Task Resume may include user input for one retained Agent Session whose incomplete Current Node is interrupted and resumable. Kent revalidates that Session and Current Node before committing the Resume.
+- The included input does not narrow Task Resume: all eligible interrupted Current Nodes resume, and only the selected Session receives the input.
+- Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
 - Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
 - Restart does not restore live Questions, live Approvals, Automatic Intents, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.

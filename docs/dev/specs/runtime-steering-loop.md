@@ -93,8 +93,8 @@
 - Post-turn Queue and manual compaction fail before acceptance when no Workflow Agent Step can become eligible.
 - Human Send/Steer reactivates the interrupted Current Node through the same Workflow Resume authority as the public Resume action.
 - Retained-Session reactivation selects the exact Session, Task, Current Node, and parallel branch bound to that Session.
-- Retained-Session reactivation does not validate, mutate, or start sibling Current Nodes.
-- Kent accepts the original human input only after the selected Current Node publishes a matching fresh Workflow Agent execution.
+- Retained-Session reactivation resumes every eligible interrupted Current Node on the Task while delivering the original human input only to the targeted Session.
+- Kent accepts the original human input at the selected Current Node's durable Resume commit.
 - If selected preparation, admission, publication, or caller waiting fails first, Kent accepts no original input and starts no ordinary Session execution.
 - Public Task Resume may still resume every eligible interrupted Current Node on the Task and returns after durable requeueing.
 - Public Task Resume does not wait for startup.

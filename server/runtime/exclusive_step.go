@@ -149,6 +149,9 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 	if err != nil {
 		return err
 	}
+	if options.OnStepStarted != nil {
+		options.OnStepStarted(stepID)
+	}
 	if isAgentStepKind(options.ActiveKind) {
 		if pauseErr := s.engine.pauseRuntimeOperations(ctx); pauseErr != nil {
 			return s.finishStep(stepID, options, pauseErr)

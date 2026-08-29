@@ -18,6 +18,7 @@ func (initialBranchControllerRunner) StartAgentCurrentNode(
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
 	workflowexecution.CurrentNodeAssignmentSteer,
+	*workflowexecution.WorkflowSessionContinuation,
 	func(),
 	workflowruntime.Controller,
 ) (sessionruntime.ExecutionHandle, error) {

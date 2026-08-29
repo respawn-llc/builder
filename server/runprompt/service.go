@@ -33,28 +33,37 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 		return serverapi.RunPromptResponse{}, err
 	}
 	defer func() {
-		err = errors.Join(err, runtimeHandle.plan.CloseWithFailure(err != nil))
+		err = errors.Join(err, runtimeHandle.closeWithFailure(err != nil))
 	}()
 
+	var historyErr error
+	if history := s.launcher.boot.PromptHistory; history != nil {
+		if runtimeHandle.retainedContinuation == nil {
+			_, historyErr = history.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
+				SessionID: runtimeHandle.promptHistorySessionID(),
+				Text:      runtimeHandle.promptHistoryText(req.Prompt),
+			})
+			if historyErr != nil {
+				return serverapi.RunPromptResponse{}, historyErr
+			}
+		} else {
+			_, historyErr = history.RecordPromptHistoryEntry(runtimeHandle.promptHistoryContext(ctx), metadata.PromptHistoryEntry{
+				SessionID: runtimeHandle.promptHistorySessionID(),
+				Text:      runtimeHandle.promptHistoryText(req.Prompt),
+			})
+		}
+	}
+	runtimeHandle.releaseTechnicalContext()
 	runCtx := ctx
 	if req.Timeout > 0 {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(ctx, req.Timeout)
 		defer cancel()
 	}
-
 	startedAt := time.Now()
-	if history := s.launcher.boot.PromptHistory; history != nil {
-		_, err := history.RecordPromptHistoryEntry(runCtx, metadata.PromptHistoryEntry{
-			SessionID: runtimeHandle.plan.sessionID,
-			Text:      runtimeHandle.plan.PromptHistoryText(req.Prompt),
-		})
-		if err != nil {
-			return serverapi.RunPromptResponse{}, err
-		}
-	}
 	response, runErr := runtimeHandle.submitUserMessage(runCtx, req.Prompt)
 	response.Duration = time.Since(startedAt)
+	runErr = errors.Join(runErr, historyErr)
 	if runErr != nil {
 		return response, runErr
 	}

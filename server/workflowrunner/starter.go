@@ -512,6 +512,7 @@ func (s *Starter) StartAgentCurrentNode(
 	reference workflow.CurrentNodeReference,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	continuation *workflowexecution.WorkflowSessionContinuation,
 	onRetire func(),
 	controller workflowruntime.Controller,
 ) (sessionruntime.ExecutionHandle, error) {
@@ -532,6 +533,8 @@ func (s *Starter) StartAgentCurrentNode(
 			input,
 			prepared,
 			taskPromptDelivery,
+			assignmentSteer,
+			continuation,
 			onRetire,
 			controller,
 		)
@@ -545,6 +548,8 @@ func (s *Starter) StartAgentCurrentNode(
 		assignment.input,
 		assignment.prepared,
 		taskPromptDelivery,
+		assignmentSteer,
+		continuation,
 		onRetire,
 		controller,
 	)
@@ -555,6 +560,8 @@ func (s *Starter) startCurrentNodeAgent(
 	input workflowstore.CurrentNodeStartContext,
 	prepared preparedCurrentNodeAgentSession,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
+	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	continuation *workflowexecution.WorkflowSessionContinuation,
 	onRetire func(),
 	controller workflowruntime.Controller,
 ) (sessionruntime.ExecutionHandle, error) {
@@ -572,7 +579,7 @@ func (s *Starter) startCurrentNodeAgent(
 	resource := sessionruntime.AgentResourceSelection(sessionruntime.CurrentAgentResource{})
 	var replacementPlan *sessionruntime.AgentRuntimePlan
 	if prepared.replaceResource {
-		runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared)
+		runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared, continuation)
 		if planErr != nil {
 			return nil, prepared.cleanup(planErr)
 		}
@@ -581,7 +588,7 @@ func (s *Starter) startCurrentNodeAgent(
 	} else {
 		err = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(context.Context, *runtime.Engine) error { return nil })
 		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-			runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared)
+			runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared, continuation)
 			if planErr != nil {
 				return nil, prepared.cleanup(planErr)
 			}
@@ -604,6 +611,12 @@ func (s *Starter) startCurrentNodeAgent(
 	if err != nil {
 		return nil, prepared.cleanup(err)
 	}
+	var onSelectedResult func(sessionruntime.ExecutionResult, error)
+	var onSelectedProgress func(runtime.Event)
+	if continuation != nil {
+		onSelectedResult = continuation.RecordExact
+		onSelectedProgress = continuation.PublishEvent
+	}
 	handle, err := s.runtimeAuthority.StartAgentExecution(
 		ctx,
 		sessionruntime.AgentExecutionRequest{
@@ -615,14 +628,17 @@ func (s *Starter) startCurrentNodeAgent(
 					WorkflowID:  input.Workflow.ID,
 					CurrentNode: reference,
 				},
-				Config:   runtimeConfig,
-				OnRetire: onRetire,
+				Config:                   runtimeConfig,
+				AssignmentAlreadyHandled: assignmentSteer != nil,
+				OnRetire:                 onRetire,
+				OnSelectedResult:         onSelectedResult,
+				OnSelectedProgress:       onSelectedProgress,
 			},
 			Resource: resource,
 			Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 				return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 			},
-			Runner: s.currentNodeAgentRunner(input, controller),
+			Runner: s.currentNodeAgentRunner(input, continuation, controller),
 		},
 	)
 	if err != nil {
@@ -824,6 +840,7 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 func (s *Starter) buildCurrentNodeAgentRuntimePlan(
 	input workflowstore.CurrentNodeStartContext,
 	prepared preparedCurrentNodeAgentSession,
+	continuation *workflowexecution.WorkflowSessionContinuation,
 ) (sessionruntime.AgentRuntimePlan, error) {
 	projectWorkspaceBoundary := prepared.plan.ProjectWorkspaceBoundary.Clone()
 	filesystemContext, err := runtimewire.NewFilesystemContext(prepared.root.EffectiveRoot(), prepared.root.EffectiveRoot(), projectWorkspaceBoundary)
@@ -854,13 +871,40 @@ func (s *Starter) buildCurrentNodeAgentRuntimePlan(
 
 func (s *Starter) currentNodeAgentRunner(
 	input workflowstore.CurrentNodeStartContext,
+	continuation *workflowexecution.WorkflowSessionContinuation,
 	controller workflowruntime.Controller,
 ) sessionruntime.AgentRunner {
 	return func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 		var turnEngine *runtime.Engine
 		var turnResult runtime.WorkflowTurnResult
-		turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
+		var turnErr error
+		turnErr = bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 			turnEngine = engine
+			if continuation != nil {
+				continuation.RecordSessionName(engine.SessionName())
+			}
+			if continuation != nil {
+				continuationInput := continuation.Input()
+				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+					turnResult, turnErr = engine.SubmitWorkflowContinuationTurnWithInputAndStepHook(
+						metadata.WithQueryFailureDiagnostics(engineCtx),
+						input.CurrentNode.Reference,
+						continuationInput.Text,
+						continuationInput.Steer,
+						continuation.RegisterStep,
+					)
+				} else {
+					turnResult, turnErr = engine.SubmitWorkflowTurnWithInputAndStepHook(
+						metadata.WithQueryFailureDiagnostics(engineCtx),
+						input.CurrentNode.Reference,
+						continuationInput.Text,
+						continuationInput.Steer,
+						continuation.RegisterStep,
+					)
+				}
+				continuation.RecordTurn(runtime.WorkflowTurnUserResult(turnResult), turnErr)
+				return turnErr
+			}
 			if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
 				result, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
 				turnResult = result
@@ -876,9 +920,16 @@ func (s *Starter) currentNodeAgentRunner(
 			}
 			return nil
 		})
+		if continuation != nil && turnEngine == nil {
+			continuation.RecordTurn(runtime.UserTurnResult{}, turnErr)
+		}
 		if turnResult.Completion != nil && turnEngine != nil {
 			completion := *turnResult.Completion
-			compactionErr := compactCompletedWorkflowSession(runCtx, turnEngine, completion.CommittedResult)
+			var stepHook func(string)
+			if continuation != nil {
+				stepHook = continuation.RegisterStep
+			}
+			compactionErr := compactCompletedWorkflowSession(runCtx, turnEngine, completion.CommittedResult, stepHook)
 			continuationErr := controller.ContinueCurrentNode(
 				context.WithoutCancel(runCtx),
 				completion.CommittedResult,
@@ -928,6 +979,7 @@ func compactCompletedWorkflowSession(
 	ctx context.Context,
 	engine *runtime.Engine,
 	completed workflowstore.CurrentNodeCompletionResult,
+	stepHooks ...func(string),
 ) error {
 	if engine == nil || !completed.PostCompletionEligible || engine.CompactionMode() == "none" {
 		return nil
@@ -942,6 +994,10 @@ func compactCompletedWorkflowSession(
 	}
 	if !shouldCompact {
 		return nil
+	}
+	if len(stepHooks) > 0 && stepHooks[0] != nil {
+		_, err := engine.CompactContextForWorkflowPostCompletion(ctx, stepHooks[0])
+		return err
 	}
 	_, err := engine.CompactContextForWorkflowPostCompletion(ctx)
 	return err

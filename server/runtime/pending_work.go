@@ -146,7 +146,7 @@ func (e *Engine) removePendingWork(id runtimeids.QueueItemID) (runtimeinput.Pend
 	if err != nil {
 		return runtimeinput.PendingWorkRestoration{}, err
 	}
-	e.emitQueuedUserMessageStatus(message, QueuedUserMessageDiscarded, "", false)
+	e.emitQueuedUserMessageStatus(message, QueuedUserMessageDiscarded, "", false, nil)
 	e.publishPendingWorkSnapshot()
 	return restoration, nil
 }

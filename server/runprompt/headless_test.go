@@ -24,12 +24,17 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
+	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
+	"core/server/workflow"
+	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -50,11 +55,55 @@ func (s *recordingPromptHistoryStore) RecordPromptHistoryEntry(_ context.Context
 	return metadata.PromptHistoryRecord{}, nil
 }
 
-type blockingPromptHistoryStore struct{}
+type blockingPromptHistoryStore struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+type headlessAssignmentOrderClient struct {
+	assigned atomic.Bool
+	called   atomic.Bool
+	mu       sync.Mutex
+	request  llm.Request
+}
+
+func (c *headlessAssignmentOrderClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
+	c.called.Store(true)
+	c.mu.Lock()
+	c.request = request
+	c.mu.Unlock()
+	if !c.assigned.Load() {
+		return llm.Response{}, errors.New("provider request preceded Workflow assignment")
+	}
+	return llm.Response{}, &llm.APIStatusError{
+		StatusCode: 400,
+		Body:       "provider stopped after assignment",
+	}
+}
+
+func (c *headlessAssignmentOrderClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{
+		ProviderID:           "test",
+		SupportsResponsesAPI: true,
+	}, nil
+}
+
+func (c *headlessAssignmentOrderClient) requestSnapshot() llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.request
+}
 
 func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
-	<-ctx.Done()
-	return metadata.PromptHistoryRecord{}, ctx.Err()
+	if s.started != nil {
+		close(s.started)
+	}
+	select {
+	case <-s.release:
+		return metadata.PromptHistoryRecord{}, nil
+	case <-ctx.Done():
+		return metadata.PromptHistoryRecord{}, ctx.Err()
+	}
 }
 
 type fixedSessionExecutionTargetResolver struct {
@@ -369,6 +418,7 @@ type selectedRunPromptFixture struct {
 	store     *session.Store
 	authority *sessionruntime.Authority
 	client    apicontract.RunPromptService
+	boot      HeadlessBootstrap
 }
 
 func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promptHistoryStore) selectedRunPromptFixture {
@@ -399,14 +449,195 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 		},
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
+	boot := HeadlessBootstrap{
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		RuntimeAuthority: authority,
+		PromptHistory:    history,
+	}
 	return selectedRunPromptFixture{
 		store:     store,
 		authority: authority,
-		client: NewInProcessRunPromptClient(HeadlessBootstrap{
-			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-			RuntimeAuthority: authority,
-			PromptHistory:    history,
-		}),
+		client:    NewInProcessRunPromptClient(boot),
+		boot:      boot,
+	}
+}
+
+type headlessWorkflowReactivatorFunc func(
+	context.Context,
+	runtimeids.SessionID,
+	runtime.CommandAcceptance,
+	context.Context,
+	*workflowexecution.WorkflowSessionContinuation,
+) (workflowexecution.WorkflowSessionContinuationResult, error)
+
+func (f headlessWorkflowReactivatorFunc) ReactivateWorkflowSessionWithAcceptance(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	accept runtime.CommandAcceptance,
+	acceptedCtx context.Context,
+	continuation *workflowexecution.WorkflowSessionContinuation,
+) (workflowexecution.WorkflowSessionContinuationResult, error) {
+	return f(ctx, sessionID, accept, acceptedCtx, continuation)
+}
+
+func TestInProcessRunPromptRetainedWorkflowReinjectsAssignmentBeforeProvider(t *testing.T) {
+	provider := &headlessAssignmentOrderClient{}
+	fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", nil)
+	sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
+	workflowID := runtimeids.NewWorkflowID()
+	currentNode, err := workflow.NewCurrentNodeReference(
+		workflow.TaskID("headless-retained-task"),
+		workflow.NodeID("headless-retained-node"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new retained Current Node reference: %v", err)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new Session descriptor: %v", err)
+	}
+	filesystem, err := runtimewire.NewFilesystemContext(
+		fixture.store.Meta().WorkspaceRoot,
+		fixture.store.Meta().WorkspaceRoot,
+		metadata.ProjectWorkspaceBoundary{
+			ProjectID:  "test-project",
+			Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: fixture.store.Meta().WorkspaceRoot}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("new filesystem context: %v", err)
+	}
+	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: config.Settings{
+			Model:            "gpt-5",
+			ProviderOverride: "openai",
+			OpenAIBaseURL:    "http://unused.invalid",
+			Workflow: config.WorkflowSettings{
+				CompletionMode: config.WorkflowCompletionModeUnstructured,
+			},
+			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		FilesystemContext:     askquestion.FilesystemContext{Access: filesystem.Access},
+		Headless:              true,
+		QuestionsEnabled:      textutil.Value(false),
+		AutoCompactionEnabled: textutil.Value(false),
+		Client:                provider,
+	})
+	if err != nil {
+		t.Fatalf("new retained runtime plan: %v", err)
+	}
+	if _, err := fixture.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "retained-assignment-order",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open retained runtime: %v", err)
+	}
+	executionConfig := &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID:        runtimeids.NewExecutionScopeID(),
+		CompletionMode: workflowruntime.CompletionModeUnstructuredOutput,
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: currentNode,
+			WorkflowID:  workflowID,
+		},
+	}
+	var binding *runtime.CurrentNodeExecutionBinding
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		var err error
+		binding, err = engine.BindCurrentNodeExecution(executionConfig)
+		return err
+	}); err != nil {
+		t.Fatalf("bind retained Workflow activation: %v", err)
+	}
+	bindingClosed := false
+	t.Cleanup(func() {
+		if !bindingClosed && binding != nil {
+			if err := binding.Close(); err != nil && !errors.Is(err, runtime.ErrEngineClosed) {
+				t.Errorf("close retained Workflow activation: %v", err)
+			}
+		}
+	})
+	fixture.boot.WorkflowSessionReactivator = headlessWorkflowReactivatorFunc(
+		func(
+			ctx context.Context,
+			gotSessionID runtimeids.SessionID,
+			accept runtime.CommandAcceptance,
+			acceptedCtx context.Context,
+			continuation *workflowexecution.WorkflowSessionContinuation,
+		) (workflowexecution.WorkflowSessionContinuationResult, error) {
+			if gotSessionID != sessionID {
+				return workflowexecution.WorkflowSessionContinuationResult{}, fmt.Errorf("reactivated Session = %s, want %s", gotSessionID, sessionID)
+			}
+			committed, err := accept(func() (bool, error) {
+				provider.assigned.Store(true)
+				return true, nil
+			})
+			if err != nil || !committed {
+				return workflowexecution.WorkflowSessionContinuationResult{}, errors.Join(err, errors.New("Resume was not accepted"))
+			}
+			if err := binding.Close(); err != nil {
+				return workflowexecution.WorkflowSessionContinuationResult{}, err
+			}
+			bindingClosed = true
+			handle, err := fixture.authority.StartAgentExecution(
+				acceptedCtx,
+				sessionruntime.AgentExecutionRequest{
+					Descriptor: descriptor,
+					Workflow: &sessionruntime.WorkflowAgentExecution{
+						Reference: sessionruntime.WorkflowExecutionRef{
+							ProjectID:   "test-project",
+							WorkflowID:  workflowID,
+							CurrentNode: currentNode,
+						},
+						Config:           executionConfig,
+						OnSelectedResult: continuation.RecordExact,
+					},
+					Resource: sessionruntime.CurrentAgentResource{},
+					Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+						return bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
+							result, turnErr := engine.SubmitWorkflowTurnWithInput(
+								engineCtx,
+								currentNode,
+								continuation.Input().Text,
+								nil,
+							)
+							continuation.RecordTurn(runtime.WorkflowTurnUserResult(result), turnErr)
+							return turnErr
+						})
+					},
+				},
+			)
+			if err != nil {
+				return workflowexecution.WorkflowSessionContinuationResult{}, err
+			}
+			_ = ctx
+			return workflowexecution.WorkflowSessionContinuationResult{Handle: handle}, nil
+		},
+	)
+	client := NewInProcessRunPromptClient(fixture.boot)
+	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		Prompt: "continue",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "provider stopped after assignment") {
+		t.Fatalf("RunPrompt error = %v, want provider failure after assignment", err)
+	}
+	if !provider.called.Load() || !provider.assigned.Load() {
+		t.Fatalf("provider called=%t assignment committed=%t, want both", provider.called.Load(), provider.assigned.Load())
+	}
+	foundWorkflowAssignment := false
+	for _, message := range llm.MessagesFromItems(provider.requestSnapshot().Items) {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeWorkflowMode {
+			foundWorkflowAssignment = true
+			break
+		}
+	}
+	if !foundWorkflowAssignment {
+		t.Fatal("provider request omitted the Workflow assignment")
+	}
+	if response.SessionID != sessionID.String() {
+		t.Fatalf("RunPrompt response Session = %q, want %q", response.SessionID, sessionID)
 	}
 }
 
@@ -1204,19 +1435,51 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		}))
 		defer server.Close()
 
-		fixture := newSelectedRunPromptFixture(t, server.URL, &blockingPromptHistoryStore{})
-		_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-			Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
-			Prompt:  "hello",
-			Timeout: 100 * time.Millisecond,
-		}, nil)
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("RunPrompt error = %v, want deadline exceeded", err)
+		historyStarted := make(chan struct{})
+		releaseHistory := make(chan struct{})
+		fixture := newSelectedRunPromptFixture(t, server.URL, &blockingPromptHistoryStore{
+			started: historyStarted,
+			release: releaseHistory,
+		})
+		type result struct {
+			response serverapi.RunPromptResponse
+			err      error
+		}
+		done := make(chan result, 1)
+		go func() {
+			response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+				Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+				Prompt:  "hello",
+				Timeout: 2 * time.Second,
+			}, nil)
+			done <- result{response: response, err: err}
+		}()
+		select {
+		case <-historyStarted:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for prompt history")
+		}
+		select {
+		case got := <-done:
+			t.Fatalf("RunPrompt returned during prompt history: %+v", got)
+		case <-time.After(250 * time.Millisecond):
+		}
+		close(releaseHistory)
+		select {
+		case got := <-done:
+			if got.err != nil {
+				t.Fatalf("RunPrompt error = %v, want success after history release", got.err)
+			}
+			if got.response.SessionID != fixture.store.Meta().SessionID {
+				t.Fatalf("partial response session = %q, want %q", got.response.SessionID, fixture.store.Meta().SessionID)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("RunPrompt did not finish after prompt history release")
 		}
 		sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
 		_, active := fixture.authority.SessionExecution(sessionID)
-		if providerCalls != 0 || active {
-			t.Fatalf("provider calls=%d runtime active=%t, want 0/false", providerCalls, active)
+		if providerCalls != 1 || active {
+			t.Fatalf("provider calls=%d runtime active=%t, want 1/false", providerCalls, active)
 		}
 	})
 

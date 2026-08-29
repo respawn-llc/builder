@@ -87,6 +87,7 @@ type currentNodeQueuedStart struct {
 	nodeKind           workflow.NodeKind
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
+	continuation       *WorkflowSessionContinuation
 	policy             currentNodeAdmissionPolicy
 	completion         *currentNodeAdmissionCompletion
 	agentCapacityLease *currentNodeAgentCapacityLease
@@ -125,8 +126,16 @@ func (c *currentNodeAdmissionCompletion) wait(
 	}
 	select {
 	case <-c.done:
-	case <-ctx.Done():
-		return nil, context.Cause(ctx)
+	default:
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			select {
+			case <-c.done:
+			default:
+				return nil, context.Cause(ctx)
+			}
+		}
 	}
 	if c.err != nil {
 		return nil, c.err
@@ -416,6 +425,7 @@ func (c *CurrentNodeController) admitAgent(
 		start.reference,
 		start.taskPromptDelivery,
 		assignmentSteer,
+		start.continuation,
 		func() { c.releaseAgentCapacity(start.agentCapacityLease) },
 		c,
 	)
