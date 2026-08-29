@@ -74,12 +74,7 @@ type WorktreeTransitionAuthority func(func(context.Context) error) error
 
 type WorktreeTransitionTargetSync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
 
-type WorktreeTransitionExecutor func(
-	context.Context,
-	WorktreeTransitionAuthority,
-	WorktreeTransitionTargetSync,
-	func(clientui.WorktreeTransitionOutcome) error,
-) error
+type WorktreeTransitionExecutor func(context.Context, WorktreeTransitionAuthority, WorktreeTransitionTargetSync, func(clientui.WorktreeTransitionOutcome) error) error
 
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,

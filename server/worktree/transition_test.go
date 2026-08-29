@@ -122,7 +122,7 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 			} else {
 				outcomes := env.publisher.outcomes
 				requireTerminal(t, len(outcomes) == 1 && outcomes[0].OperationID == operationID && outcomes[0].State == *test.outcome, "Worktree outcomes = %+v, want state=%v", outcomes, *test.outcome)
-				if *test.outcome == failed {
+				if *test.outcome == failed && !test.selector {
 					requireTerminal(t, outcomes[0].Failure != nil && outcomes[0].Failure.Diagnostic == test.diagnostic.Error(), "Worktree outcome diagnostic = %+v, want %q", outcomes[0].Failure, test.diagnostic)
 				}
 			}

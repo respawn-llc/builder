@@ -122,7 +122,7 @@ func (s *Service) publishWorktreeTransitionResult(
 	}
 	if runErr != nil && !isWorktreeApplied(runErr) {
 		outcome.State = clientui.WorktreeTransitionFailed
-		outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: runErr.Error()}
+		outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: worktreeTransitionDiagnostic(runErr)}
 	}
 	if isWorktreeUnapplied(runErr) && syncFailure != nil {
 		if syncErr := syncFailure(outcome); syncErr != nil {
@@ -131,6 +131,14 @@ func (s *Service) publishWorktreeTransitionResult(
 	}
 	s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
 	return runErr
+}
+
+func worktreeTransitionDiagnostic(err error) string {
+	var selector *worktreecontract.SelectorError
+	if errors.As(err, &selector) && selector.Details != nil {
+		return fmt.Sprintf("worktree selector %q did not resolve to one available worktree; choose an exact Worktree ID or path", selector.Details.Input)
+	}
+	return err.Error()
 }
 
 func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, selector string, authority transitionAuthority, sync transitionTargetSync) error {
