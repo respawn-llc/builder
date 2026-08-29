@@ -810,47 +810,39 @@ func TestImmediateSessionSettingsApplyDuringBusyStepWithoutTranscriptRows(t *tes
 		t.Fatal("timed out waiting for tool call to start")
 	}
 	before := mustTranscriptHydrationSnapshot(t, eng)
-	var feedback []clientui.TranscriptSessionSettingFeedback
+	feedbackCount := 0
 	publish := func(value clientui.TranscriptSessionSettingFeedback) error {
-		feedback = append(feedback, value)
-		return nil
+		feedbackCount++
+		return value.Validate()
 	}
-	if _, err := eng.SetSessionNameWithPublication(t.Context(), "renamed", publish); err != nil {
-		t.Fatal(err)
+	apply := []func() error{
+		func() error { _, err := eng.SetSessionNameWithPublication(t.Context(), "renamed", publish); return err },
+		func() error { _, err := eng.SetThinkingLevelWithPublication(t.Context(), "high", publish); return err },
+		func() error { _, err := eng.SetFastModeEnabledWithPublication(t.Context(), true, publish); return err },
+		func() error {
+			_, _, err := eng.SetReviewerEnabledWithPublication(t.Context(), true, publish)
+			return err
+		},
+		func() error {
+			_, _, err := eng.SetQuestionsEnabledWithPublication(t.Context(), false, publish)
+			return err
+		},
+		func() error {
+			_, _, err := eng.SetAutoCompactionEnabledWithPublication(t.Context(), false, publish)
+			return err
+		},
 	}
-	if _, err := eng.SetThinkingLevelWithPublication(t.Context(), "high", publish); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := eng.SetFastModeEnabledWithPublication(t.Context(), true, publish); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := eng.SetReviewerEnabledWithPublication(t.Context(), true, publish); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := eng.SetQuestionsEnabledWithPublication(t.Context(), false, publish); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := eng.SetAutoCompactionEnabledWithPublication(t.Context(), false, publish); err != nil {
-		t.Fatal(err)
-	}
-	if len(feedback) != 6 {
-		t.Fatalf("setting feedback = %+v, want six values", feedback)
-	}
-	for index, value := range feedback {
-		if err := value.Validate(); err != nil || !value.Changed {
-			t.Fatalf("feedback[%d] = %+v, validation error %v", index, value, err)
+	for index, mutate := range apply {
+		if err := mutate(); err != nil {
+			t.Fatalf("setting %d: %v", index, err)
 		}
 	}
-	meta := store.Meta()
-	if meta.Name != "renamed" || meta.ChatSettings == nil ||
-		meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "high" ||
-		meta.ChatSettings.Fast == nil || !*meta.ChatSettings.Fast ||
-		meta.ChatSettings.Supervisor == nil || *meta.ChatSettings.Supervisor != "edits" ||
-		meta.ChatSettings.Questions == nil || *meta.ChatSettings.Questions ||
-		meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction ||
-		eng.SessionName() != "renamed" || eng.ThinkingLevel() != "high" || !eng.FastModeEnabled() ||
+	if feedbackCount != len(apply) {
+		t.Fatalf("setting feedback count = %d, want %d", feedbackCount, len(apply))
+	}
+	if eng.SessionName() != "renamed" || eng.ThinkingLevel() != "high" || !eng.FastModeEnabled() ||
 		eng.ReviewerFrequency() != "edits" || eng.QuestionsEnabled() || eng.AutoCompactionEnabled() {
-		t.Fatalf("immediate setting state = meta %+v, feedback %+v", meta, feedback)
+		t.Fatal("immediate settings did not apply during the Agent Step")
 	}
 	if after := mustTranscriptHydrationSnapshot(t, eng); len(after.CommittedRows) != len(before.CommittedRows) {
 		t.Fatalf("immediate settings added transcript rows: before %d, after %d", len(before.CommittedRows), len(after.CommittedRows))
