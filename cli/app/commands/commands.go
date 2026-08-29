@@ -157,7 +157,7 @@ func NewDefaultRegistry() *Registry {
 	r.RegisterWithOptions("ps", "List background processes or manage one (usage: /ps [kill|inline|logs] <id>)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionProcesses, Args: strings.TrimSpace(args)}
 	})
-	r.RegisterWithOptions("worktree", "Manage git worktrees (usage: /worktree [create|switch|delete] ...)", RegisterOptions{PreservePromptHistoryDraft: true}, func(args string) Result {
+	r.RegisterWithOptions("worktree", "Manage git worktrees (usage: /worktree [create|switch|delete] ...)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionWorktree, Args: strings.TrimSpace(args)}
 	})
 	r.RegisterAlias("wt", "worktree")

@@ -50,7 +50,7 @@ func (c uiInputController) handleEnteredSlashCommandInput(text, submittedText st
 	}
 	command := selection.command
 	commandResult := m.commandRegistry.Execute(commandText)
-	if m.isBusy() && !isBusyLocalWorktreePicker(commandResult) {
+	if m.isBusy() {
 		switch command.ActiveRunPolicy {
 		case commands.ActiveRunPolicyAllowed:
 		default:
@@ -145,20 +145,11 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 			return "background process client is unavailable", true
 		}
 	case commands.ActionWorktree:
-		if m.isBusy() && !isBusyLocalWorktreePicker(commandResult) {
-			return "cannot run /worktree while model is working", true
-		}
 		if m.worktreeClient == nil {
 			return "worktree client is unavailable", true
 		}
 	}
 	return "", false
-}
-
-func isBusyLocalWorktreePicker(commandResult commands.Result) bool {
-	return commandResult.Handled &&
-		commandResult.Action == commands.ActionWorktree &&
-		strings.TrimSpace(commandResult.Args) == ""
 }
 
 func isCompactCommandResult(commandResult commands.Result) bool {

@@ -22,7 +22,7 @@ func TestDefaultRegistryBusyContract(t *testing.T) {
 		"fast": commands.ActiveRunPolicyAllowed, "supervisor": commands.ActiveRunPolicyAllowed,
 		"autocompaction": commands.ActiveRunPolicyAllowed, "questions": commands.ActiveRunPolicyAllowed,
 		"status": commands.ActiveRunPolicyAllowed, "goal": commands.ActiveRunPolicyAllowed,
-		"ps": commands.ActiveRunPolicyAllowed, "worktree": commands.ActiveRunPolicyRequiresIdle,
+		"ps": commands.ActiveRunPolicyAllowed, "worktree": commands.ActiveRunPolicyAllowed,
 		"copy": commands.ActiveRunPolicyAllowed, "back": commands.ActiveRunPolicyAllowed,
 		"review": commands.ActiveRunPolicyAllowed, "init": commands.ActiveRunPolicyAllowed,
 	}
@@ -93,17 +93,22 @@ func TestBusyEnterOpensReadOverlays(t *testing.T) {
 	}
 }
 
-func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
-	for _, input := range []string{"/worktree list", "/wt switch feature"} {
+func TestBusyEnterDispatchesWorktreeTransitions(t *testing.T) {
+	for _, input := range []string{"/wt switch feature", "/wt leave"} {
 		t.Run(input, func(t *testing.T) {
+			client := &worktreeCommandTestClient{}
 			model := busyCommandTestModel()
+			model.worktreeClient = client
 			testSetMainInput(model, input)
 			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
-			if cmd == nil || testMainInput(updated) != "" {
-				t.Fatalf("blocked command result = cmd %v, input %q", cmd, testMainInput(updated))
+			if cmd == nil || testMainInput(updated) != "" || !updated.worktrees.switchPending {
+				t.Fatalf("transition result = cmd %v input %q pending %t", cmd, testMainInput(updated), updated.worktrees.switchPending)
 			}
-			requireBusyCommandQueuesEmpty(t, updated)
+			_ = cmd()
+			if got := len(client.enterRequests) + len(client.leaveRequests); got != 1 {
+				t.Fatalf("transition requests = enter %d leave %d, want one", len(client.enterRequests), len(client.leaveRequests))
+			}
 		})
 	}
 }
@@ -133,34 +138,51 @@ func TestBusyEnterOpensBareWorktreePickerAliases(t *testing.T) {
 	}
 }
 
-func TestPromptCommandRemainsTypedRuntimeSubmission(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	model := newProjectedTestUIModel(
-		client,
-		WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
-		WithUIPromptCommandCatalogEntries([]commands.PromptCommandCatalogEntry{{
-			Name:    "prompt:inspect",
-			Preview: "Inspect the requested scope",
-		}}),
-	)
-	model.commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(model.promptCatalogEntries)
-	submitted := "/prompt:inspect cli/app"
-	testSetMainInput(model, submitted)
-
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	for _, msg := range collectCmdMessages(t, cmd) {
-		model = updateUIModel(t, model, msg)
+func TestBusyEnterRoutesDirectWorktreeCommands(t *testing.T) {
+	for _, input := range []string{"/wt status", "/wt create", "/wt delete feature"} {
+		t.Run(input, func(t *testing.T) {
+			client := &worktreeCommandTestClient{listResp: testMainWorktreeListResponse()}
+			model := busyCommandTestModel()
+			model.worktreeClient = client
+			testSetMainInput(model, input)
+			_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			for range collectCmdMessages(t, cmd) {
+			}
+			if len(client.listRequests) != 1 {
+				t.Fatalf("worktree list requests = %d, want direct owner call", len(client.listRequests))
+			}
+		})
 	}
+}
 
-	if client.submitCalls != 1 {
-		t.Fatalf("typed prompt steering calls = %d, want 1", client.submitCalls)
-	}
-	if client.submitInput.Kind != runtimeinput.KindPromptCommand ||
-		client.submitInput.PromptCommand == nil ||
-		client.submitInput.PromptCommand.Name != "prompt:inspect" ||
-		client.submitInput.PromptCommand.Arguments != "cli/app" {
-		t.Fatalf("typed prompt steering input = %+v", client.submitInput)
+func TestBusyPromptCommandsRemainTypedRuntimeSubmissions(t *testing.T) {
+	for _, test := range []struct{ input, name string }{
+		{"/prompt:inspect cli/app", "prompt:inspect"},
+		{"/review cli/app", "prompt:review"},
+		{"/init cli/app", "prompt:init"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			client := &runtimeControlFakeClient{}
+			model := newProjectedTestUIModel(client,
+				WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
+				WithUIPromptCommandCatalogEntries([]commands.PromptCommandCatalogEntry{{Name: "prompt:inspect", Preview: "Inspect"}}),
+			)
+			model.commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(model.promptCatalogEntries)
+			model.setRuntimeActivityBusyForTest(true)
+			model.activity = uiActivityRunning
+			testSetMainInput(model, test.input)
+			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			model = next.(*uiModel)
+			for _, msg := range collectCmdMessages(t, cmd) {
+				model = updateUIModel(t, model, msg)
+			}
+			if client.submitCalls != 1 || model.exitAction != UIActionNone ||
+				client.submitInput.Kind != runtimeinput.KindPromptCommand ||
+				client.submitInput.PromptCommand == nil ||
+				client.submitInput.PromptCommand.Name != test.name {
+				t.Fatalf("busy prompt result = calls %d action %q input %+v", client.submitCalls, model.exitAction, client.submitInput)
+			}
+		})
 	}
 }
 
@@ -183,7 +205,6 @@ func TestBusyEnterDispatchesCompact(t *testing.T) {
 func TestBusyNavigationCommandsStartTheirExistingTransitions(t *testing.T) {
 	for input, action := range map[string]UIAction{
 		"/exit": UIActionExit, "/new": UIActionNewSession, "/resume": UIActionResume,
-		"/review": UIActionNewSession, "/init": UIActionNewSession,
 	} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()

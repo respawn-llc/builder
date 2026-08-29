@@ -49,3 +49,5 @@ The picker shows a one-line preview made from the first 256 Unicode characters a
 If the exact `$ARGUMENTS` token appears in the body, Kent replaces every occurrence with trimmed trailing arguments. Otherwise, Kent appends non-empty trailing arguments after one blank line.
 
 First-time setup can import slash-command directories from supported providers. An unavailable or unknown `/prompt:` command reports an error and is never sent to the model as plain text. Other unknown slash commands retain their normal behavior.
+
+During an active turn, `/review`, `/init`, and available `/prompt:<name>` commands steer their server-expanded prompt into the current session. Outside an active turn, `/review` and `/init` reuse an empty session or start a fresh child session.
