@@ -26,7 +26,7 @@ type reviewerRequestConfig struct {
 	ModelCapabilities session.LockedModelCapabilities
 }
 
-func (e *Engine) runReviewerSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error) {
+func (e *Engine) runReviewerSuggestions(ctx context.Context, stepID string, reviewerClient *observedModelClient) (reviewerSuggestionsResult, error) {
 	e.ensureOrchestrationCollaborators()
 	prepared, err := e.reviewerFlow.Prepare(ctx, stepID, reviewerClient)
 	if err != nil {
@@ -35,9 +35,6 @@ func (e *Engine) runReviewerSuggestions(ctx context.Context, stepID string, revi
 	result := e.reviewerFlow.Run(ctx, prepared)
 	if result.err != nil {
 		return reviewerSuggestionsResult{}, result.err
-	}
-	if err := e.observePromptCacheResponse(stepID, prepared.cacheObservation, result.usage); err != nil {
-		return reviewerSuggestionsResult{}, err
 	}
 	return result.suggestions, nil
 }

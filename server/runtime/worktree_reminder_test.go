@@ -715,7 +715,7 @@ func TestSubmitUserMessageMaterializesWorktreeReminderBeforeModelFailure(t *test
 	assertWorktreeReminderEntryCount(t, eng.ChatSnapshot(), 1)
 
 	successClient := &fakeClient{responses: []llm.Response{finalOutputItemResponse("ok")}}
-	eng.llm = successClient
+	eng.llm = newObservedModelClient(successClient)
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "continue again"); err != nil {
 		t.Fatalf("submit retry: %v", err)

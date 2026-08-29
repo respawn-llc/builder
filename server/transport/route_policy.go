@@ -369,16 +369,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.Attachment.SessionID, true
 	case serverapi.RuntimeSetSessionNameRequest:
 		return p.SessionID, true
-	case serverapi.RuntimeSetThinkingLevelRequest:
-		return p.SessionID, true
-	case serverapi.RuntimeSetFastModeEnabledRequest:
-		return p.SessionID, true
-	case serverapi.RuntimeSetReviewerEnabledRequest:
-		return p.SessionID, true
-	case serverapi.RuntimeSetAutoCompactionEnabledRequest:
-		return p.SessionID, true
-	case serverapi.RuntimeSetQuestionsEnabledRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeAppendCommittedEntryRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeShouldCompactBeforeUserMessageRequest:

@@ -136,13 +136,9 @@ func TestTranscriptSessionIdentityReplacesConflictingConversationFreshnessCaches
 
 func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
 	role := "worker"
-	runtimeClient := &runtimeControlFakeClient{
-		cachedMainView: clientui.RuntimeMainView{
-			Session: clientui.RuntimeSessionView{AgentRole: &role},
-		},
-		hasCachedMainView: true,
-	}
-	request := newProjectedTestUIModel(runtimeClient).newStatusRequest(time.Now())
+	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
+	model.status.snapshot.AgentRole = &role
+	request := model.newStatusRequest(time.Now())
 	if request.AgentRole == nil || *request.AgentRole != role {
 		t.Fatalf("status request agent role = %v, want %q", request.AgentRole, role)
 	}

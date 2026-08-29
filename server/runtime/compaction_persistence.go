@@ -28,9 +28,10 @@ func (p compactionPersistence) setActivity(
 	requestID *runtimeids.CompactionRequestID,
 	mode compactionMode,
 	count int,
+	activeKind ActiveKind,
 	active bool,
 ) error {
-	return p.engine.steer(stepID, steerCompactionActivityIntent(active, requestID, string(mode), count))
+	return p.engine.steer(stepID, steerCompactionActivityIntent(active, requestID, string(mode), count, activeKind))
 }
 
 func (p compactionPersistence) emitStatus(

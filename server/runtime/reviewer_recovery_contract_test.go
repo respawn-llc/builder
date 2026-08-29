@@ -11,7 +11,7 @@ import (
 
 func TestReviewerSkippedWhenNoToolCalls(t *testing.T) {
 	pipeline := defaultReviewerPipeline{}
-	if pipeline.ShouldRunTurn("edits", &fakeClient{}, false) {
+	if pipeline.ShouldRunTurn("edits", newObservedModelClient(&fakeClient{}), false) {
 		t.Fatal("Reviewer ran for edits frequency without a patch edit")
 	}
 }

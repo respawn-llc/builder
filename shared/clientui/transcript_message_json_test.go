@@ -156,7 +156,6 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 	}
 	text := "queued"
 	final := "done"
-	fastModeEnabled := true
 	events := []TranscriptEvent{
 		NewTranscriptEvent(TranscriptHydration{RuntimeReadModelUpdate: update, SessionIdentity: transcriptTestSessionIdentity(t), SessionStatus: transcriptTestSessionStatus(), CommittedRows: []TranscriptCommittedRow{}}),
 		NewTranscriptEvent(TranscriptCommittedRow{Visibility: transcript.EntryVisibilityOngoing, Integrity: transcript.RowIntegrityValid, Kind: TranscriptRowAssistant, Assistant: &TranscriptAssistantRow{StepID: stepID, Text: "done", Phase: transcript.AssistantPhaseFinal}}),
@@ -183,11 +182,6 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 			Kind:           runtimeinput.PendingWorkItemKindManualCompaction,
 			CanonicalInput: "/compact",
 		}}),
-		NewTranscriptEvent(TranscriptSessionSettingFeedback{
-			Kind:     SessionSettingFastMode,
-			Changed:  true,
-			FastMode: &fastModeEnabled,
-		}),
 		NewTranscriptEvent(TranscriptHumanInputInterrupted{Items: []TranscriptInterruptedHumanInputItem{{
 			QueueItemID: transcriptTestQueueItemID(t),
 			Text:        "restore verbatim",

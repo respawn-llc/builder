@@ -5,7 +5,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -540,30 +539,13 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 		}
 	})
 
-	t.Run("provider-specific thinking level", func(t *testing.T) {
-		if err := eng.SetThinkingLevel(t.Context(), " provider-specific-depth "); err != nil {
-			t.Fatalf("set provider-specific thinking level: %v", err)
-		}
-		if got := eng.ThinkingLevel(); got != "provider-specific-depth" {
-			t.Fatalf("thinking level = %q, want provider-specific-depth", got)
-		}
-		meta := eng.store.Meta()
-		if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
-			t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
-		}
-	})
-
 	t.Run("unsupported fast mode", func(t *testing.T) {
-		published := false
-		changed, err := eng.SetFastModeEnabledWithPublication(t.Context(), true, func(clientui.TranscriptSessionSettingFeedback) error {
-			published = true
-			return nil
-		})
+		changed, err := eng.SetFastModeEnabled(true)
 		if err == nil {
 			t.Fatal("expected fast mode unsupported error")
 		}
-		if changed || published {
-			t.Fatalf("rejected fast mode = changed %t, published %t", changed, published)
+		if changed {
+			t.Fatal("did not expect changed=true for unsupported fast mode")
 		}
 		if eng.FastModeEnabled() {
 			t.Fatal("did not expect fast mode enabled after failure")
@@ -704,9 +686,10 @@ func TestFastModeCanChangeAfterLock(t *testing.T) {
 	}
 }
 
-func TestSetFastModePersistsSessionSetting(t *testing.T) {
+func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{Model: "gpt-5.3-codex"})
+	cfg := Config{Model: "gpt-5.3-codex"}
+	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, cfg)
 
 	changed, err := eng.SetFastModeEnabled(true)
 	if err != nil {
@@ -715,29 +698,10 @@ func TestSetFastModePersistsSessionSetting(t *testing.T) {
 	if !changed || !eng.FastModeEnabled() {
 		t.Fatalf("expected fast mode enabled, changed=%v enabled=%v", changed, eng.FastModeEnabled())
 	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.Fast == nil || !*meta.ChatSettings.Fast {
-		t.Fatalf("Session Fast Mode override = %+v, want true", meta.ChatSettings)
-	}
-}
 
-func TestSetAutoCompactionEnabledPersistsSessionSetting(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-
-	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
-	if err != nil {
-		t.Fatalf("disable auto-compaction: %v", err)
-	}
-	if !changed || enabled {
-		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
-	}
-	if got := eng.AutoCompactionEnabled(); got {
-		t.Fatalf("expected runtime auto-compaction disabled, got %v", got)
-	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction {
-		t.Fatalf("Session Auto-compaction override = %+v, want false", meta.ChatSettings)
+	restarted := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, cfg)
+	if restarted.FastModeEnabled() {
+		t.Fatal("expected fast mode disabled after restart")
 	}
 }
 
@@ -757,7 +721,7 @@ func TestSetAutoCompactionEnabledRejectsAfterClose(t *testing.T) {
 	}
 }
 
-func TestImmediateSessionSettingsApplyDuringBusyStepWithoutTranscriptRows(t *testing.T) {
+func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -790,12 +754,6 @@ func TestImmediateSessionSettingsApplyDuringBusyStepWithoutTranscriptRows(t *tes
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model:                 "gpt-5",
 		AutoCompactTokenLimit: 350000,
-		Reviewer: ReviewerConfig{
-			Frequency:     "off",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        &fakeClient{},
-		},
 	})
 
 	submitDone := make(chan error, 1)
@@ -809,58 +767,42 @@ func TestImmediateSessionSettingsApplyDuringBusyStepWithoutTranscriptRows(t *tes
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for tool call to start")
 	}
-	before := mustTranscriptHydrationSnapshot(t, eng)
-	feedbackCount := 0
-	publish := func(value clientui.TranscriptSessionSettingFeedback) error {
-		feedbackCount++
-		return value.Validate()
+	type settingResult struct {
+		changed bool
+		enabled bool
+		err     error
 	}
-	apply := []func() error{
-		func() error { _, err := eng.SetSessionNameWithPublication(t.Context(), "renamed", publish); return err },
-		func() error { _, err := eng.SetThinkingLevelWithPublication(t.Context(), "high", publish); return err },
-		func() error { _, err := eng.SetFastModeEnabledWithPublication(t.Context(), true, publish); return err },
-		func() error {
-			_, _, err := eng.SetReviewerEnabledWithPublication(t.Context(), true, publish)
-			return err
-		},
-		func() error {
-			_, _, err := eng.SetQuestionsEnabledWithPublication(t.Context(), false, publish)
-			return err
-		},
-		func() error {
-			_, _, err := eng.SetAutoCompactionEnabledWithPublication(t.Context(), false, publish)
-			return err
-		},
+	settingDone := make(chan settingResult, 1)
+	go func() {
+		changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
+		settingDone <- settingResult{changed: changed, enabled: enabled, err: err}
+	}()
+	select {
+	case result := <-settingDone:
+		t.Fatalf("setting applied during protected Step: %+v", result)
+	case <-time.After(50 * time.Millisecond):
 	}
-	for index, mutate := range apply {
-		if err := mutate(); err != nil {
-			t.Fatalf("setting %d: %v", index, err)
-		}
-	}
-	if feedbackCount != len(apply) {
-		t.Fatalf("setting feedback count = %d, want %d", feedbackCount, len(apply))
-	}
-	if eng.SessionName() != "renamed" || eng.ThinkingLevel() != "high" || !eng.FastModeEnabled() ||
-		eng.ReviewerFrequency() != "edits" || eng.QuestionsEnabled() || eng.AutoCompactionEnabled() {
-		t.Fatal("immediate settings did not apply during the Agent Step")
-	}
-	if after := mustTranscriptHydrationSnapshot(t, eng); len(after.CommittedRows) != len(before.CommittedRows) {
-		t.Fatalf("immediate settings added transcript rows: before %d, after %d", len(before.CommittedRows), len(after.CommittedRows))
-	}
-
 	close(release)
+
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit while disabling auto-compaction: %v", err)
+	}
+	result := <-settingDone
+	if result.err != nil {
+		t.Fatalf("disable auto-compaction: %v", result.err)
+	}
+	if !result.changed || result.enabled {
+		t.Fatalf("setting result = %+v, want changed and disabled", result)
 	}
 	if got := len(client.compactionCalls); got != 0 {
 		t.Fatalf("expected no compaction call for in-flight run after disabling auto-compaction, got %d", got)
 	}
 }
 
-func TestSetReviewerEnabledPersistsSessionSetting(t *testing.T) {
+func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	cfg := Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "off",
@@ -868,7 +810,8 @@ func TestSetReviewerEnabledPersistsSessionSetting(t *testing.T) {
 			ThinkingLevel: "low",
 			Client:        &fakeClient{},
 		},
-	})
+	}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
 	changed, mode, err := eng.SetReviewerEnabled(true)
 	if err != nil {
 		t.Fatalf("enable reviewer: %v", err)
@@ -879,9 +822,10 @@ func TestSetReviewerEnabledPersistsSessionSetting(t *testing.T) {
 	if got := eng.ReviewerFrequency(); got != "edits" {
 		t.Fatalf("reviewer frequency = %q, want edits", got)
 	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.Supervisor == nil || *meta.ChatSettings.Supervisor != "edits" {
-		t.Fatalf("Session Supervisor override = %+v, want edits", meta.ChatSettings)
+
+	restarted := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
+	if got := restarted.ReviewerFrequency(); got != "off" {
+		t.Fatalf("reviewer frequency after restart = %q, want off", got)
 	}
 }
 

@@ -76,7 +76,7 @@ func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaConte
 		t.Fatalf("compaction calls = %d, want one", len(client.compactionCalls))
 	}
 	foundTerminalOutput := false
-	for _, item := range client.compactionCalls[0].InputItems {
+	for _, item := range client.compactionCalls[0].Items {
 		if item.Type != llm.ResponseItemTypeMessage ||
 			item.Role == nil ||
 			*item.Role != llm.RoleAssistant ||
@@ -87,7 +87,7 @@ func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaConte
 		foundTerminalOutput = true
 	}
 	if !foundTerminalOutput {
-		t.Fatalf("compaction input omitted durable terminal assistant output: %+v", client.compactionCalls[0].InputItems)
+		t.Fatalf("compaction input omitted durable terminal assistant output: %+v", client.compactionCalls[0].Items)
 	}
 
 	workflowModes := 0

@@ -1,7 +1,6 @@
 package serverapi
 
 import (
-	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -9,8 +8,12 @@ import (
 	"core/shared/clientui"
 )
 
-func TestRuntimeGoalShowResponseEncodesAbsentGoalAsNull(t *testing.T) {
-	wire, err := json.Marshal(RuntimeGoalShowResponse{})
+func TestRuntimeGoalShowResponseOmitsAbsentGoal(t *testing.T) {
+	wire, err := json.Marshal(RuntimeGoalShowResponse{
+		GoalEnvelope: clientui.GoalEnvelope{
+			Availability: clientui.GoalAvailabilityAvailable,
+		},
+	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -18,21 +21,25 @@ func TestRuntimeGoalShowResponseEncodesAbsentGoalAsNull(t *testing.T) {
 	if err := json.Unmarshal(wire, &fields); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	goal, exists := fields["goal"]
-	if !exists || !bytes.Equal(goal, []byte("null")) {
-		t.Fatalf("goal field = %s, exists=%t; want null", goal, exists)
+	if _, exists := fields["goal"]; exists {
+		t.Fatalf("goal field = %s; want absent", fields["goal"])
 	}
 }
 
 func TestRuntimeGoalShowResponseRejectsUnknownGoalStatus(t *testing.T) {
 	now := time.Now().UTC()
-	err := (RuntimeGoalShowResponse{Goal: &clientui.Goal{
-		ID:        "goal-1",
-		Objective: "ship",
-		Status:    clientui.RuntimeGoalStatus("unknown"),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}}).Validate()
+	err := (RuntimeGoalShowResponse{
+		GoalEnvelope: clientui.GoalEnvelope{
+			Availability: clientui.GoalAvailabilityAvailable,
+			Goal: &clientui.Goal{
+				ID:        "goal-1",
+				Objective: "ship",
+				Status:    clientui.RuntimeGoalStatus("unknown"),
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+		},
+	}).Validate()
 	if err == nil {
 		t.Fatal("RuntimeGoalShowResponse accepted an unknown Goal status")
 	}

@@ -388,54 +388,6 @@ func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing
 	}
 }
 
-func TestSessionSettingPublicationBatchesAuthoritativeStateBeforeFeedback(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-	subscription := subscribeTranscriptForTest(t, registry, engine.SessionID())
-	if message := nextTranscriptMessage(t, subscription); message.Kind() != clientui.TranscriptMessageHydration {
-		t.Fatalf("first message kind = %q, want hydration", message.Kind())
-	}
-
-	name := "renamed"
-	if err := engine.SetSessionName(t.Context(), name); err != nil {
-		t.Fatal(err)
-	}
-	feedback := clientui.TranscriptSessionSettingFeedback{
-		Kind: clientui.SessionSettingSessionName, Changed: true, SessionName: &name,
-	}
-	if err := registry.PublishSessionSettingFeedback(engine.SessionID(), feedback); err != nil {
-		t.Fatal(err)
-	}
-	state := nextTranscriptMessage(t, subscription)
-	publishedFeedback := nextTranscriptMessage(t, subscription)
-	if state.Kind() != clientui.TranscriptMessageSessionIdentity ||
-		publishedFeedback.Kind() != clientui.TranscriptMessageSessionSettingFeedback ||
-		publishedFeedback.Sequence != state.Sequence+1 ||
-		transcriptPayload[clientui.TranscriptSessionSettingFeedback](t, publishedFeedback).Kind != feedback.Kind {
-		t.Fatalf("setting publication order = state %+v, feedback %+v", state, publishedFeedback)
-	}
-
-	enabled := false
-	if _, _, err := engine.SetAutoCompactionEnabled(t.Context(), enabled); err != nil {
-		t.Fatal(err)
-	}
-	feedback = clientui.TranscriptSessionSettingFeedback{
-		Kind: clientui.SessionSettingAutoCompaction, Changed: true, AutoCompaction: &enabled,
-	}
-	if err := registry.PublishSessionSettingFeedback(engine.SessionID(), feedback); err != nil {
-		t.Fatal(err)
-	}
-	state = nextTranscriptMessage(t, subscription)
-	publishedFeedback = nextTranscriptMessage(t, subscription)
-	if state.Kind() != clientui.TranscriptMessageSessionStatus ||
-		publishedFeedback.Kind() != clientui.TranscriptMessageSessionSettingFeedback ||
-		publishedFeedback.Sequence != state.Sequence+1 ||
-		transcriptPayload[clientui.TranscriptSessionSettingFeedback](t, publishedFeedback).Kind != feedback.Kind {
-		t.Fatalf("setting publication order = state %+v, feedback %+v", state, publishedFeedback)
-	}
-}
-
 func TestRuntimeSnapshotsStopExposingRuntimeBeforeDrainCleanupCompletes(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)

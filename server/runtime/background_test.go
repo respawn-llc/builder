@@ -333,7 +333,7 @@ func TestRuntimeSteeringRejectsClosedEngineWithoutQueueing(t *testing.T) {
 	}
 }
 
-func TestBackgroundAgentStepDoesNotBlockImmediateSettingMutation(t *testing.T) {
+func TestBackgroundFinalAnswerAppliesRuntimeMutationAtStepBoundary(t *testing.T) {
 	providerStarted := make(chan struct{})
 	releaseProvider := make(chan struct{})
 	client := &hookClient{
@@ -377,17 +377,19 @@ func TestBackgroundAgentStepDoesNotBlockImmediateSettingMutation(t *testing.T) {
 	}()
 	select {
 	case err := <-mutationDone:
-		if err != nil {
-			t.Fatalf("apply immediate setting during background Agent Step: %v", err)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("background Agent Step blocked immediate setting mutation")
-	}
-	if got := engine.ThinkingLevel(); got != "low" {
-		t.Fatalf("Thinking during background Agent Step = %q, want low", got)
+		t.Fatalf("Runtime mutation completed during protected background Agent Step: %v", err)
+	case <-time.After(25 * time.Millisecond):
 	}
 
 	close(releaseProvider)
+	select {
+	case err := <-mutationDone:
+		if err != nil {
+			t.Fatalf("apply Runtime mutation at background Step Boundary: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("background Step Boundary stranded the Runtime mutation")
+	}
 	select {
 	case err := <-backgroundDone:
 		if err != nil {

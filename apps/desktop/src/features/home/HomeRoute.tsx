@@ -34,7 +34,6 @@ import { ProjectCreateDialog, type ProjectDraft } from "./ProjectCreateForm";
 import { useHomeSidebarMode } from "./useHomeSidebarMode";
 import {
   useGlobalAttentionPages,
-  useGlobalAttentionEvents,
   useProjectCreation,
   useProjectCreationEvents,
   useProjectPages,
@@ -60,8 +59,7 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
   const queryClient = useQueryClient();
   const creation = useProjectCreation();
   const projects = useProjectPages();
-  const attentionSubscriptionReady = useGlobalAttentionEvents();
-  const attention = useGlobalAttentionPages(attentionSubscriptionReady);
+  const attention = useGlobalAttentionPages();
   const [category, setCategory] = useState<HomeSidebarCategory>("projects");
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];

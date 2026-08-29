@@ -95,7 +95,7 @@ func TestGenerateWithRetryRejectsNonRetriableModelErrorsWithoutRetry(t *testing.
 			_, err := engine.generateWithRetryClient(
 				context.Background(),
 				"",
-				client,
+				newObservedModelClient(client),
 				llm.Request{Model: "gpt-5", ToolChoiceMode: llm.ToolChoiceModeAutomatic},
 				nil,
 				nil,

@@ -1648,7 +1648,8 @@ func TestProtocolErrorDecodesPendingWorkCapacityDirectly(t *testing.T) {
 }
 
 func TestRemotePendingWorkContractsPreserveTypedResults(t *testing.T) {
-	guidance, exact := "keep details", "/compact keep details"
+	guidance := "keep details"
+	exact := "/compact keep details"
 	requestID := runtimeids.NewCompactionRequestID()
 	wire := mustJSON(t, serverapi.RuntimeCompactContextRequest{
 		SessionID: "session-1", RequestID: requestID,

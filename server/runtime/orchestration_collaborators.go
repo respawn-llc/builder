@@ -63,7 +63,7 @@ type contextCompactor interface {
 	CompactContextAdmissionWithAcceptance(ctx context.Context, requestID runtimeids.CompactionRequestID, admission runtimeinput.ManualCompactionAdmission, accept CommandAcceptance) (session.CommitReceipt, error)
 	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForWorkflowPostCompletion(ctx context.Context) (session.CommitReceipt, error)
-	CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
+	CompactContextForPreSubmitWithAcceptance(ctx context.Context, text string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
 	ShouldCompactBeforeUserMessage(ctx context.Context, text string) (bool, error)
@@ -71,7 +71,7 @@ type contextCompactor interface {
 
 type stepLoopOptions struct {
 	ReviewerFrequency              string
-	ReviewerClient                 llm.Client
+	ReviewerClient                 *observedModelClient
 	RefreshReviewerConfigOnResolve bool
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
 }
@@ -160,21 +160,19 @@ type messageLifecycle interface {
 }
 
 type reviewerPipeline interface {
-	ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool
-	Prepare(ctx context.Context, stepID string, reviewerClient llm.Client) (preparedReviewerRequest, error)
+	ShouldRunTurn(frequency string, reviewerClient *observedModelClient, patchEditsApplied bool) bool
+	Prepare(ctx context.Context, stepID string, reviewerClient *observedModelClient) (preparedReviewerRequest, error)
 	Run(ctx context.Context, prepared preparedReviewerRequest) reviewerProviderResult
 }
 
 type preparedReviewerRequest struct {
-	originStepID     runtimeids.StepID
-	client           llm.Client
-	request          llm.Request
-	cacheObservation preparedCacheRequestObservation
+	originStepID runtimeids.StepID
+	client       *observedModelClient
+	request      cacheObservedRequest
 }
 
 type reviewerProviderResult struct {
 	suggestions reviewerSuggestionsResult
-	usage       llm.Usage
 	err         error
 }
 

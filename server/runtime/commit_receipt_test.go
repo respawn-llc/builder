@@ -10,9 +10,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
-	"core/shared/clientui"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 )
 
 func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
@@ -62,357 +60,33 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 	})
 }
 
-func TestImmediateSettingsApplyCommittedStateOnPersistenceObserverFailure(t *testing.T) {
-	t.Parallel()
-	type controlCase struct {
-		name      string
-		newEngine func(*testing.T, *session.Store) *Engine
-		apply     func(*Engine) (bool, error)
-		isApplied func(*Engine) bool
-	}
-	cases := []controlCase{
-		{
-			name: "fast mode",
-			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
-					ProviderID:           "openai",
-					SupportsResponsesAPI: true,
-					IsOpenAIFirstParty:   true,
-				}}, Config{Model: "gpt-5.3-codex"})
-			},
-			apply: func(engine *Engine) (bool, error) {
-				return engine.SetFastModeEnabledWithPublication(context.Background(), true, nil)
-			},
-			isApplied: func(engine *Engine) bool { return engine.FastModeEnabled() },
-		},
-		{
-			name: "questions",
-			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-			},
-			apply: func(engine *Engine) (bool, error) {
-				changed, _, err := engine.SetQuestionsEnabledWithPublication(context.Background(), false, nil)
-				return changed, err
-			},
-			isApplied: func(engine *Engine) bool { return !engine.QuestionsEnabled() },
-		},
-		{
-			name: "reviewer",
-			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
-					ID:      toolspec.ToolExecCommand,
-					Handler: fakeTool{name: toolspec.ToolExecCommand},
-				}), Config{
-					Model: "gpt-5",
-					Reviewer: ReviewerConfig{
-						Frequency:     "off",
-						Model:         "gpt-5",
-						ThinkingLevel: "low",
-						Client:        &fakeClient{},
-					},
-				})
-			},
-			apply: func(engine *Engine) (bool, error) {
-				changed, _, err := engine.SetReviewerEnabledWithPublication(context.Background(), true, nil)
-				return changed, err
-			},
-			isApplied: func(engine *Engine) bool { return engine.ReviewerFrequency() == "edits" },
-		},
-	}
-
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			observerErr := errors.New("control feedback observer failed")
-			gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-			store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-			engine := testCase.newEngine(t, store)
-			gate.FailNext(observerErr)
-
-			changed, err := testCase.apply(engine)
-			if !errors.Is(err, observerErr) {
-				t.Fatalf("control error = %v, want observer error", err)
-			}
-			if !changed || !testCase.isApplied(engine) {
-				t.Fatalf("committed setting did not apply: changed=%v", changed)
-			}
-			if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
-				t.Fatalf("immediate setting projected committed rows: %+v", rows)
-			}
-		})
-	}
-}
-
-func TestFastModePersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
-		ProviderID:           "openai",
-		SupportsResponsesAPI: true,
-		IsOpenAIFirstParty:   true,
-	}}, Config{Model: "gpt-5.3-codex"})
-	entered, release := gate.BlockNext()
-	defer release()
-
-	result := make(chan struct {
-		changed bool
-		err     error
-	}, 1)
-	go func() {
-		changed, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, nil)
-		result <- struct {
-			changed bool
-			err     error
-		}{changed: changed, err: err}
-	}()
-	select {
-	case <-entered:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Fast Mode metadata persistence")
-	}
-	requireSessionFastModeOverride(t, store, true)
-	if engine.FastModeEnabled() {
-		t.Fatal("Fast Mode applied to live Runtime before Session metadata persistence completed")
-	}
-	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
-		t.Fatalf("Fast Mode feedback committed before Session metadata persistence: %+v", rows)
-	}
-
-	release()
-	select {
-	case got := <-result:
-		if got.err != nil || !got.changed {
-			t.Fatalf("SetFastModeEnabledWithPublication = %+v", got)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Fast Mode completion")
-	}
-	if !engine.FastModeEnabled() {
-		t.Fatal("Fast Mode was not applied after Session metadata persistence")
-	}
-}
-
-func TestQuestionsPersistBeforeFeedbackAndLiveProjection(t *testing.T) {
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	entered, release := gate.BlockNext()
-	defer release()
-
-	result := make(chan struct {
-		changed bool
-		enabled bool
-		err     error
-	}, 1)
-	go func() {
-		changed, enabled, err := engine.SetQuestionsEnabledWithPublication(t.Context(), false, nil)
-		result <- struct {
-			changed bool
-			enabled bool
-			err     error
-		}{changed: changed, enabled: enabled, err: err}
-	}()
-	select {
-	case <-entered:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Questions metadata persistence")
-	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.Questions == nil || *meta.ChatSettings.Questions {
-		t.Fatalf("Session Questions override = %+v, want false", meta.ChatSettings)
-	}
-	if !engine.QuestionsEnabled() {
-		t.Fatal("Questions applied to live Runtime before Session metadata persistence completed")
-	}
-	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
-		t.Fatalf("Questions feedback committed before Session metadata persistence: %+v", rows)
-	}
-
-	release()
-	select {
-	case got := <-result:
-		if got.err != nil || !got.changed || got.enabled {
-			t.Fatalf("SetQuestionsEnabledWithPublication = %+v", got)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Questions completion")
-	}
-	if engine.QuestionsEnabled() {
-		t.Fatal("Questions was not applied after Session metadata persistence")
-	}
-}
-
-func TestReviewerPersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
-		ID:      toolspec.ToolExecCommand,
-		Handler: fakeTool{name: toolspec.ToolExecCommand},
-	}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "off",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        &fakeClient{},
-		},
-	})
-	entered, release := gate.BlockNext()
-	defer release()
-
-	result := make(chan struct {
-		changed bool
-		mode    string
-		err     error
-	}, 1)
-	go func() {
-		changed, mode, err := engine.SetReviewerEnabledWithPublication(t.Context(), true, nil)
-		result <- struct {
-			changed bool
-			mode    string
-			err     error
-		}{changed: changed, mode: mode, err: err}
-	}()
-	select {
-	case <-entered:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Reviewer metadata persistence")
-	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.Supervisor == nil || *meta.ChatSettings.Supervisor != "edits" {
-		t.Fatalf("Session Supervisor override = %+v, want edits", meta.ChatSettings)
-	}
-	if engine.ReviewerFrequency() != "off" {
-		t.Fatal("Reviewer applied to live Runtime before Session metadata persistence completed")
-	}
-	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
-		t.Fatalf("Reviewer feedback committed before Session metadata persistence: %+v", rows)
-	}
-
-	release()
-	select {
-	case got := <-result:
-		if got.err != nil || !got.changed || got.mode != "edits" {
-			t.Fatalf("SetReviewerEnabledWithPublication = %+v", got)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Reviewer completion")
-	}
-	if engine.ReviewerFrequency() != "edits" {
-		t.Fatal("Reviewer was not applied after Session metadata persistence")
-	}
-}
-
-func TestStateOnlyChatSettingsPersistBeforeLiveProjection(t *testing.T) {
-	t.Run("Thinking", func(t *testing.T) {
-		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-		engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
-			Model:                   "gpt-5",
-			ThinkingLevel:           "medium",
-			SupportedThinkingValues: []string{"low", "medium", "high"},
-		})
-		entered, release := gate.BlockNext()
-		defer release()
-
-		result := make(chan error, 1)
-		go func() {
-			result <- engine.SetThinkingLevel(t.Context(), "high")
-		}()
-		select {
-		case <-entered:
-		case <-time.After(runtimeTestSynchronizationTimeout):
-			t.Fatal("timed out waiting for Thinking metadata persistence")
-		}
-		meta := store.Meta()
-		if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "high" {
-			t.Fatalf("Session Thinking override = %+v, want high", meta.ChatSettings)
-		}
-		if got := engine.ThinkingLevel(); got != "medium" {
-			t.Fatalf("live Thinking = %q before metadata persistence completed, want medium", got)
-		}
-
-		release()
-		select {
-		case err := <-result:
-			if err != nil {
-				t.Fatalf("SetThinkingLevel: %v", err)
-			}
-		case <-time.After(runtimeTestSynchronizationTimeout):
-			t.Fatal("timed out waiting for Thinking completion")
-		}
-		if got := engine.ThinkingLevel(); got != "high" {
-			t.Fatalf("live Thinking = %q after metadata persistence, want high", got)
-		}
-	})
-
-	t.Run("Auto-compaction", func(t *testing.T) {
-		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-		engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-		entered, release := gate.BlockNext()
-		defer release()
-
-		result := make(chan struct {
-			changed bool
-			enabled bool
-			err     error
-		}, 1)
-		go func() {
-			changed, enabled, err := engine.SetAutoCompactionEnabled(t.Context(), false)
-			result <- struct {
-				changed bool
-				enabled bool
-				err     error
-			}{changed: changed, enabled: enabled, err: err}
-		}()
-		select {
-		case <-entered:
-		case <-time.After(runtimeTestSynchronizationTimeout):
-			t.Fatal("timed out waiting for Auto-compaction metadata persistence")
-		}
-		meta := store.Meta()
-		if meta.ChatSettings == nil || meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction {
-			t.Fatalf("Session Auto-compaction override = %+v, want false", meta.ChatSettings)
-		}
-		if !engine.AutoCompactionEnabled() {
-			t.Fatal("Auto-compaction applied to live Runtime before Session metadata persistence completed")
-		}
-
-		release()
-		select {
-		case got := <-result:
-			if got.err != nil || !got.changed || got.enabled {
-				t.Fatalf("SetAutoCompactionEnabled = %+v", got)
-			}
-		case <-time.After(runtimeTestSynchronizationTimeout):
-			t.Fatal("timed out waiting for Auto-compaction completion")
-		}
-		if engine.AutoCompactionEnabled() {
-			t.Fatal("Auto-compaction was not applied after Session metadata persistence")
-		}
-	})
-}
-
-func TestDefinitelyUncommittedStateOnlyChatSettingsStopBeforeLiveProjection(t *testing.T) {
+func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
 	tests := []struct {
-		name  string
-		apply func(*testing.T, *Engine) error
-		state func(*Engine) bool
+		name    string
+		apply   func(context.Context, *Engine) error
+		applied func(*Engine) bool
 	}{
 		{
-			name: "Thinking",
-			apply: func(t *testing.T, engine *Engine) error {
-				return engine.SetThinkingLevel(t.Context(), "low")
+			name: "Session name",
+			apply: func(ctx context.Context, engine *Engine) error {
+				return engine.SetSessionName(ctx, "renamed")
 			},
-			state: func(engine *Engine) bool { return engine.ThinkingLevel() == "high" },
+			applied: func(engine *Engine) bool { return engine.SessionName() == "renamed" },
+		},
+		{
+			name: "Thinking",
+			apply: func(ctx context.Context, engine *Engine) error {
+				return engine.SetThinkingLevel(ctx, "low")
+			},
+			applied: func(engine *Engine) bool { return engine.ThinkingLevel() == "low" },
 		},
 		{
 			name: "Auto-compaction",
-			apply: func(t *testing.T, engine *Engine) error {
-				_, _, err := engine.SetAutoCompactionEnabled(t.Context(), false)
+			apply: func(ctx context.Context, engine *Engine) error {
+				_, _, err := engine.SetAutoCompactionEnabled(ctx, false)
 				return err
 			},
-			state: func(engine *Engine) bool { return engine.AutoCompactionEnabled() },
+			applied: func(engine *Engine) bool { return !engine.AutoCompactionEnabled() },
 		},
 	}
 
@@ -424,53 +98,36 @@ func TestDefinitelyUncommittedStateOnlyChatSettingsStopBeforeLiveProjection(t *t
 				ThinkingLevel:           "high",
 				SupportedThinkingValues: []string{"low", "high"},
 			})
-			blockTestSessionMetadataMutations(t, store)
+			if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("pause Runtime FIFO: %v", err)
+			}
 
-			if err := test.apply(t, engine); err == nil {
-				t.Fatal("definitely uncommitted setting mutation succeeded")
+			caller, cancel := context.WithCancel(t.Context())
+			result := make(chan error, 1)
+			go func() {
+				result <- test.apply(caller, engine)
+			}()
+			waitForPendingRuntimeOperation(t, engine)
+			cancel()
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("canceled setter wait error = %v, want canceled", err)
+				}
+			case <-time.After(runtimeTestSynchronizationTimeout):
+				t.Fatal("canceled setter caller remained blocked")
 			}
-			if !test.state(engine) {
-				t.Fatal("definitely uncommitted setting changed live Runtime state")
+			if test.applied(engine) {
+				t.Fatal("setter applied before the paused Runtime FIFO drained")
 			}
-			if err := engine.SetSessionName(t.Context(), "closed"); !errors.Is(err, ErrEngineClosed) {
-				t.Fatalf("mutation after uncommitted settings failure = %v, want Engine closed", err)
+
+			if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+				t.Fatalf("drain accepted setter: %v", err)
+			}
+			if !test.applied(engine) {
+				t.Fatal("accepted setter did not continue after caller cancellation")
 			}
 		})
-	}
-}
-
-func TestImmediateSettingOwnerSerializesThroughPublication(t *testing.T) {
-	store := mustCreateTestSession(t)
-	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{Model: "gpt-5.3-codex"})
-	publishing, releasePublication, firstDone, secondDone := make(chan struct{}), make(chan struct{}), make(chan error, 1), make(chan error, 1)
-	go func() {
-		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, func(clientui.TranscriptSessionSettingFeedback) error {
-			close(publishing)
-			<-releasePublication
-			return nil
-		})
-		firstDone <- err
-	}()
-	<-publishing
-	go func() {
-		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), false, nil)
-		secondDone <- err
-	}()
-	select {
-	case err := <-secondDone:
-		t.Fatalf("second setting completed before first publication: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(releasePublication)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first setting: %v", err)
-	}
-	if err := <-secondDone; err != nil {
-		t.Fatalf("second setting: %v", err)
-	}
-	requireSessionFastModeOverride(t, store, false)
-	if engine.FastModeEnabled() {
-		t.Fatal("second setting was not final live value")
 	}
 }
 

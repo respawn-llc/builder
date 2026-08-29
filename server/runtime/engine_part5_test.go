@@ -34,7 +34,7 @@ func runReviewerPrompt(t *testing.T, eng *Engine) llm.Request {
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 	}}}
-	if _, err := eng.runReviewerSuggestions(context.Background(), stepID, client); err != nil {
+	if _, err := eng.runReviewerSuggestions(context.Background(), stepID, newObservedModelClient(client)); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
@@ -86,7 +86,7 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	reviewerReq, err := eng.buildReviewerRequest(context.Background(), reviewerClient)
+	reviewerReq, err := eng.buildReviewerRequest(context.Background(), newObservedModelClient(reviewerClient))
 	if err != nil {
 		t.Fatalf("build reviewer before compaction: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 	if mainLocked == nil || mainLocked.HasSystemPrompt || mainLocked.HasReviewerPrompt {
 		t.Fatalf("locked prompts after compaction = %+v, want both stale", mainLocked)
 	}
-	reviewerReq, err = eng.buildReviewerRequest(context.Background(), reviewerClient)
+	reviewerReq, err = eng.buildReviewerRequest(context.Background(), newObservedModelClient(reviewerClient))
 	if err != nil {
 		t.Fatalf("build reviewer after compaction: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestReviewerSystemPromptFileMissingFailsWithoutSnapshot(t *testing.T) {
 	if _, err := eng.ensureLocked(); err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
-	_, err := eng.runReviewerSuggestions(context.Background(), runtimeTestStepID("missing-reviewer-prompt"), &fakeClient{})
+	_, err := eng.runReviewerSuggestions(context.Background(), runtimeTestStepID("missing-reviewer-prompt"), newObservedModelClient(&fakeClient{}))
 	if !errors.Is(err, errReadReviewerSystemPromptFile) {
 		t.Fatalf("expected errReadReviewerSystemPromptFile, got %v", err)
 	}

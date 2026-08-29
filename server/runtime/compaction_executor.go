@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/shared/rpcwire"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -21,26 +20,15 @@ var (
 )
 
 func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.ResponseItem, providerID string, instructions string, dispatchFactory dispatchRequestFactory) (compactionResult, []llm.ResponseItem, error) {
-	compactor, ok := e.llm.(llm.CompactionClient)
-	if !ok {
+	if !e.llm.supportsCompaction() {
 		return compactionResult{}, nil, errors.New("llm client does not support remote compaction")
 	}
-	locked, err := e.ensureLocked()
+	baseRequest, err := e.compactionRequest(ctx, input, instructions)
 	if err != nil {
 		return compactionResult{}, nil, err
 	}
-	requestItems := llm.CloneResponseItems(input)
-	baseRequest := llm.CompactionRequest{
-		Model:        locked.Model,
-		Instructions: instructions,
-		FastMode:     e.FastModeEnabled(),
-		InputItems:   requestItems,
-	}
-	if e.supportsPromptCacheKey(ctx) {
-		baseRequest.PromptCacheKey = e.conversationPromptCacheKey(e.SessionID())
-	}
 
-	resp, sentInput, repairStats, err := e.compactWithContextRepairRetry(ctx, stepID, compactor, baseRequest, dispatchFactory)
+	resp, sentInput, repairStats, err := e.compactWithContextRepairRetry(ctx, stepID, e.llm, baseRequest, input, instructions, dispatchFactory)
 	if err != nil {
 		return compactionResult{overflowRepair: repairStats, provider: providerID}, sentInput, err
 	}
@@ -67,11 +55,13 @@ func compactionConversationWithPromptItems(items []llm.ResponseItem, instruction
 func (e *Engine) compactWithContextRepairRetry(
 	ctx context.Context,
 	stepID string,
-	client llm.CompactionClient,
+	client *observedModelClient,
 	request llm.CompactionRequest,
+	input []llm.ResponseItem,
+	instructions string,
 	dispatchFactory dispatchRequestFactory,
 ) (llm.CompactionResponse, []llm.ResponseItem, compactionOverflowRepairStats, error) {
-	currentInput := llm.CloneResponseItems(request.InputItems)
+	currentInput := llm.CloneResponseItems(input)
 	repairStats := compactionOverflowRepairStats{}
 	contextWindowTokens := e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
 
@@ -83,7 +73,7 @@ func (e *Engine) compactWithContextRepairRetry(
 	// (including context overflow) falls through to the overflow loop unchanged.
 	send := func(items []llm.ResponseItem, canRepair bool) (llm.CompactionResponse, []llm.ResponseItem, error) {
 		req := request
-		req.InputItems = llm.CloneResponseItems(items)
+		req.Items = compactionConversationWithPromptItems(items, instructions)
 		req, err := dispatchFactory.compaction(req)
 		if err != nil {
 			return llm.CompactionResponse{}, items, err
@@ -106,7 +96,7 @@ func (e *Engine) compactWithContextRepairRetry(
 			return resp, items, err
 		}
 		repairedItems := llm.CloneResponseItems(e.transcriptRuntimeState().SnapshotItems())
-		req.InputItems = llm.CloneResponseItems(repairedItems)
+		req.Items = compactionConversationWithPromptItems(repairedItems, instructions)
 		req, freshErr := dispatchFactory.compaction(req)
 		if freshErr != nil {
 			return llm.CompactionResponse{}, repairedItems, freshErr
@@ -140,12 +130,9 @@ func (e *Engine) compactWithContextRepairRetry(
 	return llm.CompactionResponse{}, nil, repairStats, errors.New("compaction context repair retry exhausted")
 }
 
-func (e *Engine) compactWithRetry(ctx context.Context, stepID string, client llm.CompactionClient, request llm.CompactionRequest) (llm.CompactionResponse, error) {
-	prepared, err := e.prepareCompactionCacheObservation(ctx, request)
+func (e *Engine) compactWithRetry(ctx context.Context, stepID string, client *observedModelClient, request llm.CompactionRequest) (llm.CompactionResponse, error) {
+	observed, err := e.prepareCacheObservedRequest(stepID, request, cacheResponseObservationExactStep)
 	if err != nil {
-		return llm.CompactionResponse{}, err
-	}
-	if err := e.observePromptCacheRequest(stepID, prepared); err != nil {
 		return llm.CompactionResponse{}, err
 	}
 
@@ -153,16 +140,18 @@ func (e *Engine) compactWithRetry(ctx context.Context, stepID string, client llm
 	var lastErr error
 	publishedProviderDiagnostics := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 2)
 	for i := 0; i <= len(delays); i++ {
-		resp, err := client.Compact(ctx, request)
-		e.publishProviderTurnStateDiagnostics(stepID, request.CodexDispatch, publishedProviderDiagnostics)
+		resp, err := client.compactObserved(ctx, observed, func() {
+			e.publishProviderTurnStateDiagnostics(stepID, observed.request.CodexDispatch, publishedProviderDiagnostics)
+		})
 		if err != nil && ctx.Err() != nil {
 			return llm.CompactionResponse{}, ctx.Err()
 		}
 		if err == nil {
-			if err := e.observePromptCacheResponse(stepID, prepared, resp.Usage); err != nil {
-				return llm.CompactionResponse{}, err
-			}
 			return resp, nil
+		}
+		var observationErr *cacheObservationDispatchError
+		if errors.As(err, &observationErr) {
+			return llm.CompactionResponse{}, err
 		}
 		if llm.IsNonRetriableModelError(err) || llm.IsContextLengthOverflowError(err) {
 			return llm.CompactionResponse{}, err
@@ -178,65 +167,57 @@ func (e *Engine) compactWithRetry(ctx context.Context, stepID string, client llm
 	return llm.CompactionResponse{}, fmt.Errorf("compaction request failed after retries: %w", lastErr)
 }
 
-func (e *Engine) prepareCompactionCacheObservation(ctx context.Context, request llm.CompactionRequest) (preparedCacheRequestObservation, error) {
-	if e == nil || e.modelRequests().RequestCache() == nil || !e.supportsPromptCacheKey(ctx) {
-		return preparedCacheRequestObservation{}, nil
-	}
-	lineageRequest, ok, err := e.compactionCacheObservationRequest(ctx, request)
-	if err != nil || !ok {
-		return preparedCacheRequestObservation{}, err
-	}
-	return e.modelRequests().RequestCache().Prepare(lineageRequest)
+func (e *Engine) compactionRequest(ctx context.Context, input []llm.ResponseItem, instructions string) (llm.CompactionRequest, error) {
+	return e.compactionRequestFromItems(ctx, compactionConversationWithPromptItems(input, instructions))
 }
 
-func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request llm.CompactionRequest) (llm.Request, bool, error) {
-	if e == nil {
-		return llm.Request{}, false, nil
-	}
-	cacheKey := e.conversationPromptCacheKey(e.SessionID())
-	if cacheKey == "" {
-		return llm.Request{}, false, nil
-	}
+func (e *Engine) compactionRequestFromItems(ctx context.Context, items []llm.ResponseItem) (llm.CompactionRequest, error) {
 	locked, err := e.ensureLocked()
 	if err != nil {
-		return llm.Request{}, false, err
+		return llm.CompactionRequest{}, err
 	}
-	items := compactionConversationWithPromptItems(request.InputItems, request.Instructions)
 	systemPrompt, err := e.systemPromptWithoutBackfill(locked)
 	if err != nil {
-		return llm.Request{}, false, err
+		return llm.CompactionRequest{}, err
 	}
 	workflowMode, err := e.workflowCompletionMode(ctx)
 	if err != nil {
-		return llm.Request{}, false, err
+		return llm.CompactionRequest{}, err
 	}
 	requestTools, err := e.requestTools(ctx, workflowMode)
 	if err != nil {
-		return llm.Request{}, false, err
+		return llm.CompactionRequest{}, err
 	}
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
+	nativeWebSearch, err := e.enableNativeWebSearch(ctx)
 	if err != nil {
-		return llm.Request{}, false, err
+		return llm.CompactionRequest{}, err
+	}
+	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{
+		ChoiceMode:            llm.ToolChoiceModeAutomatic,
+		EnableNativeWebSearch: nativeWebSearch,
+	})
+	if err != nil {
+		return llm.CompactionRequest{}, err
 	}
 	req.ReasoningEffort = e.ThinkingLevel()
 	req.FastMode = e.FastModeEnabled()
-	req.SessionID = textutil.Value(e.SessionID())
-	req.PromptCacheKey = cacheKey
-	req.PromptCacheScope = transcript.CacheWarningScopeConversation
-	return req, true, nil
+	if e.supportsPromptCacheKey(ctx) {
+		req.PromptCacheKey = e.conversationPromptCacheKey(e.SessionID())
+		req.PromptCacheScope = transcript.CacheWarningScopeConversation
+	}
+	return req, nil
 }
 
-func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.ResponseItem, providerID string, instructions string, mode compactionMode, dispatchFactory dispatchRequestFactory) (compactionResult, error) {
-	summary, repairStats, err := e.localCompactionSummaryWithRepair(
+func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.ResponseItem, providerID string, instructions string, dispatchFactory dispatchRequestFactory) (compactionResult, error) {
+	summary, repairStats, toolCallRejectionCount, err := e.localCompactionSummaryWithRepair(
 		ctx,
 		stepID,
 		input,
 		instructions,
-		mode,
 		dispatchFactory,
 	)
 	if err != nil {
-		return compactionResult{}, err
+		return compactionResult{localToolCallRejectionCount: toolCallRejectionCount}, err
 	}
 	replacement := llm.ItemsFromMessages([]llm.Message{{
 		Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value(strings.TrimSpace(summary)),
@@ -244,16 +225,17 @@ func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.Re
 
 	usageInputTokens := estimateItemsTokens(replacement)
 	return compactionResult{
-		engine:            "local",
-		items:             replacement,
-		usage:             llm.Usage{InputTokens: usageInputTokens, WindowTokens: e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())},
-		trimmedItemsCount: nil,
-		overflowRepair:    repairStats,
-		provider:          providerID,
+		engine:                      "local",
+		items:                       replacement,
+		usage:                       llm.Usage{InputTokens: usageInputTokens, WindowTokens: e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())},
+		trimmedItemsCount:           nil,
+		overflowRepair:              repairStats,
+		localToolCallRejectionCount: toolCallRejectionCount,
+		provider:                    providerID,
 	}, nil
 }
 
-func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, error) {
+func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.ResponseItem, instructions string) (string, error) {
 	run := e.ActiveRun()
 	if run == nil {
 		return "", fmt.Errorf("%w: active Run identity is required for local compaction", llm.ErrInvalidRequest)
@@ -262,38 +244,23 @@ func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.Respons
 	if err != nil {
 		return "", err
 	}
-	summary, _, err := e.localCompactionSummaryWithRepair(ctx, run.StepID, input, instructions, mode, factory)
+	summary, _, _, err := e.localCompactionSummaryWithRepair(ctx, run.StepID, input, instructions, factory)
 	return summary, err
 }
 
-func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, stepID string, input []llm.ResponseItem, instructions string, mode compactionMode, dispatchFactory dispatchRequestFactory) (string, compactionOverflowRepairStats, error) {
-	locked, err := e.ensureLocked()
-	if err != nil {
-		return "", compactionOverflowRepairStats{}, err
-	}
-	systemPrompt, err := e.systemPromptWithoutBackfill(locked)
-	if err != nil {
-		return "", compactionOverflowRepairStats{}, err
-	}
-	workflowMode, err := e.workflowCompletionMode(ctx)
-	if err != nil {
-		return "", compactionOverflowRepairStats{}, err
-	}
-	requestTools, err := e.requestTools(ctx, workflowMode)
-	if err != nil {
-		return "", compactionOverflowRepairStats{}, err
-	}
-	window := localCompactionWindow(input)
+func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, stepID string, input []llm.ResponseItem, instructions string, dispatchFactory dispatchRequestFactory) (string, compactionOverflowRepairStats, int, error) {
+	window := llm.CloneResponseItems(input)
 	repairStats := compactionOverflowRepairStats{}
+	toolCallRejectionCount := 0
 	contextWindowTokens := e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
 	// summarize mirrors the remote send closure: it repairs a missing-tool-output
 	// HTTP 400 (append + re-snapshot + retry) only on the first, uncollapsed
 	// window. After a collapse, output items are preserved, so a missing-output
 	// 400 is an invariant violation and panics; other 400s fall through.
-	summarize := func(w []llm.ResponseItem, canRepair bool) (string, []llm.ResponseItem, error) {
-		summary, err := e.localCompactionSummaryFromWindow(ctx, stepID, locked, systemPrompt, w, instructions, requestTools, mode, dispatchFactory)
+	summarize := func(w []llm.ResponseItem, canRepair bool) (string, []llm.ResponseItem, int, error) {
+		summary, rejectedToolCalls, err := e.localCompactionSummaryFromWindow(ctx, stepID, w, instructions, dispatchFactory)
 		if !isMissingToolOutputProviderError(err, w) {
-			return summary, w, err
+			return summary, w, rejectedToolCalls, err
 		}
 		if !canRepair {
 			panic(missingToolOutputAfterCollapseInvariant)
@@ -303,24 +270,25 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, stepID st
 			missingToolOutputRepairLiveProvider400,
 		)
 		if repairErr != nil {
-			return "", w, errors.Join(err, repairErr)
+			return "", w, rejectedToolCalls, errors.Join(err, repairErr)
 		}
 		if repaired == 0 {
-			return summary, w, err
+			return summary, w, rejectedToolCalls, err
 		}
-		repairedWindow := localCompactionWindow(e.transcriptRuntimeState().SnapshotItems())
-		summary, err = e.localCompactionSummaryFromWindow(ctx, stepID, locked, systemPrompt, repairedWindow, instructions, requestTools, mode, dispatchFactory)
-		return summary, repairedWindow, err
+		repairedWindow := e.transcriptRuntimeState().SnapshotItems()
+		repairedSummary, repairedRejectedToolCalls, repairedErr := e.localCompactionSummaryFromWindow(ctx, stepID, repairedWindow, instructions, dispatchFactory)
+		return repairedSummary, repairedWindow, rejectedToolCalls + repairedRejectedToolCalls, repairedErr
 	}
 
 	for repairAttempt := 0; repairAttempt <= len(compactionOverflowRepairTargetPercents); repairAttempt++ {
-		summary, sentWindow, err := summarize(window, repairAttempt == 0)
+		summary, sentWindow, rejectedToolCalls, err := summarize(window, repairAttempt == 0)
+		toolCallRejectionCount += rejectedToolCalls
 		window = sentWindow
 		if err == nil {
-			return summary, repairStats, nil
+			return summary, repairStats, toolCallRejectionCount, nil
 		}
 		if !llm.IsContextLengthOverflowError(err) || repairAttempt == len(compactionOverflowRepairTargetPercents) {
-			return "", repairStats, err
+			return "", repairStats, toolCallRejectionCount, err
 		}
 		targetSavedTokens := compactionOverflowRepairTargetTokens(contextWindowTokens, repairAttempt+1)
 		nextWindow, repaired := collapseCompactionOverflowToolPayloadsAfterSavings(window, targetSavedTokens, repairStats.EstimatedSavedTokens)
@@ -328,61 +296,55 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, stepID st
 			// Only known tool payloads are safe to collapse here. Ordinary
 			// conversation history must not be trimmed or request-shaped at
 			// compaction time, so fail instead of retrying the same payload.
-			return "", repairStats, err
+			return "", repairStats, toolCallRejectionCount, err
 		}
 		window = nextWindow
 		repairStats = repairStats.Add(repaired)
 	}
-	return "", repairStats, errors.New("local compaction context repair retry exhausted")
+	return "", repairStats, toolCallRejectionCount, errors.New("local compaction context repair retry exhausted")
 }
 
-func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID string, locked session.LockedContract, systemPrompt string, window []llm.ResponseItem, instructions string, requestTools []llm.Tool, mode compactionMode, dispatchFactory dispatchRequestFactory) (string, error) {
-	items := append(llm.CloneResponseItems(window), llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(instructions)}})...)
+func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID string, window []llm.ResponseItem, instructions string, dispatchFactory dispatchRequestFactory) (string, int, error) {
+	items := compactionConversationWithPromptItems(window, instructions)
+	toolCallRejectionCount := 0
 	for attempt := 0; ; attempt++ {
-		req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
+		req, err := e.compactionRequestFromItems(ctx, items)
 		if err != nil {
-			return "", err
-		}
-		req.ReasoningEffort = e.ThinkingLevel()
-		req.FastMode = e.FastModeEnabled()
-		if e.supportsPromptCacheKey(ctx) {
-			if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
-				req.PromptCacheKey = cacheKey
-				req.PromptCacheScope = transcript.CacheWarningScopeConversation
-			}
+			return "", toolCallRejectionCount, err
 		}
 		req, err = dispatchFactory.generation(req)
 		if err != nil {
-			return "", err
+			return "", toolCallRejectionCount, err
 		}
 
 		resp, err := e.generateWithRetryClient(ctx, stepID, e.llm, req, nil, nil, nil)
 		if err != nil {
-			return "", err
+			return "", toolCallRejectionCount, err
 		}
 		if len(resp.ToolCalls) > 0 {
-			if mode != compactionModeHandoff || attempt >= handoffCompactionToolCallRetries {
-				return "", errLocalCompactionAttemptedToolCalls
+			toolCallRejectionCount++
+			if attempt >= localCompactionToolCallRetries {
+				return "", toolCallRejectionCount, errLocalCompactionAttemptedToolCalls
 			}
-			retryItems, err := handoffCompactionToolCallRetryItems(resp)
+			retryItems, err := localCompactionToolCallRetryItems(resp)
 			if err != nil {
-				return "", err
+				return "", toolCallRejectionCount, err
 			}
 			items = append(items, retryItems...)
 			continue
 		}
 		if resp.Assistant.Content == nil {
-			return "", errors.New("local compaction summary was empty")
+			return "", toolCallRejectionCount, errors.New("local compaction summary was empty")
 		}
 		summary := strings.TrimSpace(*resp.Assistant.Content)
 		if summary == "" {
-			return "", errors.New("local compaction summary was empty")
+			return "", toolCallRejectionCount, errors.New("local compaction summary was empty")
 		}
-		return summary, nil
+		return summary, toolCallRejectionCount, nil
 	}
 }
 
-func handoffCompactionToolCallRetryItems(resp llm.Response) ([]llm.ResponseItem, error) {
+func localCompactionToolCallRetryItems(resp llm.Response) ([]llm.ResponseItem, error) {
 	if len(resp.ToolCalls) == 0 {
 		return nil, nil
 	}
@@ -403,34 +365,17 @@ func handoffCompactionToolCallRetryItems(resp llm.Response) ([]llm.ResponseItem,
 			Type:   llm.ToolOutputItemType(call.Custom),
 			CallID: textutil.OptionalTrimmedString(call.ID),
 			Name:   textutil.OptionalExactString(call.Name),
-			Output: mustJSON(map[string]any{"error": handoffCompactionToolsDisabledMessage}),
+			Output: mustJSON(map[string]any{"error": localCompactionToolsDisabledMessage}),
 		})
 	}
 	return llm.PrepareOpenAIInputItems(items), nil
-}
-
-func localCompactionWindow(input []llm.ResponseItem) []llm.ResponseItem {
-	if len(input) == 0 {
-		return nil
-	}
-	start := 0
-	for i := len(input) - 1; i >= 0; i-- {
-		if isCompactionBoundaryItem(input[i]) {
-			start = i
-			break
-		}
-	}
-	window := llm.CloneResponseItems(input[start:])
-	return window
 }
 
 func isCompactionBoundaryItem(item llm.ResponseItem) bool {
 	if item.Type == llm.ResponseItemTypeCompaction {
 		return true
 	}
-	if item.Type == llm.ResponseItemTypeMessage {
-		return item.MessageType != nil &&
-			*item.MessageType == llm.MessageTypeCompactionSummary
-	}
-	return false
+	return item.Type == llm.ResponseItemTypeMessage &&
+		item.MessageType != nil &&
+		*item.MessageType == llm.MessageTypeCompactionSummary
 }

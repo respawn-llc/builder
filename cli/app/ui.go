@@ -45,11 +45,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 			enqueueRuntimeReconnectWarning(runtimeReconnectWarning, text, visibility)
 		})
 	}
-	mainView := m.runtimeMainView()
-	m.applyRuntimeMainViewState(mainView)
-	if !m.hasRuntimeClient() {
-		m.reviewerEnabled = strings.TrimSpace(m.reviewerMode) != "" && strings.TrimSpace(m.reviewerMode) != "off"
-	}
 	if gitStartupCmd := m.statusLineGitRefreshCmd(); gitStartupCmd != nil {
 		m.statusGitBackgroundInFlight = true
 		m.startupCmds = append(m.startupCmds, gitStartupCmd)

@@ -272,15 +272,11 @@ func (e *Engine) supportsPromptCacheKey(ctx context.Context) bool {
 	return llm.SupportsPromptCacheKeyProvider(caps)
 }
 
-func supportsPromptCacheKeyForClient(ctx context.Context, client llm.Client) bool {
+func supportsPromptCacheKeyForClient(ctx context.Context, client *observedModelClient) bool {
 	if client == nil {
 		return false
 	}
-	provider, ok := client.(llm.ProviderCapabilitiesClient)
-	if !ok {
-		return false
-	}
-	caps, err := provider.ProviderCapabilities(ctx)
+	caps, err := client.capabilities(ctx)
 	if err != nil {
 		return false
 	}

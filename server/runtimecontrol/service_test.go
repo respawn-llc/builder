@@ -1906,43 +1906,6 @@ func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 	}
 }
 
-func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
-
-	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		SessionID: store.Meta().SessionID,
-		Enabled:   false,
-	})
-	if !errors.Is(err, errWorkflowTaskSessionAutoCompactionDisable) {
-		t.Fatalf("SetAutoCompactionEnabled error = %v, want workflow auto-compaction rejection", err)
-	}
-	if !engine.AutoCompactionEnabled() {
-		t.Fatal("auto-compaction disabled despite durable workflow session marker")
-	}
-}
-
-func TestServiceSetAutoCompactionEnabledPropagatesClosedRuntime(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	if err := engine.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
-	}
-
-	resp, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		SessionID: store.Meta().SessionID,
-		Enabled:   false,
-	})
-	if !errors.Is(err, runtime.ErrEngineClosed) {
-		t.Fatalf("SetAutoCompactionEnabled error = %v, want ErrEngineClosed", err)
-	}
-	if resp.Changed || resp.Enabled {
-		t.Fatalf("SetAutoCompactionEnabled response = %+v, want zero response on failure", resp)
-	}
-	if !engine.AutoCompactionEnabled() {
-		t.Fatal("auto-compaction changed after Runtime admission failure")
-	}
-}
-
 func TestServiceSetGoalAllowsAgentWithoutExistingGoal(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, &blockingRuntimeControlClient{}, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
@@ -2400,7 +2363,7 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})
-	store, _, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+	store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
 		OnEvent: func(event runtime.Event) {
 			if event.QueuedUserMessageStatus != nil {
 				queuedStatuses <- *event.QueuedUserMessageStatus
@@ -2451,14 +2414,22 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the next safe-boundary model request")
 	}
-	defer close(client.releaseSecond)
 
+	found := false
 	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
 		if message.Role == llm.RoleUser && message.Content != nil && *message.Content == queuedText {
-			return
+			found = true
+			break
 		}
 	}
-	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+	if !found {
+		t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+	}
+	close(client.releaseSecond)
+	waitForRuntimeControlIdle(t, engine)
+	if engine.HasActiveLiveRunGroup() {
+		t.Fatal("submitted steering kept stale live-run ownership after the turn completed")
+	}
 }
 
 func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission(t *testing.T) {

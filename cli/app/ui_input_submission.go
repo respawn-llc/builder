@@ -194,10 +194,17 @@ func (c uiInputController) startCompaction(submittedText, args string) tea.Cmd {
 	c.startRuntimeOperationAffordance()
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))
 	m.layout().syncViewport()
-	return tea.Batch(c.compactCmd(requestID, submittedText, args), m.reconcileSpinnerTicking(false))
+	return tea.Batch(
+		c.compactCmd(requestID, submittedText, optionalCompactionGuidance(args)),
+		m.reconcileSpinnerTicking(false),
+	)
 }
 
-func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, submittedText, args string) tea.Cmd {
+func (c uiInputController) compactCmd(
+	requestID runtimeids.CompactionRequestID,
+	submittedText string,
+	guidance *string,
+) tea.Cmd {
 	m := c.model
 	client := m.runtimeClient()
 	sessionID := m.pendingWorkRefresh.sessionID
@@ -209,10 +216,6 @@ func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, 
 				submittedText: submittedText,
 				err:           errors.New("runtime engine is not configured"),
 			}
-		}
-		var guidance *string
-		if value := runtimeinput.NormalizePendingWorkArgument(args); value != "" {
-			guidance = &value
 		}
 		return compactDoneMsg{
 			requestID:     requestID,
@@ -226,6 +229,14 @@ func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, 
 			}),
 		}
 	}
+}
+
+func optionalCompactionGuidance(value string) *string {
+	normalized := runtimeinput.NormalizePendingWorkArgument(value)
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
 }
 
 func (c uiInputController) startRuntimeOperationAffordance() {

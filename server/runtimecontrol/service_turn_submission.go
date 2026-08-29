@@ -105,8 +105,8 @@ func (s *Service) submitUserTurn(
 		if shouldCompact {
 			compactionAccepted, compactErr := s.runPreSubmitCompaction(
 				attempt.Context(),
-				request.SessionID,
 				engine,
+				projection.ExecutionText,
 			)
 			if compactionAccepted {
 				compacted = true
@@ -232,14 +232,11 @@ func (s *Service) recordAcceptedUserTurnHistory(
 
 func (s *Service) runPreSubmitCompaction(
 	ctx context.Context,
-	sessionID string,
 	engine *runtime.Engine,
+	text string,
 ) (bool, error) {
-	return runRuntimeCommand(ctx, func(ctx context.Context) (bool, bool, error) {
-		attempt := newRuntimeCommandAttempt(ctx)
-		defer attempt.Finish()
-		_, commandErr := engine.CompactContextForPreSubmitWithAcceptance(attempt.Context(), attempt.Accept)
-		accepted := attempt.Accepted()
-		return accepted, accepted, commandErr
-	})
+	attempt := newRuntimeCommandAttempt(ctx)
+	defer attempt.Finish()
+	receipt, err := engine.CompactContextForPreSubmitWithAcceptance(attempt.Context(), text, attempt.Accept)
+	return receipt.Committed, err
 }

@@ -138,13 +138,7 @@ export function useProjectBoardSubscription(
       return;
     }
     async function refresh(): Promise<void> {
-      await Promise.all([
-        invalidateProjectBoardQueries(queryClient, projectID),
-        queryClient.invalidateQueries({ queryKey: queryKeys.attention }),
-      ]);
-    }
-    async function refreshAttention(): Promise<void> {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.attention });
+      await invalidateProjectBoardQueries(queryClient, projectID);
     }
     async function refreshQuestionTask(event: WorkflowProjectEvent): Promise<void> {
       const taskID = workflowProjectQuestionTaskID(event);
@@ -160,13 +154,10 @@ export function useProjectBoardSubscription(
     async function refreshTaskSearch(): Promise<void> {
       await invalidateProjectTaskSearches(queryClient, projectID);
     }
-    async function refreshSubscriptionBoundary(): Promise<void> {
-      await Promise.all([refreshAttention(), refreshTaskSearch()]);
-    }
     const subscription = api.subscribeProject(projectID, {
       onOpen() {
         void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
+        void refreshTaskSearch().catch(consumeBackgroundError);
       },
       onEvent(event) {
         void labelEffects.consumeProjectEvent(event).catch(consumeBackgroundError);
@@ -183,12 +174,12 @@ export function useProjectBoardSubscription(
       },
       onComplete() {
         void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
+        void refreshTaskSearch().catch(consumeBackgroundError);
       },
       onError(error) {
         consumeBackgroundError(error);
         void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
+        void refreshTaskSearch().catch(consumeBackgroundError);
       },
     });
     return () => {
@@ -254,7 +245,6 @@ export function useBoardTaskActions(projectID: string) {
         queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
         queryClient.invalidateQueries({ queryKey: queryKeys.allActivity }),
         queryClient.invalidateQueries({ queryKey: queryKeys.allAttention }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.attention }),
       ]);
     },
     [queryClient, refresh],

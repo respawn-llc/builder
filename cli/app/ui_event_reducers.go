@@ -208,6 +208,10 @@ func (m *uiModel) reduceInputAsyncMessage(msg tea.Msg) uiFeatureUpdateResult {
 		cmd := m.applyRuntimeControlDone(msg)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
+	case chatSettingsDoneMsg:
+		cmd := m.applyChatSettingsDone(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, cmd)
 	case goalRuntimeDoneMsg:
 		cmd := m.applyGoalRuntimeDone(msg)
 		m.layout().syncViewport()

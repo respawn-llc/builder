@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"core/server/llm"
 	"core/shared/clientui"
 	"core/shared/transcript"
 )
@@ -50,7 +49,7 @@ func TestReviewerPreparationFailureLeavesActivityInactive(t *testing.T) {
 	pipeline := reviewerPipelineWithPreparationError{err: errors.New("prepare Reviewer request")}
 	stepID := runtimeTestStepID("reviewer-preparation-failure")
 
-	if err := engine.startReviewer(t.Context(), stepID, &fakeClient{}, pipeline); err != nil {
+	if err := engine.startReviewer(t.Context(), stepID, newObservedModelClient(&fakeClient{}), pipeline); err != nil {
 		t.Fatalf("start Reviewer: %v", err)
 	}
 	waitEngineLifecycleTasks(t, engine)
@@ -79,11 +78,11 @@ type reviewerPipelineWithPreparationError struct {
 	err error
 }
 
-func (reviewerPipelineWithPreparationError) ShouldRunTurn(string, llm.Client, bool) bool {
+func (reviewerPipelineWithPreparationError) ShouldRunTurn(string, *observedModelClient, bool) bool {
 	return true
 }
 
-func (p reviewerPipelineWithPreparationError) Prepare(context.Context, string, llm.Client) (preparedReviewerRequest, error) {
+func (p reviewerPipelineWithPreparationError) Prepare(context.Context, string, *observedModelClient) (preparedReviewerRequest, error) {
 	return preparedReviewerRequest{}, p.err
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"sync"
@@ -302,68 +301,6 @@ func TestRuntimeAbortRetiresCurrentOpenAndReplaceResourceGenerations(t *testing.
 				&plan,
 			)
 		})
-	}
-}
-
-func TestChatSettingsDurabilityAbortRetiresCurrentResourceGeneration(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot:   fixture.config.PersistenceRoot,
-		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
-		ResourceLifecycle: lifecycle,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	authority.mu.Lock()
-	failedResource := authority.resources[sessionID]
-	authority.mu.Unlock()
-	recoveryPath := filepath.Join(failedResource.store.Dir(), "append-recovery.json")
-	if err := os.Mkdir(recoveryPath, 0o755); err != nil {
-		t.Fatalf("block Chat settings persistence: %v", err)
-	}
-
-	err := authority.WithCurrentRuntime(t.Context(), sessionID, func(ctx context.Context, engine *runtime.Engine) error {
-		_, _, mutationErr := engine.SetQuestionsEnabledWithPublication(ctx, false, nil)
-		return mutationErr
-	})
-	if err == nil {
-		t.Fatal("uncommitted Chat settings mutation succeeded")
-	}
-	select {
-	case <-lifecycle.draining:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Chat settings durability abort did not retire the resource")
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	var admitted *agentResource
-	for time.Now().Before(deadline) {
-		authority.mu.Lock()
-		admitted = authority.resources[sessionID]
-		authority.mu.Unlock()
-		if failedResource.descriptor().State == AgentResourceClosed && admitted != failedResource {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if state := failedResource.descriptor().State; state != AgentResourceClosed {
-		t.Fatalf("failed resource state = %v, want closed", state)
-	}
-	if admitted == failedResource {
-		t.Fatal("failed Chat settings resource generation remained admitted")
-	}
-	if err := os.Remove(recoveryPath); err != nil {
-		t.Fatalf("restore Chat settings persistence: %v", err)
-	}
-	reopened := openLifecycleRuntime(t, authority, sessionID, "owner-b", &plan)
-	if reopened.Resource() == attachment.Resource() {
-		t.Fatal("later open reused the failed Chat settings resource generation")
 	}
 }
 

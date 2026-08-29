@@ -376,9 +376,10 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 	request := llm.CompactionRequest{
-		Model:      "gpt-5",
-		SessionID:  textutil.Value(store.Meta().SessionID),
-		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+		Model:          "gpt-5",
+		SessionID:      textutil.Value(store.Meta().SessionID),
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Items:          eng.transcriptRuntimeState().SnapshotItems(),
 	}
 
 	restoreStep := setTestActiveStep(eng, "step")
@@ -387,14 +388,14 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create compaction dispatch: %v", err)
 	}
-	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), runtimeTestStepID("step"), client, request, dispatchFactory); err != nil {
+	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), runtimeTestStepID("step"), newObservedModelClient(client), request, request.Items, "", dispatchFactory); err != nil {
 		t.Fatalf("compact with repair retry: %v", err)
 	}
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want initial 400 plus repaired retry", len(client.compactionCalls))
 	}
-	if !repairRequestHasToolCall(client.compactionCalls[1].InputItems, "missing") ||
-		!repairRequestHasToolOutput(client.compactionCalls[1].InputItems, "missing") {
+	if !repairRequestHasToolCall(client.compactionCalls[1].Items, "missing") ||
+		!repairRequestHasToolOutput(client.compactionCalls[1].Items, "missing") {
 		t.Fatal("repaired compaction retry did not preserve the call with its synthetic output")
 	}
 	_, completion := repairCompletionRecord(t, store, "missing")
@@ -426,8 +427,9 @@ func TestCompactionCheckpointContractErrorReturnsExactRepairedInput(t *testing.T
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 	request := llm.CompactionRequest{
-		Model:      "gpt-5",
-		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+		Model:          "gpt-5",
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Items:          eng.transcriptRuntimeState().SnapshotItems(),
 	}
 	var sentInput []llm.ResponseItem
 	err := withActiveTestRun(t, eng, ActiveKindCompaction, func(ctx context.Context, stepID string) error {
@@ -436,7 +438,7 @@ func TestCompactionCheckpointContractErrorReturnsExactRepairedInput(t *testing.T
 			return factoryErr
 		}
 		var compactErr error
-		_, sentInput, _, compactErr = eng.compactWithContextRepairRetry(ctx, stepID, client, request, dispatchFactory)
+		_, sentInput, _, compactErr = eng.compactWithContextRepairRetry(ctx, stepID, newObservedModelClient(client), request, request.Items, "", dispatchFactory)
 		return compactErr
 	})
 	if !errors.Is(err, checkpointErr) {
@@ -445,8 +447,8 @@ func TestCompactionCheckpointContractErrorReturnsExactRepairedInput(t *testing.T
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want initial missing-output retry plus malformed terminal result", len(client.compactionCalls))
 	}
-	if !reflect.DeepEqual(sentInput, client.compactionCalls[1].InputItems) {
-		t.Fatalf("returned sent input differs from malformed attempt\nreturned=%#v\nsent=%#v", sentInput, client.compactionCalls[1].InputItems)
+	if !reflect.DeepEqual(sentInput, client.compactionCalls[1].Items) {
+		t.Fatalf("returned sent input differs from malformed attempt\nreturned=%#v\nsent=%#v", sentInput, client.compactionCalls[1].Items)
 	}
 	if !repairRequestHasToolOutput(sentInput, "missing") {
 		t.Fatal("returned malformed-attempt input omitted synthetic tool output")
@@ -480,7 +482,7 @@ func TestMalformedRemoteCompactionFallbackUsesMissingToolRepairedInput(t *testin
 	if len(client.compactionCalls) != 2 || len(client.calls) != 1 {
 		t.Fatalf("remote/local compaction calls = %d/%d, want two/one", len(client.compactionCalls), len(client.calls))
 	}
-	if !repairRequestHasToolOutput(client.compactionCalls[1].InputItems, "missing") {
+	if !repairRequestHasToolOutput(client.compactionCalls[1].Items, "missing") {
 		t.Fatal("malformed remote attempt omitted synthetic tool output")
 	}
 	if !repairRequestHasToolOutput(client.calls[0].Items, "missing") {
@@ -574,9 +576,10 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 		t.Fatalf("append dangling tool call: %v", err)
 	}
 	request := llm.CompactionRequest{
-		Model:      "gpt-5",
-		SessionID:  textutil.Value(store.Meta().SessionID),
-		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+		Model:          "gpt-5",
+		SessionID:      textutil.Value(store.Meta().SessionID),
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Items:          eng.transcriptRuntimeState().SnapshotItems(),
 	}
 
 	defer func() {
@@ -589,7 +592,7 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, _, _, compactErr := eng.compactWithContextRepairRetry(ctx, stepID, client, request, dispatchFactory)
+		_, _, _, compactErr := eng.compactWithContextRepairRetry(ctx, stepID, newObservedModelClient(client), request, request.Items, "", dispatchFactory)
 		return compactErr
 	})
 }

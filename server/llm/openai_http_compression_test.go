@@ -189,11 +189,12 @@ func TestCompactChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	transport := NewHTTPTransport(oauthStaticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
 	sessionID, dispatch := compressionDispatch(t, CodexRequestKindCompaction)
-	response, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-		Model:         "gpt-5.6-sol",
-		SessionID:     sessionID,
-		CodexDispatch: dispatch,
-		InputItems:    PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value(strings.Repeat("history ", 200))}}),
+	response, err := transport.Compact(context.Background(), OpenAIRequest{
+		Model:          "gpt-5.6-sol",
+		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Items:          PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value(strings.Repeat("history ", 200))}}),
 	})
 	if err != nil {
 		t.Fatalf("Compact: %v", err)

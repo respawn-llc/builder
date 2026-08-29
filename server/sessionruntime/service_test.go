@@ -253,7 +253,7 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	})
 }
 
-func TestSessionFastModeRemainsSessionScopedAcrossActivationMutationAndReopen(t *testing.T) {
+func TestSessionFastModeRemainsEngineLocalAcrossActivationMutationAndReopen(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	second, err := session.Create(
 		filepath.Dir(fixture.store.Dir()),
@@ -265,37 +265,29 @@ func TestSessionFastModeRemainsSessionScopedAcrossActivationMutationAndReopen(t 
 	if err != nil {
 		t.Fatalf("create second Session: %v", err)
 	}
-	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{Fast: textutil.Value(false)}); err != nil {
-		t.Fatalf("persist first Fast: %v", err)
-	}
-	if _, err := second.MutateChatSettings(session.ChatSettingsMutation{Fast: textutil.Value(false)}); err != nil {
-		t.Fatalf("persist second Fast: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, fixture.store, func(settings *session.ChatSettingsOverrides) { settings.Fast = textutil.Value(true) })
+	sessiontest.CommitChatSettingsTestState(t, second, func(settings *session.ChatSettingsOverrides) { settings.Fast = textutil.Value(false) })
 	factory := runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 		return &sessionRuntimeTestLLMClient{}, nil
 	})
 	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RuntimeClientFactory: factory,
 	})
-	firstSettings := sessionRuntimeFastSettings(false)
+	firstSettings := sessionRuntimeFastSettings(true)
 	secondSettings := sessionRuntimeFastSettings(false)
 	first := activateSessionRuntimeForFastTest(t, fixture.api, fixture.store.Meta().SessionID, "fast-first", firstSettings)
 	secondAttachment := activateSessionRuntimeForFastTest(t, fixture.api, second.Meta().SessionID, "fast-second", secondSettings)
 
 	firstEngine := currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID)
 	secondEngine := currentSessionRuntimeEngine(t, fixture.authority, second.Meta().SessionID)
-	if firstEngine.FastModeEnabled() {
-		t.Error("first Session Fast = true, want false before mutation")
+	if !firstEngine.FastModeEnabled() {
+		t.Error("first Session Fast = false, want true")
 	}
 	if secondEngine.FastModeEnabled() {
 		t.Error("second Session Fast = true, want false")
 	}
-	changed, err := firstEngine.SetFastModeEnabled(true)
-	if err != nil {
+	if _, err := firstEngine.SetFastModeEnabled(true); err != nil {
 		t.Fatalf("set first Fast: %v", err)
-	}
-	if !changed || !firstEngine.FastModeEnabled() {
-		t.Fatalf("first Session Fast mutation = changed %t enabled %t, want changed and enabled", changed, firstEngine.FastModeEnabled())
 	}
 	if secondEngine.FastModeEnabled() {
 		t.Error("mutating first Session changed second Session Fast")
@@ -445,12 +437,9 @@ func TestActivateSessionRuntimeUsesLatestPersistedQuestionAndAutoCompactionSetti
 			return &sessionRuntimeTestLLMClient{}, nil
 		}),
 	})
-	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{
-		Questions:      textutil.Value(false),
-		AutoCompaction: textutil.Value(false),
-	}); err != nil {
-		t.Fatalf("persist latest Session settings: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, fixture.store, func(settings *session.ChatSettingsOverrides) {
+		settings.Questions, settings.AutoCompaction = textutil.Value(false), textutil.Value(false)
+	})
 
 	response, err := fixture.api.ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
 		SessionID:             fixture.store.Meta().SessionID,
@@ -477,15 +466,9 @@ func TestActivateSessionRuntimeUsesLatestPersistedCompleteChatSettings(t *testin
 			return &sessionRuntimeTestLLMClient{}, nil
 		}),
 	})
-	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{
-		Supervisor:     textutil.Value("all"),
-		Thinking:       textutil.Value("high"),
-		Fast:           textutil.Value(true),
-		Questions:      textutil.Value(false),
-		AutoCompaction: textutil.Value(false),
-	}); err != nil {
-		t.Fatalf("persist latest Session settings: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, fixture.store, func(settings *session.ChatSettingsOverrides) {
+		settings.Supervisor, settings.Thinking, settings.Fast, settings.Questions, settings.AutoCompaction = textutil.Value("all"), textutil.Value("high"), textutil.Value(true), textutil.Value(false), textutil.Value(false)
+	})
 	stale := sessionRuntimeFastSettings(false)
 	stale.Reviewer.Frequency = "off"
 	stale.ThinkingLevel = "low"
@@ -526,11 +509,7 @@ func TestActivateSessionRuntimePreservesExplicitThinkingOverPersistedSetting(t *
 			return &sessionRuntimeTestLLMClient{}, nil
 		}),
 	})
-	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{
-		Thinking: textutil.Value("low"),
-	}); err != nil {
-		t.Fatalf("persist Session Thinking: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, fixture.store, func(settings *session.ChatSettingsOverrides) { settings.Thinking = textutil.Value("low") })
 	settings := sessionRuntimeFastSettings(false)
 	settings.ThinkingLevel = "high"
 

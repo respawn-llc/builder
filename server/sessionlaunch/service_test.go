@@ -796,16 +796,7 @@ func TestPlanLaunchSessionAgentSelectionUsesCompletePreparedBaseline(t *testing.
 		!selected.Plan.AutoCompactionEnabled {
 		t.Fatalf("selected plan = %+v, want complete worker baseline", selected.Plan)
 	}
-	wantSelection := session.ChatAgentSelection{
-		Agent: "worker",
-		Baseline: session.ChatSettings{
-			Supervisor:     "all",
-			Thinking:       "high",
-			Fast:           true,
-			Questions:      true,
-			AutoCompaction: true,
-		},
-	}
+	wantSelection := sessiontest.CompleteChatSettingsState(t, "worker", "all", "high", true, true, true)
 	if selected.Plan.ActivationAgentSelection == nil ||
 		!reflect.DeepEqual(*selected.Plan.ActivationAgentSelection, wantSelection) {
 		t.Fatalf(
@@ -836,16 +827,8 @@ func TestPlanLaunchSessionProjectsUnavailableAgentWithCompleteDefaultBaseline(t 
 	containerDir := t.TempDir()
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	removed := "removed"
-	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: &session.ChatAgentSelection{
-		Agent: removed,
-		Baseline: session.ChatSettings{
-			Supervisor:     "all",
-			Thinking:       "high",
-			Fast:           true,
-			Questions:      false,
-			AutoCompaction: false,
-		},
-	}}); err != nil {
+	target := sessiontest.CompleteChatSettingsState(t, removed, "all", "high", true, false, false)
+	if _, err := store.CommitChatSettingsState(target); err != nil {
 		t.Fatalf("seed removed Agent: %v", err)
 	}
 	if err := store.SetContinuationContext(session.ContinuationContext{
@@ -932,14 +915,12 @@ func TestPlanLaunchSessionAppliesPersistedChatSettingPrecedence(t *testing.T) {
 
 func setSessionLaunchChatSettings(t *testing.T, store *session.Store, settings session.ChatSettings) {
 	t.Helper()
-	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
-		Supervisor:     sessionLaunchStringPtr(settings.Supervisor),
-		Thinking:       sessionLaunchStringPtr(settings.Thinking),
-		Fast:           textutil.Value(settings.Fast),
-		Questions:      textutil.Value(settings.Questions),
-		AutoCompaction: textutil.Value(settings.AutoCompaction),
-	}); err != nil {
-		t.Fatalf("MutateChatSettings: %v", err)
+	target, err := session.ChatSettingsStateFromCompleteSettings(config.DefaultSubagentRole, settings)
+	if err != nil {
+		t.Fatalf("build Chat settings: %v", err)
+	}
+	if _, err := store.CommitChatSettingsState(target); err != nil {
+		t.Fatalf("commit Chat settings: %v", err)
 	}
 }
 

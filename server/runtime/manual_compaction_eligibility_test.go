@@ -102,7 +102,7 @@ func TestManualCompactionRevalidatesMutableConditionsAtBoundary(t *testing.T) {
 		{
 			"active compaction",
 			func(engine *Engine) {
-				engine.compactionRuntimeState().SetActive(runtimeTestStepID("other-compaction"), nil, string(compactionModeManual), 1)
+				engine.compactionRuntimeState().SetActive(runtimeTestStepID("other-compaction"), nil, string(compactionModeManual), 1, ActiveKindCompaction)
 			},
 		},
 		{"too soon", func(engine *Engine) { engine.compactionRuntimeState().SetManualCompactionEligible(false) }},

@@ -38,41 +38,6 @@ func TestDefaultRegistryBusyContract(t *testing.T) {
 	}
 }
 
-func TestBusyEnterAppliesImmediateSettings(t *testing.T) {
-	tests := []struct {
-		input         string
-		setup         func(*uiModel)
-		sessionName   string
-		thinkingLevel string
-		fast          bool
-	}{
-		{input: "/name queued title", sessionName: "queued title"},
-		{input: "/thinking low", thinkingLevel: "low"},
-		{
-			input: "/fast on",
-			setup: func(model *uiModel) {
-				model.fastModeAvailable = true
-			},
-			fast: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.input, func(t *testing.T) {
-			model := busyCommandTestModel()
-			testSetMainInput(model, test.input)
-			if test.setup != nil {
-				test.setup(model)
-			}
-			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			updated := next.(*uiModel)
-			if testMainInput(updated) != "" || updated.sessionName != test.sessionName || updated.thinkingLevel != test.thinkingLevel || updated.fastModeEnabled != test.fast {
-				t.Fatalf("updated model = input %q, name %q, thinking %q, fast %t", testMainInput(updated), updated.sessionName, updated.thinkingLevel, updated.fastModeEnabled)
-			}
-			requireBusyCommandQueuesEmpty(t, updated)
-		})
-	}
-}
-
 func TestBusyEnterOpensReadOverlays(t *testing.T) {
 	for input, mode := range map[string]uiInputMode{
 		"/status": uiInputModeStatus,
@@ -283,18 +248,19 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 		t.Fatal("expected compaction command")
 	}
 	requestID := runtimeids.NewCompactionRequestID()
-	_ = model.inputController().compactCmd(requestID, "  /compact   tighten  summary  ", "tighten  summary")()
-	if client.compactRequest.RequestID != requestID {
-		t.Fatalf("compaction request id = %s, want %s", client.compactRequest.RequestID, requestID)
+	guidance := "tighten  summary"
+	_ = model.inputController().compactCmd(requestID, "  /compact   tighten  summary  ", &guidance)()
+	if got := client.compactRequest.RequestID; got != requestID {
+		t.Fatalf("compaction request ID = %v, want %v", got, requestID)
 	}
 	if client.compactRequest.Admission.Guidance == nil ||
 		*client.compactRequest.Admission.Guidance != "tighten summary" {
 		t.Fatalf("compaction admission = %+v", client.compactRequest.Admission)
 	}
 	buttonClient := &runtimeControlFakeClient{}
-	_ = newProjectedTestUIModel(buttonClient).inputController().compactCmd(runtimeids.NewCompactionRequestID(), "", "")()
+	_ = newProjectedTestUIModel(buttonClient).inputController().compactCmd(runtimeids.NewCompactionRequestID(), "", nil)()
 	if buttonClient.compactRequest.Admission.Guidance != nil {
-		t.Fatalf("button compaction guidance = %q, want absent", *buttonClient.compactRequest.Admission.Guidance)
+		t.Fatalf("button compaction guidance = %v, want absent", buttonClient.compactRequest.Admission.Guidance)
 	}
 	if model.isCompacting() || model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {
 		t.Fatalf("compaction state = compacting %t, blocked %t, prefix %q", model.isCompacting(), model.blocksRuntimeInput(), model.layout().mainInputPrefix())

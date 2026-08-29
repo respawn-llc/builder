@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   infiniteQueryOptions,
   keepPreviousData,
@@ -7,13 +7,10 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 
-import { ContractError, errorMessage } from "@/api";
-import type { WorkflowProjectEvent } from "@/api";
+import { errorMessage } from "@/api";
 import type { AppServices } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
-import { useConnectionSnapshot } from "@/app-facade";
-import { workflowProjectEventCanChangeAttention, workflowProjectQuestionTaskID } from "@/app-facade";
 
 type NativeProjectBinding = Parameters<
   Parameters<AppServices["nativeBridge"]["projectCreation"]["onCreated"]>[0]
@@ -37,12 +34,9 @@ export function useProjectPages() {
   });
 }
 
-export function useGlobalAttentionPages(enabled = true) {
+export function useGlobalAttentionPages() {
   const { api } = useAppServices();
-  return useInfiniteQuery({
-    ...globalAttentionQueryOptions(api),
-    enabled,
-  });
+  return useInfiniteQuery(globalAttentionQueryOptions(api));
 }
 
 export function useSidebarGlobalAttentionPages() {
@@ -53,84 +47,6 @@ export function useSidebarGlobalAttentionPages() {
       query.observers.filter((observer) => observer.getCurrentResult().isEnabled).length <= 1,
   });
 }
-
-export function useGlobalAttentionEvents() {
-  const { api, logger } = useAppServices();
-  const connection = useConnectionSnapshot();
-  const queryClient = useQueryClient();
-  const [openGeneration, setOpenGeneration] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (connection.phase !== "connected") {
-      return;
-    }
-    const subscriptionGeneration = connection.generation;
-    let refreshFrame: number | null = null;
-    let subscriptionLifecycle: GlobalAttentionSubscriptionLifecycle = "initial";
-    const refreshAttention = () => {
-      if (refreshFrame !== null) {
-        return;
-      }
-      refreshFrame = window.requestAnimationFrame(() => {
-        refreshFrame = null;
-        void queryClient.invalidateQueries({ queryKey: queryKeys.allAttention, refetchType: "active" });
-      });
-    };
-    const refreshQuestionTask = (event: WorkflowProjectEvent) => {
-      const taskID = workflowProjectQuestionTaskID(event);
-      if (taskID === null) {
-        return;
-      }
-      void queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID), refetchType: "active" });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.taskAttention(taskID),
-        refetchType: "active",
-      });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" });
-    };
-    const logSubscriptionWarning = (message: string, error: Error) => {
-      void logger.append("warn", message, { error: errorMessage(error) });
-    };
-    const subscription = api.subscribeProject("", {
-      onOpen() {
-        const shouldReconcile = subscriptionLifecycle !== "initial";
-        subscriptionLifecycle = "open";
-        setOpenGeneration(subscriptionGeneration);
-        if (shouldReconcile) {
-          refreshAttention();
-        }
-      },
-      onEvent(event) {
-        refreshQuestionTask(event);
-        if (workflowProjectEventCanChangeAttention(event)) {
-          refreshAttention();
-        }
-      },
-      onComplete() {
-        return;
-      },
-      onError(error) {
-        if (error instanceof ContractError) {
-          refreshAttention();
-          logSubscriptionWarning("Global attention event payload failed.", error);
-          return;
-        }
-        subscriptionLifecycle = "recovery-pending";
-        logSubscriptionWarning("Global attention subscription failed.", error);
-      },
-    });
-    return () => {
-      if (refreshFrame !== null) {
-        window.cancelAnimationFrame(refreshFrame);
-      }
-      subscription.close();
-    };
-  }, [api, connection.generation, connection.phase, logger, queryClient]);
-  return connection.phase === "connected" && openGeneration === connection.generation;
-}
-
-type GlobalAttentionSubscriptionLifecycle = "initial" | "open" | "recovery-pending";
 
 export function useProjectCreationEvents(onCreated: (binding: NativeProjectBinding) => void) {
   const { logger, nativeBridge } = useAppServices();

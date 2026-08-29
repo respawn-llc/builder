@@ -12,14 +12,29 @@ import (
 )
 
 type reviewerRuntimeState struct {
-	mu     sync.Mutex
-	client llm.Client
-	active *runtimeids.StepID
-	phase  clientui.ReviewerActivity
+	mu      sync.Mutex
+	client  *observedModelClient
+	factory func() (*observedModelClient, error)
+	active  *runtimeids.StepID
+	phase   clientui.ReviewerActivity
 }
 
-func newReviewerRuntimeState(client llm.Client) *reviewerRuntimeState {
-	return &reviewerRuntimeState{client: client, phase: clientui.ReviewerActivityInactive}
+func newReviewerRuntimeState(client llm.Client, factory func() (llm.Client, error)) *reviewerRuntimeState {
+	var observedFactory func() (*observedModelClient, error)
+	if factory != nil {
+		observedFactory = func() (*observedModelClient, error) {
+			client, err := factory()
+			if err != nil {
+				return nil, err
+			}
+			return newObservedModelClient(client), nil
+		}
+	}
+	return &reviewerRuntimeState{
+		client:  newObservedModelClient(client),
+		factory: observedFactory,
+		phase:   clientui.ReviewerActivityInactive,
+	}
 }
 
 func (s *reviewerRuntimeState) Reserve(stepID string) bool {
@@ -203,7 +218,7 @@ func (e *Engine) setReviewerAddressingFeedback(stepID string) error {
 	}, revision)
 }
 
-func (s *reviewerRuntimeState) Client() llm.Client {
+func (s *reviewerRuntimeState) Client() *observedModelClient {
 	if s == nil {
 		return nil
 	}
@@ -212,7 +227,7 @@ func (s *reviewerRuntimeState) Client() llm.Client {
 	return s.client
 }
 
-func (s *reviewerRuntimeState) EnsureClient(factory func() (llm.Client, error)) error {
+func (s *reviewerRuntimeState) EnsureClient() error {
 	if s == nil {
 		return errors.New("reviewer state is not configured")
 	}
@@ -222,10 +237,10 @@ func (s *reviewerRuntimeState) EnsureClient(factory func() (llm.Client, error)) 
 		return nil
 	}
 	s.mu.Unlock()
-	if factory == nil {
+	if s.factory == nil {
 		return errors.New("reviewer client is not configured")
 	}
-	client, err := factory()
+	client, err := s.factory()
 	if err != nil {
 		return fmt.Errorf("configure reviewer client: %w", err)
 	}

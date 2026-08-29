@@ -470,7 +470,7 @@ func (e *Engine) processQueuedUserWork(
 		return nil
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
-	_, _, consumedQueueItemIDs, err := e.submitQueuedUserMessages(ctx, ids, nil)
+	_, _, _, err := e.submitQueuedUserMessages(ctx, ids, nil)
 	if err != nil {
 		if fatal, abort := resultGroupFatalFromError(err); abort {
 			return fatal
@@ -478,7 +478,6 @@ func (e *Engine) processQueuedUserWork(
 		e.surfaceRunError(err)
 		return nil
 	}
-	e.completeLiveRunQueueItems(consumedQueueItemIDs)
 	completed = true
 	return nil
 }
