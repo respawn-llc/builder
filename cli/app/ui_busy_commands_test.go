@@ -155,34 +155,26 @@ func TestBusyEnterRoutesDirectWorktreeCommands(t *testing.T) {
 	}
 }
 
-func TestBusyPromptCommandsRemainTypedRuntimeSubmissions(t *testing.T) {
-	for _, test := range []struct{ input, name string }{
-		{"/prompt:inspect cli/app", "prompt:inspect"},
-		{"/review cli/app", "prompt:review"},
-		{"/init cli/app", "prompt:init"},
-	} {
-		t.Run(test.input, func(t *testing.T) {
-			client := &runtimeControlFakeClient{}
-			model := newProjectedTestUIModel(client,
-				WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
-				WithUIPromptCommandCatalogEntries([]commands.PromptCommandCatalogEntry{{Name: "prompt:inspect", Preview: "Inspect"}}),
-			)
-			model.commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(model.promptCatalogEntries)
-			model.setRuntimeActivityBusyForTest(true)
-			model.activity = uiActivityRunning
-			testSetMainInput(model, test.input)
-			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			model = next.(*uiModel)
-			for _, msg := range collectCmdMessages(t, cmd) {
-				model = updateUIModel(t, model, msg)
-			}
-			if client.submitCalls != 1 || model.exitAction != UIActionNone ||
-				client.submitInput.Kind != runtimeinput.KindPromptCommand ||
-				client.submitInput.PromptCommand == nil ||
-				client.submitInput.PromptCommand.Name != test.name {
-				t.Fatalf("busy prompt result = calls %d action %q input %+v", client.submitCalls, model.exitAction, client.submitInput)
-			}
-		})
+func TestBusyCatalogPromptCommandRemainsTypedRuntimeSubmission(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(client,
+		WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
+		WithUIPromptCommandCatalogEntries([]commands.PromptCommandCatalogEntry{{Name: "prompt:inspect", Preview: "Inspect"}}),
+	)
+	model.commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(model.promptCatalogEntries)
+	model.setRuntimeActivityBusyForTest(true)
+	model.activity = uiActivityRunning
+	testSetMainInput(model, "/prompt:inspect cli/app")
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		model = updateUIModel(t, model, msg)
+	}
+	if client.submitCalls != 1 || model.exitAction != UIActionNone ||
+		client.submitInput.Kind != runtimeinput.KindPromptCommand ||
+		client.submitInput.PromptCommand == nil ||
+		client.submitInput.PromptCommand.Name != "prompt:inspect" {
+		t.Fatalf("busy prompt result = calls %d action %q input %+v", client.submitCalls, model.exitAction, client.submitInput)
 	}
 }
 
@@ -205,6 +197,7 @@ func TestBusyEnterDispatchesCompact(t *testing.T) {
 func TestBusyNavigationCommandsStartTheirExistingTransitions(t *testing.T) {
 	for input, action := range map[string]UIAction{
 		"/exit": UIActionExit, "/new": UIActionNewSession, "/resume": UIActionResume,
+		"/review": UIActionNewSession, "/init": UIActionNewSession,
 	} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()

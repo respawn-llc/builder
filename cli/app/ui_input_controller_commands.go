@@ -42,7 +42,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 		if err != nil {
 			return m, m.sendTransientStatusWithNoticeID(err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		if commandResult.FreshConversation && !m.isBusy() && m.currentConversationFreshness() != clientui.ConversationFreshnessFresh {
+		if commandResult.FreshConversation && (m.isBusy() || m.currentConversationFreshness() != clientui.ConversationFreshnessFresh) {
 			previousSessionID, err := runtimeids.ParseSessionID(m.sessionID)
 			if err != nil {
 				return m, c.model.appendLocalEntryWithNoticeID("error", "Current session identity is invalid: "+err.Error(), "")

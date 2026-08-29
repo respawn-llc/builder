@@ -50,4 +50,4 @@ If the exact `$ARGUMENTS` token appears in the body, Kent replaces every occurre
 
 First-time setup can import slash-command directories from supported providers. An unavailable or unknown `/prompt:` command reports an error and is never sent to the model as plain text. Other unknown slash commands retain their normal behavior.
 
-During an active turn, `/review`, `/init`, and available `/prompt:<name>` commands steer their server-expanded prompt into the current session. Outside an active turn, `/review` and `/init` reuse an empty session or start a fresh child session.
+During an active turn, an available `/prompt:<name>` command steers its server-expanded prompt into the current session. `/review` and `/init` retain their fresh-session behavior.

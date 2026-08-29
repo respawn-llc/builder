@@ -303,8 +303,8 @@
 - An unavailable or unknown `/prompt:` command reports a command error and is never submitted as model input.
 - Built-ins: `/logout`, `/login`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/questions`, `/status`, `/goal`, `/ps`, `/worktree` (alias `/wt`), `/copy`, `/back`.
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
-- Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, and `/back` detach this TUI from the current Session without interrupting its Active Session Runtime.
-- While an Agent Turn is active, every available `/prompt:*`, `/review`, and `/init` command submits its typed identity as Steering in the current Session. Kent resolves the prompt body on the server before accepting the Steering input.
+- Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
+- While an Agent Turn is active, every available `/prompt:*` command submits its typed identity as Steering in the current Session. Kent resolves the prompt body on the server before accepting the Steering input.
 - `/name`, `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` persist and publish their Session value immediately while an Agent Step runs.
 - Those immediate setting commands affect later provider and compaction requests, never the Agent Step already running, and create no transcript rows.
 - `/compact` and Active-Runtime `/worktree switch`, `/wt switch`, `/worktree leave`, and `/wt leave` enter typed operational Pending Work while an Agent Step or another boundary-owning Runtime operation is active.
