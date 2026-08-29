@@ -35,7 +35,7 @@ type WorkspaceChatDraftResolution struct {
 	Baselines                map[string]WorkspaceChatDraft
 	GoalAvailability         session.GoalAvailability
 	PersistedQuestionsPolicy bool
-	PersistedThinking        string
+	PersistedThinking        *string
 	CompactionMode           config.CompactionMode
 	Catalog                  launch.PreparedChatAgentCatalog
 	limits                   map[string]workspaceChatDraftLimits
@@ -280,13 +280,13 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 	for agent, limit := range limits {
 		baselines[agent] = limit.draft
 	}
-	finish := func(draft WorkspaceChatDraft, questions bool, thinking string) (WorkspaceChatDraftResolution, error) {
+	finish := func(draft WorkspaceChatDraft, questions bool, thinking *string) (WorkspaceChatDraftResolution, error) {
 		return workspaceChatDraftResolution(
 			draft, questions, thinking, input.Settings.CompactionMode, baselines, catalog, limits,
 		)
 	}
 	if stored == nil {
-		return finish(defaults.draft, defaults.draft.Questions, defaults.draft.Thinking)
+		return finish(defaults.draft, defaults.draft.Questions, nil)
 	}
 	draft := *stored
 	if err := draft.Validate(); err != nil {
@@ -295,6 +295,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 	draft.Agent = normalizeWorkspaceChatDraftAgent(draft.Agent)
 	persistedQuestions := draft.Questions
 	persistedThinking := strings.TrimSpace(draft.Thinking)
+	persistedThinkingValue := &persistedThinking
 	limit, ok := limits[draft.Agent]
 	if !ok {
 		message := draft.Message
@@ -302,6 +303,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 		draft.Message = message
 		persistedQuestions = draft.Questions
 		persistedThinking = draft.Thinking
+		persistedThinkingValue = &persistedThinking
 	} else {
 		if _, ok := limit.thinking[persistedThinking]; !ok {
 			draft.Thinking = limit.draft.Thinking
@@ -315,13 +317,13 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 			draft.Questions = false
 		}
 	}
-	return finish(draft, persistedQuestions, persistedThinking)
+	return finish(draft, persistedQuestions, persistedThinkingValue)
 }
 
 func workspaceChatDraftResolution(
 	draft WorkspaceChatDraft,
 	persistedQuestions bool,
-	persistedThinking string,
+	persistedThinking *string,
 	compactionMode config.CompactionMode,
 	baselines map[string]WorkspaceChatDraft,
 	catalog launch.PreparedChatAgentCatalog,
@@ -330,6 +332,13 @@ func workspaceChatDraftResolution(
 	limit, ok := limits[normalizeWorkspaceChatDraftAgent(draft.Agent)]
 	if !ok {
 		return WorkspaceChatDraftResolution{}, fmt.Errorf("workspace Chat draft Agent %q has no resolved capability", draft.Agent)
+	}
+	if persistedThinking != nil {
+		thinking := strings.TrimSpace(*persistedThinking)
+		if thinking == "" {
+			return WorkspaceChatDraftResolution{}, errors.New("persisted workspace Chat draft Thinking is required when present")
+		}
+		persistedThinking = &thinking
 	}
 	availability := session.GoalAgentCapabilityMissing
 	if limit.questions {

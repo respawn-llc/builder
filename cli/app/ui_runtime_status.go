@@ -24,9 +24,7 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 	}
 	status := view.Status
 	m.status.snapshot.AgentRole = textutil.Pointer(view.Session.AgentRole)
-	if strings.TrimSpace(status.ThinkingLevel) != "" {
-		m.thinkingLevel = status.ThinkingLevel
-	}
+	m.thinkingLevel = status.ThinkingLevel
 	m.reviewerMode = status.ReviewerFrequency
 	m.reviewerEnabled = status.ReviewerEnabled
 	m.autoCompactionEnabled = status.AutoCompactionEnabled

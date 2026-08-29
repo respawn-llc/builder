@@ -158,25 +158,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowTaskObserve:            gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ObserveWorkflowTask),
 	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
-			switch params.Target.TargetKind {
-			case serverapi.ChatSettingsReadTargetLazy:
-				activeProjectID, err := g.activeProjectID(ctx, state)
-				if err != nil {
-					return serverapi.ChatSettingsReadResponse{}, err
-				}
-				if strings.TrimSpace(*params.Target.ProjectID) != strings.TrimSpace(activeProjectID) {
-					return serverapi.ChatSettingsReadResponse{}, serverapi.ErrWorkspaceNotRegistered
-				}
-			case serverapi.ChatSettingsReadTargetSession:
-				if err := g.requireSessionInActiveProject(
-					ctx,
-					state,
-					params.Target.Session.String(),
-				); err != nil {
-					return serverapi.ChatSettingsReadResponse{}, err
-				}
-			default:
-				return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
+			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
+				return serverapi.ChatSettingsReadResponse{}, err
 			}
 			response, err := g.deps.ChatSettingsClient().ReadChatSettings(ctx, params)
 			if err != nil {
@@ -184,6 +167,21 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			}
 			if err := response.ValidateForTarget(params.Target); err != nil {
 				return serverapi.ChatSettingsReadResponse{}, err
+			}
+			return response, nil
+		})
+	},
+	protocol.MethodChatSettingsMutate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
+			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
+				return serverapi.ChatSettingsMutationResponse{}, err
+			}
+			response, err := g.deps.ChatSettingsClient().MutateChatSettings(ctx, params)
+			if err != nil {
+				return serverapi.ChatSettingsMutationResponse{}, err
+			}
+			if err := response.ValidateForTarget(params.Target); err != nil {
+				return serverapi.ChatSettingsMutationResponse{}, err
 			}
 			return response, nil
 		})
@@ -273,4 +271,26 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodAskListPending:      gatewayClientCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, apicontract.AskViewService.ListPendingAsksBySession),
 	protocol.MethodPromptAnswerBatch:   gatewayClientCall[apicontract.PromptControlService, serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerPromptBatch),
 	protocol.MethodApprovalListPending: gatewayClientCall[apicontract.ApprovalViewService, serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](GatewayDependencies.ApprovalViewClient, apicontract.ApprovalViewService.ListPendingApprovalsBySession),
+}
+
+func (g *Gateway) authorizeChatSettingsTarget(
+	ctx context.Context,
+	state *connectionState,
+	target serverapi.ChatSettingsReadTarget,
+) error {
+	switch target.TargetKind {
+	case serverapi.ChatSettingsReadTargetLazy:
+		activeProjectID, err := g.activeProjectID(ctx, state)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(*target.ProjectID) != strings.TrimSpace(activeProjectID) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
+	case serverapi.ChatSettingsReadTargetSession:
+		return g.requireSessionInActiveProject(ctx, state, target.Session.String())
+	default:
+		return errors.New("Chat settings target kind is invalid")
+	}
+	return nil
 }

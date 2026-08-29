@@ -55,6 +55,7 @@ func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.
 	}
 	defer func() { _ = closeFn() }()
 	resp, err := liveClient.LiveSteer(ctx, serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       targetSessionID.String(),
 		CallerSessionID: callerSessionID,
 		Text:            trimmedText,
@@ -91,7 +92,8 @@ func RunLiveStop(ctx context.Context, opts Options, targetSessionID runtimeids.S
 	}
 	defer func() { _ = closeFn() }()
 	resp, err := liveClient.LiveStop(ctx, serverapi.RuntimeLiveStopRequest{
-		SessionID: targetSessionID.String(),
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       targetSessionID.String(),
 	})
 	if err != nil {
 		return RunLiveStopResult{}, err

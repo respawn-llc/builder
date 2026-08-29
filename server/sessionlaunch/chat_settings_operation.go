@@ -15,7 +15,7 @@ type PreparedChatSettingsOperationInput struct {
 	Raw                session.ChatSettingsState
 	Effective          session.ChatSettings
 	PersistedQuestions bool
-	PersistedThinking  string
+	PersistedThinking  *string
 	Catalog            launch.PreparedChatAgentCatalog
 	Locked             *session.LockedContract
 	WorkflowLocked     bool
@@ -52,9 +52,14 @@ func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInp
 		baseSettings.Questions = input.PersistedQuestions
 	} else if selectedAvailable {
 		baseSettings.Questions = input.PersistedQuestions
-		persistedThinking := strings.TrimSpace(input.PersistedThinking)
-		if persistedThinking != "" && slices.Contains(selectedEntry.Settings.SupportedThinkingValues, persistedThinking) {
-			baseSettings.Thinking = persistedThinking
+		if input.PersistedThinking != nil {
+			persistedThinking := strings.TrimSpace(*input.PersistedThinking)
+			if persistedThinking == "" {
+				return PreparedChatSettingsOperationResult{}, errors.New("persisted Chat settings Thinking is required when present")
+			}
+			if slices.Contains(selectedEntry.Settings.SupportedThinkingValues, persistedThinking) {
+				baseSettings.Thinking = persistedThinking
+			}
 		}
 	}
 	base := session.ChatSettingsState{

@@ -330,16 +330,20 @@ func (s *Service) prepareMaterializedChatSettings(
 	}
 	effective = normalizeProjectedChatSettings(effective, entry.Settings)
 	persistedQuestions := effective.Questions
-	persistedThinking := effective.Thinking
+	var persistedThinking *string
 	if !selectedAvailable {
 		persistedQuestions = entry.Settings.Baseline.Questions
-		persistedThinking = entry.Settings.Baseline.Thinking
+		persistedThinking = textutil.Value(entry.Settings.Baseline.Thinking)
 	} else if raw.Settings != nil {
 		if raw.Settings.Questions != nil {
 			persistedQuestions = *raw.Settings.Questions
 		}
 		if raw.Settings.Thinking != nil {
-			persistedThinking = strings.TrimSpace(*raw.Settings.Thinking)
+			thinking := strings.TrimSpace(*raw.Settings.Thinking)
+			if thinking == "" {
+				return PreparedChatSettingsOperationInput{}, nil, errors.New("persisted Session Chat settings Thinking is required when present")
+			}
+			persistedThinking = &thinking
 		}
 	}
 	taskID, err := s.workflowTaskID(ctx, meta.SessionID)
@@ -364,12 +368,16 @@ func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsR
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
 	draft := resolved.Draft
+	thinking := draft.Thinking
+	if resolved.PersistedThinking != nil {
+		thinking = *resolved.PersistedThinking
+	}
 	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
 		Catalog: resolved.Catalog,
 		Agent:   draft.Agent,
 		Settings: session.ChatSettings{
 			Supervisor:     draft.Supervisor,
-			Thinking:       resolved.PersistedThinking,
+			Thinking:       thinking,
 			Fast:           draft.Fast,
 			Questions:      resolved.PersistedQuestionsPolicy,
 			AutoCompaction: draft.AutoCompaction,
