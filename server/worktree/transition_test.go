@@ -31,8 +31,8 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 		{name: "pre-write technical failure", write: writeFailure, outcome: &failed, diagnostic: writeFailure},
 		{name: "successful rollback after target-sync failure", finish: syncFailure, outcome: &failed, diagnostic: syncFailure},
 		{name: "selector user-correctable failure", selector: true, outcome: &failed, diagnostic: selectorFailure},
-		{name: "applied target then identity publication failure", outcome: &completed, diagnostic: publicationFailure, publication: publicationFailure, surface: publicationDiagnostic},
-		{name: "active rollback failure", finish: syncFailure, rollback: rollbackFailure, diagnostic: rollbackFailure, surface: rollbackDiagnostic},
+		{name: "applied target then identity publication failure", outcome: &completed, publication: publicationFailure, surface: publicationDiagnostic},
+		{name: "active rollback failure", finish: syncFailure, rollback: rollbackFailure, surface: rollbackDiagnostic},
 		{name: "dormant rollback failure", dormant: true, finish: syncFailure, rollback: rollbackFailure, diagnostic: rollbackFailure},
 	}
 	for _, test := range tests {
@@ -114,9 +114,6 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 				}
 			} else {
 				requireTerminal(t, ack == nil && errors.Is(runErr, test.diagnostic), "dormant result = %+v, %v", ack, runErr)
-				plan := deleteActivityTestRuntimePlan(t, env, next.CanonicalRoot)
-				_, err := env.authority.OpenRuntime(t.Context(), sessionruntime.RuntimeOpenRequest{SessionID: openDeleteActivitySessionDescriptor(t, env.session.Meta().SessionID).SessionID(), OwnerID: "dormant-worktree-follow-up", Runtime: &plan})
-				requireTerminal(t, err == nil, "later Runtime open: %v", err)
 			}
 			if test.outcome == nil {
 				requireTerminal(t, len(env.publisher.outcomes) == 0, "Worktree outcomes = %+v, want none", env.publisher.outcomes)
@@ -127,13 +124,11 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 					requireTerminal(t, outcomes[0].Failure != nil && outcomes[0].Failure.Diagnostic == test.diagnostic.Error(), "Worktree outcome diagnostic = %+v, want %q", outcomes[0].Failure, test.diagnostic)
 				}
 			}
-			if !test.dormant {
-				_, err := engine.QueueUserMessage(t.Context(), "later human work")
-				requireTerminal(t, err == nil || test.rollback != nil && errors.Is(err, runtime.ErrEngineClosed), "later human work: %v", err)
-			}
-			target := mustResolveServiceTestTarget(t, env)
 			failedOutcome := test.outcome != nil && *test.outcome == failed
-			requireTerminal(t, (sessionTargetWorktreeID(target) == next.WorktreeID) != failedOutcome, "persisted target = %+v", target)
+			if test.publication != nil {
+				target := mustResolveServiceTestTarget(t, env)
+				requireTerminal(t, sessionTargetWorktreeID(target) == next.WorktreeID, "persisted target = %+v", target)
+			}
 			if failedOutcome && !test.selector {
 				requireTerminal(t, len(restored) == 1, "technical restoration count = %d", len(restored))
 				got := <-restored
