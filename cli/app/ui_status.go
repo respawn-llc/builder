@@ -138,7 +138,7 @@ func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
 		AuthStatus:            m.statusConfig.AuthStatus,
 		SessionName:           strings.TrimSpace(m.sessionName),
 		SessionID:             strings.TrimSpace(m.sessionID),
-		AgentRole:             textutil.Pointer(m.cachedRuntimeMainView().Session.AgentRole),
+		AgentRole:             textutil.Pointer(m.status.snapshot.AgentRole),
 		ConfiguredModelName:   textutil.Pointer(m.configuredModelName),
 		ModelName:             strings.TrimSpace(m.modelName),
 		ThinkingLevel:         strings.TrimSpace(m.thinkingLevel),

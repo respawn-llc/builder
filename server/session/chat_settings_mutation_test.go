@@ -21,49 +21,27 @@ func TestMutateChatSettingsUpdatesOneControlWithoutChangingTheAggregate(t *testi
 	})
 	tests := []struct {
 		name     string
-		mutation ChatSettingsMutation
-		want     *ChatSettingsOverrides
+		settings *ChatSettingsOverrides
 	}{
-		{
-			name:     "Supervisor",
-			mutation: ChatSettingsMutation{Supervisor: textutil.Value("all")},
-			want:     completeChatSettingsOverrides("all", "custom-depth", false, true, true),
-		},
-		{
-			name:     "Thinking",
-			mutation: ChatSettingsMutation{Thinking: textutil.Value("  provider-specific  ")},
-			want:     completeChatSettingsOverrides("all", "provider-specific", false, true, true),
-		},
-		{
-			name:     "Fast",
-			mutation: ChatSettingsMutation{Fast: textutil.Value(true)},
-			want:     completeChatSettingsOverrides("all", "provider-specific", true, true, true),
-		},
-		{
-			name:     "Questions",
-			mutation: ChatSettingsMutation{Questions: textutil.Value(false)},
-			want:     completeChatSettingsOverrides("all", "provider-specific", true, false, true),
-		},
-		{
-			name:     "Auto-compaction",
-			mutation: ChatSettingsMutation{AutoCompaction: textutil.Value(false)},
-			want:     completeChatSettingsOverrides("all", "provider-specific", true, false, false),
-		},
+		{name: "Supervisor", settings: completeChatSettingsOverrides("all", "custom-depth", false, true, true)},
+		{name: "Thinking", settings: completeChatSettingsOverrides("all", "provider-specific", false, true, true)},
+		{name: "Fast", settings: completeChatSettingsOverrides("all", "provider-specific", true, true, true)},
+		{name: "Questions", settings: completeChatSettingsOverrides("all", "provider-specific", true, false, true)},
+		{name: "Auto-compaction", settings: completeChatSettingsOverrides("all", "provider-specific", true, false, false)},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			observer.called = false
-			result, err := store.MutateChatSettings(test.mutation)
+			result, err := store.CommitChatSettingsState(ChatSettingsState{Agent: "worker", Settings: test.settings})
 			if err != nil {
-				t.Fatalf("MutateChatSettings: %v", err)
+				t.Fatalf("CommitChatSettingsState: %v", err)
 			}
 			if !result.Changed || !result.Committed || !observer.called {
 				t.Fatalf("mutation result = %+v, observer called=%v", result, observer.called)
 			}
-			assertChatSettingsState(t, result.State, "worker", test.want)
-			assertChatSettingsStateFromMeta(t, store.Meta(), "worker", test.want)
-			assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "worker", test.want)
+			assertChatSettingsStateFromMeta(t, store.Meta(), "worker", test.settings)
+			assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "worker", test.settings)
 		})
 	}
 }
@@ -80,26 +58,15 @@ func TestMutateChatSettingsSelectsDifferentAgentWithCompleteBaselineAtomically(t
 		t.Fatalf("seed continuation: %v", err)
 	}
 	observer.called = false
-	result, err := store.MutateChatSettings(ChatSettingsMutation{
-		Agent: &ChatAgentSelection{
-			Agent: "reviewer",
-			Baseline: ChatSettings{
-				Supervisor:     "all",
-				Thinking:       "  provider-specific-depth  ",
-				Fast:           true,
-				Questions:      false,
-				AutoCompaction: false,
-			},
-		},
-	})
+	target := ChatSettingsState{Agent: "reviewer", Settings: completeChatSettingsOverrides("all", "  provider-specific-depth  ", true, false, false)}
+	result, err := store.CommitChatSettingsState(target)
 	if err != nil {
-		t.Fatalf("MutateChatSettings: %v", err)
+		t.Fatalf("CommitChatSettingsState: %v", err)
 	}
 	want := completeChatSettingsOverrides("all", "provider-specific-depth", true, false, false)
 	if !result.Changed || !result.Committed || !observer.called {
 		t.Fatalf("mutation result = %+v, observer called=%v", result, observer.called)
 	}
-	assertChatSettingsState(t, result.State, "reviewer", want)
 	assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "reviewer", want)
 	for name, meta := range map[string]Meta{
 		"store":    store.Meta(),
@@ -118,20 +85,9 @@ func TestMutateChatSettingsSelectingCurrentAgentIsNoWriteNoOp(t *testing.T) {
 	})
 	before := store.Meta()
 	observer.called = false
-	result, err := store.MutateChatSettings(ChatSettingsMutation{
-		Agent: &ChatAgentSelection{
-			Agent: "worker",
-			Baseline: ChatSettings{
-				Supervisor:     "all",
-				Thinking:       "different",
-				Fast:           true,
-				Questions:      false,
-				AutoCompaction: false,
-			},
-		},
-	})
+	result, err := store.CommitChatSettingsState(ChatSettingsState{Agent: "worker", Settings: completeChatSettingsOverrides("edits", "medium", false, true, true)})
 	if err != nil {
-		t.Fatalf("MutateChatSettings: %v", err)
+		t.Fatalf("CommitChatSettingsState: %v", err)
 	}
 	if result.Changed || result.Committed || observer.called {
 		t.Fatalf("same-Agent result = %+v, observer called=%v", result, observer.called)
@@ -148,23 +104,11 @@ func TestMutateChatSettingsRepairsUnavailableUnlockedAgentToDefaultBaseline(t *t
 		Agent:    "removed-agent",
 		Settings: completeChatSettingsOverrides("all", "custom-depth", true, false, false),
 	})
-	result, err := store.MutateChatSettings(ChatSettingsMutation{
-		Agent: &ChatAgentSelection{
-			Agent: "default",
-			Baseline: ChatSettings{
-				Supervisor:     "edits",
-				Thinking:       "provider-default",
-				Fast:           false,
-				Questions:      true,
-				AutoCompaction: true,
-			},
-		},
-	})
+	_, err := store.CommitChatSettingsState(ChatSettingsState{Agent: "default", Settings: completeChatSettingsOverrides("edits", "provider-default", false, true, true)})
 	if err != nil {
 		t.Fatalf("repair unavailable Agent: %v", err)
 	}
 	want := completeChatSettingsOverrides("edits", "provider-default", false, true, true)
-	assertChatSettingsState(t, result.State, "default", want)
 	assertChatSettingsStateFromMeta(t, store.Meta(), "default", want)
 }
 
@@ -178,18 +122,7 @@ func TestMutateChatSettingsPreservesLockedUnavailableAgent(t *testing.T) {
 	}
 	before := store.Meta()
 	observer.called = false
-	result, err := store.MutateChatSettings(ChatSettingsMutation{
-		Agent: &ChatAgentSelection{
-			Agent: "default",
-			Baseline: ChatSettings{
-				Supervisor:     "edits",
-				Thinking:       "medium",
-				Fast:           false,
-				Questions:      true,
-				AutoCompaction: true,
-			},
-		},
-	})
+	result, err := store.CommitChatSettingsState(ChatSettingsState{Agent: "default", Settings: completeChatSettingsOverrides("edits", "medium", false, true, true)})
 	if !errors.Is(err, ErrChatAgentLocked) {
 		t.Fatalf("locked Agent mutation error = %v, want ErrChatAgentLocked", err)
 	}
@@ -206,23 +139,11 @@ func TestMutateChatSettingsObserverFailurePublishesOnlyCompleteAggregate(t *test
 	})
 	observer.called = false
 	observer.err = os.ErrPermission
-	result, err := store.MutateChatSettings(ChatSettingsMutation{
-		Agent: &ChatAgentSelection{
-			Agent: "reviewer",
-			Baseline: ChatSettings{
-				Supervisor:     "all",
-				Thinking:       "provider-specific",
-				Fast:           true,
-				Questions:      false,
-				AutoCompaction: false,
-			},
-		},
-	})
+	result, err := store.CommitChatSettingsState(ChatSettingsState{Agent: "reviewer", Settings: completeChatSettingsOverrides("all", "provider-specific", true, false, false)})
 	if err == nil || !errors.Is(err, os.ErrPermission) || !result.Committed || !result.Changed {
 		t.Fatalf("observer failure result = %+v, err=%v", result, err)
 	}
 	want := completeChatSettingsOverrides("all", "provider-specific", true, false, false)
-	assertChatSettingsState(t, result.State, "reviewer", want)
 	assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "reviewer", want)
 	assertChatSettingsStateFromMeta(t, store.Meta(), "reviewer", want)
 }
@@ -249,20 +170,12 @@ func newChatSettingsMutationStore(t *testing.T, state ChatDraftState) (*Store, *
 	return store, observer
 }
 
-func completeChatSettingsOverrides(
-	supervisor string,
-	thinking string,
-	fast bool,
-	questions bool,
-	autoCompaction bool,
-) *ChatSettingsOverrides {
-	return &ChatSettingsOverrides{
-		Supervisor:     textutil.Value(supervisor),
-		Thinking:       textutil.Value(thinking),
-		Fast:           textutil.Value(fast),
-		Questions:      textutil.Value(questions),
-		AutoCompaction: textutil.Value(autoCompaction),
+func completeChatSettingsOverrides(supervisor, thinking string, fast, questions, autoCompaction bool) *ChatSettingsOverrides {
+	state, err := ChatSettingsStateFromCompleteSettings("default", ChatSettings{Supervisor: supervisor, Thinking: thinking, Fast: fast, Questions: questions, AutoCompaction: autoCompaction})
+	if err != nil {
+		panic(err)
 	}
+	return state.Settings
 }
 
 func assertChatSettingsStateFromMeta(t *testing.T, meta Meta, agent string, settings *ChatSettingsOverrides) {

@@ -370,11 +370,30 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 		return errors.New("thinking level is required")
 	}
 	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
-		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{Thinking: &normalized})
-		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
-			return struct{}{}, settingsErr
+		return struct{}{}, e.setThinkingValue(normalized)
+	})
+	return err
+}
+
+// ApplyPreparedChatSettings updates the exact live runtime in one ordered
+// operation after Chat Settings has completed all fallible preparation and
+// persistence.
+func (e *Engine) ApplyPreparedChatSettings(settings session.ChatSettings) error {
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		e.mu.Lock()
+		e.cfg.ThinkingLevel = strings.TrimSpace(settings.Thinking)
+		e.cfg.FastModeEnabled = settings.Fast
+		e.cfg.Reviewer.Frequency = settings.Supervisor
+		if e.cfg.QuestionsEnabled == nil {
+			e.cfg.QuestionsEnabled = new(bool)
 		}
-		return struct{}{}, errors.Join(settingsErr, e.setThinkingValue(normalized))
+		*e.cfg.QuestionsEnabled = settings.Questions
+		if e.cfg.AutoCompactionEnabled == nil {
+			e.cfg.AutoCompactionEnabled = new(bool)
+		}
+		*e.cfg.AutoCompactionEnabled = settings.AutoCompaction
+		e.mu.Unlock()
+		return struct{}{}, nil
 	})
 	return err
 }
@@ -438,22 +457,19 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetAutoCompactionEnabled(ctx context.Context, enabled bool) (bool, bool, error) {
+	current := e.AutoCompactionEnabled()
+	if current == enabled {
+		return false, current, nil
+	}
 	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
 		changed bool
 		enabled bool
 	}, error) {
-		settings, settingsErr := e.store.MutateChatSettings(session.ChatSettingsMutation{AutoCompaction: &enabled})
-		if e.stopAfterDefinitelyUncommittedChatSetting(settings.CommitReceipt, settingsErr) {
-			return struct {
-				changed bool
-				enabled bool
-			}{enabled: e.AutoCompactionEnabled()}, settingsErr
-		}
 		e.applyAutoCompactionEnabled(enabled)
 		return struct {
 			changed bool
 			enabled bool
-		}{changed: settings.Changed, enabled: enabled}, settingsErr
+		}{changed: true, enabled: enabled}, nil
 	})
 	if err != nil {
 		return false, e.AutoCompactionEnabled(), err

@@ -10,6 +10,7 @@ import (
 	"core/server/auth"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -54,9 +55,7 @@ func TestReadDormantSessionChatContextUsesExactExecutionRootAndBoundedFacts(t *t
 		t.Fatalf("SetSessionContextFacts: %v", err)
 	}
 	autoCompaction := false
-	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{AutoCompaction: &autoCompaction}); err != nil {
-		t.Fatalf("MutateChatSettings: %v", err)
-	}
+	sessiontest.CommitChatSettingsTestState(t, store, func(settings *session.ChatSettingsOverrides) { settings.AutoCompaction = &autoCompaction })
 	settings := config.DefaultOnboardingSettings()
 	settings.ModelContextWindow = 100_000
 	settings.ContextCompactionThresholdTokens = 75_000

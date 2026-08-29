@@ -2,18 +2,26 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type runtimeInterruptCandidateClient interface {
 	interruptRuntimeCandidate() (runtimeTupleCandidate, error)
+}
+
+type chatSettingsRuntimeClient interface {
+	ReadChatSettings() (serverapi.ChatSettings, error)
+	MutateChatSettings(serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error)
 }
 
 func (m *uiModel) runtimeClient() clientui.RuntimeClient {
@@ -25,6 +33,218 @@ func (m *uiModel) runtimeClient() clientui.RuntimeClient {
 
 func (m *uiModel) hasRuntimeClient() bool {
 	return m.runtimeClient() != nil
+}
+
+func (m *uiModel) chatSettingsMutationCommand(operation serverapi.ChatSettingsMutationOperation) tea.Cmd {
+	client := m.runtimeClient().(chatSettingsRuntimeClient)
+	return func() tea.Msg {
+		response, err := client.MutateChatSettings(operation)
+		return chatSettingsDoneMsg{operation: operation.Kind, response: response, err: err}
+	}
+}
+
+func (m *uiModel) chatSettingsToggleCommand(
+	kind serverapi.ChatSettingsMutationOperationKind,
+	requested string,
+) tea.Cmd {
+	client := m.runtimeClient().(chatSettingsRuntimeClient)
+	return func() tea.Msg {
+		settings, err := client.ReadChatSettings()
+		if err != nil {
+			return chatSettingsDoneMsg{operation: kind, err: err}
+		}
+		operation, err := resolveChatSettingsToggle(kind, requested, settings)
+		if err != nil {
+			return chatSettingsDoneMsg{operation: kind, err: err}
+		}
+		response, err := client.MutateChatSettings(operation)
+		return chatSettingsDoneMsg{operation: kind, response: response, err: err}
+	}
+}
+
+func resolveChatSettingsToggle(
+	kind serverapi.ChatSettingsMutationOperationKind,
+	requested string,
+	settings serverapi.ChatSettings,
+) (serverapi.ChatSettingsMutationOperation, error) {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	switch kind {
+	case serverapi.ChatSettingsMutationSupervisor:
+		switch requested {
+		case "on":
+			value := settings.Supervisor.Baseline
+			if value == serverapi.ChatSettingsSupervisorOff {
+				value = serverapi.ChatSettingsSupervisorAfterEdits
+			}
+			encoded := string(value)
+			return serverapi.ChatSettingsMutationOperation{
+				Kind:  kind,
+				Value: &encoded,
+			}, nil
+		case "off":
+			value := string(serverapi.ChatSettingsSupervisorOff)
+			return serverapi.ChatSettingsMutationOperation{Kind: kind, Value: &value}, nil
+		case "":
+			value := string(serverapi.ChatSettingsSupervisorOff)
+			if settings.Supervisor.Value == serverapi.ChatSettingsSupervisorOff {
+				value = string(settings.Supervisor.Baseline)
+				if value == string(serverapi.ChatSettingsSupervisorOff) {
+					value = string(serverapi.ChatSettingsSupervisorAfterEdits)
+				}
+			}
+			return serverapi.ChatSettingsMutationOperation{Kind: kind, Value: &value}, nil
+		}
+	case serverapi.ChatSettingsMutationFast:
+		value := settings.Fast != nil && settings.Fast.Value
+		return enabledChatSettingsOperation(kind, requested, value)
+	case serverapi.ChatSettingsMutationQuestions:
+		return enabledChatSettingsOperation(kind, requested, settings.Questions.Enabled)
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		return enabledChatSettingsOperation(kind, requested, settings.AutoCompaction.Stored)
+	default:
+		return serverapi.ChatSettingsMutationOperation{}, errors.New("unsupported Chat settings toggle")
+	}
+	return serverapi.ChatSettingsMutationOperation{}, errors.New("invalid Chat settings toggle")
+}
+
+func enabledChatSettingsOperation(
+	kind serverapi.ChatSettingsMutationOperationKind,
+	requested string,
+	current bool,
+) (serverapi.ChatSettingsMutationOperation, error) {
+	target := current
+	switch requested {
+	case "":
+		target = !current
+	case "on":
+		target = true
+	case "off":
+		target = false
+	default:
+		return serverapi.ChatSettingsMutationOperation{}, errors.New("invalid Chat settings toggle")
+	}
+	return serverapi.ChatSettingsMutationOperation{
+		Kind:    kind,
+		Enabled: &target,
+	}, nil
+}
+
+func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
+	if msg.err != nil {
+		errText := runtimeattach.FormatSubmissionError(msg.err)
+		return m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	response := msg.response
+	settings := response.Settings
+	m.modelName = settings.SelectedAgent.Model
+	m.thinkingLevel = settings.SelectedAgent.Thinking
+	m.fastModeAvailable = settings.Fast != nil
+	m.fastModeEnabled = settings.Fast != nil && settings.Fast.Value
+	m.reviewerMode = string(settings.Supervisor.Value)
+	m.reviewerEnabled = settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff
+	m.questionsEnabled = settings.Questions.Enabled
+	m.autoCompactionEnabled = response.Context.AutoCompactionEnabled
+	m.modelContractLocked = settings.AgentLocked
+	m.status.snapshot.AgentRole = textutil.OptionalTrimmedString(config.NormalizeSubagentSelector(settings.SelectedAgent.Role))
+	m.status.snapshot.CompactionCount = int(response.Context.CompletedCompactionCount)
+	m.setRuntimeContextUsage(m.currentRuntimeSessionID(), clientui.RuntimeContextUsage{UsedTokens: int(response.Context.UsedTokens), WindowTokens: int(response.Context.ContextWindowTokens)})
+	if response.Result.Kind != serverapi.ChatSettingsMutationApplied {
+		return m.sendTransientStatusWithNoticeID(
+			chatSettingsRejectionNotices[response.Result.Rejected.Reason],
+			uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "",
+		)
+	}
+	if response.Result.Applied == nil || !response.Result.Applied.Changed {
+		return nil
+	}
+	return m.sendTransientStatusWithNoticeID(
+		chatSettingsSuccessNotice(msg.operation, settings),
+		uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "",
+	)
+}
+
+func chatSettingsSuccessNotice(kind serverapi.ChatSettingsMutationOperationKind, settings serverapi.ChatSettings) string {
+	switch kind {
+	case serverapi.ChatSettingsMutationAgent:
+		return "Agent: " + settings.SelectedAgent.Role
+	case serverapi.ChatSettingsMutationSupervisor:
+		return "Supervisor: " + chatSettingsSupervisorNotices[settings.Supervisor.Value]
+	case serverapi.ChatSettingsMutationThinking:
+		return "Thinking: " + settings.SelectedAgent.Thinking
+	case serverapi.ChatSettingsMutationFast:
+		return "Fast: " + chatSettingsOnOffValues[settings.Fast != nil && settings.Fast.Value]
+	case serverapi.ChatSettingsMutationQuestions:
+		return "Questions: " + chatSettingsOnOffValues[settings.Questions.Enabled]
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		return "Auto-compaction: " + chatSettingsOnOffValues[settings.AutoCompaction.Stored]
+	}
+	panic("invalid Chat settings mutation operation kind " + string(kind))
+}
+
+var chatSettingsOnOffValues = map[bool]string{false: "off", true: "on"}
+
+var chatSettingsSupervisorNotices = map[serverapi.ChatSettingsSupervisorValue]string{serverapi.ChatSettingsSupervisorOff: "Off", serverapi.ChatSettingsSupervisorAfterEdits: "After edits", serverapi.ChatSettingsSupervisorAlways: "Always"}
+
+var chatSettingsRejectionNotices = map[serverapi.ChatSettingsMutationRejectionReason]string{serverapi.ChatSettingsMutationAgentLocked: "Agent is locked", serverapi.ChatSettingsMutationAgentUnavailable: "Agent is unavailable", serverapi.ChatSettingsMutationThinkingUnavailable: "Thinking is unavailable", serverapi.ChatSettingsMutationFastUnavailable: "Fast mode is unavailable", serverapi.ChatSettingsMutationAutoCompactionPolicyLock: "Auto-compaction is unavailable"}
+
+func (m *uiModel) setRuntimeSessionName(name string) error {
+	m.checkTUIBlockingOperation("runtime control mutation", "set session name")
+	if client := m.runtimeClient(); client != nil {
+		err := client.SetSessionName(name)
+		m.observeRuntimeRequestResult(err)
+		return err
+	}
+	return nil
+}
+
+func (m *uiModel) showRuntimeGoal() (*clientui.RuntimeGoal, error) {
+	m.checkTUIBlockingOperation("runtime control read", "show goal")
+	if client := m.runtimeClient(); client != nil {
+		goal, err := client.ShowGoal()
+		m.observeRuntimeRequestResult(err)
+		return goal, err
+	}
+	return nil, nil
+}
+
+func (m *uiModel) setRuntimeGoal(objective string) (clientui.GoalMutationResult, error) {
+	m.checkTUIBlockingOperation("runtime control mutation", "set goal")
+	if client := m.runtimeClient(); client != nil {
+		result, err := client.SetGoal(objective)
+		m.observeRuntimeRequestResult(err)
+		return result, err
+	}
+	return clientui.GoalMutationResult{}, nil
+}
+
+func (m *uiModel) pauseRuntimeGoal() (clientui.GoalMutationResult, error) {
+	m.checkTUIBlockingOperation("runtime control mutation", "pause goal")
+	if client := m.runtimeClient(); client != nil {
+		result, err := client.PauseGoal()
+		m.observeRuntimeRequestResult(err)
+		return result, err
+	}
+	return clientui.GoalMutationResult{}, nil
+}
+
+func (m *uiModel) resumeRuntimeGoal() (clientui.GoalMutationResult, error) {
+	m.checkTUIBlockingOperation("runtime control mutation", "resume goal")
+	if client := m.runtimeClient(); client != nil {
+		result, err := client.ResumeGoal()
+		m.observeRuntimeRequestResult(err)
+		return result, err
+	}
+	return clientui.GoalMutationResult{}, nil
+}
+
+func (m *uiModel) clearRuntimeGoal() (clientui.GoalMutationResult, error) {
+	m.checkTUIBlockingOperation("runtime control mutation", "clear goal")
+	if client := m.runtimeClient(); client != nil {
+		result, err := client.ClearGoal()
+		m.observeRuntimeRequestResult(err)
+		return result, err
+	}
+	return clientui.GoalMutationResult{}, nil
 }
 
 func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
@@ -40,6 +260,10 @@ func (m *uiModel) submitRuntimeInput(ctx context.Context, req clientui.RuntimeSu
 		return submission, err
 	}
 	return clientui.UserTurnSubmission{}, nil
+}
+
+func (m *uiModel) submitRuntimeUserShellCommand(ctx context.Context, command string) error {
+	return m.submitRuntimeShell(ctx, clientui.RuntimeShellRequest{Command: command})
 }
 
 func (m *uiModel) submitRuntimeShell(ctx context.Context, req clientui.RuntimeShellRequest) error {
@@ -59,6 +283,18 @@ func (m *uiModel) compactRuntimeInput(ctx context.Context, req clientui.RuntimeC
 		return err
 	}
 	return nil
+}
+
+func (m *uiModel) interruptRuntime() error {
+	m.checkTUIBlockingOperation("runtime control mutation", "interrupt")
+	candidate, err := executeRuntimeInterrupt(runtimeInterruptRequestFromModel(m))
+	if err == nil && candidate != nil {
+		if client, ok := m.runtimeClient().(*sessionRuntimeClient); ok {
+			client.mergeRuntimeTuple(*candidate, runtimeTupleIngressIncremental)
+		}
+	}
+	m.observeRuntimeRequestResult(err)
+	return err
 }
 
 type runtimeInterruptRequest struct {
@@ -86,14 +322,29 @@ func executeRuntimeInterrupt(req runtimeInterruptRequest) (*runtimeTupleCandidat
 	return nil, req.client.Interrupt()
 }
 
+func (m *uiModel) discardQueuedRuntimeUserMessage(queueItemID string) bool {
+	m.checkTUIBlockingOperation("runtime queue mutation", "discard queued user message")
+	if client := m.runtimeClient(); client != nil {
+		return client.DiscardQueuedUserMessage(queueItemID)
+	}
+	return false
+}
+
+func (m *uiModel) recordRuntimePromptHistory(text string) error {
+	m.checkTUIBlockingOperation("runtime control mutation", "record prompt history")
+	if client := m.runtimeClient(); client != nil {
+		err := client.RecordPromptHistory(text)
+		m.observeRuntimeRequestResult(err)
+		return err
+	}
+	return nil
+}
+
 type runtimeControlPendingState struct {
-	sessionID       string
-	inFlight        bool
-	inFlightText    string
-	inFlightEnabled bool
-	desiredText     string
-	desiredEnabled  bool
-	compactionMode  string
+	sessionID    string
+	inFlight     bool
+	inFlightText string
+	desiredText  string
 }
 
 func (m *uiModel) nextRuntimeControlToken(operation runtimeControlOperation) uint64 {
@@ -121,31 +372,23 @@ func (m *uiModel) beginRuntimeControlMutation(operation runtimeControlOperation,
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	text = strings.TrimSpace(text)
-	if !runtimeControlOperationUsesEnabledTarget(operation) && !runtimeControlOperationUsesTextTarget(operation) {
+	if operation != runtimeControlSetSessionName {
 		return m.nextRuntimeControlToken(operation), true
 	}
 	if m.runtimeControlPending == nil {
 		m.runtimeControlPending = make(map[runtimeControlOperation]runtimeControlPendingState)
 	}
 	if pending, ok := m.runtimeControlPending[operation]; ok && pending.inFlight && pending.sessionID == sessionID {
-		if runtimeControlOperationUsesTextTarget(operation) {
-			pending.desiredText = text
-		} else {
-			pending.desiredEnabled = enabled
-			pending.compactionMode = strings.TrimSpace(compactionMode)
-		}
+		pending.desiredText = text
 		m.runtimeControlPending[operation] = pending
 		return 0, false
 	}
 	token := m.nextRuntimeControlToken(operation)
 	m.runtimeControlPending[operation] = runtimeControlPendingState{
-		sessionID:       sessionID,
-		inFlight:        true,
-		inFlightText:    text,
-		inFlightEnabled: enabled,
-		desiredText:     text,
-		desiredEnabled:  enabled,
-		compactionMode:  strings.TrimSpace(compactionMode),
+		sessionID:    sessionID,
+		inFlight:     true,
+		inFlightText: text,
+		desiredText:  text,
 	}
 	return token, true
 }
@@ -157,32 +400,9 @@ func (m *uiModel) clearRuntimeControlPending(operation runtimeControlOperation) 
 	delete(m.runtimeControlPending, operation)
 }
 
-func (m *uiModel) runtimeControlPendingEnabled(operation runtimeControlOperation, sessionID string, fallback bool) bool {
-	if m == nil || m.runtimeControlPending == nil {
-		return fallback
-	}
-	pending, ok := m.runtimeControlPending[operation]
-	if !ok {
-		return fallback
-	}
-	if pending.sessionID != strings.TrimSpace(sessionID) {
-		return fallback
-	}
-	return pending.desiredEnabled
-}
-
-func runtimeControlOperationUsesEnabledTarget(operation runtimeControlOperation) bool {
-	switch operation {
-	case runtimeControlSetFastMode, runtimeControlSetReviewer, runtimeControlSetAutoCompaction, runtimeControlSetQuestions:
-		return true
-	default:
-		return false
-	}
-}
-
 func runtimeControlOperationUsesTextTarget(operation runtimeControlOperation) bool {
 	switch operation {
-	case runtimeControlSetSessionName, runtimeControlSetThinkingLevel:
+	case runtimeControlSetSessionName:
 		return true
 	default:
 		return false
@@ -208,20 +428,10 @@ func (m *uiModel) runtimeControlCommand(operation runtimeControlOperation, text 
 		return nil
 	}
 	return func() tea.Msg {
-		msg := runtimeControlDoneMsg{token: token, sessionID: sessionID, operation: operation, text: text, enabled: enabled, compactionMode: compactionMode}
+		msg := runtimeControlDoneMsg{token: token, sessionID: sessionID, operation: operation, text: text}
 		switch operation {
 		case runtimeControlSetSessionName:
 			msg.err = client.SetSessionName(text)
-		case runtimeControlSetThinkingLevel:
-			msg.err = client.SetThinkingLevel(text)
-		case runtimeControlSetFastMode:
-			msg.changed, msg.err = client.SetFastModeEnabled(enabled)
-		case runtimeControlSetReviewer:
-			msg.changed, msg.mode, msg.err = client.SetReviewerEnabled(enabled)
-		case runtimeControlSetAutoCompaction:
-			msg.changed, msg.enabled, msg.err = client.SetAutoCompactionEnabled(enabled)
-		case runtimeControlSetQuestions:
-			msg.changed, msg.err = client.SetQuestionsEnabled(enabled)
 		case runtimeControlInterrupt:
 			msg.runtimeTuple, msg.err = executeRuntimeInterrupt(interruptReq)
 		}
@@ -250,16 +460,6 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		)
 	}
 	var followUpCmd tea.Cmd
-	if runtimeControlOperationUsesEnabledTarget(msg.operation) {
-		pending := m.runtimeControlPending[msg.operation]
-		if pending.inFlight && pending.desiredEnabled != pending.inFlightEnabled {
-			pending.inFlight = false
-			m.runtimeControlPending[msg.operation] = pending
-			followUpCmd = m.runtimeControlCommand(msg.operation, "", pending.desiredEnabled, pending.compactionMode)
-		} else {
-			m.clearRuntimeControlPending(msg.operation)
-		}
-	}
 	if runtimeControlOperationUsesTextTarget(msg.operation) {
 		pending := m.runtimeControlPending[msg.operation]
 		if pending.inFlight && pending.desiredText != pending.inFlightText {
@@ -274,30 +474,6 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 	case runtimeControlSetSessionName:
 		m.sessionName = strings.TrimSpace(msg.text)
 		return sequenceCmds(tea.SetWindowTitle(sessionTitle(m.sessionName)), followUpCmd)
-	case runtimeControlSetThinkingLevel:
-		m.thinkingLevel = strings.TrimSpace(msg.text)
-		return sequenceCmds(m.sendThinkingLevelSetStatus(m.thinkingLevel), followUpCmd)
-	case runtimeControlSetFastMode:
-		m.fastModeEnabled = msg.enabled
-		status := serverapi.FastModeToggleStatusMessage(m.fastModeEnabled, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
-	case runtimeControlSetReviewer:
-		nextMode := strings.TrimSpace(msg.mode)
-		if nextMode == "" {
-			nextMode = "off"
-		}
-		m.reviewerMode = nextMode
-		m.reviewerEnabled = nextMode != "off"
-		status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
-	case runtimeControlSetAutoCompaction:
-		m.autoCompactionEnabled = msg.enabled
-		status := serverapi.AutoCompactionToggleStatusMessage(msg.enabled, msg.changed, msg.compactionMode)
-		return sequenceCmds(m.inputController().appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo), followUpCmd)
-	case runtimeControlSetQuestions:
-		m.questionsEnabled = msg.enabled
-		status := serverapi.QuestionsToggleStatusMessage(msg.enabled, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
 	case runtimeControlInterrupt:
 		var merge runtimeTupleMergeResult
 		if msg.runtimeTuple != nil {

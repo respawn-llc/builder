@@ -585,7 +585,7 @@ func (m *uiModel) discardInjectedRuntimeQueueCommand(localID, serverID string, t
 			token:     token,
 			localID:   localID,
 			serverID:  serverID,
-			discarded: client.RemovePendingWork(serverID),
+			discarded: client.DiscardQueuedUserMessage(serverID),
 		}
 	}
 }

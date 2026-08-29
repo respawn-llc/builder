@@ -619,20 +619,22 @@ type maintenanceAdmission uint8
 const (
 	maintenanceAdmissionAuthorized maintenanceAdmission = iota + 1
 	maintenanceAdmissionExactStepBoundary
+	maintenanceAdmissionSessionChatSettings
 )
 
 func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runtimeids.SessionID, callback maintenanceCallback) error {
-	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionAuthorized, callback)
+	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionAuthorized, false, callback)
 }
 
 func (a *Authority) withExactStepBoundaryMaintenanceResource(ctx context.Context, sessionID runtimeids.SessionID, callback maintenanceCallback) error {
-	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionExactStepBoundary, callback)
+	return a.withMaintenanceResourceAdmission(ctx, sessionID, maintenanceAdmissionExactStepBoundary, false, callback)
 }
 
 func (a *Authority) withMaintenanceResourceAdmission(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	admission maintenanceAdmission,
+	serializeCallback bool,
 	callback maintenanceCallback,
 ) error {
 	if a == nil {
@@ -647,7 +649,9 @@ func (a *Authority) withMaintenanceResourceAdmission(
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
 	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil &&
-		(admission != maintenanceAdmissionExactStepBoundary || block.reason != SessionStartBlockMaintenance) {
+		((admission != maintenanceAdmissionExactStepBoundary &&
+			admission != maintenanceAdmissionSessionChatSettings) ||
+			block.reason != SessionStartBlockMaintenance) {
 		gate.lock.Unlock()
 		return errors.Join(
 			ErrSessionStartsBlocked,
@@ -675,7 +679,9 @@ func (a *Authority) withMaintenanceResourceAdmission(
 		return err
 	}
 	store := resource.store
-	gate.lock.Unlock()
+	if !serializeCallback {
+		gate.lock.Unlock()
+	}
 	retire := false
 	err = func() error {
 		defer resource.releaseCallbackCount()
@@ -683,6 +689,9 @@ func (a *Authority) withMaintenanceResourceAdmission(
 		retire, callbackErr = callback(ctx, store, resource, engine)
 		return callbackErr
 	}()
+	if serializeCallback {
+		gate.lock.Unlock()
+	}
 	if retire {
 		err = errors.Join(err, a.retireExactResource(ctx, resource))
 	} else {

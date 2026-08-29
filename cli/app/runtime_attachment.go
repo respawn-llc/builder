@@ -26,6 +26,7 @@ type runtimeAttachmentClients struct {
 	ProcessViews      apicontract.ProcessViewService
 	PromptControl     apicontract.PromptControlService
 	RuntimeControls   apicontract.RuntimeControlService
+	ChatSettings      apicontract.ChatSettingsService
 	SessionTranscript apicontract.SessionTranscriptService
 	SessionRuntime    apicontract.SessionRuntimeService
 	SessionViews      apicontract.SessionViewService
@@ -100,7 +101,7 @@ func prepareSharedRuntimeWiring(
 	plan sessionLaunchPlan,
 	reactivator *runtimeReactivator,
 ) (*runtimeWiring, func(), error) {
-	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
+	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls, clients.ChatSettings).(*sessionRuntimeClient)
 	if reactivator != nil {
 		runtimeClient.SetRuntimeReactivator(reactivator)
 	}

@@ -1906,62 +1906,6 @@ func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 	}
 }
 
-func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
-
-	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		SessionID: store.Meta().SessionID,
-		Enabled:   false,
-	})
-	if !errors.Is(err, errWorkflowTaskSessionAutoCompactionDisable) {
-		t.Fatalf("SetAutoCompactionEnabled error = %v, want workflow auto-compaction rejection", err)
-	}
-	if !engine.AutoCompactionEnabled() {
-		t.Fatal("auto-compaction disabled despite durable workflow session marker")
-	}
-}
-
-func TestServiceSetThinkingLevelAcceptsProviderSpecificValue(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{Model: "gpt-5"})
-
-	err := service.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{
-		SessionID: store.Meta().SessionID,
-		Level:     " provider-specific-depth ",
-	})
-	if err != nil {
-		t.Fatalf("SetThinkingLevel: %v", err)
-	}
-	if got := engine.ThinkingLevel(); got != "provider-specific-depth" {
-		t.Fatalf("live Thinking = %q, want provider-specific-depth", got)
-	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
-		t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
-	}
-}
-
-func TestServiceSetAutoCompactionEnabledPropagatesClosedRuntime(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	if err := engine.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
-	}
-
-	resp, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		SessionID: store.Meta().SessionID,
-		Enabled:   false,
-	})
-	if !errors.Is(err, runtime.ErrEngineClosed) {
-		t.Fatalf("SetAutoCompactionEnabled error = %v, want ErrEngineClosed", err)
-	}
-	if resp.Changed || resp.Enabled {
-		t.Fatalf("SetAutoCompactionEnabled response = %+v, want zero response on failure", resp)
-	}
-	if !engine.AutoCompactionEnabled() {
-		t.Fatal("auto-compaction changed after Runtime admission failure")
-	}
-}
-
 func TestServiceSetGoalAllowsAgentWithoutExistingGoal(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, &blockingRuntimeControlClient{}, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
@@ -2699,7 +2643,9 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
 		SessionID: store.Meta().SessionID,
 		RequestID: runtimeids.NewCompactionRequestID(),
-		Admission: serverapi.ManualCompactionAdmission{RestorationInput: "/compact"},
+		Admission: runtimeinput.ManualCompactionAdmission{
+			RestorationInput: "/compact",
+		},
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)
 	}

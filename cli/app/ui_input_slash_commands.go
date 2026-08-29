@@ -136,7 +136,7 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 		}
 	case commands.ActionSetFast:
 		available, _ := m.fastModeState()
-		if !available {
+		if !m.hasRuntimeClient() && !available {
 			return "Fast mode is only available for OpenAI-based Responses providers", true
 		}
 	case commands.ActionProcesses:

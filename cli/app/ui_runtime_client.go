@@ -23,6 +23,7 @@ var uiRuntimeReadTimeout = 300 * time.Millisecond
 type sessionRuntimeClient struct {
 	reads                    apicontract.SessionViewService
 	controls                 apicontract.RuntimeControlService
+	chatSettings             apicontract.ChatSettingsService
 	sessionID                string
 	reactivator              *runtimeReactivator
 	connectionStateObserver  func(error)
@@ -34,16 +35,17 @@ type sessionRuntimeClient struct {
 	metadataRevision uint64
 }
 
-func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) clientui.RuntimeClient {
+func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService, chatSettings apicontract.ChatSettingsService) clientui.RuntimeClient {
 	if reads == nil || controls == nil {
 		return nil
 	}
 	return &sessionRuntimeClient{
-		sessionID:   sessionID,
-		reactivator: newRuntimeReactivator(),
-		reads:       reads,
-		controls:    controls,
-		mainView:    clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
+		sessionID:    sessionID,
+		reactivator:  newRuntimeReactivator(),
+		reads:        reads,
+		controls:     controls,
+		chatSettings: chatSettings,
+		mainView:     clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
 	}
 }
 
@@ -123,7 +125,9 @@ func runtimeControlCall[T any](c *sessionRuntimeClient, appendWarning bool, call
 }
 
 func runtimeRequestCall[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context) (T, error)) (T, error) {
-	return call(ctx)
+	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
+		return call(ctx)
+	})
 }
 
 func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.Context) error) error {

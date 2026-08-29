@@ -293,9 +293,9 @@
 - A `/copy` clipboard write finishes before another copy can begin. Lookup, clipboard, and connection failures appear as distinct errors.
 - `/review` auto-submits embedded review rubric; it stays in-place for empty sessions and forks fresh child session after a visible user prompt.
 - `/back` reads the child session's durable final answer before reopening its previous session through authoritative global session identity, including when the target belongs to another project. When no previous-session relationship exists, it falls back to the parent-agent session for a delegated session later opened interactively. A present answer pre-fills the target input byte-for-byte; true absence opens the target with an empty prefill; lookup failure leaves the child session open.
-- `/supervisor` toggles current-session reviewer invocation and does not persist to config.
-- `/autocompaction` toggles runtime auto-compaction for current session and does not persist to config.
-- `/fast`, `/supervisor`, and `/questions` feedback is a committed transcript entry in an active Session.
+- `/supervisor off` selects Off. `/supervisor on` selects the current Agent's Supervisor baseline when that baseline is After edits or Always, and selects After edits when the baseline is Off. Kent retains no hidden last-non-Off mode. The command changes only the Session setting and does not persist to config.
+- `/autocompaction` changes the Session's stored Auto-compaction preference only when policy is optional and does not persist to config. Required and disabled policy reject the mutation and preserve the stored preference.
+- `/thinking`, `/fast`, `/supervisor`, `/autocompaction`, and `/questions` setting activations are independent requests and create no transcript entries. A durable change or persisted repair shows a transient success notice with the setting name and resulting authoritative value; a no-write no-op shows no success notice; rejection or failure shows a transient error.
 - `/status` opens a read-only detail overlay and refreshes progressively.
 - `/status` shows previous-session and parent-agent-session provenance as separate labeled facts when each relationship is present.
 - Built-in prompt commands `/review` and `/init` are canonical server-resolved prompt identities backed by embedded Markdown templates. Clients do not expand their templates.

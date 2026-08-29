@@ -136,7 +136,7 @@ func (c *worktreeCommandTestClient) consumeReconnectFailure(kind string) bool {
 
 func newWorktreeTestRuntimeClient(sessionID string) *sessionRuntimeClient {
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}}}
-	return newUIRuntimeClientWithReads(sessionID, reads, &reconnectRetryRuntimeControlClient{}).(*sessionRuntimeClient)
+	return newUIRuntimeClientWithReads(sessionID, reads, &reconnectRetryRuntimeControlClient{}, nil).(*sessionRuntimeClient)
 }
 
 func newWorktreeTestModel(t *testing.T, client *worktreeCommandTestClient, opts ...UIOption) *uiModel {
