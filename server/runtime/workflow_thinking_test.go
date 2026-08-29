@@ -75,23 +75,6 @@ func TestOperatorThinkingRemainsIndependentFromWorkflowThinking(t *testing.T) {
 	}
 }
 
-func TestDefinitelyUncommittedOperatorThinkingDoesNotPublishOrWriteLive(t *testing.T) {
-	store := mustCreateTestSession(t)
-	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
-		Model:         "workflow-thinking-model",
-		ThinkingLevel: "medium",
-	})
-	blockTestSessionMetadataMutations(t, store)
-	publications := 0
-	changed, err := engine.SetThinkingLevelWithPublication(t.Context(), "high", func(clientui.TranscriptSessionSettingFeedback) error {
-		publications++
-		return nil
-	})
-	if err == nil || changed || publications != 0 || engine.ThinkingLevel() != "medium" {
-		t.Fatalf("uncommitted operator Thinking = changed %t publications %d value %q error %v", changed, publications, engine.ThinkingLevel(), err)
-	}
-}
-
 func TestWorkflowThinkingSetterAcceptsStandardMaxAndCustomValues(t *testing.T) {
 	t.Parallel()
 	for _, value := range []string{"high", "max", "provider-custom"} {

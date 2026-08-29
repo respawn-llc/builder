@@ -351,11 +351,7 @@ func (e *Engine) SetSessionName(ctx context.Context, name string) error {
 }
 
 func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
-	normalized := strings.TrimSpace(level)
-	if normalized == "" {
-		return errors.New("thinking level is required")
-	}
-	_, err := e.SetThinkingLevelWithPublication(ctx, normalized, nil)
+	_, err := e.SetThinkingLevelWithPublication(ctx, level, nil)
 	return err
 }
 

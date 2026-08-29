@@ -317,10 +317,9 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 	var response serverapi.RuntimeSetFastModeEnabledResponse
 	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		changed, mutationErr := engine.SetFastModeEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
-		if mutationErr != nil && !changed {
-			return mutationErr
+		if mutationErr == nil || changed {
+			response = serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}
 		}
-		response = serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}
 		return mutationErr
 	})
 	return response, err
@@ -333,10 +332,9 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 	var response serverapi.RuntimeSetReviewerEnabledResponse
 	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		changed, mode, mutationErr := engine.SetReviewerEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
-		if mutationErr != nil && !changed {
-			return mutationErr
+		if mutationErr == nil || changed {
+			response = serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}
 		}
-		response = serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}
 		return mutationErr
 	})
 	return response, err
@@ -354,10 +352,9 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 			}
 		}
 		changed, enabled, err := engine.SetAutoCompactionEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
-		if err != nil && !changed {
-			return err
+		if err == nil || changed {
+			resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
 		}
-		resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
 		return err
 	})
 	return resp, err
@@ -370,10 +367,9 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 	var response serverapi.RuntimeSetQuestionsEnabledResponse
 	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		changed, enabled, mutationErr := engine.SetQuestionsEnabledWithPublication(callbackCtx, req.Enabled, s.settingPublication(req.SessionID))
-		if mutationErr != nil && !changed {
-			return mutationErr
+		if mutationErr == nil || changed {
+			response = serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}
 		}
-		response = serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}
 		return mutationErr
 	})
 	return response, err
@@ -401,7 +397,7 @@ func runtimeCommandNotAccepted(cause error) error {
 	return serverapi.NewRuntimeCommandNotAcceptedError(cause)
 }
 
-func (s *Service) settingPublication(sessionID string) runtime.SessionSettingPublication {
+func (s *Service) settingPublication(sessionID string) func(clientui.TranscriptSessionSettingFeedback) error {
 	publisher, ok := s.activity.(sessionSettingPublisher)
 	if !ok {
 		return nil

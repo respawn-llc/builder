@@ -10,18 +10,17 @@ import (
 	"core/shared/clientui"
 )
 
-type SessionSettingPublication func(clientui.TranscriptSessionSettingFeedback) error
-
 type immediateSessionSettingOwner struct {
 	mu sync.Mutex
 }
 
 func (e *Engine) mutateImmediateSessionSetting(
 	ctx context.Context,
+	prepare func() error,
 	persist func() (session.CommitReceipt, bool, error),
 	apply func(),
 	feedback clientui.TranscriptSessionSettingFeedback,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -42,8 +41,14 @@ func (e *Engine) mutateImmediateSessionSetting(
 	if e.closed.Load() {
 		return false, ErrEngineClosed
 	}
+	if prepare != nil {
+		if err := prepare(); err != nil {
+			return false, err
+		}
+	}
 	receipt, changed, mutationErr := persist()
-	if e.stopAfterDefinitelyUncommittedSessionSetting(receipt, mutationErr) {
+	if mutationErr != nil && !receipt.Committed {
+		e.closeAndRetireAfterRuntimeAbort()
 		return false, mutationErr
 	}
 	if apply != nil {
@@ -56,29 +61,18 @@ func (e *Engine) mutateImmediateSessionSetting(
 	return changed, errors.Join(mutationErr, publish(feedback))
 }
 
-func (e *Engine) stopAfterDefinitelyUncommittedSessionSetting(receipt session.CommitReceipt, err error) bool {
-	if err == nil || receipt.Committed {
-		return false
-	}
-	e.closeAndRetireAfterRuntimeAbort()
-	return true
-}
-
 func (e *Engine) mutateImmediateChatSetting(
 	ctx context.Context,
-	mutation func() (session.ChatSettingsMutation, error),
+	mutation session.ChatSettingsMutation,
 	apply func(),
 	feedback clientui.TranscriptSessionSettingFeedback,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, error) {
 	return e.mutateImmediateSessionSetting(
 		ctx,
+		nil,
 		func() (session.CommitReceipt, bool, error) {
-			update, err := mutation()
-			if err != nil {
-				return session.CommitReceipt{}, false, err
-			}
-			result, err := e.store.MutateChatSettings(update)
+			result, err := e.store.MutateChatSettings(mutation)
 			return result.CommitReceipt, result.Changed, err
 		},
 		apply,
@@ -90,16 +84,14 @@ func (e *Engine) mutateImmediateChatSetting(
 func (e *Engine) SetFastModeEnabledWithPublication(
 	ctx context.Context,
 	enabled bool,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, error) {
 	if enabled && !e.FastModeAvailable() {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
 	return e.mutateImmediateChatSetting(
 		ctx,
-		func() (session.ChatSettingsMutation, error) {
-			return session.ChatSettingsMutation{Fast: &enabled}, nil
-		},
+		session.ChatSettingsMutation{Fast: &enabled},
 		func() { e.applyFastModeEnabled(enabled) },
 		clientui.TranscriptSessionSettingFeedback{
 			Kind:     clientui.SessionSettingFastMode,
@@ -112,11 +104,12 @@ func (e *Engine) SetFastModeEnabledWithPublication(
 func (e *Engine) SetSessionNameWithPublication(
 	ctx context.Context,
 	name string,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, error) {
 	normalized := strings.TrimSpace(name)
 	return e.mutateImmediateSessionSetting(
 		ctx,
+		nil,
 		func() (session.CommitReceipt, bool, error) {
 			result, err := e.store.MutateName(normalized)
 			return result.CommitReceipt, result.Changed, err
@@ -133,7 +126,7 @@ func (e *Engine) SetSessionNameWithPublication(
 func (e *Engine) SetThinkingLevelWithPublication(
 	ctx context.Context,
 	level string,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, error) {
 	normalized := strings.TrimSpace(level)
 	if normalized == "" {
@@ -141,9 +134,7 @@ func (e *Engine) SetThinkingLevelWithPublication(
 	}
 	return e.mutateImmediateChatSetting(
 		ctx,
-		func() (session.ChatSettingsMutation, error) {
-			return session.ChatSettingsMutation{Thinking: &normalized}, nil
-		},
+		session.ChatSettingsMutation{Thinking: &normalized},
 		func() { _ = e.setThinkingValue(normalized) },
 		clientui.TranscriptSessionSettingFeedback{
 			Kind:     clientui.SessionSettingThinking,
@@ -156,13 +147,11 @@ func (e *Engine) SetThinkingLevelWithPublication(
 func (e *Engine) SetAutoCompactionEnabledWithPublication(
 	ctx context.Context,
 	enabled bool,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, bool, error) {
 	changed, err := e.mutateImmediateChatSetting(
 		ctx,
-		func() (session.ChatSettingsMutation, error) {
-			return session.ChatSettingsMutation{AutoCompaction: &enabled}, nil
-		},
+		session.ChatSettingsMutation{AutoCompaction: &enabled},
 		func() { e.applyAutoCompactionEnabled(enabled) },
 		clientui.TranscriptSessionSettingFeedback{
 			Kind:           clientui.SessionSettingAutoCompaction,
@@ -179,13 +168,11 @@ func (e *Engine) SetAutoCompactionEnabledWithPublication(
 func (e *Engine) SetQuestionsEnabledWithPublication(
 	ctx context.Context,
 	enabled bool,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, bool, error) {
 	changed, err := e.mutateImmediateChatSetting(
 		ctx,
-		func() (session.ChatSettingsMutation, error) {
-			return session.ChatSettingsMutation{Questions: &enabled}, nil
-		},
+		session.ChatSettingsMutation{Questions: &enabled},
 		func() { e.applyQuestionsEnabled(enabled) },
 		clientui.TranscriptSessionSettingFeedback{
 			Kind:      clientui.SessionSettingQuestions,
@@ -202,7 +189,7 @@ func (e *Engine) SetQuestionsEnabledWithPublication(
 func (e *Engine) SetReviewerEnabledWithPublication(
 	ctx context.Context,
 	enabled bool,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, string, error) {
 	return e.setReviewerSettingWithPublication(ctx, func() (string, error) {
 		_, target, err := e.reviewerEnabledChange(enabled)
@@ -213,7 +200,7 @@ func (e *Engine) SetReviewerEnabledWithPublication(
 func (e *Engine) SetReviewerFrequencyWithPublication(
 	ctx context.Context,
 	frequency string,
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, string, error) {
 	return e.setReviewerSettingWithPublication(ctx, func() (string, error) {
 		return e.PrepareReviewerFrequency(frequency)
@@ -223,15 +210,19 @@ func (e *Engine) SetReviewerFrequencyWithPublication(
 func (e *Engine) setReviewerSettingWithPublication(
 	ctx context.Context,
 	resolve func() (string, error),
-	publish SessionSettingPublication,
+	publish func(clientui.TranscriptSessionSettingFeedback) error,
 ) (bool, string, error) {
 	target := ""
-	changed, err := e.mutateImmediateChatSetting(
+	changed, err := e.mutateImmediateSessionSetting(
 		ctx,
-		func() (session.ChatSettingsMutation, error) {
+		func() error {
 			var err error
 			target, err = resolve()
-			return session.ChatSettingsMutation{Supervisor: &target}, err
+			return err
+		},
+		func() (session.CommitReceipt, bool, error) {
+			result, err := e.store.MutateChatSettings(session.ChatSettingsMutation{Supervisor: &target})
+			return result.CommitReceipt, result.Changed, err
 		},
 		func() { e.setReviewerFrequency(target) },
 		clientui.TranscriptSessionSettingFeedback{

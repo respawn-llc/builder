@@ -1,7 +1,6 @@
 package clientui
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -29,7 +28,7 @@ type TranscriptSessionSettingFeedback struct {
 }
 
 func (f TranscriptSessionSettingFeedback) Validate() error {
-	values := 0
+	valueCount := 0
 	for _, present := range []bool{
 		f.SessionName != nil,
 		f.Thinking != nil,
@@ -39,34 +38,24 @@ func (f TranscriptSessionSettingFeedback) Validate() error {
 		f.AutoCompaction != nil,
 	} {
 		if present {
-			values++
+			valueCount++
 		}
 	}
-	if values != 1 {
-		return fmt.Errorf("session setting feedback has %d resulting values, want exactly one", values)
+	if valueCount != 1 {
+		return fmt.Errorf("session setting feedback has %d resulting values, want exactly one", valueCount)
 	}
 	switch f.Kind {
 	case SessionSettingSessionName:
-		if f.SessionName == nil {
-			return errors.New("Session Name feedback requires a Session Name value")
-		}
-		if *f.SessionName != strings.TrimSpace(*f.SessionName) {
-			return errors.New("Session Name feedback value must be normalized")
-		}
+		return validateSettingFeedbackString("Session Name", f.SessionName, true)
 	case SessionSettingThinking:
-		if f.Thinking == nil || strings.TrimSpace(*f.Thinking) == "" {
-			return errors.New("Thinking feedback requires a Thinking value")
-		}
-		if *f.Thinking != strings.TrimSpace(*f.Thinking) {
-			return errors.New("Thinking feedback value must be normalized")
-		}
+		return validateSettingFeedbackString("Thinking", f.Thinking, false)
 	case SessionSettingFastMode:
 		if f.FastMode == nil {
-			return errors.New("Fast Mode feedback requires a Fast Mode value")
+			return fmt.Errorf("Fast Mode feedback requires a Fast Mode value")
 		}
 	case SessionSettingSupervisor:
 		if f.Supervisor == nil {
-			return errors.New("Supervisor feedback requires a Supervisor value")
+			return fmt.Errorf("Supervisor feedback requires a Supervisor value")
 		}
 		switch *f.Supervisor {
 		case "off", "edits", "all":
@@ -75,14 +64,24 @@ func (f TranscriptSessionSettingFeedback) Validate() error {
 		}
 	case SessionSettingQuestions:
 		if f.Questions == nil {
-			return errors.New("Questions feedback requires a Questions value")
+			return fmt.Errorf("Questions feedback requires a Questions value")
 		}
 	case SessionSettingAutoCompaction:
 		if f.AutoCompaction == nil {
-			return errors.New("Auto-compaction feedback requires an Auto-compaction value")
+			return fmt.Errorf("Auto-compaction feedback requires an Auto-compaction value")
 		}
 	default:
 		return fmt.Errorf("invalid Session setting feedback kind %q", f.Kind)
+	}
+	return nil
+}
+
+func validateSettingFeedbackString(name string, value *string, allowEmpty bool) error {
+	if value == nil || (!allowEmpty && strings.TrimSpace(*value) == "") {
+		return fmt.Errorf("%s feedback requires a %s value", name, name)
+	}
+	if *value != strings.TrimSpace(*value) {
+		return fmt.Errorf("%s feedback value must be normalized", name)
 	}
 	return nil
 }
