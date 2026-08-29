@@ -105,11 +105,47 @@ func (f *runtimeControlFakeClient) SetSessionName(name string) error {
 	return f.err
 }
 func (f *runtimeControlFakeClient) ReadChatSettings() (serverapi.ChatSettings, error) {
-	return serverapi.ChatSettings{}, f.err
+	return runtimeControlFakeChatSettings(), f.err
 }
 func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
-	f.status.ThinkingLevel = *operation.Value
-	return serverapi.ChatSettingsMutationResponse{Result: serverapi.NewChatSettingsMutationApplied(true), Settings: serverapi.ChatSettings{SelectedAgent: serverapi.ChatSettingsAgentSummary{Thinking: f.status.ThinkingLevel}}}, f.err
+	settings := runtimeControlFakeChatSettings()
+	switch operation.Kind {
+	case serverapi.ChatSettingsMutationThinking:
+		settings.SelectedAgent.Thinking = *operation.Value
+		f.status.ThinkingLevel = settings.SelectedAgent.Thinking
+	case serverapi.ChatSettingsMutationSupervisor:
+		settings.Supervisor.Value = serverapi.ChatSettingsSupervisorValue(*operation.Value)
+	case serverapi.ChatSettingsMutationFast:
+		settings.Fast = &serverapi.ChatSettingsFast{Value: *operation.Enabled}
+	case serverapi.ChatSettingsMutationQuestions:
+		settings.Questions.Enabled = *operation.Enabled
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		settings.AutoCompaction.Stored = *operation.Enabled
+		settings.AutoCompaction.Effective = *operation.Enabled
+	}
+	return serverapi.ChatSettingsMutationResponse{
+		Result:   serverapi.NewChatSettingsMutationApplied(true),
+		Settings: settings,
+	}, f.err
+}
+
+func runtimeControlFakeChatSettings() serverapi.ChatSettings {
+	return serverapi.ChatSettings{
+		SelectedAgent: serverapi.ChatSettingsAgentSummary{
+			Role:     "default",
+			Model:    "gpt-5",
+			Thinking: "medium",
+		},
+		Supervisor: serverapi.ChatSettingsSupervisor{
+			Value:    serverapi.ChatSettingsSupervisorOff,
+			Baseline: serverapi.ChatSettingsSupervisorAfterEdits,
+		},
+		Questions: serverapi.ChatSettingsQuestions{Enabled: true},
+		AutoCompaction: serverapi.ChatSettingsAutoCompaction{
+			Stored:    true,
+			Effective: true,
+		},
+	}
 }
 func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	f.showGoalCalls++

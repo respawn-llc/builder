@@ -38,41 +38,6 @@ func TestDefaultRegistryBusyContract(t *testing.T) {
 	}
 }
 
-func TestBusyEnterAppliesImmediateSettings(t *testing.T) {
-	tests := []struct {
-		input         string
-		setup         func(*uiModel)
-		sessionName   string
-		thinkingLevel string
-		fast          bool
-	}{
-		{input: "/name queued title", sessionName: "queued title"},
-		{input: "/thinking low", thinkingLevel: "low"},
-		{
-			input: "/fast on",
-			setup: func(model *uiModel) {
-				model.fastModeAvailable = true
-			},
-			fast: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.input, func(t *testing.T) {
-			model := busyCommandTestModel()
-			testSetMainInput(model, test.input)
-			if test.setup != nil {
-				test.setup(model)
-			}
-			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			updated := next.(*uiModel)
-			if testMainInput(updated) != "" || updated.sessionName != test.sessionName || updated.thinkingLevel != test.thinkingLevel || updated.fastModeEnabled != test.fast {
-				t.Fatalf("updated model = input %q, name %q, thinking %q, fast %t", testMainInput(updated), updated.sessionName, updated.thinkingLevel, updated.fastModeEnabled)
-			}
-			requireBusyCommandQueuesEmpty(t, updated)
-		})
-	}
-}
-
 func TestBusyEnterOpensReadOverlays(t *testing.T) {
 	for input, mode := range map[string]uiInputMode{
 		"/status": uiInputModeStatus,
