@@ -178,16 +178,6 @@ func (r RuntimeGoalShowResponse) Validate() error {
 	return r.GoalEnvelope.Validate()
 }
 
-type RuntimeGoalMutationResponse struct {
-	Goal         *clientui.Goal             `json:"goal,omitempty"`
-	Pending      *clientui.GoalPreview      `json:"pending,omitempty"`
-	Availability *clientui.GoalAvailability `json:"availability,omitempty"`
-}
-
-func (r RuntimeGoalMutationResponse) Validate() error {
-	return clientui.GoalMutationResult(r).Validate()
-}
-
 type RuntimeGoalSetRequest struct {
 	SessionID string `json:"session_id"`
 	Objective string `json:"objective"`

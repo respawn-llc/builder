@@ -88,7 +88,10 @@ func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInp
 		target.Settings.Supervisor = operation.Value
 	case serverapi.ChatSettingsMutationThinking:
 		thinking := strings.TrimSpace(*operation.Value)
-		if !slices.Contains(selectedEntry.Settings.SupportedThinkingValues, thinking) {
+		thinkingProjection := projectChatThinking(input.Effective.Thinking, selectedEntry.Settings)
+		if thinkingProjection == nil ||
+			(thinkingProjection.Kind == serverapi.ChatSettingsThinkingEnumerated &&
+				!slices.Contains(thinkingProjection.Values, thinking)) {
 			return rejectedChatSettingsOperation(input, serverapi.ChatSettingsMutationThinkingUnavailable), nil
 		}
 		target.Settings.Thinking = &thinking
