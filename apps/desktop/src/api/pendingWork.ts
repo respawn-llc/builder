@@ -26,7 +26,7 @@ export const parseWorktreeOperationID = createUUIDv4ValueParser<"worktree_operat
   "Worktree operation id must be a UUID v4.",
 );
 
-const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID);
+export const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID);
 const compactionRequestIDSchema = uuidSchema(parseCompactionRequestID);
 const worktreeOperationIDSchema = uuidSchema(parseWorktreeOperationID);
 const itemBase = {

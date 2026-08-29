@@ -6,7 +6,7 @@ import { jsonValueSchema, type JsonValue } from "./json";
 import {
   normalizeWhitespace,
   parseCompactionRequestID,
-  parsePendingWorkItemID,
+  pendingWorkItemIDSchema,
   pendingWorkRestorationSchema,
   pendingWorkSchema,
   type CompactionRequestID,
@@ -48,13 +48,11 @@ export async function submitManualCompaction(
 }
 
 export async function listPendingWork(transport: RpcTransport, sessionID: string): Promise<PendingWork> {
-  return withPendingWorkErrors(async () =>
-    parseRpcResponse(
-      methods.list,
-      listResponseSchema,
-      await transport.call(methods.list, { session_id: requiredSessionID(sessionID) }),
-    ),
-  );
+  return withPendingWorkErrors(async () => parseRpcResponse(
+    methods.list,
+    listResponseSchema,
+    await transport.call(methods.list, { session_id: requiredSessionID(sessionID) }),
+  ));
 }
 
 export async function removePendingWork(
@@ -62,16 +60,14 @@ export async function removePendingWork(
   sessionID: string,
   itemID: PendingWorkIdentity,
 ): Promise<PendingWorkRestoration> {
-  return withPendingWorkErrors(async () =>
-    parseRpcResponse(
-      methods.remove,
-      removeResponseSchema,
-      await transport.call(methods.remove, {
-        session_id: requiredSessionID(sessionID),
-        item_id: itemID.toJSONValue(),
-      }),
-    ),
-  );
+  return withPendingWorkErrors(async () => parseRpcResponse(
+    methods.remove,
+    removeResponseSchema,
+    await transport.call(methods.remove, {
+      session_id: requiredSessionID(sessionID),
+      item_id: itemID.toJSONValue(),
+    }),
+  ));
 }
 
 async function callDedicated(transport: RpcTransport, method: string, params: JsonValue): Promise<void> {
@@ -113,16 +109,7 @@ export class PendingWorkError extends RpcError {
 }
 
 const capacityErrorSchema = strict({ reason: z.literal("capacity") });
-const notPendingErrorSchema = strict({
-  item_id: z.string().transform((value, context) => {
-    try {
-      return parsePendingWorkItemID(value);
-    } catch {
-      context.addIssue({ code: "custom", message: "Expected Pending Work item UUID v4." });
-      return z.NEVER;
-    }
-  }),
-});
+const notPendingErrorSchema = strict({ item_id: pendingWorkItemIDSchema });
 const nestedCauseSchema = strict({
   code: z.number().int(),
   message: z.string().trim().min(1),
@@ -137,52 +124,52 @@ export function decodePendingWorkError(error: unknown): PendingWorkError | null 
       return null;
     }
     const cause = decodeDirectPendingWorkFailure(
-      new RpcError({
-        method: error.method,
-        code: nested.data.cause.code,
-        message: nested.data.cause.message,
-        data: nested.data.cause.data,
-      }),
+      error.method,
+      nested.data.cause.code,
+      nested.data.cause.data,
     );
     return cause === null ? null : new PendingWorkError(error, { kind: "not_accepted", cause });
   }
-  const detail = decodeDirectPendingWorkFailure(error);
+  const detail = decodeDirectPendingWorkFailure(error.method, error.code, error.data);
   return detail === null ? null : new PendingWorkError(error, detail);
 }
 
-function decodeDirectPendingWorkFailure(error: RpcError): PendingWorkFailure | null {
-  if (error.code === rpcErrorCodes.runtimeUnavailable && isPendingWorkMethod(error.method)) {
-    return error.data === undefined ? { kind: "runtime_unavailable" } : null;
+function decodeDirectPendingWorkFailure(
+  method: string,
+  code: number,
+  data: RpcError["data"],
+): PendingWorkFailure | null {
+  if (code === rpcErrorCodes.runtimeUnavailable && isPendingWorkMethod(method)) {
+    return data === undefined ? { kind: "runtime_unavailable" } : null;
   }
-  if (isPendingWorkAdmissionMethod(error.method) && error.code === rpcErrorCodes.pendingWorkCapacity) {
-    return capacityErrorSchema.safeParse(error.data).success ? { kind: "capacity" } : null;
+  if (isPendingWorkAdmissionMethod(method) && code === rpcErrorCodes.pendingWorkCapacity) {
+    return capacityErrorSchema.safeParse(data).success ? { kind: "capacity" } : null;
   }
-  if (error.method === methods.remove && error.code === rpcErrorCodes.pendingWorkNotPending) {
-    const parsed = notPendingErrorSchema.safeParse(error.data);
+  if (method === methods.remove && code === rpcErrorCodes.pendingWorkNotPending) {
+    const parsed = notPendingErrorSchema.safeParse(data);
     return parsed.success ? { kind: "not_pending", itemID: parsed.data.item_id } : null;
   }
-  return decodeManualCompactionFailure(error);
-}
-
-function decodeManualCompactionFailure(error: RpcError): PendingWorkFailure | null {
-  if (error.method !== methods.compact) return null;
-  const reason = new Map<number, ManualCompactionErrorReason>([
-    [rpcErrorCodes.manualCompactionTooSoon, "too_soon"],
-    [rpcErrorCodes.manualCompactionDisabled, "disabled"],
-    [rpcErrorCodes.manualCompactionActive, "active"],
-  ]).get(error.code);
+  if (method !== methods.compact) return null;
+  let reason: ManualCompactionErrorReason | undefined;
+  if (code === rpcErrorCodes.manualCompactionTooSoon) reason = "too_soon";
+  if (code === rpcErrorCodes.manualCompactionDisabled) reason = "disabled";
+  if (code === rpcErrorCodes.manualCompactionActive) reason = "active";
   if (reason === undefined) return null;
-  return strict({ reason: z.literal(reason) }).safeParse(error.data).success
+  return strict({ reason: z.literal(reason) }).safeParse(data).success
     ? { kind: "manual_compaction", reason }
     : null;
 }
 
+const pendingWorkAdmissionMethods = new Set<string>([
+  methods.compact,
+  methods.worktreeEnter,
+  methods.worktreeLeave,
+]);
 function isPendingWorkMethod(method: string): boolean {
   return isPendingWorkAdmissionMethod(method) || method === methods.list || method === methods.remove;
 }
-
 function isPendingWorkAdmissionMethod(method: string): boolean {
-  return method === methods.compact || method === methods.worktreeEnter || method === methods.worktreeLeave;
+  return pendingWorkAdmissionMethods.has(method);
 }
 
 async function withPendingWorkErrors<Value>(action: () => Promise<Value>): Promise<Value> {
