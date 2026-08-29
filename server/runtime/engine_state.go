@@ -363,6 +363,29 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	return err
 }
 
+// ApplyPreparedChatSettings updates the exact live runtime in one ordered
+// operation after Chat Settings has completed all fallible preparation and
+// persistence.
+func (e *Engine) ApplyPreparedChatSettings(settings session.ChatSettings) error {
+	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+		e.mu.Lock()
+		e.cfg.ThinkingLevel = strings.TrimSpace(settings.Thinking)
+		e.cfg.FastModeEnabled = settings.Fast
+		e.cfg.Reviewer.Frequency = settings.Supervisor
+		if e.cfg.QuestionsEnabled == nil {
+			e.cfg.QuestionsEnabled = new(bool)
+		}
+		*e.cfg.QuestionsEnabled = settings.Questions
+		if e.cfg.AutoCompactionEnabled == nil {
+			e.cfg.AutoCompactionEnabled = new(bool)
+		}
+		*e.cfg.AutoCompactionEnabled = settings.AutoCompaction
+		e.mu.Unlock()
+		return struct{}{}, nil
+	})
+	return err
+}
+
 // SetWorkflowThinkingValue applies a workflow-owned thinking value through the
 // same ordered Runtime mutation owner as operator settings.
 func (e *Engine) SetWorkflowThinkingValue(value workflow.ThinkingValue) error {

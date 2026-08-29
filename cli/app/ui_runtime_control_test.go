@@ -283,10 +283,11 @@ func TestGoalShowSupersededByMutationDoesNotOverwriteMutationResult(t *testing.T
 		Goal: &clientui.Goal{ID: "goal-1", Objective: "latest", Status: clientui.RuntimeGoalStatusPaused},
 	}
 	m.applyGoalRuntimeDone(goalRuntimeDoneMsg{
-		token:     mutationToken,
-		sessionID: m.sessionID,
-		operation: goalRuntimePause,
-		goal:      paused,
+		token:          mutationToken,
+		sessionID:      m.sessionID,
+		mutationSerial: m.goalRuntimeMutationSerial,
+		operation:      goalRuntimePause,
+		mutation:       clientui.GoalMutationResult{Goal: paused.Goal},
 	})
 	stale := &clientui.RuntimeGoal{
 		Goal: &clientui.Goal{ID: "goal-1", Objective: "stale", Status: clientui.RuntimeGoalStatusActive},

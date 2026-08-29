@@ -397,7 +397,7 @@ func (a *Authority) WithSessionChatSettings(
 	if err != nil {
 		return err
 	}
-	return a.withMaintenanceResource(ctx, id, func(
+	return a.withMaintenanceResourceAdmission(ctx, id, maintenanceAdmissionAuthorized, true, func(
 		runCtx context.Context,
 		store *session.Store,
 		_ *agentResource,

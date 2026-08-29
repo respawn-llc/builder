@@ -193,7 +193,13 @@ func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{SessionID: c.sessionID, RequestID: req.RequestID, Admission: req.Admission})
+	return runtimeRequestCallNoResult(ctx, c, func(ctx context.Context) error {
+		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{
+			SessionID: c.sessionID,
+			RequestID: req.RequestID,
+			Admission: req.Admission,
+		})
+	})
 }
 
 func (c *sessionRuntimeClient) Interrupt() error {

@@ -233,7 +233,12 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 	if cmd := model.inputController().startCompaction("  /compact   tighten  summary  ", "tighten  summary"); cmd == nil {
 		t.Fatal("expected compaction command")
 	}
-	_ = model.inputController().compactCmd(runtimeids.NewCompactionRequestID(), "  /compact   tighten  summary  ", "tighten  summary")()
+	requestID := runtimeids.NewCompactionRequestID()
+	guidance := "tighten  summary"
+	_ = model.inputController().compactCmd(requestID, "  /compact   tighten  summary  ", &guidance)()
+	if got := client.compactRequest.RequestID; got != requestID {
+		t.Fatalf("compaction request ID = %v, want %v", got, requestID)
+	}
 	if got := client.compactRequest.Admission.RestorationInput; got != "  /compact   tighten  summary  " {
 		t.Fatalf("compaction restoration input = %q", got)
 	}
@@ -241,7 +246,7 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 		t.Fatalf("compaction guidance = %v", client.compactRequest.Admission.Guidance)
 	}
 	buttonClient := &runtimeControlFakeClient{}
-	_ = newProjectedTestUIModel(buttonClient).inputController().compactCmd(runtimeids.NewCompactionRequestID(), "", "")()
+	_ = newProjectedTestUIModel(buttonClient).inputController().compactCmd(runtimeids.NewCompactionRequestID(), "", nil)()
 	if got := buttonClient.compactRequest.Admission.RestorationInput; got != "/compact" {
 		t.Fatalf("button compaction restoration input = %q", got)
 	}

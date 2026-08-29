@@ -188,10 +188,17 @@ func (c uiInputController) startCompaction(submittedText, args string) tea.Cmd {
 	c.startRuntimeOperationAffordance()
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))
 	m.layout().syncViewport()
-	return tea.Batch(c.compactCmd(requestID, submittedText, args), m.reconcileSpinnerTicking(false))
+	return tea.Batch(
+		c.compactCmd(requestID, submittedText, optionalCompactionGuidance(args)),
+		m.reconcileSpinnerTicking(false),
+	)
 }
 
-func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, submittedText, args string) tea.Cmd {
+func (c uiInputController) compactCmd(
+	requestID runtimeids.CompactionRequestID,
+	submittedText string,
+	guidance *string,
+) tea.Cmd {
 	m := c.model
 	client := m.runtimeClient()
 	return func() tea.Msg {
@@ -202,28 +209,44 @@ func (c uiInputController) compactCmd(requestID runtimeids.CompactionRequestID, 
 				err:           errors.New("runtime engine is not configured"),
 			}
 		}
+		admission, err := manualCompactionAdmission(submittedText, guidance)
+		if err != nil {
+			return compactDoneMsg{requestID: requestID, submittedText: submittedText, err: err}
+		}
 		return compactDoneMsg{
 			requestID:     requestID,
 			submittedText: submittedText,
 			err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
 				RequestID: requestID,
-				Admission: manualCompactionAdmission(submittedText, args),
+				Admission: admission,
 			}),
 		}
 	}
 }
 
-func manualCompactionAdmission(submittedText, args string) runtimeinput.ManualCompactionAdmission {
+func optionalCompactionGuidance(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
+func manualCompactionAdmission(
+	submittedText string,
+	guidance *string,
+) (runtimeinput.ManualCompactionAdmission, error) {
 	restorationInput := submittedText
 	if strings.TrimSpace(restorationInput) == "" {
 		restorationInput = "/compact"
 	}
 	admission := runtimeinput.ManualCompactionAdmission{RestorationInput: restorationInput}
-	if strings.TrimSpace(args) != "" {
-		guidance := args
-		admission.Guidance = &guidance
+	if guidance != nil {
+		if strings.TrimSpace(*guidance) == "" {
+			return runtimeinput.ManualCompactionAdmission{}, errors.New("compaction guidance must not be blank")
+		}
+		admission.Guidance = guidance
 	}
-	return admission
+	return admission, nil
 }
 
 func (c uiInputController) startRuntimeOperationAffordance() {

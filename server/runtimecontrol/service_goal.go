@@ -197,31 +197,35 @@ func (s *Service) applyExactAgentGoalMutation(
 ) (runtime.GoalCommandResult, error) {
 	var result runtime.GoalCommandResult
 	err := s.authority.WithCurrentRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		availability, err := engine.GoalAvailability()
+		if err != nil {
+			return err
+		}
 		active := engine.ActiveRun()
 		if active == nil || active.RunID != runID.String() || active.StepID != stepID.String() {
 			return runtime.ErrAgentGoalStepInactive
 		}
 		var (
-			goal   session.GoalState
-			queued bool
-			err    error
+			goal         session.GoalState
+			queued       bool
+			operationErr error
 		)
 		switch mutation.kind {
 		case goalMutationSet:
-			goal, queued, err = engine.QueueAgentShellSetGoalForStep(stepID.String(), mutation.Objective, mutation.Actor)
+			goal, queued, operationErr = engine.QueueAgentShellSetGoalForStep(stepID.String(), mutation.Objective, mutation.Actor)
 		case goalMutationStatus:
-			goal, queued, err = engine.QueueGoalStatusForStep(stepID.String(), mutation.Status, mutation.Actor)
+			goal, queued, operationErr = engine.QueueGoalStatusForStep(stepID.String(), mutation.Status, mutation.Actor)
 		default:
 			return errors.New("agent Goal mutation kind is invalid")
 		}
-		if err != nil {
-			return err
+		if operationErr != nil {
+			return operationErr
 		}
 		if !queued {
 			return runtime.ErrAgentGoalStepInactive
 		}
 		result = runtimeGoalResult(goal, false, runtime.GoalCommandQueued, session.CommitReceipt{}, session.CommitReceipt{})
-		result.Availability = engine.GoalMutationAvailability()
+		result.Availability = &availability
 		return nil
 	})
 	return result, err
@@ -253,11 +257,15 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 	if store == nil {
 		return runtime.GoalCommandResult{}, errors.New("session store is required")
 	}
+	availability, err := store.GoalAvailability()
+	if err != nil {
+		return runtime.GoalCommandResult{}, err
+	}
 	switch mutation.kind {
 	case goalMutationSet:
 		goal, metadataReceipt, err := store.SetGoal(mutation.Objective, mutation.Actor)
 		result := runtimeGoalResult(goal, false, runtime.GoalCommandApplied, metadataReceipt, session.CommitReceipt{})
-		result.Availability = store.GoalMutationAvailability()
+		result.Availability = &availability
 		if err != nil || !metadataReceipt.Committed {
 			return result, err
 		}
@@ -267,7 +275,7 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 	case goalMutationStatus:
 		if current := store.Meta().Goal; current != nil && current.Status == mutation.Status {
 			result := runtimeGoalResult(*current, false, runtime.GoalCommandNoop, session.CommitReceipt{}, session.CommitReceipt{})
-			result.Availability = store.GoalMutationAvailability()
+			result.Availability = &availability
 			return result, nil
 		}
 		goal, transitioned, metadataReceipt, err := store.SetGoalStatus(mutation.Status, mutation.Actor)
@@ -276,7 +284,7 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 			disposition = runtime.GoalCommandNoop
 		}
 		result := runtimeGoalResult(goal, false, disposition, metadataReceipt, session.CommitReceipt{})
-		result.Availability = store.GoalMutationAvailability()
+		result.Availability = &availability
 		if err != nil || !transitioned || !metadataReceipt.Committed {
 			return result, err
 		}
@@ -286,7 +294,7 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 	case goalMutationClear:
 		goal, metadataReceipt, err := store.ClearGoal(mutation.Actor)
 		result := runtimeGoalResult(goal, true, runtime.GoalCommandApplied, metadataReceipt, session.CommitReceipt{})
-		result.Availability = store.GoalMutationAvailability()
+		result.Availability = &availability
 		if err != nil || !metadataReceipt.Committed {
 			return result, err
 		}
