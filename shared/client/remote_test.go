@@ -1649,18 +1649,18 @@ func TestProtocolErrorDecodesPendingWorkCapacityDirectly(t *testing.T) {
 
 func TestRemotePendingWorkContractsPreserveTypedResults(t *testing.T) {
 	guidance, exact := "keep details", " /compact   keep details "
-	requestID := runtimeids.NewCompactionRequestID()
+	requestID := runtimeids.NewRuntimeClientRequestID()
 	wire := mustJSON(t, serverapi.RuntimeCompactContextRequest{
-		SessionID: "session-1", RequestID: requestID,
-		Admission: serverapi.ManualCompactionAdmission{Guidance: &guidance, RestorationInput: exact}})
+		ClientRequestID: requestID.String(),
+		SessionID:       "session-1",
+		Args:            guidance,
+	})
 	var compactRequest serverapi.RuntimeCompactContextRequest
 	if err := json.Unmarshal(wire, &compactRequest); err != nil {
 		t.Fatal(err)
 	}
-	if compactRequest.RequestID != requestID ||
-		compactRequest.Admission.Guidance == nil ||
-		*compactRequest.Admission.Guidance != guidance ||
-		compactRequest.Admission.RestorationInput != exact {
+	if compactRequest.ClientRequestID != requestID.String() ||
+		compactRequest.Args != guidance {
 		t.Fatalf("compact request = %+v", compactRequest)
 	}
 	id := runtimeids.NewQueueItemID()

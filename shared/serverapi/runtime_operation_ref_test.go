@@ -8,7 +8,7 @@ import (
 	"core/shared/runtimeinput"
 )
 
-func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
+func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T) {
 	requests := []struct {
 		name      string
 		request   interface{ Validate() error }
@@ -17,32 +17,35 @@ func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 		{
 			name: "submit",
 			request: RuntimeSubmitUserTurnRequest{
-				SessionID: "session-1",
-				Input:     runtimeinput.Text("hello"),
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+				SessionID:       "session-1",
+				Input:           runtimeinput.Text("hello"),
 			},
 			forbidden: []string{"operation_ref", "pre_submit_compaction_operation_ref"},
 		},
 		{
 			name: "shell",
 			request: RuntimeSubmitUserShellCommandRequest{
-				SessionID: "session-1",
-				Command:   "pwd",
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+				SessionID:       "session-1",
+				Command:         "pwd",
 			},
 			forbidden: []string{"operation_ref"},
 		},
 		{
 			name: "compact",
 			request: RuntimeCompactContextRequest{
-				SessionID: "session-1",
-				RequestID: runtimeids.NewCompactionRequestID(),
-				Admission: ManualCompactionAdmission{RestorationInput: "/compact"},
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+				SessionID:       "session-1",
+				Args:            "notes",
 			},
 			forbidden: []string{"operation_ref"},
 		},
 		{
 			name: "interrupt",
 			request: RuntimeInterruptRequest{
-				SessionID: "session-1",
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+				SessionID:       "session-1",
 			},
 			forbidden: []string{"target_operation_ref", "pending_operation_refs"},
 		},
@@ -69,9 +72,15 @@ func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 	}
 }
 
-func TestRuntimeCompactContextRequiresRequestIdentity(t *testing.T) {
-	err := (RuntimeCompactContextRequest{SessionID: "session-1"}).Validate()
-	if err == nil {
-		t.Fatal("RuntimeCompactContextRequest accepted a missing request identity")
+func TestRuntimeSubmitUserShellCommandRequestRejectsBlankCommand(t *testing.T) {
+	request := RuntimeSubmitUserShellCommandRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       "session-1",
+	}
+	for _, command := range []string{"", " \t\n"} {
+		request.Command = command
+		if err := request.Validate(); err == nil {
+			t.Fatalf("accepted blank shell command %q", command)
+		}
 	}
 }

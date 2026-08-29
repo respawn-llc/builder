@@ -16,7 +16,6 @@ import (
 	"core/server/session"
 
 	"core/internal/testharness/recordstore"
-	"core/shared/textutil"
 )
 
 // WriteEventLogHeaderFixture replaces a test session's event artifact with a

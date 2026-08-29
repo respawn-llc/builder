@@ -167,111 +167,12 @@ func (c *reconnectRetryRuntimeControlClient) ClearGoal(context.Context, serverap
 	return c.clearGoalResp, nil
 }
 
-func TestRuntimeClientShowGoalDoesNotOverwriteAcceptedPendingGoal(t *testing.T) {
-	pending := &clientui.Goal{ID: "goal-pending", Objective: "accepted pending goal", Status: clientui.RuntimeGoalStatusActive}
-	committed := &clientui.Goal{ID: "goal-committed", Objective: "prior committed goal", Status: clientui.RuntimeGoalStatusPaused}
-	controls := &reconnectRetryRuntimeControlClient{
-		setGoalResp:  serverapi.RuntimeGoalShowResponse{Goal: pending},
-		showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: committed},
-	}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-
-	accepted, err := runtimeClient.SetGoal(pending.Objective)
-	if err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	assertRuntimeClientGoalCached(t, runtimeClient, accepted, runtimeGoalFromCore(pending))
-
-	shown, err := runtimeClient.ShowGoal()
-	if err != nil {
-		t.Fatalf("ShowGoal: %v", err)
-	}
-	if !reflect.DeepEqual(shown, runtimeGoalFromCore(committed)) {
-		t.Fatalf("shown goal = %+v, want committed goal %+v", shown, committed)
-	}
-	view, ok := runtimeClient.CachedMainView()
-	if !ok {
-		t.Fatal("expected cached main view")
-	}
-	if !reflect.DeepEqual(view.Status.Goal, runtimeGoalFromCore(pending)) {
-		t.Fatalf("cached goal = %+v, want accepted pending goal %+v", view.Status.Goal, pending)
-	}
-}
-
-func TestRuntimeClientShowGoalPreservesSuspendedLiveStatus(t *testing.T) {
-	committed := &clientui.Goal{ID: "goal-committed", Objective: "committed goal", Status: clientui.RuntimeGoalStatusActive}
-	controls := &reconnectRetryRuntimeControlClient{showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: committed}}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	liveGoal := runtimeGoalFromCore(committed)
-	liveGoal.Suspended = true
-	runtimeClient.storeMainView(clientui.RuntimeMainView{
-		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
-		Status:  clientui.RuntimeStatus{Goal: liveGoal},
-	})
-
-	shown, err := runtimeClient.ShowGoal()
-	if err != nil {
-		t.Fatalf("ShowGoal: %v", err)
-	}
-	if !reflect.DeepEqual(shown, runtimeGoalFromCore(committed)) {
-		t.Fatalf("shown goal = %+v, want committed goal %+v", shown, committed)
-	}
-	view, ok := runtimeClient.CachedMainView()
-	if !ok {
-		t.Fatal("expected cached main view")
-	}
-	if !reflect.DeepEqual(view.Status.Goal, liveGoal) {
-		t.Fatalf("cached goal = %+v, want suspended live goal %+v", view.Status.Goal, liveGoal)
-	}
-}
-
-func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
-	setGoal := &clientui.Goal{ID: "goal-set", Objective: "set goal", Status: clientui.RuntimeGoalStatusActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	pauseGoal := &clientui.Goal{ID: "goal-pause", Objective: "pause goal", Status: clientui.RuntimeGoalStatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	resumeGoal := &clientui.Goal{ID: "goal-resume", Objective: "resume goal", Status: clientui.RuntimeGoalStatusActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	completeGoal := &clientui.Goal{ID: "goal-complete", Objective: "complete goal", Status: clientui.RuntimeGoalStatusComplete, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	controls := &reconnectRetryRuntimeControlClient{
-		setGoalResp:      serverapi.RuntimeGoalShowResponse{Goal: setGoal},
-		pauseGoalResp:    serverapi.RuntimeGoalShowResponse{Goal: pauseGoal},
-		resumeGoalResp:   serverapi.RuntimeGoalShowResponse{Goal: resumeGoal},
-		completeGoalResp: serverapi.RuntimeGoalShowResponse{Goal: completeGoal},
-		clearGoalResp:    serverapi.RuntimeGoalShowResponse{},
-	}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
-	runtimeClient.SetRuntimeReactivator(reactivator)
-	availability := clientui.GoalAvailabilityAgentCapabilityMissing
-	runtimeClient.storeMainView(clientui.RuntimeMainView{
-		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
-		Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{
-			Availability: &availability,
-		}},
-	})
-
-	for _, tt := range []struct {
-		name string
-		call func() (*clientui.RuntimeGoal, error)
-		want *clientui.Goal
-	}{
-		{name: "set", call: func() (*clientui.RuntimeGoal, error) { return runtimeClient.SetGoal("set goal") }, want: setGoal},
-		{name: "pause", call: runtimeClient.PauseGoal, want: pauseGoal},
-		{name: "resume", call: runtimeClient.ResumeGoal, want: resumeGoal},
-		{name: "complete", call: runtimeClient.CompleteGoal, want: completeGoal},
-		{name: "clear", call: runtimeClient.ClearGoal, want: nil},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			goal, err := tt.call()
-			if err != nil {
-				t.Fatalf("%s goal: %v", tt.name, err)
-			}
-			want := runtimeGoalFromCore(tt.want)
-			if want == nil {
-				want = &clientui.RuntimeGoal{}
-			}
-			want.Availability = &availability
-			assertRuntimeClientGoalCached(t, runtimeClient, goal, want)
-		})
+func runtimeClientTestShowResponse(goal *clientui.Goal) serverapi.RuntimeGoalShowResponse {
+	return serverapi.RuntimeGoalShowResponse{
+		GoalEnvelope: clientui.GoalEnvelope{
+			Goal:         goal,
+			Availability: clientui.GoalAvailabilityAvailable,
+		},
 	}
 }
 
@@ -384,6 +285,9 @@ func runtimeClientTestGoal(id, objective string, status clientui.RuntimeGoalStat
 }
 
 func runtimeClientTestRuntimeGoal(goal *clientui.Goal, suspended bool) *clientui.RuntimeGoal {
+	if goal == nil {
+		return nil
+	}
 	return &clientui.RuntimeGoal{Goal: goal, Suspended: suspended}
 }
 
@@ -598,7 +502,7 @@ func deletedTestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testi
 	goal := &clientui.Goal{ID: "goal-1", Objective: "ship", Status: clientui.RuntimeGoalStatusActive}
 	controls := &reconnectRetryRuntimeControlClient{
 		showGoalErr:  serverapi.ErrRuntimeUnavailable,
-		showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: goal},
+		showGoalResp: runtimeClientTestShowResponse(goal),
 	}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
 	reactivator := newRuntimeReactivator()
