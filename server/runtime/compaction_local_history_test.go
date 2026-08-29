@@ -4,19 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testing.T) {
 	t.Parallel()
 	const (
 		preBoundaryID  = "reasoning-before-boundary"
+		stablePrefixID = "stable-prefix"
 		checkpointID   = "reasoning-at-boundary"
 		postBoundaryID = "reasoning-after-boundary"
 	)
@@ -40,12 +42,19 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		checkpointStepID,
 		"local",
 		compactionModeManual,
-		llm.ItemsFromMessages([]llm.Message{{
-			Role:        llm.RoleDeveloper,
-			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-			SourcePath:  textutil.Value(checkpointID),
-			Content:     textutil.Value("checkpoint"),
-		}}),
+		llm.ItemsFromMessages([]llm.Message{
+			{
+				Role:       llm.RoleDeveloper,
+				SourcePath: textutil.Value(stablePrefixID),
+				Content:    textutil.Value("stable prefix"),
+			},
+			{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				SourcePath:  textutil.Value(checkpointID),
+				Content:     textutil.Value("checkpoint"),
+			},
+		}),
 	)
 	restoreStep()
 	if err != nil || !receipt.Committed {
@@ -64,8 +73,14 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		t.Fatalf("local compaction calls = %d, want one", len(client.calls))
 	}
 	seen := make(map[string]bool)
+	stablePrefixSeen := false
 	checkpointSeen := false
 	for _, item := range client.calls[0].Items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.SourcePath != nil &&
+			*item.SourcePath == stablePrefixID {
+			stablePrefixSeen = true
+		}
 		if item.Type == llm.ResponseItemTypeMessage &&
 			item.MessageType != nil &&
 			*item.MessageType == llm.MessageTypeCompactionSummary &&
@@ -77,9 +92,10 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 			seen[*item.ID] = true
 		}
 	}
-	if !checkpointSeen || !seen[postBoundaryID] || seen[preBoundaryID] {
+	if !stablePrefixSeen || !checkpointSeen || !seen[postBoundaryID] || seen[preBoundaryID] {
 		t.Fatalf(
-			"local compaction request checkpoint=%t IDs=%+v, want checkpoint/post present and pre-boundary absent",
+			"local compaction request stable-prefix=%t checkpoint=%t IDs=%+v, want stable prefix/checkpoint/post present and pre-boundary absent",
+			stablePrefixSeen,
 			checkpointSeen,
 			seen,
 		)
@@ -92,8 +108,10 @@ func TestPreSubmitCompactionLocalCarriesPreservedUserMessageInOrder(t *testing.T
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("pre-submit summary")},
 	}}}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
-		Model:          "gpt-5",
-		CompactionMode: "local",
+		Model:                 "gpt-5",
+		CompactionMode:        "local",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 300,
 	})
 	if err := steerTestActiveStep(engine, "user", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
@@ -104,7 +122,7 @@ func TestPreSubmitCompactionLocalCarriesPreservedUserMessageInOrder(t *testing.T
 		t.Fatalf("persist pre-submit carryover prompt: %v", err)
 	}
 
-	if err := engine.CompactContextForPreSubmit(context.Background()); err != nil {
+	if err := engine.CompactContextForPreSubmit(context.Background(), strings.Repeat("next ", 1_000)); err != nil {
 		t.Fatalf("pre-submit compaction: %v", err)
 	}
 	if len(client.calls) != 1 {
@@ -113,18 +131,31 @@ func TestPreSubmitCompactionLocalCarriesPreservedUserMessageInOrder(t *testing.T
 	assertCompactionReplacementOrder(t, engine.transcriptRuntimeState().SnapshotItems(), false)
 }
 
-func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
+func TestManualCompactionLocalRetriesWhenModelAttemptsToolCalls(t *testing.T) {
 	t.Parallel()
 	probe := &toolExecutionProbe{}
 	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant},
-		ToolCalls: []llm.ToolCall{{
-			ID:    "compaction-tool-call",
-			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{"cmd":"pwd"}`),
-		}},
-	}}}
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "compaction-tool-call",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"cmd":"pwd"}`),
+			}},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "second-compaction-tool-call",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"cmd":"pwd"}`),
+			}},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+		},
+	}}
 	engine := mustNewTestEngine(
 		t,
 		store,
@@ -145,26 +176,52 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 		events = append(events, event)
 	}
 	scheduleManualCompactionAndWait(t, engine)
-	if !hasEventKind(events, EventCompactionFailed) {
-		t.Fatalf("manual local compaction events = %+v, want failed event", events)
+	if !hasEventKind(events, EventCompactionCompleted) {
+		t.Fatalf("manual local compaction events = %+v, want completed event", events)
 	}
-	if probe.called || len(client.calls) != 1 {
+	if probe.called || len(client.calls) != 3 {
 		t.Fatalf(
-			"manual local compaction tool-execution/model-calls = %t/%d, want false/one",
+			"manual local compaction tool-execution/model-calls = %t/%d, want false/three",
 			probe.called,
 			len(client.calls),
 		)
 	}
-
-	recent, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4)
-	if readErr != nil {
-		t.Fatalf("read bounded compaction records: %v", readErr)
+	assertRequestsPreserveCacheIdentity(t, client.calls[0], client.calls[1])
+	assertRequestsPreserveCacheIdentity(t, client.calls[1], client.calls[2])
+	if !requestHasCompactionToolError(client.calls[1], "compaction-tool-call") {
+		t.Fatalf("manual local compaction retry omitted the synthetic tool error: %+v", client.calls[1].Items)
 	}
-	for _, record := range recent.Records {
-		if _, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord); ok {
-			t.Fatalf("tool-call failure committed history replacement: %+v", record)
+	if !requestHasCompactionToolError(client.calls[2], "second-compaction-tool-call") {
+		t.Fatalf("manual local compaction second retry omitted the synthetic tool error: %+v", client.calls[2].Items)
+	}
+	feedbackCount := 0
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			feedbackCount++
 		}
 	}
+	if feedbackCount != 2 {
+		t.Fatalf(
+			"manual local compaction developer-error feedback entries = %d, want two; entries=%+v",
+			feedbackCount,
+			engine.ChatSnapshot().Entries,
+		)
+	}
+}
+
+func requestHasCompactionToolError(request llm.Request, callID string) bool {
+	for _, item := range request.Items {
+		if item.Type != llm.ResponseItemTypeFunctionCallOutput || item.CallID == nil || *item.CallID != callID {
+			continue
+		}
+		var payload struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(item.Output, &payload) == nil && payload.Error == localCompactionToolsDisabledMessage {
+			return true
+		}
+	}
+	return false
 }
 
 func TestManualCompactionDisabledWhenModeNone(t *testing.T) {

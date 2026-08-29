@@ -137,7 +137,7 @@ func buildReviewerDispatchRequestForTest(
 	var request llm.Request
 	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
 		var buildErr error
-		request, buildErr = engine.buildReviewerDispatchRequest(ctx, stepID, reviewerClient)
+		request, buildErr = engine.buildReviewerDispatchRequest(ctx, stepID, newObservedModelClient(reviewerClient))
 		return buildErr
 	})
 	if err != nil {
@@ -444,7 +444,7 @@ func generateTestActiveStep(
 	stepID = runtimeTestStepID(stepID)
 	restore := setTestActiveStep(engine, stepID)
 	defer restore()
-	return engine.generateWithRetryClient(ctx, stepID, client, request, nil, nil, nil)
+	return engine.generateWithRetryClient(ctx, stepID, newObservedModelClient(client), request, nil, nil, nil)
 }
 
 func runReviewerSuggestionsTestActiveStep(
@@ -456,7 +456,7 @@ func runReviewerSuggestionsTestActiveStep(
 	stepID = runtimeTestStepID(stepID)
 	restore := setTestActiveStep(engine, stepID)
 	defer restore()
-	return engine.runReviewerSuggestions(ctx, stepID, client)
+	return engine.runReviewerSuggestions(ctx, stepID, newObservedModelClient(client))
 }
 
 func runStepLoopInActiveTestRun(

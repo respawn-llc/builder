@@ -174,7 +174,19 @@ func (e *Engine) ActiveRun() *RunSnapshot {
 }
 
 func (e *Engine) ActiveStepSnapshot() *RunSnapshot {
-	return e.ActiveRun()
+	snapshot := e.ActiveRun()
+	if snapshot == nil {
+		return nil
+	}
+	stepID, activeKind, active := e.compactionRuntimeState().ActiveKindSnapshot()
+	if !active {
+		return snapshot
+	}
+	projected := *snapshot
+	projected.StepID = stepID
+	projected.ActiveKind = activeKind
+	projected.GoalLoop = false
+	return &projected
 }
 
 var ErrActiveStepInactive = errors.New("originating model step is no longer active")
@@ -687,10 +699,10 @@ func (e *Engine) CompactionMode() string {
 func (e *Engine) initReviewerClient() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.reviewerRuntimeStateLocked().EnsureClient(e.cfg.Reviewer.ClientFactory)
+	return e.reviewerRuntimeStateLocked().EnsureClient()
 }
 
-func (e *Engine) reviewerTurnConfigSnapshot() (string, llm.Client) {
+func (e *Engine) reviewerTurnConfigSnapshot() (string, *observedModelClient) {
 	e.mu.Lock()
 	reviewerState := e.reviewerRuntimeStateLocked()
 	normalized, ok := NormalizeReviewerFrequency(e.cfg.Reviewer.Frequency)
@@ -935,7 +947,7 @@ func (e *Engine) reviewerRuntimeState() *reviewerRuntimeState {
 
 func (e *Engine) reviewerRuntimeStateLocked() *reviewerRuntimeState {
 	if e.reviewerState == nil {
-		e.reviewerState = newReviewerRuntimeState(e.cfg.Reviewer.Client)
+		e.reviewerState = newReviewerRuntimeState(nil, nil)
 	}
 	return e.reviewerState
 }

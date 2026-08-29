@@ -2419,7 +2419,7 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})
-	store, _, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+	store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
 		OnEvent: func(event runtime.Event) {
 			if event.QueuedUserMessageStatus != nil {
 				queuedStatuses <- *event.QueuedUserMessageStatus
@@ -2470,14 +2470,22 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the next safe-boundary model request")
 	}
-	defer close(client.releaseSecond)
 
+	found := false
 	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
 		if message.Role == llm.RoleUser && message.Content != nil && *message.Content == queuedText {
-			return
+			found = true
+			break
 		}
 	}
-	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+	if !found {
+		t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+	}
+	close(client.releaseSecond)
+	waitForRuntimeControlIdle(t, engine)
+	if engine.HasActiveLiveRunGroup() {
+		t.Fatal("submitted steering kept stale live-run ownership after the turn completed")
+	}
 }
 
 func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission(t *testing.T) {

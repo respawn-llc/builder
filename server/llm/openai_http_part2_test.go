@@ -429,10 +429,11 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
 
-	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-		Model:     "gpt-5",
-		SessionID: textutil.Value("test-session"),
-		InputItems: PrepareOpenAIInputItems([]ResponseItem{
+	resp, err := transport.Compact(context.Background(), OpenAIRequest{
+		Model:          "gpt-5",
+		SessionID:      textutil.Value("test-session"),
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Items: PrepareOpenAIInputItems([]ResponseItem{
 			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("u1")},
 		}),
 	})
@@ -477,11 +478,30 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	transport.BaseURLExplicit = true
 	transport.Client = newRewritingHTTPClient(t, server)
 
-	request := testOAuthCompactionRequest(t, "gpt-5.6-sol")
-	request.Instructions = "preserved instructions"
+	request := OpenAIRequest{
+		Model:          "gpt-5.6-sol",
+		SystemPrompt:   "stable system prompt",
+		PromptCacheKey: "session-cache-lineage",
+		SessionID:      textutil.Value("test-session"),
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Tools: []Tool{{
+			Name:   "exec_command",
+			Schema: mustTestFunctionSchema(t, struct{}{}),
+		}},
+	}
+	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID:   "test-session",
+		RunID:       "test-run",
+		RequestKind: CodexRequestKindCompaction.Optional(),
+	})
+	if err != nil {
+		t.Fatalf("dispatch context: %v", err)
+	}
+	request.CodexDispatch = dispatch
 	request.PromptCacheKey = "session-cache-lineage"
-	request.InputItems = PrepareOpenAIInputItems([]ResponseItem{
+	request.Items = PrepareOpenAIInputItems([]ResponseItem{
 		{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("history first")},
+		{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleDeveloper), Content: textutil.Value("compact this conversation")},
 	})
 	resp, err := transport.Compact(context.Background(), request)
 	if err != nil {
@@ -497,21 +517,29 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	if got := captured["stream"]; got != true {
 		t.Fatalf("stream = %#v, want true", got)
 	}
-	if got := captured["instructions"]; got != "preserved instructions" {
-		t.Fatalf("instructions = %#v, want preserved instructions", got)
+	if got := captured["instructions"]; got != "stable system prompt" {
+		t.Fatalf("instructions = %#v, want stable system prompt", got)
 	}
 	if got := captured["prompt_cache_key"]; got != "session-cache-lineage" {
 		t.Fatalf("prompt_cache_key = %#v, want existing session lineage", got)
 	}
 	input, ok := captured["input"].([]any)
-	if !ok || len(input) != 2 {
-		t.Fatalf("input = %#v, want history plus final compaction trigger", captured["input"])
+	if !ok || len(input) != 3 {
+		t.Fatalf("input = %#v, want history, compaction instructions, and final trigger", captured["input"])
 	}
 	first, _ := input[0].(map[string]any)
 	if first["type"] != "message" {
 		t.Fatalf("first input = %#v, want preserved history item", first)
 	}
-	trigger, _ := input[1].(map[string]any)
+	compactionPrompt, _ := input[1].(map[string]any)
+	if compactionPrompt["role"] != "developer" {
+		t.Fatalf("compaction prompt = %#v, want trailing developer message", compactionPrompt)
+	}
+	tools, _ := captured["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want stable advertised tools", captured["tools"])
+	}
+	trigger, _ := input[2].(map[string]any)
 	if len(trigger) != 1 || trigger["type"] != "compaction_trigger" {
 		t.Fatalf("final input = %#v, want exact compaction trigger", trigger)
 	}
@@ -708,7 +736,7 @@ func newOAuthCompactStreamServer(t *testing.T, events []string) *httptest.Server
 	return server
 }
 
-func testOAuthCompactionRequest(t *testing.T, model string) OpenAICompactionRequest {
+func testOAuthCompactionRequest(t *testing.T, model string) OpenAIRequest {
 	t.Helper()
 	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
 		SessionID:   "test-session",
@@ -718,10 +746,11 @@ func testOAuthCompactionRequest(t *testing.T, model string) OpenAICompactionRequ
 	if err != nil {
 		t.Fatalf("dispatch context: %v", err)
 	}
-	return OpenAICompactionRequest{
-		Model:         model,
-		SessionID:     textutil.Value("test-session"),
-		CodexDispatch: dispatch,
+	return OpenAIRequest{
+		Model:          model,
+		SessionID:      textutil.Value("test-session"),
+		CodexDispatch:  dispatch,
+		ToolChoiceMode: ToolChoiceModeAutomatic,
 	}
 }
 
@@ -749,7 +778,11 @@ func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testin
 	_, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, OpenAIAuthMode{}, caps)
 	checkErr("buildPayload", err)
 
-	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, caps).BuildCompactV2(OpenAICompactionRequest{Model: "gpt-5", InputItems: unpreparedItems})
+	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, caps).BuildCompactV2(OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Items:          unpreparedItems,
+	}, OpenAIAuthMode{})
 	checkErr("buildCompactPayload", err)
 }
 

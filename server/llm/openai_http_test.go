@@ -440,10 +440,11 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorForOpenAIV2(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
 
-	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-		Model:      "gpt-5",
-		SessionID:  textutil.Value("s1"),
-		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
+	_, err := transport.Compact(context.Background(), OpenAIRequest{
+		Model:          "gpt-5",
+		SessionID:      textutil.Value("s1"),
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Items:          PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err == nil {
 		t.Fatal("expected compact error")

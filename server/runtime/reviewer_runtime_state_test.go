@@ -7,7 +7,7 @@ import (
 )
 
 func TestReviewerRuntimeStateReservesBeforeInvocationAndTransitionsToAddressingFeedback(t *testing.T) {
-	state := newReviewerRuntimeState(nil)
+	state := newReviewerRuntimeState(nil, nil)
 	stepID := runtimeTestStepID("reviewer-phase")
 
 	if !state.Reserve(stepID) {

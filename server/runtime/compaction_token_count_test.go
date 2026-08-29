@@ -104,6 +104,45 @@ func TestShouldCompactBeforeUserMessageUsesEstimatedPromptGrowth(t *testing.T) {
 	}
 }
 
+func TestPreSubmitCompactionRechecksEligibilityAgainstCurrentContext(t *testing.T) {
+	t.Parallel()
+	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
+		remoteCompactionReplacement(100, 10, 1_000),
+	}}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model:                         "gpt-5",
+		ContextWindowTokens:           1_000,
+		AutoCompactTokenLimit:         950,
+		PreSubmitCompactionLeadTokens: 50,
+	})
+	if err := engine.steer(runtimeTestStepID("existing"), steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("existing")}},
+	)); err != nil {
+		t.Fatalf("persist existing input: %v", err)
+	}
+	prompt := strings.Repeat("next ", 100)
+	engine.setLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 1_000})
+	eligible, err := engine.ShouldCompactBeforeUserMessage(t.Context(), prompt)
+	if err != nil {
+		t.Fatalf("initial pre-submit eligibility: %v", err)
+	}
+	if !eligible {
+		t.Fatal("initial context did not require pre-submit compaction")
+	}
+
+	engine.setLastUsage(llm.Usage{InputTokens: 100, WindowTokens: 1_000})
+	receipt, err := engine.CompactContextForPreSubmitWithActiveHook(t.Context(), prompt, nil)
+	if err != nil {
+		t.Fatalf("execute pre-submit compaction after context reduction: %v", err)
+	}
+	if receipt.Committed || len(client.compactionCalls) != 0 {
+		t.Fatalf("stale pre-submit compaction committed=%t provider-calls=%d", receipt.Committed, len(client.compactionCalls))
+	}
+}
+
 func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t *testing.T) {
 	t.Parallel()
 	client := &preciseCompactionClient{contextWindow: 1_000}

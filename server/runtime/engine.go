@@ -146,7 +146,7 @@ type Engine struct {
 
 	store                       *session.Store
 	eventLog                    session.MaterializedEventLog
-	llm                         llm.Client
+	llm                         *observedModelClient
 	registry                    *tools.Registry
 	cfg                         Config
 	reviewerSuggestionsContract jsoncontract.Structured
@@ -260,10 +260,13 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("prepare reviewer suggestions contract: %w", err)
 	}
+	reviewerState := newReviewerRuntimeState(cfg.Reviewer.Client, cfg.Reviewer.ClientFactory)
+	cfg.Reviewer.Client = nil
+	cfg.Reviewer.ClientFactory = nil
 	eng := &Engine{
 		store:                       store,
 		eventLog:                    eventLog,
-		llm:                         client,
+		llm:                         newObservedModelClient(client),
 		registry:                    registry,
 		cfg:                         cfg,
 		reviewerSuggestionsContract: reviewerSuggestionsContract,
@@ -275,7 +278,7 @@ func New(
 		compactionState:             newCompactionRuntimeState(),
 		handoffState:                newHandoffRuntimeState(),
 		phaseState:                  newPhaseProtocolState(),
-		reviewerState:               newReviewerRuntimeState(cfg.Reviewer.Client),
+		reviewerState:               reviewerState,
 		transcriptState:             newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
 		lockedState:                 newLockedContractState(),
 		modelRequestsState:          newModelRequestRuntimeState(),
@@ -883,11 +886,11 @@ func (e *Engine) runStepLoopWithPendingUserInjectionOutcomeObserver(ctx context.
 // this run. When refreshReviewerConfigOnResolve is true, the final assistant
 // resolution re-reads current runtime reviewer config so busy-time toggles (for
 // example from /supervisor) affect the currently running step at completion.
-func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool) (stepLoopResult, error) {
+func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient *observedModelClient, refreshReviewerConfigOnResolve bool) (stepLoopResult, error) {
 	return e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, refreshReviewerConfigOnResolve, nil)
 }
 
-func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool, onQueuedUserFlushCommitted func(session.CommitReceipt)) (stepLoopResult, error) {
+func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient *observedModelClient, refreshReviewerConfigOnResolve bool, onQueuedUserFlushCommitted func(session.CommitReceipt)) (stepLoopResult, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.stepFlow.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
 		ReviewerFrequency:              reviewerFrequency,
@@ -906,8 +909,8 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 	if e.cfg.ProviderCapabilitiesOverride != nil {
 		providerContract = *e.cfg.ProviderCapabilitiesOverride
 		hasProviderContract = true
-	} else if provider, ok := e.llm.(llm.ProviderCapabilitiesClient); ok {
-		if caps, err := provider.ProviderCapabilities(context.Background()); err == nil {
+	} else if e.llm != nil {
+		if caps, err := e.llm.capabilities(context.Background()); err == nil {
 			providerContract = caps
 			hasProviderContract = true
 		}
@@ -1005,19 +1008,16 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 	}
 }
 
-func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
-	prepared, err := e.modelRequests().RequestCache().Prepare(req)
+func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, client *observedModelClient, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
+	observed, err := e.prepareCacheObservedRequest(stepID, req, cacheResponseObservationExactStep)
 	if err != nil {
-		return llm.Response{}, err
-	}
-	if err := e.observePromptCacheRequest(stepID, prepared); err != nil {
 		return llm.Response{}, err
 	}
 	publishedProviderDiagnostics := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 2)
 	resp, err := generateWithRetryClient(
 		ctx,
 		client,
-		req,
+		observed,
 		onDelta,
 		onReasoningDelta,
 		onAttemptReset,
@@ -1028,16 +1028,13 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 	if err != nil {
 		return llm.Response{}, err
 	}
-	if err := e.observePromptCacheResponse(stepID, prepared, resp.Usage); err != nil {
-		return llm.Response{}, err
-	}
 	return resp, nil
 }
 
 func generateWithRetryClient(
 	ctx context.Context,
-	client llm.Client,
-	req llm.Request,
+	client *observedModelClient,
+	observed cacheObservedRequest,
 	onDelta func(llm.AssistantDelta),
 	onReasoningDelta func(llm.ReasoningSummaryDelta),
 	onAttemptReset func(),
@@ -1078,19 +1075,29 @@ func generateWithRetryClient(
 				onReasoningDelta(delta)
 			}
 		}
-		resp, attemptErr = client.Generate(ctx, req, llm.StreamCallbacks{
-			OnAssistantDelta:        attemptOnDelta,
-			OnReasoningSummaryDelta: attemptOnReasoningDelta,
-		})
-		attemptDone.Store(true)
-		if onAttemptFinished != nil {
-			onAttemptFinished()
-		}
+		resp, attemptErr = client.generateObserved(
+			ctx,
+			observed,
+			llm.StreamCallbacks{
+				OnAssistantDelta:        attemptOnDelta,
+				OnReasoningSummaryDelta: attemptOnReasoningDelta,
+			},
+			func() {
+				attemptDone.Store(true)
+				if onAttemptFinished != nil {
+					onAttemptFinished()
+				}
+			},
+		)
 		if attemptErr != nil && ctx.Err() != nil {
 			return llm.Response{}, ctx.Err()
 		}
 		if attemptErr == nil {
 			return resp, nil
+		}
+		var observationErr *cacheObservationDispatchError
+		if errors.As(attemptErr, &observationErr) {
+			return llm.Response{}, attemptErr
 		}
 		resetAttempt := func() {
 			if (attemptEmitted || reasoningEmitted) && onAttemptReset != nil {

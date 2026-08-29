@@ -687,11 +687,12 @@ func TestResponsesStubServesCompactAndModelMetadataTransportRoutes(t *testing.T)
 	compactTransport.BaseURL = "https://chatgpt.com/backend-api/codex"
 	compactTransport.BaseURLExplicit = true
 	compactTransport.Client = newCanonicalOAuthStubClient(t, compact)
-	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
-		Model:         "gpt-5",
-		SessionID:     textutil.Value("session-1"),
-		CodexDispatch: testCodexDispatch(t, "session-1", llm.CodexRequestKindCompaction),
-		InputItems:    llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
+	if _, err := compactTransport.Compact(context.Background(), llm.OpenAIRequest{
+		Model:          "gpt-5",
+		SessionID:      textutil.Value("session-1"),
+		CodexDispatch:  testCodexDispatch(t, "session-1", llm.CodexRequestKindCompaction),
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
 	}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}

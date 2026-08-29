@@ -708,15 +708,7 @@ type Response struct {
 	Usage             Usage            `json:"usage"`
 }
 
-type CompactionRequest struct {
-	Model          string
-	Instructions   string
-	PromptCacheKey string
-	SessionID      *string
-	FastMode       bool
-	CodexDispatch  *CodexDispatchContext `json:"-"`
-	InputItems     []ResponseItem
-}
+type CompactionRequest = Request
 
 type CompactionResponse struct {
 	Checkpoint ResponseItem

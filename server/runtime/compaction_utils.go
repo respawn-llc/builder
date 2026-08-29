@@ -29,13 +29,9 @@ func (e *Engine) currentProviderCapabilities(ctx context.Context) (llm.ProviderC
 	if e.cfg.ProviderCapabilitiesOverride != nil {
 		return *e.cfg.ProviderCapabilitiesOverride, nil
 	}
-	provider, ok := e.llm.(llm.ProviderCapabilitiesClient)
-	if !ok {
-		return llm.ProviderCapabilities{}, fmt.Errorf("provider capabilities are unavailable for client %T", e.llm)
-	}
-	providerCaps, err := provider.ProviderCapabilities(ctx)
+	providerCaps, err := e.llm.capabilities(ctx)
 	if err != nil {
-		return llm.ProviderCapabilities{}, err
+		return llm.ProviderCapabilities{}, fmt.Errorf("resolve provider capabilities: %w", err)
 	}
 	return providerCaps, nil
 }
