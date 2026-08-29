@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"buf.build/go/protovalidate"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 	"github.com/google/uuid"
@@ -118,7 +119,7 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 			return errors.New("worktree transition failure diagnostic is required")
 		}
 		if outcome.Failure.SelectorError != nil {
-			if err := validateWorktreeTransitionSelectorError(outcome.Failure.SelectorError); err != nil {
+			if err := protovalidate.Validate(outcome.Failure.SelectorError); err != nil {
 				return err
 			}
 		}
@@ -140,18 +141,4 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 		return errors.New("worktree transition state is invalid")
 	}
 	return nil
-}
-
-func validateWorktreeTransitionSelectorError(selector *worktreepb.SelectorErrorDetails) error {
-	if strings.TrimSpace(selector.Input) == "" {
-		return errors.New("worktree transition selector error input is required")
-	}
-	switch selector.Kind {
-	case worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_NOT_FOUND,
-		worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_AMBIGUOUS,
-		worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_UNAVAILABLE:
-		return nil
-	default:
-		return errors.New("worktree transition selector error kind is invalid")
-	}
 }

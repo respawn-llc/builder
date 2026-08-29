@@ -789,19 +789,22 @@ message WorktreeTransitionOutcome {
   ];
   WorktreeTransitionKind transition = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   WorktreeTransitionState state = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
-  optional Diagnostic failure = 4;
+  oneof failure_detail {
+    Diagnostic failure = 4;
+    kent.api.worktree.SelectorErrorDetails selector_error = 6;
+  }
   optional kent.api.worktree.DeletePreconditionDetails delete_precondition = 5;
   option (buf.validate.message).cel = {
     id: "kent.transcript.worktree_transition_failure"
     message: "only failed worktree transitions carry failure"
     expression:
-      "(this.state == 2 && has(this.failure)) || "
-      "(this.state == 1 && !has(this.failure) && !has(this.delete_precondition))"
+      "(this.state == 2 && (has(this.failure) || has(this.selector_error))) || "
+      "(this.state == 1 && !has(this.failure) && !has(this.selector_error) && !has(this.delete_precondition))"
   };
   option (buf.validate.message).cel = {
     id: "kent.transcript.worktree_transition_delete_precondition"
     message: "delete precondition belongs only to a failed delete transition"
-    expression: "!has(this.delete_precondition) || (this.transition == 3 && this.state == 2)"
+    expression: "!has(this.delete_precondition) || (this.transition == 3 && this.state == 2 && has(this.failure))"
   };
 }
 

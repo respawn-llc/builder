@@ -441,11 +441,8 @@ func TestDefinitelyUncommittedStateOnlyChatSettingsStopBeforeLiveProjection(t *t
 
 func TestImmediateSettingOwnerSerializesThroughPublication(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
-		ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true,
-	}}, Config{Model: "gpt-5.3-codex"})
-	publishing, releasePublication := make(chan struct{}), make(chan struct{})
-	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{Model: "gpt-5.3-codex"})
+	publishing, releasePublication, firstDone, secondDone := make(chan struct{}), make(chan struct{}), make(chan error, 1), make(chan error, 1)
 	go func() {
 		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, func(clientui.TranscriptSessionSettingFeedback) error {
 			close(publishing)

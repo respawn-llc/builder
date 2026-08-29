@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"buf.build/go/protovalidate"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/worktreecontract"
@@ -59,7 +60,7 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 			if err := o.Failure.Validate(); err != nil {
 				return err
 			}
-		} else if err := validateWorktreeTransitionSelectorError(o.SelectorError); err != nil {
+		} else if err := protovalidate.Validate(o.SelectorError); err != nil {
 			return err
 		}
 		if o.DeletePrecondition != nil {

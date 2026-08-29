@@ -42,31 +42,21 @@ func TestPendingWorkCapacityStructuredRPCDirectAndNested(t *testing.T) {
 
 func TestPendingWorkIdentityViewsReuseDomainUUID(t *testing.T) {
 	t.Parallel()
-
 	compactionID := runtimeids.NewCompactionRequestID()
 	got, err := PendingWorkItemIDFromCompactionRequest(compactionID)
-	if err != nil {
-		t.Fatalf("compaction Pending Work id: %v", err)
-	}
-	if got.String() != compactionID.String() {
-		t.Fatalf("compaction Pending Work id = %q, want %q", got, compactionID)
+	if err != nil || got.String() != compactionID.String() {
+		t.Fatalf("compaction Pending Work id = %q, %v", got, err)
 	}
 	worktreeID := clientui.NewWorktreeTransitionID()
 	got, err = PendingWorkItemIDFromWorktreeOperation(worktreeID)
-	if err != nil {
-		t.Fatalf("Worktree Pending Work id: %v", err)
-	}
-	if got.String() != worktreeID.String() {
-		t.Fatalf("Worktree Pending Work id = %q, want %q", got, worktreeID)
+	if err != nil || got.String() != worktreeID.String() {
+		t.Fatalf("Worktree Pending Work id = %q, %v", got, err)
 	}
 }
 
 func TestPendingWorkRemovalResponseValidatesTypedCanonicalRestoration(t *testing.T) {
 	t.Parallel()
-
-	valid := RuntimeRemovePendingWorkResponse{Restoration: PendingWorkRestoration{
-		Kind: PendingWorkItemKindWorktreeTransition, CanonicalInput: "/wt leave",
-	}}
+	valid := RuntimeRemovePendingWorkResponse{Restoration: PendingWorkRestoration{Kind: PendingWorkItemKindWorktreeTransition, CanonicalInput: "/wt leave"}}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
