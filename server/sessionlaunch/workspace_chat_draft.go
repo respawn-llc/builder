@@ -93,6 +93,9 @@ func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(
 		return runtimeids.SessionID{}, err
 	}
 	resolution.Draft.Questions = resolution.PersistedQuestionsPolicy
+	if resolution.PersistedThinking != nil {
+		resolution.Draft.Thinking = *resolution.PersistedThinking
+	}
 	sessionID, err := materialize(ctx, resolution)
 	if err != nil {
 		return runtimeids.SessionID{}, err

@@ -160,7 +160,12 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 	}
 	if result.Kind == serverapi.ChatSettingsMutationApplied {
 		if err := s.core.safeBundles().Runtime.runtimeRegistry.PublishSessionStatus(sessionID.String()); err != nil {
-			return serverapi.ChatSettingsMutationResponse{}, err
+			slog.ErrorContext(
+				responseCtx,
+				"Chat settings status publication failed after durable commit",
+				"session_id", sessionID.String(),
+				"error", err,
+			)
 		}
 	}
 	return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings.Settings, Session: settings.Session, Context: contextFacts}, nil
