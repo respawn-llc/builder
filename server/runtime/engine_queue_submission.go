@@ -221,6 +221,29 @@ func worktreeFailureRequiresTechnicalRestoration(err error) bool {
 	return classifyWorktreeSchedulingError(err).technical
 }
 
+func (e *Engine) launchIndeterminateWorktreeLifecycleTask(task func(context.Context) error) bool {
+	if task == nil {
+		return false
+	}
+	var indeterminate error
+	return e.launchLifecycleTaskWithCompletion(func(ctx context.Context) *resultGroupFatal {
+		taskErr := task(ctx)
+		if worktreeFailureIsIndeterminate(taskErr) {
+			indeterminate = taskErr
+		}
+		return nil
+	}, func() {
+		if indeterminate == nil {
+			return
+		}
+		var retirementErr error
+		if e.cfg.LifecycleRuntimeAbort != nil {
+			retirementErr = e.cfg.LifecycleRuntimeAbort()
+		}
+		e.surfaceRunErrorRaw(errors.Join(indeterminate, retirementErr))
+	})
+}
+
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.
@@ -415,7 +438,7 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	e.queuedUserWorkScheduled = true
 	e.queuedUserWorkCompletion = completion
 	e.queuedUserWorkMu.Unlock()
-	if !e.launchLifecycleTask(func(ctx context.Context) error {
+	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		return e.processQueuedUserWork(ctx, completion)
 	}) {
 		e.clearQueuedUserWorkScheduled(completion, ErrEngineClosed)

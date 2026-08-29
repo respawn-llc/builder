@@ -7,7 +7,6 @@ import (
 
 	"core/server/llm"
 	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
@@ -22,7 +21,6 @@ type queuedUserMessageStore struct {
 
 type queuedUserMessage struct {
 	message        QueuedUserMessage
-	lane           runtimeinput.PendingWorkLane
 	steerAdmission *pendingWorkSteerAdmission
 }
 
@@ -30,19 +28,18 @@ func newQueuedUserMessageStore() *queuedUserMessageStore {
 	return &queuedUserMessageStore{}
 }
 
-func (s *queuedUserMessageStore) Queue(text string, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (s *queuedUserMessageStore) Queue(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	return s.QueueItem(QueuedUserMessage{
 		ID:      uuid.NewString(),
 		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
-	}, association)
+	}, association...)
 }
 
 type queuedUserMessageAssociation struct {
-	lane           runtimeinput.PendingWorkLane
 	steerAdmission *pendingWorkSteerAdmission
 }
 
-func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	item.ID = strings.TrimSpace(item.ID)
 	if item.ID == "" {
 		item.ID = uuid.NewString()
@@ -55,22 +52,13 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, association q
 	if _, err := runtimeids.ParseQueueItemID(item.ID); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	switch association.lane {
-	case runtimeinput.PendingWorkLaneQueue:
-		if association.steerAdmission != nil {
-			return QueuedUserMessage{}, errors.New("Queue message cannot carry a Steer admission")
-		}
-	case runtimeinput.PendingWorkLaneSteer:
-		if association.steerAdmission == nil {
-			return QueuedUserMessage{}, errors.New("Steer message admission is required")
-		}
-	default:
-		return QueuedUserMessage{}, errors.New("queued message Pending Work lane is required")
+	var association queuedUserMessageAssociation
+	if len(associations) != 0 {
+		association = associations[0]
 	}
 	s.mu.Lock()
 	s.pending = append(s.pending, queuedUserMessage{
 		message:        item,
-		lane:           association.lane,
 		steerAdmission: clonePendingWorkSteerAdmission(association.steerAdmission),
 	})
 	s.mu.Unlock()
@@ -183,7 +171,6 @@ func (s *queuedUserMessageStore) EntrySnapshot() []queuedUserMessage {
 	for _, pending := range s.pending {
 		out = append(out, queuedUserMessage{
 			message:        pending.message,
-			lane:           pending.lane,
 			steerAdmission: clonePendingWorkSteerAdmission(pending.steerAdmission),
 		})
 	}

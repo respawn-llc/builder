@@ -5,7 +5,6 @@ import (
 
 	"core/server/llm"
 	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 	"core/shared/textutil"
 )
 
@@ -16,12 +15,8 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 		t.Fatalf("NewAgentSteer: %v", err)
 	}
 	message := steer.Message()
-	admission := pendingWorkSteerAdmission(1)
 	item, err := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
 		Message: message,
-	}, queuedUserMessageAssociation{
-		lane:           runtimeinput.PendingWorkLaneSteer,
-		steerAdmission: &admission,
 	})
 	if err != nil {
 		t.Fatalf("QueueItem: %v", err)
@@ -34,8 +29,7 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 
 func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 	store := &queuedUserMessageStore{}
-	association := queuedUserMessageAssociation{lane: runtimeinput.PendingWorkLaneQueue}
-	if _, err := store.QueueItem(QueuedUserMessage{}, association); err == nil {
+	if _, err := store.QueueItem(QueuedUserMessage{}); err == nil {
 		t.Fatal("QueueItem accepted an invalid payload")
 	}
 	for _, content := range []string{"", " \t "} {
@@ -44,7 +38,7 @@ func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 				Role:    llm.RoleUser,
 				Content: textutil.Value(content),
 			},
-		}, association); err == nil {
+		}); err == nil {
 			t.Fatalf("QueueItem accepted whitespace-only content %q", content)
 		}
 	}

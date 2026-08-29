@@ -71,8 +71,7 @@ func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 	for index := range runtimeinput.PendingWorkCapacity {
-		if _, err := engine.messageFlow.QueueUserMessage(fmt.Sprintf("pending %d", index),
-			queuedUserMessageAssociation{lane: runtimeinput.PendingWorkLaneQueue}); err != nil {
+		if _, err := engine.messageFlow.QueueUserMessage(fmt.Sprintf("pending %d", index)); err != nil {
 			t.Fatal(err)
 		}
 	}

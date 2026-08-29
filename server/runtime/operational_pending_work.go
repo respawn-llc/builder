@@ -68,23 +68,24 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 		return err
 	}
 
-	launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) error {
+	run := func(lifecycleCtx context.Context) error {
 		stopLifecycleCancellation := context.AfterFunc(lifecycleCtx, func() {
 			cancelPending(context.Cause(lifecycleCtx))
 		})
 		defer stopLifecycleCancellation()
 		defer cancelPending(context.Canceled)
 		defer e.stepLifecycle.ReleaseReservation(reservation)
-		runErr := request.run(pendingCtx, reservation, request.item)
-		fatal, abort := resultGroupFatalFromError(runErr)
-		if abort {
+		return request.run(pendingCtx, reservation, request.item)
+	}
+	var launched bool
+	if request.item.Kind == runtimeinput.PendingWorkItemKindWorktreeTransition {
+		launched = e.launchIndeterminateWorktreeLifecycleTask(run)
+	} else {
+		launched = e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
+			fatal, _ := resultGroupFatalFromError(run(lifecycleCtx))
 			return fatal
-		}
-		if worktreeFailureIsIndeterminate(runErr) {
-			return runErr
-		}
-		return nil
-	})
+		})
+	}
 	if !launched {
 		e.stepLifecycle.ReleaseReservation(reservation)
 		cancelPending(ErrEngineClosed)

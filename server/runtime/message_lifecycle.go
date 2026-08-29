@@ -556,18 +556,18 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 	return result, nil
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.Queue(text, association)
+	return m.queue.Queue(text, association...)
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage, association queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.QueueItem(item, association)
+	return m.queue.QueueItem(item, association...)
 }
 
 func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {

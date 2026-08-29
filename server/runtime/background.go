@@ -350,7 +350,7 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool, err
 	return strconv.Itoa(*res.CompletedBackgroundSessionID), true, nil
 }
 
-func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) error {
+func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {
 	if _, err := b.runQueuedNotices(ctx); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil

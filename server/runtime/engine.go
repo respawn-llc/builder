@@ -19,7 +19,6 @@ import (
 	"core/shared/jsoncontract"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 
@@ -470,7 +469,14 @@ func (e *Engine) ensureLifecycle() {
 	})
 }
 
-func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
+func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFatal) bool {
+	return e.launchLifecycleTaskWithCompletion(task, nil)
+}
+
+func (e *Engine) launchLifecycleTaskWithCompletion(
+	task func(context.Context) *resultGroupFatal,
+	completed func(),
+) bool {
 	if e == nil || task == nil {
 		return false
 	}
@@ -487,7 +493,7 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
 	go func(ctx context.Context) {
-		var taskErr error
+		var runtimeAbort *resultGroupFatal
 		defer func() {
 			// Retirement may synchronously close this Engine and wait for lifecycle
 			// tasks, so this task must leave the wait group before callbacks run.
@@ -495,18 +501,14 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
 			if e.cfg.LifecycleTaskFinished != nil {
 				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
 			}
-			if e.cfg.LifecycleRuntimeAbort == nil {
-				return
-			}
-			if _, runtimeAbort := resultGroupFatalFromError(taskErr); runtimeAbort {
+			if runtimeAbort != nil && e.cfg.LifecycleRuntimeAbort != nil {
 				e.surfaceRunError(e.cfg.LifecycleRuntimeAbort())
-				return
 			}
-			if worktreeFailureIsIndeterminate(taskErr) {
-				e.surfaceRunErrorRaw(errors.Join(taskErr, e.cfg.LifecycleRuntimeAbort()))
+			if completed != nil {
+				completed()
 			}
 		}()
-		taskErr = task(ctx)
+		runtimeAbort = task(ctx)
 	}(ctx)
 	return true
 }
@@ -521,8 +523,7 @@ func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserM
 }
 
 func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (QueuedUserMessage, error) {
-		_ = operationCtx
+	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (QueuedUserMessage, error) {
 		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
 	})
 }
@@ -536,9 +537,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		var item QueuedUserMessage
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
 			e.outputMutationMu.Lock()
-			queued, queueErr := e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
-				lane: runtimeinput.PendingWorkLaneQueue,
-			})
+			queued, queueErr := e.messageFlow.QueueUserMessage(text)
 			if queueErr == nil {
 				item = queued
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
@@ -572,7 +571,6 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 			admission := e.nextPendingWorkSteerAdmission()
 			e.outputMutationMu.Lock()
 			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, queuedUserMessageAssociation{
-				lane:           runtimeinput.PendingWorkLaneSteer,
 				steerAdmission: admission,
 			})
 			if queueErr == nil {
@@ -621,7 +619,6 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		admission := e.nextPendingWorkSteerAdmission()
 		e.outputMutationMu.Lock()
 		queued, queueErr := e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
-			lane:           runtimeinput.PendingWorkLaneSteer,
 			steerAdmission: admission,
 		})
 		if queueErr == nil {
@@ -821,7 +818,7 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 	}
 	terminal, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeDeferred[tools.Result], error) {
 		deferred := newRuntimeDeferred[tools.Result]()
-		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) error {
+		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
 			result, runErr := e.runUserShellCommand(lifecycleCtx, command, onActive, accept)
 			deferred.complete(result, runErr)
 			fatal, abort := resultGroupFatalFromError(runErr)

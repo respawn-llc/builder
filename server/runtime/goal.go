@@ -811,7 +811,7 @@ func (e *Engine) startGoalLoop(firstTurnAlreadyPrompted bool) error {
 }
 
 func (e *Engine) launchGoalLoopTask(firstTurnAlreadyPrompted bool) {
-	launched := e.launchLifecycleTask(func(ctx context.Context) error {
+	launched := e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		defer e.finishGoalLoop()
 		return e.runGoalLoop(ctx, firstTurnAlreadyPrompted)
 	})

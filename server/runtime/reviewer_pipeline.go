@@ -118,7 +118,7 @@ func (e *Engine) startReviewer(
 		}
 		return nil
 	}
-	if !e.launchLifecycleTask(func(lifecycleCtx context.Context) error {
+	if !e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
 		result := reviewerProviderResult{err: prepareErr}
 		if prepareErr == nil {
 			started, err := e.startReviewerActivity(stepID)
@@ -223,7 +223,7 @@ func (e *Engine) applyReviewerProviderResult(
 			completeReviewerActivityError(e, originStepID),
 		)
 	}
-	if !e.launchLifecycleTask(func(ctx context.Context) error {
+	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		return e.runReviewerContinuation(ctx, prepared.originStepID, result.suggestions)
 	}) {
 		return errors.Join(ErrEngineClosed, completeReviewerActivityError(e, originStepID))

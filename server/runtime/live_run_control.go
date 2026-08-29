@@ -10,7 +10,6 @@ import (
 
 	"core/server/llm"
 	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 	"core/shared/textutil"
 )
 
@@ -243,11 +242,10 @@ func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSte
 }
 
 func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
-	result, err := awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (struct {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
 		item     QueuedUserMessage
 		accepted bool
 	}, error) {
-		_ = operationCtx
 		item, accepted, operationErr := e.queueMessageForActiveRunRaw(ctx, message, onActive, beforeQueue, accept)
 		return struct {
 			item     QueuedUserMessage
@@ -310,7 +308,6 @@ func (e *Engine) queueMessageForActiveRunRaw(ctx context.Context, message llm.Me
 		admission := e.nextPendingWorkSteerAdmission()
 		e.outputMutationMu.Lock()
 		queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
-			lane:           runtimeinput.PendingWorkLaneSteer,
 			steerAdmission: admission,
 		})
 		if queueErr == nil {
@@ -404,15 +401,15 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 		rawIDs = append(rawIDs, id)
 	}
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
+	e.outputMutationMu.Lock()
 	failed := map[runtimeids.QueueItemID]struct{}{}
 	removed := e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
 	for _, item := range removed {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
 	}
+	e.emitInterruptedHumanInputs(removed)
+	e.outputMutationMu.Unlock()
 	if len(removed) != 0 {
-		e.outputMutationMu.Lock()
-		e.emitInterruptedHumanInputs(removed)
-		e.outputMutationMu.Unlock()
 		e.publishPendingWorkChanged()
 	}
 	e.liveRun.clearStoppedQueueItems(failed)

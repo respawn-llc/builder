@@ -59,16 +59,10 @@ func (e *Engine) projectPendingWork() (runtimeinput.PendingWork, error) {
 		if err != nil {
 			return runtimeinput.PendingWork{}, err
 		}
-		switch message.lane {
-		case runtimeinput.PendingWorkLaneQueue:
+		if message.steerAdmission == nil {
 			queue = append(queue, item)
-		case runtimeinput.PendingWorkLaneSteer:
-			if message.steerAdmission == nil {
-				return runtimeinput.PendingWork{}, errors.New("pending Steer message admission is required")
-			}
+		} else {
 			steer = append(steer, orderedPendingWorkItem{order: *message.steerAdmission, item: item})
-		default:
-			return runtimeinput.PendingWork{}, fmt.Errorf("pending message lane %q is invalid", message.lane)
 		}
 	}
 	if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
@@ -143,7 +137,7 @@ func (e *Engine) removePendingWork(id runtimeids.QueueItemID) (runtimeinput.Pend
 	if !removed {
 		return runtimeinput.PendingWorkRestoration{}, &runtimeinput.PendingWorkRemovalError{ItemID: id}
 	}
-	if message.lane == runtimeinput.PendingWorkLaneSteer {
+	if message.steerAdmission != nil {
 		e.unmarkQueuedUserInjectionForAutoDrain(id.String())
 		e.completeLiveRunQueueItems(map[string]struct{}{id.String(): {}})
 	}
@@ -212,9 +206,13 @@ func pendingWorkMessage(message queuedUserMessage) (runtimeinput.PendingWorkItem
 	if err != nil {
 		return runtimeinput.PendingWorkItem{}, err
 	}
+	lane := runtimeinput.PendingWorkLaneQueue
+	if message.steerAdmission != nil {
+		lane = runtimeinput.PendingWorkLaneSteer
+	}
 	return runtimeinput.PendingWorkItem{
 		ID:             id,
-		Lane:           message.lane,
+		Lane:           lane,
 		Kind:           runtimeinput.PendingWorkItemKindMessage,
 		State:          runtimeinput.PendingWorkItemStatePending,
 		CanonicalInput: text,

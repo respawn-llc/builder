@@ -153,8 +153,8 @@ type messageLifecycle interface {
 	PendingUserMessages() []QueuedUserMessage
 	PendingUserMessageEntries() []queuedUserMessage
 	RestorePendingUserInjections(items []queuedUserMessage)
-	QueueUserMessage(text string, association queuedUserMessageAssociation) (QueuedUserMessage, error)
-	QueueUserMessageWithID(item QueuedUserMessage, association queuedUserMessageAssociation) (QueuedUserMessage, error)
+	QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
+	QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }

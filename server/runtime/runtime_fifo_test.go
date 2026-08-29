@@ -13,7 +13,6 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/clientui"
-	"core/shared/runtimeinput"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -34,28 +33,6 @@ func waitForAcceptedRuntimeOperationCount(t *testing.T, engine *Engine, want int
 	got := engine.runtimeFIFO.pendingCount
 	engine.runtimeFIFO.mu.Unlock()
 	t.Fatalf("accepted Runtime operation count = %d, want %d", got, want)
-}
-
-func runScheduledWorktreeTransitionForTest(
-	ctx context.Context,
-	engine *Engine,
-	fn func() error,
-) error {
-	completed := make(chan error, 1)
-	_, err := engine.ScheduleWorktreeTransition(
-		ctx,
-		clientui.NewWorktreeTransitionID(),
-		runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionLeave},
-		func(context.Context) error {
-			runErr := fn()
-			completed <- runErr
-			return runErr
-		},
-	)
-	if err != nil {
-		return err
-	}
-	return <-completed
 }
 
 func TestRuntimeOperationFIFOCompletesTypedOperationsInAcceptanceOrder(t *testing.T) {
@@ -249,7 +226,7 @@ func TestWorktreeTransitionRunsBeforeQueuedHumanProviderTurn(t *testing.T) {
 	releaseTransition := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- runScheduledWorktreeTransitionForTest(t.Context(), engine, func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil
@@ -327,7 +304,7 @@ func TestWorktreeTransitionWaitsForActiveAgentStepBoundary(t *testing.T) {
 	releaseTransition := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- runScheduledWorktreeTransitionForTest(t.Context(), engine, func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil
@@ -414,7 +391,7 @@ func TestWorktreeTransitionRunsWhileReviewerIsActive(t *testing.T) {
 	}
 
 	transitionRan := false
-	err := runScheduledWorktreeTransitionForTest(t.Context(), engine, func() error {
+	err := engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 		transitionRan = true
 		return nil
 	})
@@ -517,7 +494,7 @@ func TestWorktreeTransitionUsesReviewerFollowUpStepAtToolBoundary(t *testing.T) 
 	transitionRan := false
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- runScheduledWorktreeTransitionForTest(t.Context(), engine, func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			transitionRan = true
 			return nil
 		})
@@ -1055,7 +1032,7 @@ func TestWorktreeTerminalEffectReentersAtTheCurrentRuntimeTail(t *testing.T) {
 	terminalApplied := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- runScheduledWorktreeTransitionForTest(t.Context(), engine, func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			err := engine.ApplyWorktreeTransitionTerminal(t.Context(), func(context.Context) error {
