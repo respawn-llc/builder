@@ -26,15 +26,9 @@ export const parseWorktreeOperationID = createUUIDv4ValueParser<"worktree_operat
   "Worktree operation id must be a UUID v4.",
 );
 
-const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID, "Expected Pending Work item UUID v4.");
-const compactionRequestIDSchema = uuidSchema(
-  parseCompactionRequestID,
-  "Expected Compaction request UUID v4.",
-);
-const worktreeOperationIDSchema = uuidSchema(
-  parseWorktreeOperationID,
-  "Expected Worktree operation UUID v4.",
-);
+const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID);
+const compactionRequestIDSchema = uuidSchema(parseCompactionRequestID);
+const worktreeOperationIDSchema = uuidSchema(parseWorktreeOperationID);
 const itemBase = {
   state: z.literal("pending"),
   canonical_input: nonBlankExact,
@@ -50,14 +44,7 @@ const messageItemSchema = strict({
   .refine((value) => value.canonical_input === value.message.text, {
     message: "Message canonical input must match its text.",
   })
-  .transform((value) => ({
-    id: value.id,
-    lane: value.lane,
-    kind: value.kind,
-    state: value.state,
-    canonicalInput: value.canonical_input,
-    message: value.message,
-  }));
+  .transform(({ canonical_input, ...value }) => ({ ...value, canonicalInput: canonical_input }));
 
 const manualCompactionItemSchema = strict({
   id: compactionRequestIDSchema,
@@ -74,13 +61,10 @@ const manualCompactionItemSchema = strict({
         : `/compact ${value.manual_compaction.guidance}`),
     { message: "Manual compaction canonical input must match its guidance." },
   )
-  .transform((value) => ({
-    id: value.id,
-    lane: value.lane,
-    kind: value.kind,
-    state: value.state,
-    canonicalInput: value.canonical_input,
-    manualCompaction: { guidance: value.manual_compaction.guidance ?? null },
+  .transform(({ canonical_input, manual_compaction, ...value }) => ({
+    ...value,
+    canonicalInput: canonical_input,
+    manualCompaction: { guidance: manual_compaction.guidance ?? null },
   }));
 
 const worktreeTransitionSchema = z.discriminatedUnion("transition", [
@@ -109,13 +93,10 @@ const worktreeTransitionItemSchema = strict({
         : "/wt leave"),
     { message: "Worktree canonical input must match its transition." },
   )
-  .transform((value) => ({
-    id: value.id,
-    lane: value.lane,
-    kind: value.kind,
-    state: value.state,
-    canonicalInput: value.canonical_input,
-    worktreeTransition: value.worktree_transition,
+  .transform(({ canonical_input, worktree_transition, ...value }) => ({
+    ...value,
+    canonicalInput: canonical_input,
+    worktreeTransition: worktree_transition,
   }));
 
 export const pendingWorkItemSchema = z.union([
@@ -232,12 +213,15 @@ export const sessionSettingFeedbackSchema = sessionSettingFeedbackWireSchema.tra
 });
 export type SessionSettingFeedback = Readonly<z.output<typeof sessionSettingFeedbackSchema>>;
 
-function uuidSchema<Domain extends string>(parse: (value: string) => UUIDv4Value<Domain>, message: string) {
+function uuidSchema<Domain extends string>(parse: (value: string) => UUIDv4Value<Domain>) {
   return z.string().transform((value, context) => {
     try {
       return parse(value);
-    } catch {
-      context.addIssue({ code: "custom", message });
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "Expected UUID v4.",
+      });
       return z.NEVER;
     }
   });
