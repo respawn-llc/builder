@@ -45,7 +45,7 @@
 - The Agent Node inspector keeps the ordinary Assignee picker and requires a concrete fallback Assignee.
 - Each eligible serial Transition Branch inspector exposes an Assignee picker item labeled **Let the previous node choose**. Selecting it enables Assignee selection only for that Transition.
 - An eligible Transition without that override uses the target Agent Node's configured Assignee, so incoming Transitions may mix override-enabled and fallback-only behavior.
-- A checkbox labeled **Let the previous node select thinking level** enables thinking selection only for the inspected eligible Transition.
+- A checkbox labeled **Let the previous node select thinking level** enables thinking selection only for that eligible Transition.
 - Assignee selection is unavailable with `N/A for current configuration` when no role is explicitly configured with `agent_callable = true`.
 - With one explicitly agent-callable role, Assignee selection remains available but no model-facing Assignee Parameter appears because Kent applies that role automatically.
 - Thinking selection is unavailable with `N/A for current configuration` when no applicable target model supports thinking.
@@ -110,7 +110,7 @@
 - Draft validation and execution validation remain separate. Blocking draft-validation errors prevent graph-changing saves. Execution-validation errors remain visible but do not prevent a save limited to Workflow details.
 - Draft validation blocks prompts into non-agent targets, duplicate Transition Keys, invalid or duplicate Fan-Out Transition Branch Keys, invalid Parameter Keys or descriptions, invalid previous-Parameter references, and Join aggregate key collisions.
 - Execution validation blocks starting or executing an agent-target transition without a prompt.
-- Historical Node-owned prompt and contract data may be read for inspection, but the editor never writes or round-trips it. A runnable definition must author Transition Prompts and Parameters.
+- Node-owned prompt and contract data outside the authored Transition contract is read-only in the editor. The editor never writes or round-trips it. A runnable definition must author Transition Prompts and Parameters.
 - A save limited to Workflow details, and a no-op save, bypass graph-edit policy.
 - Graph-changing saves show a preview with draft validation, execution validation, destructive or removal impact, and any required confirmation.
 - Destructive graph-save confirmation appears in the editor status area, not in a separate blocking surface.

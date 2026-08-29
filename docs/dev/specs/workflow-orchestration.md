@@ -7,13 +7,13 @@
 - Tasks can move through agent work, scripts, review loops, parallel branches, Joins, and terminal states.
 - Every Kent client presents the same server-owned Workflow and Task behavior.
 - Data-only Workflow and Task requests independently load the latest completed durable and live projections available to them. Responses may be stale or combine facts from different completed moments, while mutations revalidate their safety-critical facts.
-- Every incompatible Workflow contract cutover increments the client/server protocol version. Incompatible clients fail with a clear compatibility error, and Kent does not emulate an older Workflow contract.
+- Every incompatible Workflow contract change increments the client/server protocol version. Incompatible clients fail with a clear compatibility error, and Kent does not emulate another Workflow contract version.
 
 ## Domain Model
 
 - `Task` is the primary durable work item. Sessions are retained artifacts associated with agent Nodes on the Task.
 - A Task directly owns its Current Nodes. It usually has one and may have several only while a fan-out executes parallel branches.
-- Current Nodes have no independent entity IDs. Parallel state uses the existing Transition Branch Keys needed by the fan-out and Join.
+- Current Nodes have no independent entity IDs. Parallel state uses the Transition Branch Keys needed by the fan-out and Join.
 - An executable current Node owns only its current execution state and optional Session binding. Script Nodes have no Session.
 - Leaving a Node removes that current execution state. Kent does not retain completed Node execution, execution-attempt, or workflow-movement records as hidden history.
 - Task creation creates a durable Task at the Workflow's Start Node.
@@ -204,7 +204,7 @@
 - Nodes define Workflow states and executable behavior. Agent Nodes configure a required fallback Assignee, completion mode, and worktree and Session policy. Script Nodes configure an executable path.
 - Transitions define target Nodes, optional effective-Assignee and thinking selection, Approval, Context-Preservation Mode, Context Source, Parameters, routing, and Join behavior.
 - The Assignee is the subagent role materialized for an Agent Current Node. There is no separate product Assignment entity.
-- Workflow definitions select existing subagent role identities. They do not directly override model, provider, authentication, or tools. The sole tool exception is the approved Transition-selected Assignee path, where Kent force-enables Questions; every other tool follows the selected role or retained Session contract.
+- Workflow definitions select configured subagent role identities. They do not directly override model, provider, authentication, or tools. The sole tool exception is the Transition-selected Assignee path, where Kent force-enables Questions; every other tool follows the selected role or retained Session contract.
 - Agent Nodes do not own invocation prompts. Each incoming Transition Branch owns its Transition Prompt. Kent provides no Node-level prompt fallback.
 - Every Agent Node's configured fallback Assignee, including default and built-in roles, must have `ask_question` enabled. A Transition-selected Assignee is exempt because Kent force-enables Questions only for that execution path. Validation reports affected fallback Nodes and does not change role configuration. Workflow Drafts and Backlog Tasks remain allowed. Task Start, Resume, and manual movement to an executable target validate the latest Workflow before target selection, Task movement, or execution. Pending Approval creation validates before freezing its target; Approval does not repeat that graph or configuration validation.
 - Every Agent Node has a required configured Assignee.
@@ -433,7 +433,7 @@
 - Concurrent Task Start requests serialize through the Task lifecycle owner from Start validation through cutover. Losing, canceling, or closing the initiating client connection stops only that client's observation; it never cancels, pauses, retries, or otherwise changes Task Start.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
 - As part of that interruption, Manual Move cancels every pending Question and denies and removes every pending Approval on the Task before applying the move.
-- Human `kent task complete --force` is command composition over the existing Task Interrupt and Manual Move operations. It explicitly interrupts and waits first, then invokes this same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values; it is not another completion authority.
+- Human `kent task complete --force` composes Task Interrupt and Manual Move. It explicitly interrupts and waits first, then invokes this same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values; it is not another completion authority.
 - Other conflicting lifecycle operations block Manual Move.
 - If revalidation or movement fails after live work has been interrupted, the origin Current Nodes remain interrupted and Kent surfaces the move failure instead of resuming them.
 
@@ -451,10 +451,6 @@
 - Manual movement supports every Context Source. An incoming Transition is usable only when every selected branch can resolve any Session required by its Context Source.
 - Manual movement never infers one origin branch from a parallel Task or from the dragged card. During parallel work it does not preserve branch-scoped Session context. When the selected Transition source is not the Task's sole unscoped Current Node, required retained-Session context resolves only from serial associations; branch-scoped-only context makes the Transition unusable. A selected Fan-Out Transition resolves context before its targets receive their new Transition Branch Keys.
 - Pending Approvals freeze context-source resolution before Approval. A fallback-to-new result remains `new_session` even if another matching Session appears before Approval, and a selected Session remains fixed if a newer matching Session appears.
-- A uniquely repaired legacy Current Node, active Fan-Out branch, or pending Approval uses the repaired exact Context Source after upgrade.
-- If unresolved legacy state reaches `previous_target_or_new` and the target is an Agent Node, Kent starts a fresh target Session and reports a diagnostic.
-- If unresolved legacy state reaches strict `previous_target`, a non-Agent `previous_target_or_new` target, or a final Join, production reports a typed actionable error without changing Workflow state. Debug operation fails fast.
-- Kent removes this unresolved-legacy compatibility handling in v2.6.2.
 - If a fresh retained-target Session binds but later start preparation fails, Resume reports the invalid binding and does not create another Session. Recovery requires operator intervention.
 - `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Current Node's materialized Assignee.
 - Workflow validation rejects statically known Assignee incompatibility, runtime rejects retained-Session Assignee incompatibility, and valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
@@ -464,12 +460,12 @@
 - `new_session` establishes the target Current Node's materialized Assignee and thinking at its fresh context boundary and resolves current role configuration for that Assignee.
 - Kent derives `compact_and_continue_session` timing from the accepted Workflow path. Workflow authors do not configure eager or lazy timing.
 - Guaranteed future reuse compacts eagerly after the source assignment completes, regardless of context usage. Reuse is guaranteed when at least one branch that the accepted fan-out will execute guarantees it; unrelated accepted siblings do not need to reuse the Session.
-- Optional future reuse compacts after source completion only when Workflow Pre-Compaction reaches its threshold. Otherwise it retains the existing lazy compaction when the later selected target starts.
+- Optional future reuse compacts after source completion only when Workflow Pre-Compaction reaches its threshold. Otherwise lazy compaction occurs when the selected target starts.
 - Kent derives guarantee from every valid path to a reachable Terminal Node after narrowing the graph to the accepted Transition. Unselected outgoing alternatives, manual movement, later Workflow edits, Task deletion, and restart do not affect the classification. A decision cycle with an exit does not become optional merely because execution may revisit that cycle.
 - When static Session provenance cannot prove that every terminal path reaches compact-and-continue reuse, Kent treats that reuse as optional rather than eager.
 - Guarantee and eligibility follow all Context Source semantics, including direct and transitive `immediate_source`, `node:<node_key>`, `previous_target`, and `previous_target_or_new`. A source that may fall back to a new Session remains optional unless the accepted path guarantees selection of the retained Session.
 - Eager `compact_and_continue_session` and threshold-triggered Workflow Pre-Compaction share one post-completion history replacement. A later target establishes its fresh Session Contract and appends its assignment without producing a second summary for the already-compacted history. The selected Session's prompt-cache key remains its Kent Session ID.
-- A target skips its existing lazy CAC summary only when the selected Session has an unconsumed committed Workflow Pre-Compaction replacement. Otherwise existing CAC behavior is unchanged.
+- A target skips its lazy CAC summary only when the selected Session has an unconsumed committed Workflow Pre-Compaction replacement. Otherwise CAC runs when the target starts.
 - Nodes own no agent input or output contract. Transition Branches exclusively declare the Parameters they provide to their targets.
 - Prompt placeholders validate against the prompt-owning Transition Branch's Parameters through `.Params.<parameter_key>`.
 - Applying a Transition materializes each branch's declared Parameters for its target. Prompt rendering uses those values and never searches discarded execution history.
@@ -484,11 +480,11 @@
 - When omitted, the Workflow Pre-Compaction threshold is 70% of `context_compaction_threshold_tokens`, rounded down to a whole token. An explicit value must be positive and no greater than that ordinary threshold; equality is valid.
 - Workflow Pre-Compaction uses the same authoritative context-usage value and compaction operation as ordinary context management. It does not introduce another token measurement authority.
 - Workflow Pre-Compaction triggers when authoritative context usage is at or above its threshold.
-- `compaction_mode = "none"` disables threshold-triggered Workflow Pre-Compaction. Authored `compact_and_continue_session` retains its existing compaction-disabled behavior; Kent never silently treats it as `continue_session`.
+- `compaction_mode = "none"` disables threshold-triggered Workflow Pre-Compaction. Authored `compact_and_continue_session` remains disabled; Kent never silently treats it as `continue_session`.
 - Kent evaluates a just-completed Agent Session only after its completion result and handoff are durable and only when the accepted Workflow can later select that retained Session.
 - Human forced completion uses Manual Move and does not run source-completion Workflow Pre-Compaction.
 - Terminal-only or unreachable reuse is ineligible. A direct same-Session continuation without Approval is also ineligible because the Session does not structurally become dormant; later admission, capacity, or startup delay does not change that decision.
-- An Approval wait makes the completed Session dormant and eligible. Kent starts eligible compaction after the terminal output is durable. While live source finalization runs, existing Workflow lifecycle sequencing prevents Approval apply.
+- An Approval wait makes the completed Session dormant and eligible. Kent starts eligible compaction after the terminal output is durable. While live source finalization runs, Workflow lifecycle sequencing prevents Approval apply.
 - The compaction request uses the pre-compaction cache key and includes the durable completed assignment and handoff. The replacement summary describes that assignment as completed and cannot present it as still in progress.
 - A successful replacement does not change the retained Session's prompt-cache key. Ordinary `continue_session` and `compact_and_continue_session` keep using that Kent Session ID; changed Workflow assignment and Session Contract content naturally invalidate the changed request prefix.
 - Fan-out compacts the source history once before Session copies are created. Reusing successors receive the same summary with distinct fresh cache keys.
@@ -497,7 +493,7 @@
 - A later `compact_and_continue_session` target does not create a second summary for a committed Workflow Pre-Compaction boundary.
 - An uncommitted replacement leaves no Workflow Pre-Compaction boundary.
 - Threshold-only work proceeds without pre-compaction after an uncommitted replacement.
-- Authored `compact_and_continue_session` retains its existing target-time behavior after an uncommitted replacement.
+- After an uncommitted replacement, authored `compact_and_continue_session` compacts when its target starts.
 - After compaction succeeds, fails, or is canceled, the durable successor or Pending Approval eventually becomes available through ordinary Workflow continuation exactly once.
 - Nonfatal post-completion diagnostics do not fail or interrupt the already-completed source.
 - An Approval source remains waiting for Approval.
@@ -527,7 +523,7 @@
 - Workflow automation starts Agent Nodes within available agent capacity and prefers to continue related work on the same Task. `[workflow].concurrency` limits these agent runs only.
 - Script Nodes do not wait for or consume agent-run capacity. Kent does not limit concurrent Script Node runs.
 - When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
-- Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
+- Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting other work.
 - Resuming a Task whose automatic Agent Current Nodes are waiting for capacity promotes those queued Nodes into explicit admission. The same Resume action covers an automatically queued first execution and a queued continuation.
 - Public Task Resume classifies and requeues every eligible interrupted Current Node on the Task.
 - Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
@@ -615,8 +611,8 @@
 - Selection-required results distinguish two reasons: the Workflow requires selection, or the configured target is unavailable. Every selection flow offers all four concrete modes.
 - Failure to resolve an explicitly selected custom ref is a validation failure. During Task Start it occurs before cutover, leaves the Task at Start, and does not recursively request selection or fall back to another target. A later Start may select another concrete target.
 - A Task locks target-selection provenance only after preparation establishes a usable Execution Root and any required setup succeeds. Initial Task Start locks that provenance in the same metadata transaction that materializes its first executable Current Nodes and exact Agent Session bindings. Setup failure leaves the Task unlocked.
-- A Task with historical managed-worktree facts but no locked execution-target provenance does not infer an execution root from its recorded `HEAD`; it remains readable but requires an explicit target selection before execution.
-- An unlocked Task follows its configured Workflow execution-target policy. Kent does not use historical managed-worktree facts as a source-`HEAD` fallback.
+- A Task with recorded managed-worktree facts but no locked execution-target provenance does not infer an execution root from its recorded `HEAD`; it remains readable but requires an explicit target selection before execution.
+- An unlocked Task follows its configured Workflow execution-target policy. Kent does not use recorded managed-worktree facts as a source-`HEAD` fallback.
 - Managed targets use ordinary Kent-managed Worktree creation and setup behavior, with Task-specific initial branch selection and collision behavior defined below. Before initial Task Start materializes the first executable Current Nodes, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
 - Every Kent-managed Worktree root must resolve within the Worktree Base Dir and must not overlap its source Workspace in either direction. An explicit managed Worktree root that violates either condition is rejected before Worktree creation.
 - A persisted managed Worktree root outside the Worktree Base Dir causes Session activation and Worktree restoration to fail. Kent does not migrate that root automatically.
@@ -663,7 +659,7 @@
 - A Session without an Active Session Runtime is retargeted in durable metadata and receives one typed model-visible Worktree-change entry.
 - A live background process whose Working Directory is inside the Worktree blocks deletion immediately.
 - A rejected deletion leaves Session targets, worktree information, Git state, and branch state unchanged.
-- Task Worktree creation and conservative restoration use the same setup behavior. Restoration follows the existing named-branch and root rules above.
+- Task Worktree creation and conservative restoration use the same setup behavior. Restoration follows the named-branch and root rules above.
 - Creation follows the Task-specific collision rules above.
 - CLI target overrides, interaction, structured outcomes, and already-started guidance follow [CLI Commands](cli-commands.md#workflow-and-task-mutation).
 
@@ -673,7 +669,7 @@
 - Project creation chooses a key explicitly; default suggestion can use the first three letters of project name.
 - A Project without a Project Key receives one before Kent creates its first Task Short ID. Kent derives the suggestion from the Project name and resolves collisions.
 - Project keys are editable at any time, including after a project has tasks. A key change only sets the prefix for tasks created afterward and never rewrites existing task short IDs, so a project's history can contain mixed prefixes. The change is rejected only for format violations or a collision with another project's key.
-- Existing task short IDs keep their historical key forever; a rename does not cascade to them.
+- Task Short IDs keep the Project Key assigned at creation; a Project Key rename does not cascade to them.
 - Task short IDs are stored durable product identifiers, not derived display strings.
 - Task required fields are title, short ID, and body.
 - A Task can include an optional structured `source_url`.
@@ -695,13 +691,14 @@
 
 ## Durable Workflow State
 
+- Supported Metadata upgrade normalization of persisted Workflow state follows [Release And Distribution](release-distribution.md#metadata-upgrades).
 - A Task owns its Current Nodes, any entering Transition Branch, current inputs, optional Session associations, and pending Approval.
 - Current Nodes have no independent product identity.
 - Every Agent Current Node materializes and persists its effective Assignee and thinking when it is created.
-- During upgrade, the Session resolved as continuation context does not by itself determine the target Assignee.
+- The Session resolved as continuation context does not by itself determine the target Assignee.
 - An unstarted target that will establish a fresh or compacted Session contract materializes the required target Agent Node fallback. An unstarted retained continuation preserves the retained Session Assignee, treating an absent retained role as Kent's canonical default role.
 - A target execution already bound to a Session preserves that Session's Assignee. A pending Approval target has not started and therefore derives its Assignee only from its frozen Context-Preservation Mode and Context Source resolution.
-- Pre-feature state migrates with absent/no-thinking because it had no frozen thinking value. Migration does not validate preserved role availability against current configuration; an unavailable role becomes an ordinary Current Node start failure after startup.
+- An Agent Current Node without persisted thinking uses absent/no-thinking. Kent validates preserved role availability when the Current Node starts; an unavailable role produces an ordinary start failure.
 - Later Workflow edits do not change an admitted Agent Current Node's materialized Assignee or thinking.
 - Current Node read models expose the materialized Assignee and thinking.
 - Desktop Task detail renders the materialized Assignee and thinking for Agent Current Nodes and omits them for non-Agent Current Nodes.
@@ -731,23 +728,3 @@
 - A successful Workflow save applies details and graph changes as one atomic change.
 - Saving a Workflow graph never deletes or moves Tasks.
 - Executable context uses the Task, the latest Workflow definition, current inputs, Execution Target, and selected Context Source Session. It does not search discarded execution history.
-
-## Compatibility Data
-
-- Existing unlocked Tasks without a managed Worktree initialize their pending managed branch from their Task Short ID. Tasks with a managed Worktree and Tasks locked to no managed Worktree have no pending branch choice.
-- A legacy canceled Task moves to terminal Node `done` when that Node exists.
-- If that Workflow has terminal Nodes but no `done` Node, Kent preserves the
-  Task's unique valid active terminal when one exists. Otherwise Kent chooses
-  one terminal Node deterministically.
-- If its Workflow has no terminal Node, Kent removes the Task after making its
-  Sessions workflow-neutral and preserves its worktrees and other external
-  artifacts.
-- `source_url` remains an optional structured Task field.
-- Task Short ID remains durable product data.
-- Context Source selection uses retained Sessions and does not depend on discarded execution records.
-- Pending Approval retains the exact Transition facts that the operator is approving. Ordinary work uses current inputs and the latest Workflow definition.
-- When legacy serial state contains a persisted pending Approval and a conflicting serial current position, Kent retains the Approval source as the Task's only Current Node.
-- When legacy serial state has no pending Approval and contains several active Start or Terminal Nodes, Kent retains the placement with the latest update time, then latest creation time, then greatest identifier.
-- Task Comments retain their author identity when available.
-- Session listings retain the first prompt preview.
-- Sessions retain unsent input drafts for recovery.

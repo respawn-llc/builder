@@ -4,7 +4,7 @@
 
 - The active prompt appears in the Ongoing Mode Mutable Band and takes input focus. It does not open an Alternate Screen.
 - A collapsed transcript entry for a Question shows only the Question.
-- The active question is Markdown-rendered and wraps within the live region. Answer options take viewport priority; question lines use the remaining capacity and follow the live region's existing collapse/truncation behavior. Pure freeform prompts retain the existing cursor-anchored viewport behavior.
+- The active question is Markdown-rendered and wraps within the live region. Answer options take viewport priority; question lines use the remaining capacity and follow the live region's collapse/truncation behavior. Pure freeform prompts use cursor-anchored viewport behavior.
 - Prompts use FIFO order and show one active prompt at a time. Resolving the active prompt shows the next one.
 - A prompt resolved from another attached client disappears from the active view or pending list.
 - An update to the active prompt refreshes it in place without replacing the user's selection or draft.

@@ -11,6 +11,11 @@
 - Kent rejects an older existing Metadata database before changing its schema or data.
 - A missing Metadata database remains a supported fresh installation.
 - Kent provides no fallback migration path or downgrade path.
+- A supported Metadata upgrade atomically normalizes an empty or whitespace-only Session parent-provenance value to absence.
+- A supported Metadata upgrade converts a canceled Workflow Task to its Workflow's `done` terminal Node when present. Without `done`, Kent preserves the Task's unique valid active terminal Node or otherwise chooses one terminal Node deterministically.
+- When a canceled Task's Workflow has no terminal Node, a supported Metadata upgrade removes the Task, makes its Sessions workflow-neutral, and preserves its worktrees and other external artifacts.
+- When serial Workflow state contains a pending Approval and a conflicting current position, a supported Metadata upgrade keeps the Approval source as the Task's sole Current Node.
+- When serial Workflow state has no pending Approval and has several active Start or Terminal Nodes, a supported Metadata upgrade keeps the position with the latest update time, then latest creation time, then greatest identifier.
 
 ## Targets
 

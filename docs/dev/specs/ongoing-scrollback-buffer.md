@@ -11,9 +11,9 @@
 - After the TUI emits content into the Immutable Area, it treats that content as unavailable. It does not retain or compare emitted lines, rendered text, entry identities, counts, or terminal bytes to decide future output.
 - The mutable band is an absolute-positioned viewport anchored to the visible terminal bottom. Every render and erase establishes geometry, resets origin mode and scroll margins, and derives the band top from the submitted frame height. It must not depend on the current cursor position.
 - Immutable writes use OSC 133 output semantics. The mutable band is one OSC 133 redrawable semantic-prompt region, so supporting terminals clear it before resize reflow and the resize event repaints it from mutable frame state. Retired mutable rows return to output semantics before erase, so semantic-prompt marking never survives into immutable rows or permits history replay.
-- The client resolves one terminal-resize policy at startup. Exact `TERM_PROGRAM=ghostty` or a non-empty `KITTY_WINDOW_ID` selects OSC 133 repaint unless non-empty `TMUX` is present; tmux, every other identity, and absent identity select legacy width rehydration. Terminal identity matching is exact, with no substring inference from `TERM` or process names.
+- The client resolves one terminal-resize policy at startup. Exact `TERM_PROGRAM=ghostty` or a non-empty `KITTY_WINDOW_ID` selects OSC 133 repaint unless non-empty `TMUX` is present; tmux, every other identity, and absent identity select debounced width rehydration. Terminal identity matching is exact, with no substring inference from `TERM` or process names.
 - Each event, streaming update, or status change produces one uninterrupted terminal update: erase only the Mutable Band, append newly stable rows, and repaint the Mutable Band from current state.
-- There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering. The legacy resize fallback uses a one-second debounce to coalesce width changes before scratch rehydration; it is not a repaint timer.
+- There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering. Debounced width rehydration coalesces width changes for one second before Scratch Rehydration; it is not a repaint timer.
 
 ## Mutable Band Height
 
@@ -70,8 +70,8 @@
 - Separator placement uses only the most recently promoted group kind. A different incoming kind emits one blank line before the row. The same incoming kind appends without a separator.
 - Pending tool activity renders in the mutable band and repaints freely there until the server emits a committed tool row or abort for that call. A committed tool row appends to the immutable area immediately in server order and must not be retained for delayed group promotion, reordering, or batching.
 - Compact tool and notice rows remain one-line width-bound summaries and may ellipsize at emission. This compacting contract is separate from full user/assistant Markdown flow.
-- Error-severity notices are a renderer-owned exception to compact notice layout regardless of the selected Ongoing render mode. The renderer emits the complete typed reason payload, including complete runtime-diagnostic detail and complete legacy-untyped text, wrapped without ellipsis; cache-warning, compaction, and tool-output-repair errors use their complete typed reason text.
-- Every non-error tool and notice row retains its existing compact or full policy. Agent Steer notices and verbose Reviewer Suggestions retain their existing full Ongoing surface routing.
+- Error-severity notices are a renderer-owned exception to compact notice layout regardless of the selected Ongoing render mode. The renderer emits the complete typed reason payload, including complete runtime-diagnostic detail and complete untyped-notice text, wrapped without ellipsis; cache-warning, compaction, and tool-output-repair errors use their complete typed reason text.
+- Every non-error tool and notice row follows its specified compact or full policy. Agent Steer notices and verbose Reviewer Suggestions use the full Ongoing presentation.
 - Assistant output groups promote progressively through stream promotion; the blank separator for the group is emitted before its first promoted row.
 
 ## Queueing While Not Owning The Normal Buffer
@@ -86,8 +86,8 @@
 - Scratch rehydration is the only path that re-issues already-shown content. The trigger list is exhaustive:
   - The received event seq is discontiguous with the last received seq, or the connection/subscription was lost. The emitted history may misrepresent the conversation and appending cannot repair it.
   - The arrival-order queue exceeded 1000 events.
-  - A width change under the legacy terminal-resize fallback policy, after the one-second debounce.
-- Height changes always repaint the mutable band. Width changes use OSC 133 repaint only for exact Ghostty or kitty capability evidence outside tmux; all other environments use the legacy fallback.
+  - A width change under debounced width rehydration, after the one-second debounce.
+- Height changes always repaint the mutable band. Width changes use OSC 133 repaint only for exact Ghostty or kitty capability evidence outside tmux; all other environments use debounced width rehydration.
 - Never triggers. Each of these is an ordinary append or a bug to fix at its cause, and re-emitting in response to any of them is banned:
   - New content arrived: a delta, a tool call, a notice, any addition.
   - The needed change is addition-only.
@@ -99,7 +99,7 @@
   - The cursor is not where erasing would be convenient.
   - A large paste filled the screen.
 - Outside the exhaustive trigger list, a bug is never resolved by re-emitting committed state, in any code path, under any severity.
-- Rehydration erases only the Mutable Band, reopens the Session, and appends the received active segment below existing Scrollback. It never clears Scrollback, changes emitted content, or compares the received segment with existing terminal output. Duplicate-looking output after rehydration is acceptable.
+- Rehydration erases only the Mutable Band, reopens the Session, and appends the received active segment below Scrollback. It never clears Scrollback, changes emitted content, or compares the received segment with terminal output. Duplicate-looking output after rehydration is acceptable.
 - Only the operator's local input and navigation state survives rehydration. Kent reopens the ordered transcript subscription and independently reloads the latest completed server-owned projections for RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state. Those non-transcript projections may be stale or represent different completed moments. A runtime transport failure keeps the TUI open under the connection-loss contract while Kent retries reopening the subscription. Any other rehydration failure exits the TUI with a clear error; it does not fabricate empty state.
 
 ## Errors
@@ -108,4 +108,4 @@
 - In debug mode, unclear developer failures are logged with the same diagnostics and then panic. In normal operation, Kent logs them and continues when possible.
 - No error or recovery path may: drop, skip, or defer rendering of received committed content; drop or disable the native surface; hand the ongoing transcript to an app-managed viewport; trigger scratch rehydration; store content for later comparison; or re-emit. An error path that cannot satisfy these constraints exits the TUI with a clear message instead.
 - Immediate terminal write failures surface synchronously and follow the same debug and normal-operation recovery rules.
-- When an ongoing transcript subscription cannot open because of a runtime transport failure, the TUI keeps the existing transcript visible, shows the persistent connection-loss status-line notice, and retries without exposing low-level transport details. A successful hydration clears the notice. Other failures while opening or rehydrating Chat retain the existing clear-error and debug-diagnostic path.
+- When an ongoing transcript subscription cannot open because of a runtime transport failure, the TUI keeps the visible transcript, shows the persistent connection-loss status-line notice, and retries without exposing low-level transport details. A successful hydration clears the notice. Other failures while opening or rehydrating Chat use the clear-error and debug-diagnostic path.
