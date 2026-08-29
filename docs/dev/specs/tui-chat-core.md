@@ -40,7 +40,7 @@
 - Pending messages survive only until delivery or process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - Pending messages render as a visible pane between transcript and input until drained. The pane shows both queued post-turn messages and pending steering messages, each in FIFO order; queued messages render above steering messages.
 - There is no standalone per-item removal or reordering affordance. The only user-facing removal is the busy `Ctrl+C` interrupt, which drains pending human Send/Steer and post-turn Queue messages into the main input (see Interrupts And Exit). Typed controls and domain operations remain accepted.
-- When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server submission order, followed by any existing composer draft.
+- When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server submission order, followed by the composer draft.
 - Pending Queue and Steer messages are not persisted for restoration. Process exit before the TUI observes the interrupt loses them.
 - The following creation-failure behavior applies to every queued message or Steer, including Allow commentary.
 - If Kent cannot create the queued message or Steer, the failed message returns to the composer and requires an explicit user action to send again. The failed message does not remain pending or retry automatically.

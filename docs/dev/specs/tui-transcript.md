@@ -197,7 +197,7 @@
 - The editor determines its rendered lines and cursor position.
 - Kent can use a drawn cursor only for verified cursor drift, wrap mismatch, or Alternate Screen corruption that native cursor placement cannot fix.
 - All user text uses one authoritative submission path. The user's action selects Send/Steer or Queue intent. For Send/Steer, Kent determines from live state whether the submission starts an Agent Turn or becomes a Steer.
-- Queue/send hotkey is `Tab`; `Ctrl+Enter` is a compatibility alias.
+- Queue/send hotkey is `Tab`; `Ctrl+Enter` is an alias.
 - Known `Ctrl+Enter` CSI encodings normalize to the same queue action.
 - Clipboard paste hotkeys are `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D`; explicit system clipboard reads save images to temporary PNG files and insert the path, or insert text at the active cursor. Terminal bracketed paste remains ordinary text input and never causes a system clipboard read.
 - Runtime acceptance, protected Agent Steps, Steering drains, and the separate post-turn Queue follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
@@ -338,7 +338,7 @@
 
 ## Client Lifecycle Hooks
 
-- Protocol 64 clients advertise support for the `live_run_finished` transcript event during handshake. Kent suppresses that event for clients without the capability and preserves contiguous transcript sequence numbers for those clients.
+- The transcript stream publishes `live_run_finished` with contiguous transcript sequence numbers.
 - A controlling TUI can run one configured local command for Session lifecycle events.
 - Hook processing never delays transcript delivery, model work, or TUI rendering.
 - At most 64 lifecycle events can wait for launch. Kent silently drops a new event when this capacity is full.

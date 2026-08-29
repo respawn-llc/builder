@@ -28,7 +28,7 @@
 ## /ps
 
 - The overlay lists background processes with their state, command, and working directory. It refreshes while open and when process state changes. It has no manual-refresh key.
-- Actions on the selected process: `Enter`/`i` paste the process's recent output into the composer (appending below any existing draft) and close the overlay; `k` sends terminate and refreshes the list; `o` opens the log file via the system opener, falling back to `$VISUAL`/`$EDITOR`. Each action is single-flight; results and failures surface as status notices.
+- Actions on the selected process: `Enter`/`i` paste the process's recent output into the composer (appending below the composer draft) and close the overlay; `k` sends terminate and refreshes the list; `o` opens the log file via the system opener, falling back to `$VISUAL`/`$EDITOR`. Each action is single-flight; results and failures surface as status notices.
 - The paste action is draft-safe: if the composer draft changed between request and response, the stale output is discarded rather than spliced into the newer draft.
 - With no processes, actions produce a "nothing selected" notice; the overlay stays open.
 

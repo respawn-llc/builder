@@ -210,7 +210,7 @@ A durable Kent conversation associated with an Agent Node on a Task and, during 
 
 ### Compaction Mode
 
-The implementation used to compact a Session's context. The modes are disabled, local, and provider-native.
+The strategy used to compact a Session's context. The modes are disabled, local, and provider-native.
 
 ### Compaction Trigger
 
@@ -352,7 +352,7 @@ Comparing retained or received transcript data to emitted terminal content to de
 
 ### Scratch Rehydration
 
-Recovery that erases the Mutable Band, reopens the Session, and appends the active transcript segment below existing Scrollback. It does not inspect or change the Immutable Area.
+Recovery that erases the Mutable Band, reopens the Session, and appends the active transcript segment below Scrollback. It does not inspect or change the Immutable Area.
 
 ## Runtime Steering And Goals
 

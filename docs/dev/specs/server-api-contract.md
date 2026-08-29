@@ -1,75 +1,107 @@
-- KENT-192 must not modify, regenerate, build, or test Rust code. Rust remains frozen.
-- The centralized contract must be designed so a future Rust client can consume it easily through generated Rust code or Protobuf.
-- KENT-192 must generate the complete Go and TypeScript contract without activating it. Dependent vertical tasks adopt that generated contract in Desktop and every Go remote client, including CLI/TUI callers.
-- Protobuf must become the single authoritative API contract. Generated Protobuf messages replace hand-authored Go and TypeScript wire types.
-- The dependent migration chain must hard-cut the server and clients by domain from JSON text payloads to generated Protobuf messages carried in typed binary WebSocket envelopes. Kent must retain its existing product-level call, notification, subscription, progress, authentication, attachment, and cancellation behavior rather than adopting gRPC or Connect transport semantics.
-- Contract rules that depend only on one message must be declared in the Protobuf contract and enforced through generated validation. Domain rules that require server state must remain server-owned.
-- Every route-reachable named scalar must be explicitly classified as open/validated text, identifier, or closed enum. Closed enums must transfer every legacy member, with intentional renames recorded in the domain migration fixture. Every route-reachable `Validate`/`ValidateRPC` predicate must be classified as message-local and migrated to Protovalidate, or as stateful/shared-choke-point behavior that remains with its explicitly recorded owner. Unclassified scalars and validators block schema completion.
-- Kent's existing protocol version is the only compatibility/version authority for schema changes. Every contract change must increase the protocol version. Protobuf packages must not add independent `v1`/`v2` versioning, and KENT-192 must not promise source, wire, or backward schema compatibility beyond exact protocol-version matching. This supersedes the earlier Buf breaking-check decision; Buf remains the generation/lint toolchain, not a second compatibility authority.
-- Binary Protobuf performance is a secondary measurable benefit. KENT-192 must not claim a user-visible performance improvement without benchmark evidence.
-- The Protobuf contract must permit future standard Rust code generation without changing contract ownership. KENT-192 must not generate or adopt Rust output.
-- The repository must contain one neutral top-level Protobuf schema tree organized by stable Kent API domains. No client or server owns this tree.
-- Server, Go clients, and Desktop compile generated Protobuf contract code into their artifacts. Applications never load `.proto` files at runtime.
-- A future Kotlin mobile client must be able to generate its contract code from the same schema tree. Kotlin output is not part of KENT-192.
-- KENT-192 must not redesign or modify request concurrency handling.
-- KENT-192 must preserve the existing per-operation connection isolation for caller observation and transport teardown without application request IDs. At the approved baseline and the inspected KENT-345 implementation state, dedicated unary connections are used by Server Update Status, Workflow Task Search, Runtime Submit User Turn, Runtime Submit User Shell Command, Runtime Compact Context, Runtime Interrupt, Runtime Live Stop, Runtime Live Wait, and Runtime Live Watch. KENT-345 removes their generic application request IDs but does not authorize moving them onto a multiplexed connection or adding correlated cancel frames.
-- Unary methods must declare a typed descriptor-owned connection policy with no implicit/unspecified value: multiplexed or dedicated. Subscription, progress, and notification connection behavior remains derived from operation kind. A dedicated unary call opens one operation-owned WebSocket, completes handshake/authentication/attachment as applicable, and closes that connection on caller cancellation; closing it stops only that caller's waiting and delivery and never cancels, pauses, retries, or otherwise changes the server operation, the client's multiplexed control connection, or another operation. The envelope therefore does not add a cancel-frame variant in this migration.
-- The generated request and response contract must not introduce or preserve a generic request ID. Request-ID deletion belongs to KENT-345/KENT-346.
-- This prohibition applies to operation/domain messages and generic application identity, not connection-local transport correlation. The binary envelope may carry an opaque correlation value for multiplexed call/result frames so concurrent calls on one WebSocket are matched correctly. That value must never reach service/domain code, persistence, replay, memoization, or reconciliation, and notifications/events do not carry it. KENT-192 must preserve this transport behavior rather than expand into correlation deletion.
-- Protobuf services and typed Kent method options must centralize operation message types and route behavior as much as possible. Generated descriptors must replace the hand-authored route table, including the unary connection policy that selects multiplexed versus operation-owned dedicated transport.
-- The migration chain covers the complete registered server API, all Go remote clients/TUI/CLI, and Desktop. Each operation has one active encoding and contract authority at every intermediate state. Rust remains frozen and incompatible until future Rust work consumes the schema.
-- Kent-owned dynamic payloads, including transcript event variants, handshake outcomes/workspace selections, and API error details, must become typed Protobuf messages or explicit `oneof` variants.
-- On August 13, 2026, the user assigned Workflow-owned Attention variants (`workflow_approval`, `workflow_task`, and interrupted-current-node detail) to the planned Workflow Task schema slice. The transcript/Prompt/process/Attention slice completes only Session/Prompt Attention with explicit typed messages/`oneof`s. It must not introduce JSON, generic dynamic fields, placeholder variants, duplicate schemas, or Workflow execution-target/setup-recovery ownership; the Workflow Task slice represents each deferred variant exactly once and completes Attention coverage.
-- Externally authored provider, model, and tool content must stay server-only and must not be migrated into the client Protobuf contract. Kent must preserve that content in the provider's native representation rather than adding Protobuf wrappers around provider-owned JSON.
-- If implementation discovers another dynamic wire field, it must be classified with the user instead of silently introducing `Any`, generic maps, raw JSON, or opaque bytes into the client contract.
-- The generic transport envelope may carry serialized Protobuf message bytes because the operation descriptor declares the exact payload type. This is descriptor-typed transport framing, not an opaque application field. Operation messages must still not contain unclassified `bytes`, `Any`, generic maps, or raw JSON.
-- Optional values represent semantic absence. They must use Protobuf presence and generated nullable/optional platform types; they must not use sentinel values or transmit explicit JSON-style null entries.
-- API errors must be centralized in the Protobuf contract as stable Kent error codes with typed detail payloads and operation-specific declared variants. A client that receives a future error variant it does not recognize must surface it as a generic error rather than discard it or invent a fallback interpretation.
-- On August 13, 2026, the user approved the initial connection/Project/Session-launch error taxonomy: preserve existing stable typed variants; map otherwise-unclassified operational failures to shared typed `internal_failure`; model onboarding rollback as a typed primary-failure `oneof` plus structured `{operation, cause}` rollback facts; and keep `background_process_active` public because Session workspace retargeting has an evidenced producer/consumer contract. Do not stringify errors or add operation-specific ad hoc variants without product authority.
-- External request values must be validated once, at the earliest server request boundary, before downstream server logic consumes them. Downstream server code must trust that boundary instead of repeating the same validation. Validation owned by another choke point, such as a database constraint shared by many writers, must remain at that owning choke point rather than be duplicated in the API boundary.
-- Clients must run generated Protobuf message constraints on server responses and events. Reuse of generated validation is acceptable and desired because it catches contract bugs earlier; handwritten validation of the same rule must not be duplicated throughout a platform codebase.
-- KENT-192 may proceed before KENT-345 because it does not activate the new transport. Active Protobuf verticals must begin only after KENT-345 lands and must use its no-application-request-ID contract without absorbing its concurrency work.
-- KENT-192 authors the authoritative messages against KENT-345's approved no-generic-request-identity end state. It omits only the exact generic request-identity declarations listed in the predecessor projection below; Queue Item, Worktree Setup Operation, Run, Agent Step, Session, Resource Generation, process, prompt/question/approval, and other domain identities remain. Envelope correlation remains because it is connection-local transport matching rather than application request identity.
-- Generation must use a pinned Buf-managed standard stack: official Google Go generation/runtime, Protobuf-ES for TypeScript binary messages/descriptors/custom options, and Protovalidate rules executed by Go and TypeScript. Kent must not adopt gRPC/Connect or build a custom Protobuf generator/runtime.
-- Generated Protobuf messages are the API-boundary contract, not the default server domain/storage model. A separate server type and mapping are warranted only where the server owns meaning or behavior that differs from the wire representation. When there is no real semantic difference, KENT-192 must not add a ceremonial duplicate model or mapper layer.
-- Missing repeated/map fields mean empty collections. Optional wrapper messages are reserved for actual three-state semantics where absent differs from present-empty.
-- Generated clients must accept and preserve unknown Protobuf fields, reject unknown enum values, and enforce declared constraints. This decoding policy must be centralized at the Go and TypeScript transport boundaries so a future public API can change it without a repository-wide refactor.
-- Operations with no request content or no success data must use the standard `google.protobuf.Empty` message. The transport must not encode absence through null or a special empty-envelope case.
-- KENT-192 must preserve the existing terminal behavior of subscriptions and progress operations. It must not introduce a new subscription failure/completion product contract merely because the transport representation changes.
-- API instants must use the standard `google.protobuf.Timestamp`, and elapsed amounts must use `google.protobuf.Duration`. Raw integer time representations remain only where an external system owns that representation.
-- KENT-554 must remove the legacy server capability toggles and server capability registry. Protocol-version equality is the only capability/compatibility gate.
-- Capability deletion is limited to protocol/route negotiation and activation: handshake capability flags, client `Supports…` gates, route dependency/activation toggles, and startup's capability-derived route registry. It must not delete unrelated onboarding model/provider/import facts, native desktop permissions, terminal abilities, or internal server access types merely because they use the word “capability.”
-- Before server activation completes, handshake, authentication, readiness, onboarding capability facts, and onboarding finalization must remain available. Operations that require activation must continue to fail with the typed onboarding-required or activation-failed result.
-- KENT-192 authors the authoritative handshake against the approved post-KENT-554 contract, avoiding obsolete schema churn. `HandshakeRequest.client_capabilities`, the `ClientCapabilities` message and `transcript_live_run_finished` member/validator branch, `ServerIdentity.capabilities`, and all `CapabilityFlags` members/validators are approved intentional projection deletions and do not appear in Protobuf. `CapabilityFacts` operations and provider/model/import capability data used for onboarding remain because they are product facts, not protocol route negotiation.
-- Protobuf service/method descriptors must be the sole active operation identity and must minimize handwritten route metadata. The user explicitly chose to normalize private wire names during the breaking migration rather than preserve historical names.
-- Active operation names use strict lower-snake `<package>.<service>.<method>` with no service elision and no `kent` prefix. Each non-empty Protobuf package segment starts with an ASCII lowercase letter; every remaining character is an ASCII lowercase letter, digit, or underscore. Service and method identifiers convert from PascalCase to lower_snake by a deterministic single pass over classified ASCII characters: split before an uppercase letter when preceded by a lowercase letter or digit, and before the final uppercase letter of an uppercase run when followed by a lowercase letter; then lowercase the emitted tokens and join them with `_`. Digits remain in their surrounding token. Both Go and TypeScript must implement this validation and tokenization without regex, substring matching, or text-replacement parsing. Thus `APIStatus` becomes `api_status`, `UUID` becomes `uuid`, `HTTP2Server` becomes `http2_server`, and `MaterializeWorkspaceChat` becomes `materialize_workspace_chat`. Semantic service names avoid repetition, for example `workflow.definition.create`, `session.catalog.materialize_workspace_chat`, `worktree.create_target.resolve`, and `workflow.task.create`.
-- During migration only, each descriptor method carries a typed `legacy_wire_name` provenance option containing the exact current JSON operation name. It is not an active alias, accepted wire name, or runtime lookup key. Coverage joins each live legacy route to exactly one descriptor by this option, while active binary identity always derives from package/service/method. The option is removed from a method when its vertical deletes that legacy route, and KENT-560 deletes the option definition. This co-located temporary provenance avoids a second operation inventory while allowing intentional renames.
-- Unary results, progress final results, and subscription-start acknowledgements use an operation-specific top-level `oneof` with exactly one `success` or `error` branch. Each operation's error message contains a required stable string `code` and a typed detail `oneof`; known codes declare their required detail variant and constraints. Any present error branch is a failure. An unknown non-empty code, including one accompanied by a future unknown detail field, is classified generically while unknown fields remain preserved. A missing top-level outcome, empty code, or known code with missing/wrong detail is malformed. A subscription-start failure occurs before acknowledgement and remains distinct from later events and terminal completion. Client-visible text remains client-owned.
-- KENT-192 must include only a lightweight performance-regression check capable of detecting severe serialization mistakes or regressions. It must not add a large benchmark suite, enforce a strict speedup, or rely on noisy local-machine timing as a release gate.
-- The user approves a new authoritative Server API contract document and specs-index entry. The document must read as external Server API documentation and include only what an external API consumer needs to know; generator stack, repository layout, implementation internals, and migration mechanics remain in this plan.
-- KENT-192 must not add a separate internal Protobuf architecture document. The already-present `docs/dev/protobuf-server-api.md` is unapproved duplicate authority and must be deleted. Dependent-task records may reference this plan, the authoritative schema tree, and `docs/dev/specs/server-api-contract.md`; they must not preserve or recreate a second architecture/migration document.
-- The approved typed-error/client-wording contract supersedes `project-workspaces.md` and `cli-commands.md` wherever they require server-provided human-readable error or blocker wording. Preserve the CLI's documented plain/JSON output shapes, server blocker order, stable codes, counts, resolved IDs, bounded blocker sets, guidance behavior, retryability, and exit statuses while making every human-readable message, explanation, and guidance string client-derived from typed codes/details and transport-neutral. On August 13, 2026, the user explicitly authorized the owning `cli-commands.md` update. For an unknown blocker code, the CLI must use generic client-owned wording, preserve available typed details, advise resolving the reported code and retrying, avoid inventing a command, and never depend on a server-authored message field.
-- KENT-192 must not migrate legacy string IDs or the persistence/domain ID model. First-party UUID v4 values must retain their canonical textual wire form without new role-specific wrappers in this ticket. Third-party/provider identifiers remain validated string fields in this wire-contract migration. Role-specific provider ID types must be evaluated in a separate focused task.
-- Machine-generated Go and TypeScript output and mechanically repetitive Protobuf schema boilerplate do not count toward the 10,000-production-line PR cap. Handwritten executable/tooling logic does count. On August 13, 2026, the user explicitly confirmed that KENT-192 is exempt from any review gate that instead counts the complete product-tree diff toward a generic 10,000-line limit. That broader counting rule would make the next requirement impossible and does not supersede this ticket-specific decision. The migration is decomposed into dependent tasks that merge sequentially to `main`; the user will coordinate shipping them relatively quickly. Each later PR retains the 10,000 counted-production-line hard cap while preserving one contract authority for every operation at every intermediate state.
-- KENT-192 itself is the inactive Protobuf foundation and may proceed before KENT-345: authoritative domain schemas for the complete API, pinned generation, generated Go/TypeScript output, descriptors and typed method options, validation/error conventions, freshness guards, external Server API documentation, and the binary-envelope definition. It must not change active API signatures or activate Protobuf transport.
-- The next dependent task deletes protocol/route capability negotiation and activation without depending on KENT-345. It may simplify the active legacy route set but must not activate Protobuf transport.
-- Every active Protobuf vertical depends on both the foundation/capability tasks and merged KENT-345. KENT-345 keeps its already-landed generic request-ID, request-memo, reconciliation, prompt-history identity, and protocol cleanup. Protobuf schemas omit generic request IDs from the start; no Protobuf vertical reintroduces them.
-- Active migration proceeds by complete domain verticals across server, Go clients, and Desktop: project/bootstrap; Worktree; interactive Session; Workflow definition; Workflow Task; then final legacy-contract deletion.
-- During active vertical migration, each migrated operation accepts only binary Protobuf and each unmigrated operation accepts only its existing JSON contract. No operation may accept both encodings or have two contract authorities. A temporary dispatcher may distinguish the disjoint frame types and must be deleted in the final task. Every vertical increments the exact protocol version.
-- The approved dependent task chain is:
-  1. KENT-192 — inactive Protobuf foundation.
-  2. KENT-554 — delete API capability negotiation; blocked only by KENT-192.
-  3. KENT-555 — activate connection/bootstrap, Project, and Session-launch/catalog Protobuf vertical; blocked by KENT-554 and KENT-345.
-  4. KENT-557 — migrate Worktree API.
-  5. KENT-558 — migrate interactive Session API.
-  6. KENT-559 — migrate Workflow-definition API.
-  7. KENT-556 — migrate Workflow Task API.
-  8. KENT-560 — delete the legacy JSON contract and temporary mixed dispatcher.
-- KENT-553 separately evaluates typed provider IDs and is not part of this migration chain.
-- Current evidence does contain a 64-bit/JavaScript distinction: Go wire DTOs expose `uint64` runtime/attention sequence values and `int64` workflow versions, transcript cursors, process byte offsets, counts, and timestamps, while Desktop currently represents the values it consumes as JavaScript `number`. KENT-192's generated TypeScript integer representation remains to be resolved from the actual semantic ranges; it must not introduce `bigint` merely because Protobuf supports it.
-- Current 64-bit API values have no specified need to exceed JavaScript's exact integer range. On August 12, 2026, the user explicitly chose the standard Protobuf-ES `bigint` representation because Protobuf-ES 2.13.0 does not generate `number` for `int64`/`uint64` and KENT-192 must not add a custom generator or postprocessor. The Protobuf contract must still constrain current JavaScript-facing values to the JavaScript safe-integer range. A future field may deliberately widen that range only with an explicit contract decision and protocol bump.
-- The future Kotlin mobile app will live in this repository and generate from the same schema tree. KENT-192 needs no schema registry, external package publication, or Kotlin-specific distribution mechanism.
-- Malformed Protobuf bytes, unknown operations, wrong frame direction, invalid envelopes, and known-operation validation failures must reject only that frame and keep an established connection alive so unrelated valid traffic can continue. Return or publish a typed protocol/validation failure when the frame can be correlated safely.
-- Protocol-version mismatch and invalid handshake/authentication establishment reject setup and close because no valid connection contract was established. KENT-192 must not add a strike counter, rate limiter, or repeated-invalid-frame disconnect state machine.
-- Debug builds fail fast only when Kent itself attempts to emit a generated message that violates its declared contract. Malformed peer input is external data and must be robustly rejected in debug and production. Production must surface the internal contract error and not send the invalid frame.
-- The Protobuf schema is the sole editable API contract. Generated code must not become a second editable authority.
+# Server API Contract
+
+## Authority And Compatibility
+
+- Protobuf schemas are the sole editable authority for the Kent server API.
+- Generated Protobuf messages are the API-boundary contract for official Go and TypeScript clients.
+- Kent carries serialized Protobuf messages in typed binary WebSocket envelopes. It does not expose gRPC or Connect transport semantics.
+- Kent's protocol version is the sole compatibility authority for API schema changes.
+- Every contract change must increment the protocol version.
+- Clients and servers must use the same protocol version.
+- Protobuf packages must not introduce an independent `v1` or `v2` compatibility authority.
+- Kent promises no source, wire, or backward schema compatibility across protocol versions.
+- Protocol capability flags must not negotiate route or schema availability.
+- Onboarding model, provider, and import capability facts remain ordinary product data rather than protocol compatibility gates.
+- The Protobuf schema must remain suitable for standard code generation without changing API ownership.
+- The Protobuf schema is platform-neutral. No client or server owns it.
+- Applications compile generated contract code into their artifacts and never load `.proto` files at runtime.
+
+## Operations And Transport
+
+- Protobuf services and typed Kent method options own operation request types, response types, operation kind, and unary connection policy.
+- Generated descriptors are the sole operation identity and route-metadata authority.
+- Active operation names use strict lower-snake `<package>.<service>.<method>` form with no service elision and no `kent` prefix.
+- Each nonempty package segment must start with an ASCII lowercase letter and contain only ASCII lowercase letters, digits, or underscores.
+- Service and method identifiers convert from PascalCase to lower snake case by splitting before an uppercase letter when a lowercase letter or digit precedes it, and before the final uppercase letter of an uppercase run when a lowercase letter follows it.
+- Digits remain in their surrounding token.
+- `APIStatus` becomes `api_status`, `UUID` becomes `uuid`, `HTTP2Server` becomes `http2_server`, and `MaterializeWorkspaceChat` becomes `materialize_workspace_chat`.
+- Both Go and TypeScript must apply the same operation-name validation and conversion.
+- The generated request and response contract must not contain a generic application request ID.
+- Multiplexed call and result envelopes may carry opaque connection-local correlation values.
+- Connection-local correlation values must not reach service or domain code, persistence, replay, memoization, or reconciliation.
+- Notifications and events must not carry connection-local correlation values.
+- Every unary method must declare either multiplexed or dedicated connection policy. An unspecified policy is invalid.
+- Server Update Status, Workflow Task Search, Runtime Submit User Turn, Runtime Submit User Shell Command, Runtime Compact Context, Runtime Interrupt, Runtime Live Stop, Runtime Live Wait, and Runtime Live Watch use dedicated unary connections.
+- Subscription, progress, and notification connection behavior derives from operation kind.
+- A dedicated unary call owns one WebSocket and performs the applicable handshake, authentication, and attachment steps on that connection.
+- Caller cancellation closes a dedicated unary connection and stops only that caller's waiting and delivery.
+- Closing a caller connection must not cancel, pause, retry, replay, authorize, or otherwise change server-owned work.
+- The transport must not add a cancel-frame variant for server-owned work.
+- Call, notification, subscription, progress, authentication, attachment, and cancellation semantics remain owned by their operation specifications.
+- Subscription and progress operations use the terminal completion and failure behavior defined by their owning operation specifications. Transport framing adds no generic terminal product outcome.
+
+## Message Design
+
+- Every route-reachable named scalar must be classified as open or validated text, identifier, or closed enum.
+- Closed enums must declare every supported value.
+- Message-local rules must be declared in the Protobuf contract and enforced through generated validation.
+- Rules that require server state must remain with their server-owned domain boundary.
+- Unclassified scalars and validators are invalid API contract state.
+- Kent-owned variant payloads must use typed Protobuf messages or explicit `oneof` branches.
+- Transcript events, handshake outcomes, workspace selections, API error details, and Attention variants must not use generic dynamic payloads.
+- Session and Prompt Attention and Workflow-owned Attention must each have one typed representation under their owning domain.
+- Externally authored provider, model, and tool content remains server-only in its provider-native representation.
+- Client-facing operation messages must not wrap provider-owned JSON.
+- Operation messages must not contain unclassified `bytes`, `Any`, generic maps, or raw JSON.
+- A transport envelope may contain serialized Protobuf bytes only when its operation descriptor declares the exact payload type.
+- Optional values represent semantic absence through Protobuf presence and generated optional platform types.
+- Sentinel values and explicit JSON-style null entries must not represent absence.
+- Missing repeated and map fields represent empty collections.
+- Optional wrapper messages are reserved for semantics where absence differs from present-empty.
+- Operations with no request content or no success data must use `google.protobuf.Empty`.
+- API instants must use `google.protobuf.Timestamp`.
+- API elapsed amounts must use `google.protobuf.Duration`.
+- Raw numeric time representations are permitted only when an external system owns that representation.
+- Existing first-party identifiers retain their owning domain format. The Protobuf API does not migrate the persistence or domain identity model.
+- First-party UUID v4 identifiers retain canonical textual wire form.
+- Third-party and provider identifiers remain validated string fields unless their owning contract defines another representation.
+- Generated TypeScript uses the standard Protobuf `bigint` representation for `int64` and `uint64`.
+- JavaScript-facing 64-bit values must remain within the JavaScript safe-integer range.
+
+## Results And Errors
+
+- Unary results, progress final results, and subscription-start acknowledgements must use an operation-specific top-level `oneof` with exactly one `success` or `error` branch.
+- A present error branch is an operation failure.
+- Each operation error must contain a nonempty stable code and a typed detail `oneof`.
+- Known error codes must declare and validate their required detail variant.
+- A missing outcome, empty error code, or known code with missing or incorrect detail is malformed.
+- A client must surface an unknown nonempty error code as a generic error while preserving available unknown fields.
+- Subscription-start failure occurs before acknowledgement and remains distinct from later events and terminal completion.
+- Client-visible wording is client-owned and derived from stable codes and typed details.
+- The shared `internal_failure` code represents otherwise-unclassified operational failures.
+- Onboarding rollback errors use one typed primary failure plus structured rollback facts containing operation and cause.
+- `background_process_active` remains a public error because Session workspace retargeting exposes that blocker.
+- Clients must not stringify errors or depend on server-authored human-readable messages.
+
+## Validation And Decoding
+
+- External request values must be validated once at the earliest server request boundary before downstream server logic consumes them.
+- Validation owned by another shared authority, such as a database constraint used by several writers, must remain with that authority.
+- Clients must run generated Protobuf constraints on server responses and events.
+- Platforms must centralize generated validation at their transport boundary.
+- Generated clients must preserve unknown Protobuf fields.
+- Generated clients must reject unknown enum values.
+- Malformed Protobuf bytes, unknown operations, wrong frame direction, invalid envelopes, and known-operation validation failures must reject only the affected frame after a connection is established.
+- Kent must keep the established connection available for unrelated valid traffic after a rejected frame.
+- Kent must return or publish a typed protocol or validation failure when the frame can be correlated safely.
+- Protocol-version mismatch and invalid handshake or authentication establishment must reject setup and close the connection.
+- Kent must not add strike counters, rate limits, or repeated-invalid-frame disconnect state solely for contract validation.
+- Debug builds fail fast when Kent attempts to emit a generated message that violates its declared contract.
+- Malformed peer input is external data and must be rejected without crashing in debug and production.
+- Production must surface an internal contract error and must not send an invalid frame.
+
+## Startup Availability
+
+- Handshake, authentication, readiness, onboarding capability facts, and onboarding finalization remain available before server activation completes.
+- Operations that require activation must fail with a typed onboarding-required or activation-failed result while activation is unavailable.
+- Handshake messages must not contain route capability flags.
