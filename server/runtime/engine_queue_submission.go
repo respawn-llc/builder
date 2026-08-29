@@ -194,34 +194,31 @@ func (e *Engine) ApplyWorktreeTransitionTerminal(
 	return err
 }
 
-type worktreeTechnicalFailure interface {
-	WorktreeTechnicalFailure()
-}
+type worktreeSchedulingError struct{ technical, applied, indeterminate bool }
 
-type worktreeIndeterminateFailure interface {
-	WorktreeTransitionIndeterminate()
-}
-
-type worktreeAppliedFailure interface {
-	WorktreeTransitionApplied()
+func classifyWorktreeSchedulingError(err error) worktreeSchedulingError {
+	var indeterminate interface{ WorktreeTransitionIndeterminate() }
+	if errors.As(err, &indeterminate) {
+		return worktreeSchedulingError{indeterminate: true}
+	}
+	var applied interface{ WorktreeTransitionApplied() }
+	if errors.As(err, &applied) {
+		return worktreeSchedulingError{applied: true}
+	}
+	var technical interface{ WorktreeTechnicalFailure() }
+	return worktreeSchedulingError{technical: errors.As(err, &technical)}
 }
 
 func worktreeFailureIsApplied(err error) bool {
-	var applied worktreeAppliedFailure
-	return errors.As(err, &applied)
+	return classifyWorktreeSchedulingError(err).applied
 }
 
 func worktreeFailureIsIndeterminate(err error) bool {
-	var indeterminate worktreeIndeterminateFailure
-	return errors.As(err, &indeterminate)
+	return classifyWorktreeSchedulingError(err).indeterminate
 }
 
 func worktreeFailureRequiresTechnicalRestoration(err error) bool {
-	if worktreeFailureIsIndeterminate(err) {
-		return false
-	}
-	var technical worktreeTechnicalFailure
-	return errors.As(err, &technical)
+	return classifyWorktreeSchedulingError(err).technical
 }
 
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user

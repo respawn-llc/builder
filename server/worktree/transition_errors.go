@@ -69,18 +69,15 @@ func worktreeUnappliedTechnicalUnlessClassified(err error) error {
 	return worktreeUnappliedTechnical(err)
 }
 
-func worktreeUnappliedWithDiagnostic(unapplied error, diagnostic error) error {
+func worktreeUnappliedAfterRollback(failure, rollback error) error {
+	var applied *worktreeAppliedError
+	if errors.As(rollback, &applied) {
+		rollback = applied.cause
+	}
+	diagnostic := errors.Join(failure, rollback)
 	var technical *worktreeTechnicalError
-	if errors.As(unapplied, &technical) {
+	if errors.As(failure, &technical) {
 		return worktreeUnappliedTechnical(diagnostic)
 	}
 	return worktreeUnappliedUserCorrectable(diagnostic)
-}
-
-func worktreeAppliedDiagnostic(err error) error {
-	var applied *worktreeAppliedError
-	if errors.As(err, &applied) {
-		return applied.cause
-	}
-	return err
 }

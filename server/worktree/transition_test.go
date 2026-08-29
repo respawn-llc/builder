@@ -33,7 +33,7 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 		{name: "selector user-correctable failure", selector: true, outcome: &failed, diagnostic: selectorFailure},
 		{name: "applied target then identity publication failure", outcome: &completed, publication: publicationFailure, surface: publicationDiagnostic},
 		{name: "active rollback failure", finish: syncFailure, rollback: rollbackFailure, surface: rollbackDiagnostic},
-		{name: "dormant rollback failure", dormant: true, finish: syncFailure, rollback: rollbackFailure, diagnostic: rollbackFailure},
+		{name: "dormant rollback failure", dormant: true, finish: syncFailure, rollback: rollbackFailure, diagnostic: rollbackDiagnostic},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -81,10 +81,7 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 						apply := func(applyCtx context.Context) error {
 							return runTerminalMutationCase(applyCtx, env, next.WorktreeID, previous, sync, test.write, test.finish, test.rollback, test.publication != nil)
 						}
-						if authority != nil {
-							return worktreeUnappliedTechnicalUnlessClassified(authority(apply))
-						}
-						return apply(ctx)
+						return applyWorktreeTransition(ctx, authority, apply)
 					})
 			}
 			if !test.dormant {
@@ -113,7 +110,7 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 					}, "Runtime diagnostic/retirement = %q/%v/%v, want %q/unavailable", page.Snapshot.StreamingError, pageErr, retireErr, test.surface)
 				}
 			} else {
-				requireTerminal(t, ack == nil && errors.Is(runErr, test.diagnostic), "dormant result = %+v, %v", ack, runErr)
+				requireTerminal(t, ack == nil && runErr != nil && runErr.Error() == test.diagnostic.Error(), "dormant result = %+v, %v", ack, runErr)
 			}
 			if test.outcome == nil {
 				requireTerminal(t, len(env.publisher.outcomes) == 0, "Worktree outcomes = %+v, want none", env.publisher.outcomes)

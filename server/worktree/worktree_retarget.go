@@ -54,10 +54,7 @@ func applyWorktreeTargetMutation[T any](write func() error, finish func() (T, er
 
 func classifyWorktreeRollback(failure, rollback error) error {
 	if isWorktreeUnapplied(failure) && (rollback == nil || isWorktreeApplied(rollback)) {
-		return worktreeUnappliedWithDiagnostic(
-			failure,
-			errors.Join(failure, worktreeAppliedDiagnostic(rollback)),
-		)
+		return worktreeUnappliedAfterRollback(failure, rollback)
 	}
 	return worktreeIndeterminate(errors.Join(failure, rollback))
 }
