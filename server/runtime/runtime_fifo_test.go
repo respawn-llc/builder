@@ -45,9 +45,7 @@ func runScheduledWorktreeTransitionForTest(
 	_, err := engine.ScheduleWorktreeTransition(
 		ctx,
 		clientui.NewWorktreeTransitionID(),
-		runtimeinput.PendingWorkWorktreeTransition{
-			Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
-		},
+		runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionLeave},
 		func(context.Context) error {
 			runErr := fn()
 			completed <- runErr
@@ -57,12 +55,7 @@ func runScheduledWorktreeTransitionForTest(
 	if err != nil {
 		return err
 	}
-	select {
-	case err := <-completed:
-		return err
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
+	return <-completed
 }
 
 func TestRuntimeOperationFIFOCompletesTypedOperationsInAcceptanceOrder(t *testing.T) {
