@@ -376,7 +376,8 @@ describe("Desktop Worktree client", () => {
         throw new Error("expected Pending Work capacity rejection");
       } catch (error) {
         expect(error).toBeInstanceOf(WorktreeError);
-        expect((error as WorktreeError).detail).toEqual({ kind: "capacity" });
+        if (!(error instanceof WorktreeError)) throw error;
+        expect(error.detail).toEqual({ kind: "capacity" });
       }
     }
   });
