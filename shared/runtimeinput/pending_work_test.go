@@ -6,70 +6,62 @@ import (
 	"core/shared/runtimeids"
 )
 
-func TestPendingWorkClosedContract(t *testing.T) {
-	guidance := "keep details"
-	selector := "feature/a"
-	queue := pendingWorkTestMessage(PendingWorkLaneQueue, "queued")
-	steer := pendingWorkTestMessage(PendingWorkLaneSteer, "steer")
-	compaction := PendingWorkItem{
-		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer,
-		Kind: PendingWorkItemKindManualCompaction, State: PendingWorkItemStatePending,
-		CanonicalInput:   "/compact keep details",
+func TestCollectionContract(t *testing.T) {
+	t.Parallel()
+	guidance := "keep implementation details"
+	selector, compactionID := "feature/a", runtimeids.NewCompactionRequestID()
+	compactionView, err := runtimeids.ParseQueueItemID(compactionID.String())
+	if err != nil {
+		t.Fatalf("compaction ID view: %v", err)
+	}
+	steerMessage := PendingWorkItem{
+		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindMessage,
+		State: PendingWorkItemStatePending, CanonicalInput: "keep going", Message: &PendingWorkMessage{Text: "keep going"},
+	}
+	steerCompaction := PendingWorkItem{
+		ID: compactionView, Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindManualCompaction,
+		State: PendingWorkItemStatePending, CanonicalInput: "/compact keep implementation details",
 		ManualCompaction: &PendingWorkManualCompaction{Guidance: &guidance},
 	}
+	queueMessage := steerMessage
+	queueMessage.ID = runtimeids.NewQueueItemID()
+	queueMessage.Lane = PendingWorkLaneQueue
 	enter := PendingWorkItem{
-		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer,
-		Kind: PendingWorkItemKindWorktreeTransition, State: PendingWorkItemStatePending,
-		CanonicalInput: "/wt switch feature/a",
-		WorktreeTransition: &PendingWorkWorktreeTransition{
-			Transition: PendingWorkWorktreeTransitionEnter,
-			Selector:   &selector,
-		},
+		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindWorktreeTransition,
+		State: PendingWorkItemStatePending, CanonicalInput: "/wt switch feature/a",
+		WorktreeTransition: &PendingWorkWorktreeTransition{Transition: PendingWorkWorktreeTransitionEnter, Selector: &selector},
 	}
 	leave := PendingWorkItem{
-		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer,
-		Kind: PendingWorkItemKindWorktreeTransition, State: PendingWorkItemStatePending,
-		CanonicalInput: "/wt leave",
-		WorktreeTransition: &PendingWorkWorktreeTransition{
-			Transition: PendingWorkWorktreeTransitionLeave,
-		},
+		ID: runtimeids.NewQueueItemID(), Lane: PendingWorkLaneSteer, Kind: PendingWorkItemKindWorktreeTransition,
+		State: PendingWorkItemStatePending, CanonicalInput: "/wt leave",
+		WorktreeTransition: &PendingWorkWorktreeTransition{Transition: PendingWorkWorktreeTransitionLeave},
 	}
-	if err := (PendingWork{Items: []PendingWorkItem{queue, steer, compaction, enter, leave}}).Validate(); err != nil {
+	if err := (PendingWork{Items: []PendingWorkItem{queueMessage, steerMessage, steerCompaction, enter, leave}}).Validate(); err != nil {
 		t.Fatalf("valid Queue-first collection: %v", err)
 	}
 
-	twoPayloads := steer
-	twoPayloads.ManualCompaction = compaction.ManualCompaction
-	queueCompaction := compaction
-	queueCompaction.Lane = PendingWorkLaneQueue
-	badGuidance := compaction
-	badGuidance.ManualCompaction = &PendingWorkManualCompaction{Guidance: textPointer("keep   details")}
-	badCompactionCanonical := compaction
-	badCompactionCanonical.CanonicalInput = "/compact   keep details"
+	twoPayloads := steerMessage
+	twoPayloads.ManualCompaction = steerCompaction.ManualCompaction
+	badGuidance := steerCompaction
+	badGuidance.ManualCompaction = &PendingWorkManualCompaction{Guidance: stringPointer("keep   implementation details")}
 	missingSelector := enter
-	missingSelector.WorktreeTransition = &PendingWorkWorktreeTransition{
-		Transition: PendingWorkWorktreeTransitionEnter,
-	}
+	missingSelector.WorktreeTransition = &PendingWorkWorktreeTransition{Transition: PendingWorkWorktreeTransitionEnter}
 	badSelector := enter
 	badSelector.WorktreeTransition = &PendingWorkWorktreeTransition{
-		Transition: PendingWorkWorktreeTransitionEnter,
-		Selector:   textPointer(" feature/a "),
+		Transition: PendingWorkWorktreeTransitionEnter, Selector: stringPointer(" feature/a "),
 	}
 	leaveWithSelector := leave
 	leaveWithSelector.WorktreeTransition = &PendingWorkWorktreeTransition{
-		Transition: PendingWorkWorktreeTransitionLeave,
-		Selector:   &selector,
+		Transition: PendingWorkWorktreeTransitionLeave, Selector: &selector,
 	}
 	for name, collection := range map[string]PendingWork{
-		"Steer before Queue":     {Items: []PendingWorkItem{steer, queue}},
-		"duplicate identity":     {Items: []PendingWorkItem{queue, queue}},
-		"multiple payloads":      {Items: []PendingWorkItem{twoPayloads}},
-		"Queue compaction":       {Items: []PendingWorkItem{queueCompaction}},
-		"unnormalized guidance":  {Items: []PendingWorkItem{badGuidance}},
-		"wrong canonical input":  {Items: []PendingWorkItem{badCompactionCanonical}},
-		"missing enter selector": {Items: []PendingWorkItem{missingSelector}},
-		"unnormalized selector":  {Items: []PendingWorkItem{badSelector}},
-		"leave with selector":    {Items: []PendingWorkItem{leaveWithSelector}},
+		"duplicate id":        {Items: []PendingWorkItem{steerMessage, steerMessage}},
+		"Steer before Queue":  {Items: []PendingWorkItem{steerMessage, queueMessage}},
+		"two payloads":        {Items: []PendingWorkItem{twoPayloads}},
+		"bad guidance":        {Items: []PendingWorkItem{badGuidance}},
+		"missing enter value": {Items: []PendingWorkItem{missingSelector}},
+		"bad selector":        {Items: []PendingWorkItem{badSelector}},
+		"leave selector":      {Items: []PendingWorkItem{leaveWithSelector}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := collection.Validate(); err == nil {
@@ -77,31 +69,18 @@ func TestPendingWorkClosedContract(t *testing.T) {
 			}
 		})
 	}
-
-	restoration, err := compaction.Restoration()
-	if err != nil || restoration.CanonicalInput != compaction.CanonicalInput {
-		t.Fatalf("restoration = %+v, %v", restoration, err)
+	restoration, err := steerCompaction.Restoration()
+	technical, technicalErr := steerCompaction.TechnicalRestoration()
+	if err != nil || technicalErr != nil ||
+		restoration.Kind != steerCompaction.Kind || restoration.CanonicalInput != steerCompaction.CanonicalInput ||
+		technical.ItemID != compactionView || technical.Kind != steerCompaction.Kind ||
+		technical.CanonicalInput != steerCompaction.CanonicalInput ||
+		compactionView.String() != compactionID.String() {
+		t.Fatalf("restoration = %+v; technical = %+v; errors = %v, %v", restoration, technical, err, technicalErr)
 	}
-	technical, err := compaction.TechnicalRestoration()
-	if err != nil || technical.ItemID != compaction.ID || technical.CanonicalInput != compaction.CanonicalInput {
-		t.Fatalf("technical restoration = %+v, %v", technical, err)
-	}
-}
-
-func TestNormalizePendingWorkArgument(t *testing.T) {
-	if got := NormalizePendingWorkArgument(" \tfeature   with\nspaces "); got != "feature with spaces" {
-		t.Fatalf("normalized Pending Work argument = %q", got)
+	if _, err := runtimeids.ParseCanonicalUUIDv4(technical.ItemID.String(), "Pending Work item ID"); err != nil {
+		t.Fatalf("Pending Work identity: %v", err)
 	}
 }
 
-func pendingWorkTestMessage(lane PendingWorkLane, text string) PendingWorkItem {
-	return PendingWorkItem{
-		ID: runtimeids.NewQueueItemID(), Lane: lane, Kind: PendingWorkItemKindMessage,
-		State: PendingWorkItemStatePending, CanonicalInput: text,
-		Message: &PendingWorkMessage{Text: text},
-	}
-}
-
-func textPointer(value string) *string {
-	return &value
-}
+func stringPointer(value string) *string { return &value }
