@@ -157,14 +157,8 @@ func TestFastModePersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
 		changed bool
 		err     error
 	}, 1)
-	publishing := make(chan struct{})
-	releasePublication := make(chan struct{})
 	go func() {
-		changed, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, func(clientui.TranscriptSessionSettingFeedback) error {
-			close(publishing)
-			<-releasePublication
-			return nil
-		})
+		changed, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, nil)
 		result <- struct {
 			changed bool
 			err     error
@@ -185,49 +179,15 @@ func TestFastModePersistsBeforeFeedbackAndLiveProjection(t *testing.T) {
 
 	release()
 	select {
-	case <-publishing:
+	case got := <-result:
+		if got.err != nil || !got.changed {
+			t.Fatalf("SetFastModeEnabledWithPublication = %+v", got)
+		}
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Fast Mode publication")
+		t.Fatal("timed out waiting for Fast Mode completion")
 	}
 	if !engine.FastModeEnabled() {
 		t.Fatal("Fast Mode was not applied after Session metadata persistence")
-	}
-
-	secondDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), false, nil)
-		secondDone <- err
-	}()
-	select {
-	case err := <-secondDone:
-		t.Fatalf("second setting completed before first publication: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	requireSessionFastModeOverride(t, store, true)
-	if !engine.FastModeEnabled() {
-		t.Fatal("second setting applied live before first publication completed")
-	}
-
-	close(releasePublication)
-	select {
-	case got := <-result:
-		if got.err != nil || !got.changed {
-			t.Fatalf("first Fast Mode setting = %+v", got)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for first setting")
-	}
-	select {
-	case err := <-secondDone:
-		if err != nil {
-			t.Fatalf("second setting: %v", err)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for second setting")
-	}
-	requireSessionFastModeOverride(t, store, false)
-	if engine.FastModeEnabled() {
-		t.Fatal("second setting was not final live value")
 	}
 }
 
@@ -476,6 +436,44 @@ func TestDefinitelyUncommittedStateOnlyChatSettingsStopBeforeLiveProjection(t *t
 				t.Fatalf("mutation after uncommitted settings failure = %v, want Engine closed", err)
 			}
 		})
+	}
+}
+
+func TestImmediateSettingOwnerSerializesThroughPublication(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{
+		ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true,
+	}}, Config{Model: "gpt-5.3-codex"})
+	publishing, releasePublication := make(chan struct{}), make(chan struct{})
+	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), true, func(clientui.TranscriptSessionSettingFeedback) error {
+			close(publishing)
+			<-releasePublication
+			return nil
+		})
+		firstDone <- err
+	}()
+	<-publishing
+	go func() {
+		_, err := engine.SetFastModeEnabledWithPublication(t.Context(), false, nil)
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second setting completed before first publication: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releasePublication)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first setting: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second setting: %v", err)
+	}
+	requireSessionFastModeOverride(t, store, false)
+	if engine.FastModeEnabled() {
+		t.Fatal("second setting was not final live value")
 	}
 }
 
