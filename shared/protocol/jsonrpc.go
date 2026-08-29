@@ -66,6 +66,7 @@ const (
 	ErrCodeChatSettingsAgentPreparation      = -32063
 	ErrCodePendingWorkNotPending             = -32064
 	ErrCodePendingWorkCapacity               = -32065
+	ErrCodeWorkflowTaskResumeConflict        = -32066
 )
 
 type Request struct {

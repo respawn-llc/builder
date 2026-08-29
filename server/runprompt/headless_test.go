@@ -271,6 +271,19 @@ func TestRunPromptProgressFromRuntimeEventDropsOperationalSpam(t *testing.T) {
 	}
 }
 
+func TestRetainedWorkflowAssertionsUseOverrideFreePlan(t *testing.T) {
+	plan := launch.SessionPlan{
+		ActiveSettings: config.Settings{Model: "persisted-model"},
+		EnabledTools:   []toolspec.ID{toolspec.ToolExecCommand},
+	}
+	err := validateRetainedWorkflowAssertions(plan, serverapi.RunPromptOverrides{
+		Model: "requested-model",
+	})
+	if err == nil {
+		t.Fatal("conflicting retained model assertion was accepted")
+	}
+}
+
 func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T) {
 	reservedRole := "self"
 	validIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
@@ -599,7 +612,7 @@ func TestInProcessRunPromptRetainedWorkflowReinjectsAssignmentBeforeProvider(t *
 							result, turnErr := engine.SubmitWorkflowTurnWithInput(
 								engineCtx,
 								currentNode,
-								continuation.Input().Text,
+								continuation.Input().(workflowexecution.WorkflowSessionTextInput).Text,
 								nil,
 							)
 							continuation.RecordTurn(runtime.WorkflowTurnUserResult(result), turnErr)

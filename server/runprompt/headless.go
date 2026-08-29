@@ -68,26 +68,8 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 			return nil, ErrSessionRunning
 		}
 	}
-	launchReq := sessionlaunch.PlanRequest{
-		Mode:            launch.ModeHeadless,
-		Intent:          req.Intent,
-		CallerSessionID: req.CallerSessionID,
-		Overrides:       req.Overrides,
-	}
-	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)
-	if err != nil {
-		return nil, err
-	}
-	plan := result.Plan
-	if plan.Goal != nil {
-		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
-	}
-	agentSteer, err := agentSteerForRunPrompt(req, openingExisting)
-	if err != nil {
-		return nil, err
-	}
+	retained := false
 	if openingExisting && l.boot.WorkflowSessionReactivator != nil && l.boot.RuntimeAuthority != nil {
-		retained := false
 		retainedErr := l.boot.RuntimeAuthority.WithRetainedWorkflowRuntime(
 			ctx,
 			selectedSessionID,
@@ -101,68 +83,95 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 			!errors.Is(retainedErr, serverapi.ErrRuntimeNoActiveRun) {
 			return nil, retainedErr
 		}
-		if retained {
-			if err := validateRetainedWorkflowAssertions(plan, req.Overrides); err != nil {
-				return nil, err
-			}
-			continuationText := req.Prompt
-			if agentSteer != nil {
-				continuationText = ""
-			}
-			continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuation(continuationText, agentSteer)
-			if continuationErr != nil {
-				return nil, continuationErr
-			}
-			continuation.SetProgressSink(func(event runtime.Event) {
-				PublishRunPromptProgress(progress, event)
-			})
-			var continuationResult workflowexecution.WorkflowSessionContinuationResult
-			var reactivateErr error
-			attempt := runtime.NewCommandAttempt(ctx)
-			acceptedCtx := attempt.Context()
-			if l.boot.WorkflowSessionReactivator != nil {
-				continuationResult, reactivateErr = l.boot.WorkflowSessionReactivator.ReactivateWorkflowSessionWithAcceptance(
-					ctx,
-					selectedSessionID,
-					attempt.Accept,
-					attempt.Context(),
-					continuation,
-				)
-			} else {
-				attempt.Finish()
-				return nil, errors.New("retained Workflow continuation acceptance is unavailable")
-			}
-			if reactivateErr != nil {
-				var historyErr error
-				if continuationResult.Accepted() && l.boot.PromptHistory != nil {
-					historyText := req.Prompt
-					input := continuation.Input()
-					if input.Steer != nil && input.Steer.Message().Content != nil {
-						historyText = *input.Steer.Message().Content
-					}
-					_, historyErr = l.boot.PromptHistory.RecordPromptHistoryEntry(acceptedCtx, metadata.PromptHistoryEntry{
-						SessionID: selectedSessionID.String(),
-						Text:      historyText,
-					})
-				}
-				attempt.Finish()
-				return nil, errors.Join(reactivateErr, historyErr)
-			}
-			sessionName := ""
-			if plan.SessionName != nil {
-				sessionName = *plan.SessionName
-			}
-			return &headlessPromptRuntime{
-				retainedAdmission:    continuationResult,
-				retainedSessionID:    selectedSessionID,
-				retainedContinuation: continuation,
-				technicalContext:     acceptedCtx,
-				technicalCancel:      attempt.Finish,
-				sessionName:          sessionName,
-				warnings:             append(append([]string(nil), result.Warnings...), formatWorkflowResumeDiagnostics(continuationResult.SiblingDiagnostics)...),
-				progress:             progress,
-			}, nil
+	}
+	launchReq := sessionlaunch.PlanRequest{
+		Mode:            launch.ModeHeadless,
+		Intent:          req.Intent,
+		CallerSessionID: req.CallerSessionID,
+		Overrides:       req.Overrides,
+	}
+	var authoritativePlan launch.SessionPlan
+	if retained {
+		authoritativeResult, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, sessionlaunch.PlanRequest{
+			Mode:            launchReq.Mode,
+			Intent:          launchReq.Intent,
+			CallerSessionID: launchReq.CallerSessionID,
+		})
+		if err != nil {
+			return nil, err
 		}
+		authoritativePlan = authoritativeResult.Plan
+		if err := validateRetainedWorkflowAssertions(authoritativePlan, req.Overrides); err != nil {
+			return nil, err
+		}
+	}
+	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)
+	if err != nil {
+		return nil, err
+	}
+	plan := result.Plan
+	if plan.Goal != nil {
+		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
+	}
+	agentSteer, err := agentSteerForRunPrompt(req, openingExisting)
+	if err != nil {
+		return nil, err
+	}
+	if retained {
+		continuationText := req.Prompt
+		if agentSteer != nil {
+			continuationText = ""
+		}
+		continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuation(continuationText, agentSteer)
+		if continuationErr != nil {
+			return nil, continuationErr
+		}
+		continuation.SetProgressSink(func(event runtime.Event) {
+			PublishRunPromptProgress(progress, event)
+		})
+		var continuationResult workflowexecution.WorkflowSessionContinuationResult
+		var reactivateErr error
+		attempt := runtime.NewCommandAttempt(ctx)
+		acceptedCtx := attempt.Context()
+		continuationResult, reactivateErr = l.boot.WorkflowSessionReactivator.ReactivateWorkflowSessionWithAcceptance(
+			ctx,
+			selectedSessionID,
+			attempt.Accept,
+			attempt.Context(),
+			continuation,
+		)
+		if reactivateErr != nil {
+			var historyErr error
+			if continuationResult.Accepted() && l.boot.PromptHistory != nil {
+				historyText := req.Prompt
+				input := continuation.Input()
+				if steerInput, ok := input.(workflowexecution.WorkflowSessionSteerInput); ok &&
+					steerInput.Steer != nil &&
+					steerInput.Steer.Message().Content != nil {
+					historyText = *steerInput.Steer.Message().Content
+				}
+				_, historyErr = l.boot.PromptHistory.RecordPromptHistoryEntry(acceptedCtx, metadata.PromptHistoryEntry{
+					SessionID: selectedSessionID.String(),
+					Text:      historyText,
+				})
+			}
+			attempt.Finish()
+			return nil, errors.Join(reactivateErr, historyErr)
+		}
+		sessionName := ""
+		if plan.SessionName != nil {
+			sessionName = *plan.SessionName
+		}
+		return &headlessPromptRuntime{
+			retainedAdmission:    continuationResult,
+			retainedSessionID:    selectedSessionID,
+			retainedContinuation: continuation,
+			technicalContext:     acceptedCtx,
+			technicalCancel:      attempt.Finish,
+			sessionName:          sessionName,
+			warnings:             append(append([]string(nil), result.Warnings...), formatWorkflowResumeDiagnostics(continuationResult.SiblingDiagnostics)...),
+			progress:             progress,
+		}, nil
 	}
 	runtimePlan, err := l.prepareRuntime(ctx, plan, progress, agentSteer)
 	if err != nil {
@@ -466,11 +475,13 @@ func (r *headlessPromptRuntime) promptHistoryText(prompt string) string {
 	}
 	if r != nil && r.retainedContinuation != nil {
 		input := r.retainedContinuation.Input()
-		if input.Steer != nil && input.Steer.Message().Content != nil {
-			return *input.Steer.Message().Content
-		}
-		if strings.TrimSpace(input.Text) != "" {
-			return input.Text
+		switch value := input.(type) {
+		case workflowexecution.WorkflowSessionSteerInput:
+			if value.Steer != nil && value.Steer.Message().Content != nil {
+				return *value.Steer.Message().Content
+			}
+		case workflowexecution.WorkflowSessionTextInput:
+			return value.Text
 		}
 	}
 	return prompt

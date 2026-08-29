@@ -699,6 +699,10 @@ func protocolError(err error) (int, string) {
 	if errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous) {
 		return protocol.ErrCodeWorkflowTaskCompleteAmbiguous, message
 	}
+	var resumeConflict *serverapi.WorkflowTaskResumeConflictError
+	if errors.As(err, &resumeConflict) {
+		return resumeConflict.RPCErrorCode(), message
+	}
 	if errors.Is(err, serverapi.ErrServerAuthRequired) || errors.Is(err, auth.ErrAuthNotConfigured) {
 		return protocol.ErrCodeAuthRequired, message
 	}

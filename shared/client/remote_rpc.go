@@ -524,6 +524,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskStartConflict && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskStartConflictError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskResumeConflict && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskResumeConflictError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskInitialBranch && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskInitialBranchError(resp.Data, message)
 	}

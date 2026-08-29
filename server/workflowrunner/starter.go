@@ -885,20 +885,28 @@ func (s *Starter) currentNodeAgentRunner(
 			}
 			if continuation != nil {
 				continuationInput := continuation.Input()
+				var continuationText string
+				var continuationSteer *runtime.AgentSteer
+				switch input := continuationInput.(type) {
+				case workflowexecution.WorkflowSessionTextInput:
+					continuationText = input.Text
+				case workflowexecution.WorkflowSessionSteerInput:
+					continuationSteer = input.Steer
+				}
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
 					turnResult, turnErr = engine.SubmitWorkflowContinuationTurnWithInputAndStepHook(
 						metadata.WithQueryFailureDiagnostics(engineCtx),
 						input.CurrentNode.Reference,
-						continuationInput.Text,
-						continuationInput.Steer,
+						continuationText,
+						continuationSteer,
 						continuation.RegisterStep,
 					)
 				} else {
 					turnResult, turnErr = engine.SubmitWorkflowTurnWithInputAndStepHook(
 						metadata.WithQueryFailureDiagnostics(engineCtx),
 						input.CurrentNode.Reference,
-						continuationInput.Text,
-						continuationInput.Steer,
+						continuationText,
+						continuationSteer,
 						continuation.RegisterStep,
 					)
 				}

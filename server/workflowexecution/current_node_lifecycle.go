@@ -13,6 +13,7 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
@@ -111,10 +112,21 @@ type TaskResumeResult struct {
 	CurrentNodes []workflow.CurrentNode
 }
 
-type WorkflowSessionContinuationInput struct {
-	Text  string
+type WorkflowSessionContinuationInput interface {
+	isWorkflowSessionContinuationInput()
+}
+
+type WorkflowSessionTextInput struct {
+	Text string
+}
+
+func (WorkflowSessionTextInput) isWorkflowSessionContinuationInput() {}
+
+type WorkflowSessionSteerInput struct {
 	Steer *runtime.AgentSteer
 }
+
+func (WorkflowSessionSteerInput) isWorkflowSessionContinuationInput() {}
 
 type WorkflowSessionContinuation struct {
 	input WorkflowSessionContinuationInput
@@ -136,8 +148,14 @@ func NewWorkflowSessionContinuation(text string, steer *runtime.AgentSteer) (*Wo
 	if steer == nil && strings.TrimSpace(text) == "" {
 		return nil, errors.New("workflow Session continuation input is required")
 	}
+	var input WorkflowSessionContinuationInput
+	if steer != nil {
+		input = WorkflowSessionSteerInput{Steer: steer}
+	} else {
+		input = WorkflowSessionTextInput{Text: text}
+	}
 	return &WorkflowSessionContinuation{
-		input:   WorkflowSessionContinuationInput{Text: text, Steer: steer},
+		input:   input,
 		turn:    newContinuationSignal[runtime.UserTurnResult](),
 		exact:   newContinuationSignal[sessionruntime.ExecutionResult](),
 		stepIDs: make(map[string]struct{}),
@@ -146,7 +164,7 @@ func NewWorkflowSessionContinuation(text string, steer *runtime.AgentSteer) (*Wo
 
 func (c *WorkflowSessionContinuation) Input() WorkflowSessionContinuationInput {
 	if c == nil {
-		return WorkflowSessionContinuationInput{}
+		return nil
 	}
 	return c.input
 }
@@ -416,11 +434,31 @@ func (c *CurrentNodeController) reactivateWorkflowSession(
 	}
 	input, err := c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
 	if err != nil {
+		if errors.Is(err, workflowstore.ErrSessionNotCurrentWorkflowNode) {
+			taskID, resolveErr := c.store.TaskIDForSession(ctx, sessionID)
+			if resolveErr != nil {
+				return WorkflowSessionContinuationResult{}, resolveErr
+			}
+			if taskID != nil {
+				conflict, conflictErr := c.workflowSessionConflict(ctx, *taskID, nil, err)
+				if conflictErr != nil {
+					return WorkflowSessionContinuationResult{}, conflictErr
+				}
+				if conflict.State != TaskResumeConflictFinished &&
+					conflict.State != TaskResumeConflictPendingApproval {
+					conflict.State = TaskResumeConflictMovedCurrentNode
+				}
+				return WorkflowSessionContinuationResult{}, conflict
+			}
+		}
 		return WorkflowSessionContinuationResult{}, err
 	}
 	if handle, live := c.authority.SessionExecution(sessionID); live {
 		if resumeState != nil && resumeState.acceptance != nil {
-			return WorkflowSessionContinuationResult{}, &TaskResumeConflictError{TaskID: input.Task.ID}
+			return WorkflowSessionContinuationResult{}, &TaskResumeConflictError{
+				TaskID: string(input.Task.ID),
+				State:  TaskResumeConflictNoResumableCurrentNode,
+			}
 		}
 		handle, err := c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
 		return WorkflowSessionContinuationResult{Handle: handle}, err
@@ -653,60 +691,29 @@ func workflowResumeDiagnosticsError(diagnostics []WorkflowSessionResumeDiagnosti
 	return errors.Join(causes...)
 }
 
-type TaskResumeConflictState uint8
+type TaskResumeConflictState = serverapi.WorkflowTaskResumeConflictState
+type TaskResumeConflictError = serverapi.WorkflowTaskResumeConflictError
 
 const (
-	taskResumeConflictUnspecified TaskResumeConflictState = iota
-	TaskResumeConflictPendingApproval
-	TaskResumeConflictFinished
-	TaskResumeConflictMovedCurrentNode
-	TaskResumeConflictCurrentNodeNotInterrupted
-	TaskResumeConflictNoResumableCurrentNode
+	TaskResumeConflictPendingApproval           = serverapi.WorkflowTaskResumeConflictPendingApproval
+	TaskResumeConflictFinished                  = serverapi.WorkflowTaskResumeConflictFinished
+	TaskResumeConflictMovedCurrentNode          = serverapi.WorkflowTaskResumeConflictMovedCurrentNode
+	TaskResumeConflictCurrentNodeNotInterrupted = serverapi.WorkflowTaskResumeConflictCurrentNodeNotInterrupted
+	TaskResumeConflictNoResumableCurrentNode    = serverapi.WorkflowTaskResumeConflictNoResumableCurrentNode
 )
-
-type TaskResumeConflictError struct {
-	TaskID workflow.TaskID
-	State  TaskResumeConflictState
-}
 
 func workflowSessionConflictError(taskID workflow.TaskID, cause error) error {
 	var conflict *TaskResumeConflictError
-	if errors.As(cause, &conflict) && conflict.State != taskResumeConflictUnspecified {
-		return &TaskResumeConflictError{TaskID: taskID, State: conflict.State}
+	if errors.As(cause, &conflict) && conflict.State.IsValid() {
+		return &TaskResumeConflictError{TaskID: string(taskID), State: conflict.State}
 	}
-	state := taskResumeConflictUnspecified
 	switch {
 	case errors.Is(cause, workflowstore.ErrCurrentNodePendingApproval):
-		state = TaskResumeConflictPendingApproval
+		return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictPendingApproval}
 	case errors.Is(cause, workflowstore.ErrSessionNotCurrentWorkflowNode):
-		state = TaskResumeConflictMovedCurrentNode
+		return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictMovedCurrentNode}
 	}
-	return &TaskResumeConflictError{TaskID: taskID, State: state}
-}
-
-func (e *TaskResumeConflictError) Error() string {
-	state := "no interrupted executable Current Node is resumable"
-	action := "continue through the Task's current node when it has moved on"
-	switch e.State {
-	case TaskResumeConflictPendingApproval:
-		state = "the Workflow Task is waiting for an Approval"
-		action = "resolve that Approval before continuing the Task"
-	case TaskResumeConflictFinished:
-		state = "the Workflow Task has finished"
-		action = "start a new ordinary Session"
-	case TaskResumeConflictMovedCurrentNode:
-		state = "the retained Session is no longer the Task's current Workflow Node"
-	case TaskResumeConflictCurrentNodeNotInterrupted:
-		state = "the retained Session's Current Node is no longer interrupted"
-	case TaskResumeConflictNoResumableCurrentNode:
-		state = "the Workflow Task has no interrupted executable Current Node"
-	}
-	return fmt.Sprintf(
-		"Workflow Task %q is blocked because %s; %s. Direct interactive continuation of this retained Workflow Session is not currently supported",
-		e.TaskID,
-		state,
-		action,
-	)
+	return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictNoResumableCurrentNode}
 }
 
 func (c *CurrentNodeController) PreflightTaskResume(
@@ -839,7 +846,7 @@ func (c taskResumeClassification) eligibilityError() error {
 		return c.conflict
 	}
 	if c.validationErr == nil {
-		return &TaskResumeConflictError{TaskID: c.taskID}
+		return &TaskResumeConflictError{TaskID: string(c.taskID), State: TaskResumeConflictNoResumableCurrentNode}
 	}
 	return c.validationErr
 }
@@ -851,12 +858,12 @@ func (c *CurrentNodeController) workflowSessionConflict(
 	cause error,
 ) (*TaskResumeConflictError, error) {
 	var existing *TaskResumeConflictError
-	if errors.As(cause, &existing) && existing.State != taskResumeConflictUnspecified {
-		return &TaskResumeConflictError{TaskID: taskID, State: existing.State}, nil
+	if errors.As(cause, &existing) && existing.State.IsValid() {
+		return &TaskResumeConflictError{TaskID: string(taskID), State: existing.State}, nil
 	}
 	if errors.Is(cause, workflowstore.ErrCurrentNodePendingApproval) {
 		return &TaskResumeConflictError{
-			TaskID: taskID,
+			TaskID: string(taskID),
 			State:  TaskResumeConflictPendingApproval,
 		}, nil
 	}
@@ -869,7 +876,7 @@ func (c *CurrentNodeController) workflowSessionConflict(
 		}
 		if len(pending) != 0 {
 			return &TaskResumeConflictError{
-				TaskID: taskID,
+				TaskID: string(taskID),
 				State:  TaskResumeConflictPendingApproval,
 			}, nil
 		}
@@ -880,7 +887,7 @@ func (c *CurrentNodeController) workflowSessionConflict(
 	}
 	if len(currentNodes) == 0 {
 		return &TaskResumeConflictError{
-			TaskID: taskID,
+			TaskID: string(taskID),
 			State:  TaskResumeConflictFinished,
 		}, nil
 	}
@@ -888,17 +895,17 @@ func (c *CurrentNodeController) workflowSessionConflict(
 		for _, currentNode := range currentNodes {
 			if currentNode.Reference.Equal(*selected) {
 				return &TaskResumeConflictError{
-					TaskID: taskID,
+					TaskID: string(taskID),
 					State:  TaskResumeConflictCurrentNodeNotInterrupted,
 				}, nil
 			}
 		}
 		return &TaskResumeConflictError{
-			TaskID: taskID,
+			TaskID: string(taskID),
 			State:  TaskResumeConflictMovedCurrentNode,
 		}, nil
 	}
-	return &TaskResumeConflictError{TaskID: taskID, State: TaskResumeConflictNoResumableCurrentNode}, nil
+	return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictNoResumableCurrentNode}, nil
 }
 
 func (c *CurrentNodeController) resumeTask(

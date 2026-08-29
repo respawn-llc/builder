@@ -867,7 +867,7 @@ func TestServiceSubmitUserTurnRetainedWorkflowReinjectsAssignmentBeforeProvider(
 							result, turnErr := current.SubmitWorkflowTurnWithInput(
 								engineCtx,
 								workflowRef.CurrentNode,
-								continuation.Input().Text,
+								continuation.Input().(workflowexecution.WorkflowSessionTextInput).Text,
 								nil,
 							)
 							continuation.RecordTurn(runtime.WorkflowTurnUserResult(result), turnErr)

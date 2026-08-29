@@ -95,7 +95,8 @@
 - Retained-Session reactivation selects the exact Session, Task, Current Node, and parallel branch bound to that Session.
 - Retained-Session reactivation resumes every eligible interrupted Current Node on the Task while delivering the original human input only to the targeted Session.
 - Kent accepts the original human input at the selected Current Node's durable Resume commit.
-- If selected preparation, admission, publication, or caller waiting fails first, Kent accepts no original input and starts no ordinary Session execution.
+- Before that commit, a failed or canceled selected preparation rejects the original input and starts no ordinary Session execution.
+- After that commit, later admission, publication, delivery, finalization, or caller waiting failures do not retract acceptance; the accepted input remains recorded and the selected operation reports its later failure.
 - Public Task Resume may still resume every eligible interrupted Current Node on the Task and returns after durable requeueing.
 - Public Task Resume does not wait for startup.
 - While an accepted Workflow Agent assignment is preparing and no exact execution is live, Send/Steer and short settings remain accepted.

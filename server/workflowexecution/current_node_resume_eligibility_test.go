@@ -27,7 +27,7 @@ func TestCurrentNodeControllerResumeEligibilityRejectsTaskWithoutInterruptedExec
 	_, err := controller.PreflightTaskResume(context.Background(), taskID)
 
 	var conflict *TaskResumeConflictError
-	if !errors.As(err, &conflict) || conflict.TaskID != taskID {
+	if !errors.As(err, &conflict) || conflict.TaskID != string(taskID) {
 		t.Fatalf("PreflightTaskResume error = %T %v, want conflict for %q", err, err, taskID)
 	}
 	if len(store.resumed) != 0 {

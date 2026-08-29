@@ -826,6 +826,19 @@ func (s *currentNodeControllerStore) ResolveCurrentSessionStartContext(
 	return workflowstore.CurrentNodeStartContext{}, workflowstore.ErrSessionNotCurrentWorkflowNode
 }
 
+func (s *currentNodeControllerStore) TaskIDForSession(
+	_ context.Context,
+	_ runtimeids.SessionID,
+) (*workflow.TaskID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionTaskID == nil {
+		return nil, nil
+	}
+	taskID := *s.sessionTaskID
+	return &taskID, nil
+}
+
 func (s *currentNodeControllerStore) admitCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
