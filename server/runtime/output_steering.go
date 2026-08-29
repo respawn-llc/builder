@@ -696,9 +696,28 @@ func (e *Engine) steerWithCommitReceiptRaw(provenance steeringProvenance, intent
 }
 
 func (e *Engine) steerOrdered(provenance steeringProvenance, intents ...steeringIntent) error {
+	if restored, ok := queuedUserMessageRestoreItems(intents); ok {
+		e.outputMutationMu.Lock()
+		e.messageFlow.RestorePendingUserInjections(restored)
+		for _, pending := range restored {
+			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
+		}
+		e.outputMutationMu.Unlock()
+		if len(restored) != 0 {
+			e.publishPendingWorkChanged()
+		}
+		return nil
+	}
 	e.outputMutationMu.Lock()
 	defer e.outputMutationMu.Unlock()
 	return e.steerOrderedRaw(provenance, intents...)
+}
+
+func queuedUserMessageRestoreItems(intents []steeringIntent) ([]queuedUserMessage, bool) {
+	if len(intents) != 1 || len(intents[0].items) != 1 || intents[0].items[0].queuedRestore == nil {
+		return nil, false
+	}
+	return intents[0].items[0].queuedRestore.items, true
 }
 
 func (e *Engine) steerOrderedRaw(provenance steeringProvenance, intents ...steeringIntent) error {
@@ -1063,12 +1082,7 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 		return err
 	}
 	if item.queuedRestore != nil {
-		e.messageFlow.RestorePendingUserInjections(item.queuedRestore.items)
-		for _, pending := range item.queuedRestore.items {
-			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
-		}
-		e.publishPendingWorkSnapshot()
-		return nil
+		return errors.New("queued user restoration must use the Pending Work mutation owner")
 	}
 	if item.event != nil {
 		evt := *item.event

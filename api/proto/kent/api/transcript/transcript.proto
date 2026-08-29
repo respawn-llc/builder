@@ -789,19 +789,22 @@ message WorktreeTransitionOutcome {
   ];
   WorktreeTransitionKind transition = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   WorktreeTransitionState state = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
-  optional Diagnostic failure = 4;
+  oneof failure_detail {
+    Diagnostic failure = 4;
+    kent.api.worktree.SelectorErrorDetails selector_error = 6;
+  }
   optional kent.api.worktree.DeletePreconditionDetails delete_precondition = 5;
   option (buf.validate.message).cel = {
     id: "kent.transcript.worktree_transition_failure"
     message: "only failed worktree transitions carry failure"
     expression:
-      "(this.state == 2 && has(this.failure)) || "
-      "(this.state == 1 && !has(this.failure) && !has(this.delete_precondition))"
+      "(this.state == 2 && (has(this.failure) || has(this.selector_error))) || "
+      "(this.state == 1 && !has(this.failure) && !has(this.selector_error) && !has(this.delete_precondition))"
   };
   option (buf.validate.message).cel = {
     id: "kent.transcript.worktree_transition_delete_precondition"
     message: "delete precondition belongs only to a failed delete transition"
-    expression: "!has(this.delete_precondition) || (this.transition == 3 && this.state == 2)"
+    expression: "!has(this.delete_precondition) || (this.transition == 3 && this.state == 2 && has(this.failure))"
   };
 }
 
@@ -854,6 +857,59 @@ message LiveRunFinished {
     id: "kent.transcript.live_run_failure"
     message: "only failed live runs carry failure"
     expression: "(this.status == 3 && has(this.failure)) || (this.status != 3 && !has(this.failure))"
+  };
+}
+
+message PendingWorkChanged {}
+
+message PendingWorkTechnicalRestoration {
+  string item_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  kent.api.runtime.PendingWorkItemKind kind = 2 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  string canonical_input = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+}
+
+message PendingWorkRestored {
+  PendingWorkTechnicalRestoration restoration = 1 [(buf.validate.field).required = true];
+}
+
+enum SessionSettingKind {
+  SESSION_SETTING_KIND_UNSPECIFIED = 0;
+  SESSION_SETTING_KIND_SESSION_NAME = 1;
+  SESSION_SETTING_KIND_THINKING = 2;
+  SESSION_SETTING_KIND_FAST_MODE = 3;
+  SESSION_SETTING_KIND_SUPERVISOR = 4;
+  SESSION_SETTING_KIND_QUESTIONS = 5;
+  SESSION_SETTING_KIND_AUTO_COMPACTION = 6;
+}
+
+message SessionSettingFeedback {
+  SessionSettingKind kind = 1 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  bool changed = 2;
+  oneof value {
+    option (buf.validate.oneof).required = true;
+    string session_name = 3;
+    string thinking = 4 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+    bool fast_mode = 5;
+    string supervisor = 6 [(buf.validate.field).string = {in: ["off", "edits", "all"]}];
+    bool questions = 7;
+    bool auto_compaction = 8;
+  }
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.session_setting_feedback_value"
+    message: "Session setting feedback kind and resulting value must agree"
+    expression:
+      "(this.kind == 1 && has(this.session_name) && this.session_name == this.session_name.trim()) || "
+      "(this.kind == 2 && has(this.thinking) && this.thinking == this.thinking.trim()) || "
+      "(this.kind == 3 && has(this.fast_mode)) || "
+      "(this.kind == 4 && has(this.supervisor)) || "
+      "(this.kind == 5 && has(this.questions)) || "
+      "(this.kind == 6 && has(this.auto_compaction))"
   };
 }
 
@@ -959,6 +1015,9 @@ message Message {
     WorktreeTransitionOutcome worktree_transition_outcome = 23;
     OperationalDiagnostic operational_diagnostic = 24;
     LiveRunFinished live_run_finished = 25;
+    PendingWorkChanged pending_work_changed = 26;
+    PendingWorkRestored pending_work_restored = 27;
+    SessionSettingFeedback session_setting_feedback = 28;
   }
   option (buf.validate.message).cel = {
     id: "kent.transcript.message_sequence"

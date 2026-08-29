@@ -11,7 +11,6 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -508,7 +507,7 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
 	if len(pending) != 0 {
-		m.engine.publishPendingWorkSnapshot()
+		m.engine.publishPendingWorkChanged()
 	}
 	return m.commitPendingUserInjections(stepID, pending)
 }
@@ -574,20 +573,6 @@ func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage,
 	return m.queue.QueueItem(item, association...)
 }
 
-func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByScope(scopeID runtimeids.ExecutionScopeID) []interruptedHumanSteering {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	return m.queue.DrainByScope(scopeID)
-}
-
-func (m *defaultMessageLifecycle) DrainInterruptedUserInjections() []interruptedHumanSteering {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	return m.queue.DrainInterrupted()
-}
-
 func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {
 	if m == nil || m.queue == nil {
 		return nil
@@ -633,9 +618,9 @@ func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUse
 	m.queue.RestoreFront(items)
 }
 
-func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {
+func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool) {
 	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}, false
+		return queuedUserMessage{}, false
 	}
 	return m.queue.DiscardItem(queueItemID)
 }

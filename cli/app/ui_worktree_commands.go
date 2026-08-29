@@ -4,11 +4,13 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const worktreeUsageText = "Usage: /wt | /wt status | /wt create | /wt new | /wt delete [target] | /wt remove [target] | /wt rm [target] | /wt switch <target>"
+const worktreeUsageText = "Usage: /wt | /wt status | /wt create | /wt new | /wt delete [target] | /wt remove [target] | /wt rm [target] | /wt switch <target> | /wt leave"
 
 func (c uiInputController) handleWorktreeCommand(args string) (tea.Model, tea.Cmd) {
 	m := c.model
@@ -33,10 +35,17 @@ func (c uiInputController) handleWorktreeCommand(args string) (tea.Model, tea.Cm
 		}
 		return m, c.startWorktreeOverlayCmd(uiWorktreeOpenIntent{OpenCreate: true})
 	case "switch":
-		if len(parts) != 2 {
+		if len(parts) < 2 {
 			return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 		}
-		return c.handleWorktreeSwitchCommand(parts[1])
+		return c.handleWorktreeSwitchCommand(strings.Join(parts[1:], " "))
+	case "leave":
+		if len(parts) != 1 {
+			return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+		}
+		return c.handleWorktreeTransitionCommand(runtimeinput.PendingWorkWorktreeTransition{
+			Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+		})
 	case "delete", "remove", "rm":
 		if len(parts) > 2 {
 			return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
@@ -58,16 +67,35 @@ func (c uiInputController) handleWorktreeCommand(args string) (tea.Model, tea.Cm
 }
 
 func (c uiInputController) handleWorktreeSwitchCommand(token string) (tea.Model, tea.Cmd) {
+	target := runtimeinput.NormalizePendingWorkArgument(token)
+	return c.handleWorktreeTransitionCommand(runtimeinput.PendingWorkWorktreeTransition{
+		Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+		Selector:   &target,
+	})
+}
+
+func (c uiInputController) handleWorktreeTransitionCommand(transition runtimeinput.PendingWorkWorktreeTransition) (tea.Model, tea.Cmd) {
 	m := c.model
-	target := strings.TrimSpace(token)
+	if err := transition.Validate(); err != nil {
+		return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+	}
 	if m.worktrees.switchPending {
-		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{TargetToken: target}
+		queued := transition
+		m.worktrees.queuedTransition = &queued
 		return m, nil
 	}
-	return m, m.worktreeSwitchCommandForTarget(target)
+	return m, m.worktreeTransitionCommand(transition)
 }
 
 func (m *uiModel) worktreeSwitchCommandForTarget(targetToken string) tea.Cmd {
+	targetToken = runtimeinput.NormalizePendingWorkArgument(targetToken)
+	return m.worktreeTransitionCommand(runtimeinput.PendingWorkWorktreeTransition{
+		Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+		Selector:   &targetToken,
+	})
+}
+
+func (m *uiModel) worktreeTransitionCommand(transition runtimeinput.PendingWorkWorktreeTransition) tea.Cmd {
 	if m == nil {
 		return nil
 	}
@@ -75,10 +103,19 @@ func (m *uiModel) worktreeSwitchCommandForTarget(targetToken string) tea.Cmd {
 	m.worktrees.switchToken++
 	switchToken := m.worktrees.switchToken
 	m.worktrees.switchPending = true
-	targetToken = strings.TrimSpace(targetToken)
+	sessionID := m.pendingWorkRefresh.sessionID
 	return func() tea.Msg {
-		ack, err := service.Enter(targetToken)
-		return worktreeSwitchDoneMsg{token: switchToken, target: targetToken, ack: ack, err: err}
+		var ack *worktreepb.ScheduledAcknowledgement
+		var err error
+		switch transition.Transition {
+		case runtimeinput.PendingWorkWorktreeTransitionEnter:
+			ack, err = service.Enter(*transition.Selector)
+		case runtimeinput.PendingWorkWorktreeTransitionLeave:
+			ack, err = service.Leave()
+		default:
+			err = transition.Validate()
+		}
+		return worktreeSwitchDoneMsg{token: switchToken, sessionID: sessionID, transition: transition, ack: ack, err: err}
 	}
 }
 

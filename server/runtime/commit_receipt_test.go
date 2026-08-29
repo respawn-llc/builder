@@ -69,7 +69,8 @@ func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
 		{
 			name: "Session name",
 			apply: func(ctx context.Context, engine *Engine) error {
-				return engine.SetSessionName(ctx, "renamed")
+				_, err := engine.SetSessionName(ctx, "renamed")
+				return err
 			},
 			applied: func(engine *Engine) bool { return engine.SessionName() == "renamed" },
 		},

@@ -357,11 +357,12 @@ func (e *Engine) applyStreamingStateMutationForStep(stepID string, mutate func(*
 	return e.steerOrderedRaw(provenance, steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
-func (e *Engine) SetSessionName(ctx context.Context, name string) error {
-	_, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct{}, error) {
-		return struct{}{}, e.store.SetName(name)
+func (e *Engine) SetSessionName(ctx context.Context, name string) (bool, error) {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (bool, error) {
+		mutation, mutationErr := e.store.MutateName(name)
+		return mutation.Changed, mutationErr
 	})
-	return err
+	return result, err
 }
 
 func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {

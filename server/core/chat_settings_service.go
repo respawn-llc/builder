@@ -10,6 +10,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionlaunch"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -159,16 +160,71 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
 	if result.Kind == serverapi.ChatSettingsMutationApplied {
-		if err := s.core.safeBundles().Runtime.runtimeRegistry.PublishSessionStatus(sessionID.String()); err != nil {
+		registry := s.core.safeBundles().Runtime.runtimeRegistry
+		feedback, publishFeedback, feedbackErr := transcriptSessionSettingFeedback(operation, changed, settings.Settings)
+		if feedbackErr != nil {
 			slog.ErrorContext(
 				responseCtx,
-				"Chat settings status publication failed after durable commit",
+				"Chat settings feedback projection failed after durable commit",
 				"session_id", sessionID.String(),
-				"error", err,
+				"error", feedbackErr,
+			)
+			publishFeedback = false
+		}
+		var publishErr error
+		if publishFeedback {
+			publishErr = registry.PublishSessionSettingFeedback(sessionID.String(), feedback)
+		} else {
+			publishErr = registry.PublishSessionStatus(sessionID.String())
+		}
+		if publishErr != nil {
+			slog.ErrorContext(
+				responseCtx,
+				"Chat settings publication failed after durable commit",
+				"session_id", sessionID.String(),
+				"error", publishErr,
 			)
 		}
 	}
 	return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings.Settings, Session: settings.Session, Context: contextFacts}, nil
+}
+
+func transcriptSessionSettingFeedback(
+	operation serverapi.ChatSettingsMutationOperation,
+	changed bool,
+	settings serverapi.ChatSettings,
+) (clientui.TranscriptSessionSettingFeedback, bool, error) {
+	feedback := clientui.TranscriptSessionSettingFeedback{Changed: changed}
+	switch operation.Kind {
+	case serverapi.ChatSettingsMutationAgent:
+		return clientui.TranscriptSessionSettingFeedback{}, false, nil
+	case serverapi.ChatSettingsMutationSupervisor:
+		value := string(settings.Supervisor.Value)
+		feedback.Kind = clientui.SessionSettingSupervisor
+		feedback.Supervisor = &value
+	case serverapi.ChatSettingsMutationThinking:
+		value := strings.TrimSpace(settings.SelectedAgent.Thinking)
+		feedback.Kind = clientui.SessionSettingThinking
+		feedback.Thinking = &value
+	case serverapi.ChatSettingsMutationFast:
+		if settings.Fast == nil {
+			return clientui.TranscriptSessionSettingFeedback{}, false, errors.New("applied Fast setting has no authoritative value")
+		}
+		feedback.Kind = clientui.SessionSettingFastMode
+		feedback.FastMode = &settings.Fast.Value
+	case serverapi.ChatSettingsMutationQuestions:
+		feedback.Kind = clientui.SessionSettingQuestions
+		feedback.Questions = &settings.Questions.Enabled
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		feedback.Kind = clientui.SessionSettingAutoCompaction
+		feedback.AutoCompaction = &settings.AutoCompaction.Stored
+	default:
+		return clientui.TranscriptSessionSettingFeedback{}, false, errors.New("applied Chat settings operation kind is invalid")
+	}
+	if err := feedback.Validate(); err != nil {
+		return clientui.TranscriptSessionSettingFeedback{}, false, err
+	}
+	return feedback, true, nil
 }
 
 func (s chatSettingsService) materializedService(

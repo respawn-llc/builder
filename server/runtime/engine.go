@@ -135,14 +135,15 @@ type Engine struct {
 	mu               sync.Mutex
 	workflowTerminal WorkflowTerminalState
 
-	lifecycleMu     sync.Mutex
-	lifecycleOnce   sync.Once
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
-	lifecycleWG     sync.WaitGroup
-	lifecycleClosed bool
-	closed          atomic.Bool
-	runtimeFIFO     *runtimeOperationFIFO
+	lifecycleMu             sync.Mutex
+	lifecycleOnce           sync.Once
+	lifecycleCtx            context.Context
+	lifecycleCancel         context.CancelFunc
+	lifecycleWG             sync.WaitGroup
+	lifecycleClosed         bool
+	closed                  atomic.Bool
+	runtimeFIFO             *runtimeOperationFIFO
+	pendingWorkSteerOrdinal atomic.Uint64
 
 	store                       *session.Store
 	eventLog                    session.MaterializedEventLog
@@ -471,6 +472,13 @@ func (e *Engine) ensureLifecycle() {
 }
 
 func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFatal) bool {
+	return e.launchLifecycleTaskWithCompletion(task, nil)
+}
+
+func (e *Engine) launchLifecycleTaskWithCompletion(
+	task func(context.Context) *resultGroupFatal,
+	completed func(),
+) bool {
 	if e == nil || task == nil {
 		return false
 	}
@@ -498,6 +506,9 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFata
 			if runtimeAbort != nil && e.cfg.LifecycleRuntimeAbort != nil {
 				e.surfaceRunError(e.cfg.LifecycleRuntimeAbort())
 			}
+			if completed != nil {
+				completed()
+			}
 		}()
 		runtimeAbort = task(ctx)
 	}(ctx)
@@ -514,34 +525,35 @@ func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserM
 }
 
 func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (QueuedUserMessage, error) {
-		return e.queueUserMessageRaw(operationCtx, text, forceAutoDrain, accept)
+	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (QueuedUserMessage, error) {
+		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
 	})
 }
 
-func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if err := e.requirePendingWorkCapacity(); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	association := queuedUserMessageAssociation{admission: runtimeOperationSequence(operationCtx)}
 	if !forceAutoDrain {
 		var item QueuedUserMessage
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
 			e.outputMutationMu.Lock()
-			defer e.outputMutationMu.Unlock()
-			var queueErr error
-			item, queueErr = e.messageFlow.QueueUserMessage(text, association)
+			queued, queueErr := e.messageFlow.QueueUserMessage(text)
+			if queueErr == nil {
+				item = queued
+				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			}
+			e.outputMutationMu.Unlock()
 			if queueErr != nil {
 				return false, queueErr
 			}
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			e.publishPendingWorkChanged()
 			return true, nil
 		})
 		if err := commandAcceptanceResult(committed, err); err != nil {
 			return QueuedUserMessage{}, err
 		}
-		e.publishPendingWorkSnapshot()
 		return item, nil
 	}
 	liveItem := QueuedUserMessage{
@@ -558,19 +570,24 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 				return false, nil
 			}
 			livePublication = true
+			admission := e.nextPendingWorkSteerAdmission()
 			e.outputMutationMu.Lock()
-			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, association)
+			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, queuedUserMessageAssociation{
+				steerAdmission: admission,
+			})
+			if queueErr == nil {
+				item = queuedItem
+				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			}
+			e.outputMutationMu.Unlock()
 			if queueErr != nil {
-				e.outputMutationMu.Unlock()
 				queueItemID := mustQueueItemID(liveItem.ID)
 				e.liveRun.finishQueueItemPublication(queueItemID)
 				e.unmarkQueuedUserInjectionForAutoDrain(liveItem.ID)
 				e.completeLiveRunQueueItems(map[string]struct{}{liveItem.ID: {}})
 				return false, queueErr
 			}
-			item = queuedItem
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-			e.outputMutationMu.Unlock()
+			e.publishPendingWorkChanged()
 			return true, nil
 		})
 		if err != nil {
@@ -583,7 +600,6 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 			} else {
 				e.scheduleQueuedUserInjectionsIfIdle()
 			}
-			e.publishPendingWorkSnapshot()
 			return item, nil
 		}
 		if livePublication {
@@ -602,22 +618,27 @@ func (e *Engine) queueUserMessageRaw(operationCtx context.Context, text string, 
 	}
 	var item QueuedUserMessage
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
+		admission := e.nextPendingWorkSteerAdmission()
 		e.outputMutationMu.Lock()
-		defer e.outputMutationMu.Unlock()
-		var queueErr error
-		item, queueErr = e.messageFlow.QueueUserMessage(text, association)
+		queued, queueErr := e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+			steerAdmission: admission,
+		})
+		if queueErr == nil {
+			item = queued
+			e.markQueuedUserInjectionForAutoDrain(item.ID)
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+		}
+		e.outputMutationMu.Unlock()
 		if queueErr != nil {
 			return false, queueErr
 		}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+		e.publishPendingWorkChanged()
 		return true, nil
 	})
 	if err := commandAcceptanceResult(committed, err); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
-	e.publishPendingWorkSnapshot()
 	return item, nil
 }
 

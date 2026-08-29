@@ -275,9 +275,14 @@ func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.Tran
 	case clientui.TranscriptMessageQueuedMessageState:
 		// Queue lifecycle is reconciled by the state observer. Pending Work is
 		// the sole server membership projection.
-	case clientui.TranscriptMessagePendingWorkReplaced:
-		c.liveReadModel.applyPendingWork(message.Payload().(clientui.TranscriptPendingWorkReplaced).PendingWork)
-		return true
+	case clientui.TranscriptMessagePendingWorkChanged:
+		// The hydration-scoped Pending Work refresh owner handles invalidation.
+	case clientui.TranscriptMessagePendingWorkRestored:
+		// Composer restoration is owned by the transcript state observer.
+		return false
+	case clientui.TranscriptMessageSessionSettingFeedback:
+		// Typed setting feedback is owned by the app transient-status surface.
+		return false
 	case clientui.TranscriptMessageSessionStatus:
 		// Session status is already represented by the app status line.
 	case clientui.TranscriptMessageSessionIdentity:
@@ -320,8 +325,6 @@ func (c *ongoingTranscriptController) applyHydrationAppOwnedFacts(hydration *cli
 		}
 		changed = true
 	}
-	c.liveReadModel.applyPendingWork(hydration.PendingWork)
-	changed = changed || len(hydration.PendingWork.Items) > 0
 	if len(hydration.PendingPrompts) > 0 {
 		for _, prompt := range hydration.PendingPrompts {
 			c.liveReadModel.applyPendingPrompt(&prompt)
@@ -350,7 +353,6 @@ func hydrationHasNoTerminalRows(hydration *clientui.TranscriptHydration) bool {
 func (c *ongoingTranscriptController) frameInput() ongoing.FrameInput {
 	frame := c.frameProvider()
 	c.liveReadModel.refreshPendingToolSection(frame.Size.Width, frame.SpinnerFrame, frame.Theme)
-	c.liveReadModel.refreshQueuedOrSteeredSection(frame.Size.Width)
 	c.liveReadModel.refreshPendingPromptSection(frame.Size.Width)
 	cursorSectionRow, cursorTargetsInput := ongoingFrameInputCursorSectionRow(frame)
 	sections := make([]ongoing.FrameSection, 0, len(c.liveReadModel.sectionOrder))
@@ -449,7 +451,9 @@ func isAppOwnedOngoingMessage(kind clientui.TranscriptMessageKind) bool {
 	case clientui.TranscriptMessageStepState,
 		clientui.TranscriptMessageRuntimeReadModelUpdate,
 		clientui.TranscriptMessageQueuedMessageState,
-		clientui.TranscriptMessagePendingWorkReplaced,
+		clientui.TranscriptMessagePendingWorkChanged,
+		clientui.TranscriptMessagePendingWorkRestored,
+		clientui.TranscriptMessageSessionSettingFeedback,
 		clientui.TranscriptMessageUserMessageFlushed,
 		clientui.TranscriptMessageSessionStatus,
 		clientui.TranscriptMessageSessionIdentity,

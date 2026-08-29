@@ -42,6 +42,25 @@ type sequenceRuntimeActivityResolver struct {
 	calls     int
 }
 
+type runtimeControlSettingPublisher struct {
+	feedback []clientui.TranscriptSessionSettingFeedback
+}
+
+func (p *runtimeControlSettingPublisher) RuntimeReadModelFeedSnapshot(
+	context.Context,
+	string,
+) (clientui.RuntimeReadModelUpdate, error) {
+	return clientui.RuntimeReadModelUpdate{}, nil
+}
+
+func (p *runtimeControlSettingPublisher) PublishSessionSettingFeedback(
+	_ string,
+	feedback clientui.TranscriptSessionSettingFeedback,
+) error {
+	p.feedback = append(p.feedback, feedback)
+	return nil
+}
+
 type runtimeControlPromptFeed struct {
 	mu            sync.Mutex
 	pending       chan struct{}
@@ -1219,6 +1238,31 @@ func TestServiceLiveWaitUnavailableRuntimeStaysUnavailable(t *testing.T) {
 	}
 	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
 		t.Fatalf("LiveWait unavailable runtime also returned ErrRuntimeNoActiveRun: %v", err)
+	}
+}
+
+func TestServiceListPendingWorkReturnsEmptyCollectionForUnavailableRuntime(t *testing.T) {
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	response, err := service.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{
+		SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("ListPendingWork unavailable runtime: %v", err)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal ListPendingWork response: %v", err)
+	}
+	var payload struct {
+		PendingWork struct {
+			Items []json.RawMessage `json:"items"`
+		} `json:"pending_work"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode ListPendingWork response: %v", err)
+	}
+	if payload.PendingWork.Items == nil || len(payload.PendingWork.Items) != 0 {
+		t.Fatalf("Pending Work items = %#v, want encoded empty collection", payload.PendingWork.Items)
 	}
 }
 
@@ -2643,9 +2687,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
 		SessionID: store.Meta().SessionID,
 		RequestID: runtimeids.NewCompactionRequestID(),
-		Admission: runtimeinput.ManualCompactionAdmission{
-			RestorationInput: "/compact",
-		},
+		Admission: serverapi.ManualCompactionAdmission{},
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)
 	}
@@ -2768,7 +2810,8 @@ func TestServiceRemovePendingWorkIsRuntimeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemovePendingWork: %v", err)
 	}
-	if removed.Restoration.Message == nil || removed.Restoration.Message.Text != "discard runtime only" {
+	if removed.Restoration.Kind != serverapi.PendingWorkItemKindMessage ||
+		removed.Restoration.CanonicalInput != "discard runtime only" {
 		t.Fatalf("restoration = %+v", removed.Restoration)
 	}
 	if engine.HasQueuedUserWork() {
@@ -2776,6 +2819,35 @@ func TestServiceRemovePendingWorkIsRuntimeOnly(t *testing.T) {
 	}
 	if got := countPromptHistoryEvents(t, sessionStore, "discard runtime only"); got != 0 {
 		t.Fatalf("prompt history count after runtime-only discard = %d, want 0", got)
+	}
+}
+
+func TestSetSessionNamePublishesChangedAndUnchangedFeedback(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	publisher := &runtimeControlSettingPublisher{}
+	service.WithRuntimeActivityResolver(publisher)
+	request := serverapi.RuntimeSetSessionNameRequest{
+		SessionID: store.Meta().SessionID,
+		Name:      "renamed",
+	}
+	if err := service.SetSessionName(t.Context(), request); err != nil {
+		t.Fatalf("SetSessionName changed: %v", err)
+	}
+	if err := service.SetSessionName(t.Context(), request); err != nil {
+		t.Fatalf("SetSessionName unchanged: %v", err)
+	}
+	if len(publisher.feedback) != 2 {
+		t.Fatalf("published feedback = %+v, want changed and unchanged events", publisher.feedback)
+	}
+	if !publisher.feedback[0].Changed || publisher.feedback[1].Changed {
+		t.Fatalf("published change facts = %+v, want true then false", publisher.feedback)
+	}
+	for _, feedback := range publisher.feedback {
+		if feedback.Kind != clientui.SessionSettingSessionName ||
+			feedback.SessionName == nil ||
+			*feedback.SessionName != "renamed" {
+			t.Fatalf("published Session Name feedback = %+v", feedback)
+		}
 	}
 }
 

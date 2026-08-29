@@ -226,13 +226,12 @@ func TestWorktreeTransitionRunsBeforeQueuedHumanProviderTurn(t *testing.T) {
 	releaseTransition := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil
 		})
 	}()
-	waitForAcceptedRuntimeOperationCount(t, engine, 2)
 	close(releaseHumanApplication)
 	if err := <-humanDone; err != nil {
 		t.Fatalf("accept queued Human input: %v", err)
@@ -305,13 +304,12 @@ func TestWorktreeTransitionWaitsForActiveAgentStepBoundary(t *testing.T) {
 	releaseTransition := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil
 		})
 	}()
-	waitForAcceptedRuntimeOperationCount(t, engine, 1)
 	select {
 	case <-transitionStarted:
 		t.Fatal("Worktree transition preempted the active Agent Step")
@@ -393,7 +391,7 @@ func TestWorktreeTransitionRunsWhileReviewerIsActive(t *testing.T) {
 	}
 
 	transitionRan := false
-	err := engine.RunWorktreeTransition(t.Context(), func() error {
+	err := engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 		transitionRan = true
 		return nil
 	})
@@ -496,12 +494,11 @@ func TestWorktreeTransitionUsesReviewerFollowUpStepAtToolBoundary(t *testing.T) 
 	transitionRan := false
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			transitionRan = true
 			return nil
 		})
 	}()
-	waitForAcceptedRuntimeOperationCount(t, engine, 1)
 	select {
 	case err := <-transitionDone:
 		t.Fatalf("Worktree transition completed before the Reviewer follow-up tool boundary: %v", err)
@@ -1022,72 +1019,6 @@ func TestForegroundShellTerminalEffectReentersAtTheCurrentRuntimeTail(t *testing
 	}
 }
 
-func TestWorktreeTransitionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{finalTextResponse("done")}}
-	engine := mustNewTestEngine(
-		t,
-		mustCreateTestSession(t),
-		client,
-		tools.NewRegistry(),
-		Config{Model: "gpt-5", SupportedThinkingValues: []string{"low"}},
-	)
-	firstStarted := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	first := submitEngineRuntimeOperation(engine, func(context.Context) (struct{}, error) {
-		close(firstStarted)
-		<-releaseFirst
-		return struct{}{}, nil
-	})
-	select {
-	case <-firstStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for preceding Runtime mutation")
-	}
-
-	transitionStarted := make(chan struct{})
-	releaseTransition := make(chan struct{})
-	transitionDone := make(chan error, 1)
-	go func() {
-		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
-			close(transitionStarted)
-			<-releaseTransition
-			return nil
-		})
-	}()
-	select {
-	case <-transitionStarted:
-		t.Fatal("Worktree transition started before the preceding Runtime mutation")
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(releaseFirst)
-	if _, err := first.Await(t.Context()); err != nil {
-		t.Fatalf("complete preceding Runtime mutation: %v", err)
-	}
-	select {
-	case <-transitionStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for Worktree transition")
-	}
-
-	if _, err := engine.QueueUserMessageForAutoDrain(t.Context(), "accepted while Worktree holds eligibility"); err != nil {
-		t.Fatalf("accept Human input while Worktree transition is held: %v", err)
-	}
-	if err := engine.SetThinkingLevel(t.Context(), "low"); err != nil {
-		t.Fatalf("apply setting while Worktree transition is held: %v", err)
-	}
-	if got := fakeClientCallCount(client); got != 0 {
-		t.Fatalf("Human provider work started while Worktree held eligibility: calls=%d", got)
-	}
-	close(releaseTransition)
-	if err := <-transitionDone; err != nil {
-		t.Fatalf("Worktree transition: %v", err)
-	}
-	waitEngineLifecycleTasks(t, engine)
-	if got := fakeClientCallCount(client); got != 1 {
-		t.Fatalf("Human provider work after Worktree transition: calls=%d, want 1", got)
-	}
-}
-
 func TestWorktreeTerminalEffectReentersAtTheCurrentRuntimeTail(t *testing.T) {
 	engine := mustNewTestEngine(
 		t,
@@ -1101,13 +1032,14 @@ func TestWorktreeTerminalEffectReentersAtTheCurrentRuntimeTail(t *testing.T) {
 	terminalApplied := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- engine.RunWorktreeTransition(t.Context(), func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
 			close(transitionStarted)
 			<-releaseTransition
-			return engine.ApplyWorktreeTransitionTerminal(t.Context(), func(context.Context) error {
+			err := engine.ApplyWorktreeTransitionTerminal(t.Context(), func(context.Context) error {
 				close(terminalApplied)
 				return nil
 			})
+			return err
 		})
 	}()
 	select {

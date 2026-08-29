@@ -19,6 +19,9 @@ func (e *Engine) SteerWorktreeTransitionFailure(outcome clientui.WorktreeTransit
 		return errors.New("failed worktree transition outcome is required")
 	}
 	diagnostic := strings.TrimSpace(outcome.Failure.Diagnostic)
+	if selector := outcome.Failure.SelectorError; selector != nil {
+		diagnostic = fmt.Sprintf("selector %q did not resolve to one available Worktree; choose an exact Worktree ID or path", selector.Input)
+	}
 	return e.steerRuntime(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeErrorFeedback),

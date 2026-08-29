@@ -48,9 +48,9 @@ func registerWorktreeGatewayBinaryBindings(bindings map[string]gatewayBinaryBind
 				return worktreeCreateFailure(nil, protoapi.ClassifyWorktreeCreateValidation(err))
 			}),
 		registerWorktreeUnary(bindings, transition, "Enter", func() *worktreepb.EnterRequest { return &worktreepb.EnterRequest{} },
-			worktreeSessionScope[*worktreepb.EnterRequest], apicontract.WorktreeService.EnterWorktree, worktreeSelectorFailure[*worktreepb.EnterRequest]),
+			worktreeSessionScope[*worktreepb.EnterRequest], apicontract.WorktreeService.EnterWorktree, worktreeTransitionFailure[*worktreepb.EnterRequest]),
 		registerWorktreeUnary(bindings, transition, "Leave", func() *worktreepb.LeaveRequest { return &worktreepb.LeaveRequest{} },
-			worktreeSessionScope[*worktreepb.LeaveRequest], apicontract.WorktreeService.LeaveWorktree, worktreePlatformFailure[*worktreepb.LeaveRequest]),
+			worktreeSessionScope[*worktreepb.LeaveRequest], apicontract.WorktreeService.LeaveWorktree, worktreeTransitionFailure[*worktreepb.LeaveRequest]),
 		registerWorktreeUnary(bindings, transition, "Delete", func() *worktreepb.DeleteRequest { return &worktreepb.DeleteRequest{} },
 			worktreeSessionScope[*worktreepb.DeleteRequest], apicontract.WorktreeService.DeleteWorktree, worktreeDeleteFailure),
 	)
@@ -186,6 +186,13 @@ func worktreeSelectorFailure[Request proto.Message](request Request, err error) 
 		return selector.Details
 	}
 	return worktreePlatformFailure(request, err)
+}
+
+func worktreeTransitionFailure[Request proto.Message](request Request, err error) proto.Message {
+	if errors.Is(err, serverapi.ErrPendingWorkCapacity) {
+		return &worktreepb.PendingWorkCapacityDetails{}
+	}
+	return worktreeSelectorFailure(request, err)
 }
 
 func worktreeDeletePreviewFailure(request *worktreepb.DeletePreviewRequest, err error) proto.Message {

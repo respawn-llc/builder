@@ -123,8 +123,10 @@ func TestWorktreeListControllerQueuesStableSwitchTarget(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("queued switch returned a command while another switch is pending")
 	}
-	if fixture.model.worktrees.queuedSwitch.TargetToken != "wt-feature" {
-		t.Fatalf("queued switch = %+v, want stable worktree ID", fixture.model.worktrees.queuedSwitch)
+	if fixture.model.worktrees.queuedTransition == nil ||
+		fixture.model.worktrees.queuedTransition.Selector == nil ||
+		*fixture.model.worktrees.queuedTransition.Selector != "wt-feature" {
+		t.Fatalf("queued transition = %+v, want stable worktree ID", fixture.model.worktrees.queuedTransition)
 	}
 }
 

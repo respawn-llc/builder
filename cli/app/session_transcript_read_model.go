@@ -9,7 +9,6 @@ import (
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
-	"core/shared/runtimeinput"
 )
 
 type ongoingTranscriptReadModel struct {
@@ -17,7 +16,6 @@ type ongoingTranscriptReadModel struct {
 	sections         map[ongoing.FrameSectionKind]ongoing.FrameSection
 	pendingTools     []ongoingPendingTool
 	pendingToolIndex map[string]int
-	pendingWork      []ongoingLiveInput
 	pendingPrompts   keyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPrompt]
 }
 
@@ -130,15 +128,6 @@ func (m *ongoingTranscriptReadModel) refreshPendingToolSection(width int, spinne
 		lines = append(lines, transcriptrender.RenderPendingTool(tool.tool, width, themeName, padSpinnerIndicator(pendingToolSpinnerFrame(spinnerFrame))))
 	}
 	m.setStyledSection(ongoing.FrameSectionPendingTools, lines)
-}
-
-func (m *ongoingTranscriptReadModel) refreshQueuedOrSteeredSection(width int) {
-	m.setStyledSection(ongoing.FrameSectionQueuedOrSteered, renderOngoingLiveInputLines(m.pendingWork, width))
-}
-
-func (m *ongoingTranscriptReadModel) applyPendingWork(pending runtimeinput.PendingWork) {
-	m.pendingWork = pendingWorkInputs(pending)
-	m.refreshQueuedOrSteeredSection(80)
 }
 
 func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.TranscriptPrompt) {

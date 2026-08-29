@@ -240,7 +240,11 @@ func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string
 }
 func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
 	f.compactRequest = req
-	return f.compactContext(ctx, req.Admission.RestorationInput)
+	input, err := req.Admission.CanonicalInput()
+	if err != nil {
+		return err
+	}
+	return f.compactContext(ctx, input)
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
@@ -359,6 +363,59 @@ func TestInterruptedHumanInputRestoresServerOrderBeforeComposer(t *testing.T) {
 	}
 	if len(m.injectedQueue) != 0 {
 		t.Fatalf("interrupted items remain queued: %+v", m.injectedQueue)
+	}
+}
+
+func TestPendingWorkTechnicalRestorationMergesBeforeComposer(t *testing.T) {
+	m := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	testSetMainInput(m, "composer")
+
+	m.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkRestored{
+			Restoration: runtimeinput.PendingWorkTechnicalRestoration{
+				ItemID:         runtimeids.NewQueueItemID(),
+				Kind:           runtimeinput.PendingWorkItemKindWorktreeTransition,
+				CanonicalInput: "/wt leave",
+			},
+		})),
+		runtimeTupleMergeResult{},
+	)
+	if got, want := testMainInput(m), "/wt leave\n\ncomposer"; got != want {
+		t.Fatalf("composer = %q, want %q", got, want)
+	}
+}
+
+func TestTranscriptSessionSettingFeedbackUsesTransientStatusWithoutTranscriptRows(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	client := &runtimeControlFakeClient{}
+	model := newProjectedClosedUIModel(client)
+	enabled := true
+	cmd := model.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptSessionSettingFeedback{
+			Kind: clientui.SessionSettingFastMode, Changed: true, FastMode: &enabled,
+		})),
+		runtimeTupleMergeResult{},
+	)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ := model.Update(msg)
+		model = next.(*uiModel)
+	}
+	if model.transientStatus == "" || model.transientStatusKind != uiStatusNoticeSuccess {
+		t.Fatalf("setting feedback status = %q kind=%v, want success notice", model.transientStatus, model.transientStatusKind)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("setting feedback appended %d transcript rows", client.appendCalls)
+	}
+
+	model.transientStatus = ""
+	model.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptSessionSettingFeedback{
+			Kind: clientui.SessionSettingFastMode, Changed: false, FastMode: &enabled,
+		})),
+		runtimeTupleMergeResult{},
+	)
+	if model.transientStatus != "" {
+		t.Fatalf("unchanged setting emitted success notice %q", model.transientStatus)
 	}
 }
 

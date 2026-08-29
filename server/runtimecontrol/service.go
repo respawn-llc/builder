@@ -25,12 +25,8 @@ type RuntimeActivityResolver interface {
 	RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error)
 }
 
-type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string) error
-}
-
-type sessionStatusPublisher interface {
-	PublishSessionStatus(sessionID string) error
+type sessionSettingPublisher interface {
+	PublishSessionSettingFeedback(sessionID string, feedback clientui.TranscriptSessionSettingFeedback) error
 }
 
 type PromptHistoryStore interface {
@@ -317,11 +313,17 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 		return err
 	}
 	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		if err := engine.SetSessionName(callbackCtx, req.Name); err != nil {
+		changed, err := engine.SetSessionName(callbackCtx, req.Name)
+		if err != nil {
 			return err
 		}
-		if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-			return publisher.PublishSessionIdentity(req.SessionID)
+		if publisher, ok := s.activity.(sessionSettingPublisher); ok {
+			name := strings.TrimSpace(req.Name)
+			return publisher.PublishSessionSettingFeedback(req.SessionID, clientui.TranscriptSessionSettingFeedback{
+				Kind:        clientui.SessionSettingSessionName,
+				Changed:     changed,
+				SessionName: &name,
+			})
 		}
 		return nil
 	})
@@ -479,7 +481,9 @@ func (s *Service) ListPendingWork(ctx context.Context, req serverapi.RuntimeList
 		return snapshotErr
 	})
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return serverapi.RuntimeListPendingWorkResponse{}, nil
+		return serverapi.RuntimeListPendingWorkResponse{
+			PendingWork: serverapi.PendingWork{Items: []serverapi.PendingWorkItem{}},
+		}, nil
 	}
 	return response, err
 }

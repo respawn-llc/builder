@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -22,7 +23,8 @@ type PendingWorkItemKind = runtimeinput.PendingWorkItemKind
 type PendingWorkItemState = runtimeinput.PendingWorkItemState
 type PendingWorkMessage = runtimeinput.PendingWorkMessage
 type PendingWorkManualCompaction = runtimeinput.PendingWorkManualCompaction
-type PendingWorkManualCompactionRestoration = runtimeinput.PendingWorkManualCompactionRestoration
+type PendingWorkWorktreeTransitionKind = runtimeinput.PendingWorkWorktreeTransitionKind
+type PendingWorkWorktreeTransition = runtimeinput.PendingWorkWorktreeTransition
 type PendingWorkItem = runtimeinput.PendingWorkItem
 type PendingWork = runtimeinput.PendingWork
 type PendingWorkRestoration = runtimeinput.PendingWorkRestoration
@@ -82,13 +84,25 @@ func DecodePendingWorkNotPendingError(data json.RawMessage) error {
 }
 
 const (
-	PendingWorkLaneSteer                = runtimeinput.PendingWorkLaneSteer
-	PendingWorkLaneQueue                = runtimeinput.PendingWorkLaneQueue
-	PendingWorkItemKindMessage          = runtimeinput.PendingWorkItemKindMessage
-	PendingWorkItemKindManualCompaction = runtimeinput.PendingWorkItemKindManualCompaction
+	PendingWorkLaneSteer                  = runtimeinput.PendingWorkLaneSteer
+	PendingWorkLaneQueue                  = runtimeinput.PendingWorkLaneQueue
+	PendingWorkItemKindMessage            = runtimeinput.PendingWorkItemKindMessage
+	PendingWorkItemKindManualCompaction   = runtimeinput.PendingWorkItemKindManualCompaction
+	PendingWorkItemKindWorktreeTransition = runtimeinput.PendingWorkItemKindWorktreeTransition
 
 	PendingWorkItemStatePending = runtimeinput.PendingWorkItemStatePending
+
+	PendingWorkWorktreeTransitionEnter = runtimeinput.PendingWorkWorktreeTransitionEnter
+	PendingWorkWorktreeTransitionLeave = runtimeinput.PendingWorkWorktreeTransitionLeave
 )
+
+func PendingWorkItemIDFromCompactionRequest(id runtimeids.CompactionRequestID) (runtimeids.QueueItemID, error) {
+	return runtimeids.ParseQueueItemID(id.String())
+}
+
+func PendingWorkItemIDFromWorktreeOperation(id clientui.WorktreeTransitionID) (runtimeids.QueueItemID, error) {
+	return runtimeids.ParseQueueItemID(id.String())
+}
 
 type RuntimeListPendingWorkRequest struct {
 	SessionID string `json:"session_id"`

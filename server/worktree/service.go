@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"core/server/metadata"
@@ -67,13 +66,6 @@ type Service struct {
 	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
 	workspaceMutations  *mutationlane.MutationLaneRegistry[string]
-
-	transitionCtx     context.Context
-	cancelTransitions context.CancelFunc
-	transitionMu      sync.Mutex
-	transitionWG      sync.WaitGroup
-	transitionTails   map[string]chan struct{}
-	transitionsClosed bool
 }
 
 type syncedWorktree struct {
@@ -351,7 +343,6 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 	if gitInspector == nil {
 		gitInspector = NewGitInspector(nil)
 	}
-	transitionCtx, cancelTransitions := context.WithCancel(context.Background())
 	return &Service{
 		metadata:            metadataStore,
 		git:                 gitInspector,
@@ -364,9 +355,6 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
 		workspaceMutations:  mutationlane.NewMutationLaneRegistry[string](),
-		transitionCtx:       transitionCtx,
-		cancelTransitions:   cancelTransitions,
-		transitionTails:     make(map[string]chan struct{}),
 	}
 }
 
@@ -426,16 +414,6 @@ func authorizeSessionMaintenance(ctx context.Context, release sessionruntime.Ses
 }
 
 func (s *Service) Close() error {
-	if s == nil {
-		return nil
-	}
-	s.transitionMu.Lock()
-	s.transitionsClosed = true
-	s.transitionMu.Unlock()
-	if s.cancelTransitions != nil {
-		s.cancelTransitions()
-	}
-	s.transitionWG.Wait()
 	return nil
 }
 

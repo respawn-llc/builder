@@ -205,6 +205,19 @@
 - Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
 - A pending steer issued from another Session shows its complete wrapped message.
 - Each queued human Steering message remains a separate FIFO user message. Each queued steer issued from another Session remains a separate message.
+- Pending Work projects post-turn Queue items first in Queue order, followed by Steer items in server acceptance order across human messages, manual compaction, and Active-Runtime Worktree transitions.
+- Manual compaction renders with canonical `/compact` and normalized guidance when present.
+- Active-Runtime Worktree enter renders with canonical `/wt switch <selector>` and leave renders with `/wt leave`.
+- The TUI obtains complete Pending Work collections only through the Pending Work list route.
+- Transcript hydration and Pending Work Changed notifications carry no complete Pending Work collection.
+- Every accepted initial, replacement, reconnect, or Scratch Rehydration hydration clears displayed Pending Work and fetches the latest collection for the exact hydrated Session.
+- The TUI clears displayed Pending Work for every accepted hydration even when the Session identity is unchanged because the hydration may represent a replacement Active Session Runtime.
+- Every successful local Send/Steer, Queue, manual-compaction, Active-Runtime Worktree, or discard response and every observed Pending Work Changed notification fetches the latest collection for its exact Session.
+- A Pending Work Changed notification is payload-free and carries no order, revision, or freshness guarantee.
+- A list result or failure from an earlier hydration scope has no effect after the TUI accepts a later hydration.
+- A failed list read preserves displayed Pending Work only when the TUI fetched that collection successfully during the current uninterrupted hydration scope.
+- A failed initial list read after any accepted hydration leaves displayed Pending Work empty.
+- The TUI has no standalone per-item discard affordance for operational Pending Work.
 - Pending queues are lost on process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - A mid-turn message becomes durable only when Kent delivers it.
 - The server-published Run lifecycle is the TUI liveness authority for `Ctrl+C`: while the Run lifecycle is Running, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same Run exits locally. A later Running lifecycle with a different Run or Step identity sends a new Interrupt. The server revalidates that Interrupt targets an active Agent Turn. A submission already sent to the server may start or continue after the client detaches.
@@ -241,6 +254,8 @@
 - Non-Kent Git worktrees are manageable. Explicitly entering one adopts it into Kent metadata before applying the ordinary session-target switch.
 - Worktree selector resolution gives exact Kent IDs precedence over exact branch names, display names, and paths. List/create prefer concise branch or display selectors only when resolving that text returns the same row; registered rows then fall back to their full Kent ID, while external rows fall back to a unique trailing path component and then the full canonical path. IDs and paths are omitted from normal list output unless needed for disambiguation.
 - Supported aliases preserve safety semantics: `/worktree status`, `/worktree remove`, `/worktree rm`.
+- `/worktree switch <selector>` and `/wt switch <selector>` enter the selected target.
+- `/worktree leave` and `/wt leave` return the Session to its main workspace.
 - Worktree deletion retargets Sessions before it removes the worktree.
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.
@@ -256,15 +271,20 @@
 - After successful TUI creation, the TUI applies the ordinary enter operation.
 - Setup failure keeps the Session on its previous worktree, preserves the created worktree for inspection or repair, and shows a foreground error.
 - TUI enter and leave actions return the domain Worktree Operation acknowledgement without waiting for an active Agent Step or the Worktree transition to finish.
-- For an Active Session Runtime, each enter or leave is an independent Session mutation.
+- For an Active Session Runtime, each enter or leave is an independent Pending Work item.
 - Kent accepts an enter or leave without waiting for the transition.
+- The pending item remains visible until the Worktree transition starts or is discarded by another client.
+- Worktree selectors resolve and mutable safety conditions are revalidated when the transition starts.
 - The Worktree owner later applies the target, Working Directory, tool environment, and reminder or failure.
 - Accepted human messages retain their own first-in, first-out order, but a Worktree transition takes the next eligible boundary before human model work that is still queued and has not started.
 - A Worktree transition never preempts an Agent Step already running.
 - After that Agent Step ends, Worktree applies before another ordinary continuation.
 - Human messages remain accepted while Worktree is in progress.
 - Repeated Worktree requests receive no matching-retry response, pending-operation deduplication, or different-target busy rejection.
-- Attached clients receive the final success or failure.
+- Attached clients receive a final success or failure when the Worktree owner can determine the terminal outcome.
+- If the target applied but later Session state or response publication fails, the Worktree operation remains Completed and the TUI surfaces the later diagnostic without restoring the command.
+- If Worktree rollback fails, the TUI receives no Completed or Failed outcome and restores no command.
+- An indeterminate rollback retires only the affected Active Session Runtime; an indeterminate dormant-Session transition returns its diagnostic without a Runtime to retire.
 - A successful change becomes model-visible through the ordinary worktree reminder.
 - An accepted Worktree transition that has not applied is lost on server shutdown or restart and is never resumed.
 - Reconnecting clients refresh Worktree status.
@@ -284,7 +304,11 @@
 - Built-ins: `/logout`, `/login`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/questions`, `/status`, `/goal`, `/ps`, `/worktree` (alias `/wt`), `/copy`, `/back`.
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
-- Runtime-affecting known commands remain accepted while an Agent Step or another Runtime operation is active and enter Steering. Client-local navigation, overlays, reads, and detach actions remain with their direct owners.
+- While an Agent Turn is active, every available `/prompt:*` command submits its typed identity as Steering in the current Session. Kent resolves the prompt body on the server before accepting the Steering input.
+- `/name`, `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` persist and publish their Session value immediately while an Agent Step runs.
+- Those immediate setting commands affect later provider and compaction requests, never the Agent Step already running, and create no transcript rows.
+- `/compact` and Active-Runtime `/worktree switch`, `/wt switch`, `/worktree leave`, and `/wt leave` enter typed operational Pending Work while an Agent Step or another boundary-owning Runtime operation is active.
+- Goal follows its Goal owner. Client-local navigation, overlays, reads, detach actions, and direct Worktree management reach their direct owners while an Agent Turn is active.
 - `/resume` always enters the session picker, including when no other session exists. The originating attachment is released before the picker opens. A picker `Ctrl+C` leaves that run ownerless; it issues no second release and no interrupt.
 - `/copy` is always visible and reads the newest committed assistant final answer from the active transcript segment. It never uses client status or rendered terminal output as a fallback.
 - The durable final-answer read walks backward only within the active transcript segment and stops at the newest committed assistant final answer or a valid compaction boundary, whichever appears first. A valid boundary returns true absence and its carried pre-compaction answer is not reused.

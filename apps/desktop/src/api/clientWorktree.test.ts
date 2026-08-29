@@ -31,6 +31,7 @@ import {
 } from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 
 import { ApiClient } from "./client";
+import { requireWorktreeSuccess, WorktreeError } from "./clientWorktree";
 import { newSetupOperationID } from "./index";
 
 const ids = ["123e4567-e89b-42d3-a456-426614174000", "223e4567-e89b-42d3-a456-426614174000"] as const;
@@ -343,6 +344,42 @@ describe("Desktop Worktree client", () => {
         ]),
       ).switchWorktree("session-1", operation),
     ).rejects.toThrow("different Worktree operation identity");
+
+    for (const [method, result] of [
+      [
+        TransitionService.method.enter,
+        create(EnterResultSchema, {
+          outcome: {
+            case: "error",
+            value: {
+              code: "pending_work_capacity",
+              detail: { case: "pendingWorkCapacity", value: {} },
+            },
+          },
+        }),
+      ],
+      [
+        TransitionService.method.leave,
+        create(LeaveResultSchema, {
+          outcome: {
+            case: "error",
+            value: {
+              code: "pending_work_capacity",
+              detail: { case: "pendingWorkCapacity", value: {} },
+            },
+          },
+        }),
+      ],
+    ] as const) {
+      try {
+        requireWorktreeSuccess(method, result);
+        throw new Error("expected Pending Work capacity rejection");
+      } catch (error) {
+        expect(error).toBeInstanceOf(WorktreeError);
+        if (!(error instanceof WorktreeError)) throw error;
+        expect(error.detail).toEqual({ kind: "capacity" });
+      }
+    }
   });
 });
 

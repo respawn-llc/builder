@@ -63,6 +63,24 @@ type compactionResult struct {
 	provider                    string
 }
 
+type manualCompactionSelectionFailure struct {
+	cause error
+}
+
+func (e *manualCompactionSelectionFailure) Error() string {
+	if e == nil || e.cause == nil {
+		return "manual compaction selection failed"
+	}
+	return e.cause.Error()
+}
+
+func (e *manualCompactionSelectionFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
 type defaultContextCompactor struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
@@ -163,14 +181,19 @@ func (c *defaultContextCompactor) CompactContextWithAcceptance(
 	onActive func(),
 	accept CommandAcceptance,
 ) (session.CommitReceipt, error) {
-	instructions, err := newCompactionInstructionsInput(args)
+	normalizedGuidance := strings.Join(strings.Fields(args), " ")
+	admission := runtimeinput.ManualCompactionAdmission{}
+	if normalizedGuidance != "" {
+		admission.Guidance = &normalizedGuidance
+	}
+	instructions, err := newCompactionInstructionsInput(normalizedGuidance)
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
 	if requestID.IsZero() {
 		return session.CommitReceipt{}, errors.New("compaction request id is required")
 	}
-	return c.scheduleManualCompaction(ctx, requestID, instructions, nil, onActive, accept)
+	return c.scheduleManualCompaction(ctx, requestID, instructions, admission, onActive, accept)
 }
 
 func (e *Engine) CompactContextAdmissionForRequestWithAcceptance(
@@ -203,65 +226,27 @@ func (c *defaultContextCompactor) CompactContextAdmissionWithAcceptance(
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return c.scheduleManualCompaction(ctx, requestID, instructions, &admission, nil, accept)
+	return c.scheduleManualCompaction(ctx, requestID, instructions, admission, nil, accept)
 }
 
 func (c *defaultContextCompactor) scheduleManualCompaction(
 	ctx context.Context,
 	requestID runtimeids.CompactionRequestID,
 	instructions compactionInstructionsInput,
-	admission *runtimeinput.ManualCompactionAdmission,
+	admission runtimeinput.ManualCompactionAdmission,
 	onActive func(),
 	accept CommandAcceptance,
 ) (session.CommitReceipt, error) {
 	e := c.engine
-	return awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (session.CommitReceipt, error) {
-		if admission != nil {
-			if err := e.requirePendingWorkCapacity(); err != nil {
-				return session.CommitReceipt{}, err
-			}
-		}
-		if snapshot := c.steps.Snapshot(); snapshot != nil &&
-			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
-			return session.CommitReceipt{}, ErrManualCompactionActive
-		}
-		planningSnapshot := e.compactionPlanningSnapshot()
-		if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
-			return session.CommitReceipt{}, errCompactionDisabledModeNone
-		}
-		reservation := &exclusiveStepReservation{
-			Kind:      exclusiveStepReservationManualCompaction,
-			queueable: true,
-		}
-		pendingCtx, cancelPending := context.WithCancelCause(context.Background())
-		if admission != nil {
-			reservation.pendingManualCompaction = &pendingManualCompaction{
-				itemID:    runtimeids.NewQueueItemID(),
-				order:     runtimeOperationSequence(operationCtx),
-				admission: *admission,
-			}
-			reservation.cancelPendingCompaction = cancelPending
-		}
-		if err := c.steps.AcquireReservation(reservation); err != nil {
-			cancelPending(err)
-			return session.CommitReceipt{}, err
-		}
-		committed, acceptErr := runCommandAcceptance(accept, func() (bool, error) {
-			return true, nil
-		})
-		if err := commandAcceptanceResult(committed, acceptErr); err != nil {
-			c.steps.ReleaseReservation(reservation)
-			cancelPending(err)
-			return session.CommitReceipt{}, err
-		}
-		launched := e.launchLifecycleTask(func(lifecycleCtx context.Context) *resultGroupFatal {
-			stopLifecycleCancellation := context.AfterFunc(lifecycleCtx, func() {
-				cancelPending(context.Cause(lifecycleCtx))
-			})
-			defer stopLifecycleCancellation()
-			defer cancelPending(context.Canceled)
-			defer c.steps.ReleaseReservation(reservation)
-			_, runErr := c.compactContext(
+	item, err := manualCompactionPendingWorkItem(requestID, admission)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	err = e.scheduleOperationalPendingWork(ctx, operationalPendingWorkRequest{
+		item:   item,
+		accept: accept,
+		run: func(pendingCtx context.Context, reservation *exclusiveStepReservation, pendingItem runtimeinput.PendingWorkItem) error {
+			receipt, runErr := c.compactContext(
 				pendingCtx,
 				ActiveKindCompaction,
 				compactionModeManual,
@@ -274,22 +259,17 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 				true,
 				nil,
 			)
-			fatal, abort := resultGroupFatalFromError(runErr)
-			if abort {
-				return fatal
+			var selectionFailure *manualCompactionSelectionFailure
+			if runErr != nil &&
+				!receipt.Committed &&
+				!errors.As(runErr, &selectionFailure) &&
+				!errors.Is(runErr, errPendingOperationalWorkRemoved) {
+				runErr = errors.Join(runErr, e.publishPendingWorkTechnicalRestoration(pendingItem))
 			}
-			return nil
-		})
-		if !launched {
-			c.steps.ReleaseReservation(reservation)
-			cancelPending(ErrEngineClosed)
-			return session.CommitReceipt{}, ErrEngineClosed
-		}
-		if admission != nil {
-			e.publishPendingWorkSnapshot()
-		}
-		return session.CommitReceipt{}, nil
+			return runErr
+		},
 	})
+	return session.CommitReceipt{}, err
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
@@ -313,12 +293,6 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 }
 
 func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
-	if requireEligibility {
-		if snapshot := c.steps.Snapshot(); snapshot != nil &&
-			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
-			return session.CommitReceipt{}, ErrManualCompactionActive
-		}
-	}
 	reservation := &exclusiveStepReservation{
 		Kind:      exclusiveStepReservationManualCompaction,
 		queueable: true,
@@ -393,10 +367,10 @@ func (c *defaultContextCompactor) compactContext(
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
-		if reservation != nil && reservation.pendingManualCompaction != nil {
-			e.publishPendingWorkSnapshot()
-		}
 		if requireEligibility {
+			if e.compactionRuntimeState().ActiveSnapshot() != nil {
+				return c.reportManualCompactionSelectionFailure(stepID, requestID, ErrManualCompactionActive)
+			}
 			planningSnapshot := e.compactionPlanningSnapshot()
 			if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
 				return c.reportManualCompactionSelectionFailure(stepID, requestID, errCompactionDisabledModeNone)
@@ -419,7 +393,7 @@ func (c *defaultContextCompactor) compactContext(
 		}
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			if requireEligibility {
-				return c.reportManualCompactionSelectionFailure(stepID, requestID, err)
+				return c.reportManualCompactionTechnicalFailure(stepID, requestID, err)
 			}
 			return err
 		}
@@ -434,6 +408,18 @@ func (c *defaultContextCompactor) compactContext(
 }
 
 func (c *defaultContextCompactor) reportManualCompactionSelectionFailure(
+	stepID string,
+	requestID *runtimeids.CompactionRequestID,
+	cause error,
+) error {
+	reported := c.reportManualCompactionTechnicalFailure(stepID, requestID, cause)
+	if reported == nil {
+		return nil
+	}
+	return &manualCompactionSelectionFailure{cause: reported}
+}
+
+func (c *defaultContextCompactor) reportManualCompactionTechnicalFailure(
 	stepID string,
 	requestID *runtimeids.CompactionRequestID,
 	cause error,
