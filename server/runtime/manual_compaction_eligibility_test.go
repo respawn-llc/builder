@@ -92,10 +92,7 @@ func TestManualCompactionAdmissionReturnsDuringAgentStep(t *testing.T) {
 			return serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
 		})
 	}
-	accepted := make(chan runtimeids.QueueItemID, 1)
-	go func() { accepted <- schedule() }()
-	firstID := pendingWorkTestWaitValue(t, accepted, "manual compaction admission")
-	secondID := schedule()
+	firstID, secondID := schedule(), schedule()
 	pending := pendingWorkTestSnapshot(t, engine)
 	if !pendingWorkTestContains(pending, firstID) || !pendingWorkTestContains(pending, secondID) {
 		t.Fatalf("repeated manual compactions were coalesced: %+v", pending.Items)
@@ -150,9 +147,8 @@ func TestManualCompactionRevalidatesMutableConditionsAtBoundary(t *testing.T) {
 			if terminal == nil || terminal.RequestID == nil || *terminal.RequestID != requestID {
 				t.Fatalf("terminal compaction status = %+v, want request %s", terminal, requestID)
 			}
-			itemID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
-				return serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
-			})
+			itemID, err := serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
+			pendingWorkTestNoError(t, err)
 			if pendingWorkTestContains(pendingWorkTestSnapshot(t, engine), itemID) {
 				t.Fatal("started manual compaction remained in Pending Work")
 			}
