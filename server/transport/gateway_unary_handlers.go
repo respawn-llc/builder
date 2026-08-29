@@ -295,5 +295,4 @@ func (g *Gateway) authorizeChatSettingsTarget(
 	default:
 		return errors.New("Chat settings target kind is invalid")
 	}
-	return nil
 }
