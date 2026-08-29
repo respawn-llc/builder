@@ -420,7 +420,7 @@ func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T)
 		if err := json.Unmarshal(item.Output, &payload); err != nil {
 			t.Fatalf("unmarshal failed tool output: %v", err)
 		}
-		if payload.Error == handoffCompactionToolsDisabledMessage {
+		if payload.Error == localCompactionToolsDisabledMessage {
 			if item.CallID == nil {
 				t.Fatalf("failed tool output has no call id: %+v", item)
 			}
@@ -546,8 +546,8 @@ func TestPendingTriggerHandoffRetriesCustomToolCallOutput(t *testing.T) {
 		if err := json.Unmarshal(item.Output, &payload); err != nil {
 			t.Fatalf("unmarshal failed custom tool output: %v", err)
 		}
-		if payload.Error != handoffCompactionToolsDisabledMessage {
-			t.Fatalf("custom failed output error = %q, want %q", payload.Error, handoffCompactionToolsDisabledMessage)
+		if payload.Error != localCompactionToolsDisabledMessage {
+			t.Fatalf("custom failed output error = %q, want %q", payload.Error, localCompactionToolsDisabledMessage)
 		}
 	}
 	if !foundCustomFailedOutput {

@@ -37,8 +37,8 @@ const (
 	workflowPostCompletionCompactionAdditionalInstructions = "The current Workflow assignment is complete. Summarize the completed assignment and its durable handoff as completed work. Do not describe the assignment as ongoing, and do not add a current-assignment reminder."
 	handoffDisabledByUserMessage                           = "User disabled the handoff manually for now. They do not want you to hand off at this time, so please keep working or retry this tool later."
 	handoffTooEarlyMessage                                 = "It's too early to handoff right now. Don't worry, you still have plenty of time and memory to finish your work, so continue the current task for now. Only retry trigger_handoff after an explicit developer message says handoff is enabled."
-	handoffCompactionToolsDisabledMessage                  = "Tools are disabled during handoff. Do NOT attempt to call any tools. Produce only the requested summary."
-	handoffCompactionToolCallRetries                       = 3
+	localCompactionToolsDisabledMessage                    = "Tools are disabled during compaction. Do NOT attempt to call any tools. Produce only the requested summary."
+	localCompactionToolCallRetries                         = 3
 )
 
 var (
@@ -698,7 +698,7 @@ func (e *Engine) compactNowWithAcceptance(
 			if factoryErr != nil {
 				err = errors.Join(err, factoryErr)
 			} else {
-				localResult, localErr := e.compactLocal(ctx, stepID, remoteInput, providerID, instructions, mode, localFactory)
+				localResult, localErr := e.compactLocal(ctx, stepID, remoteInput, providerID, instructions, localFactory)
 				localResult.overflowRepair = result.overflowRepair.Add(localResult.overflowRepair)
 				result = localResult
 				if localErr != nil {
@@ -709,7 +709,7 @@ func (e *Engine) compactNowWithAcceptance(
 			}
 		}
 	} else {
-		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, dispatchFactory)
+		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, dispatchFactory)
 	}
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)

@@ -57,7 +57,7 @@ function OwnedAttentionController() {
         refreshAttentionProjection();
       },
       onEvent(event) {
-        if (event.type !== "snapshot_complete") {
+        if (event.source === "live") {
           refreshAttentionProjection();
         }
         if (event.type === "pending") {
