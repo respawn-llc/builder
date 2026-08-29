@@ -1180,6 +1180,10 @@ func TestExclusiveStepLifecycleDefersSecondBoundaryReservationToOuterStep(t *tes
 func TestExclusiveStepOperationalReservationsReceiveAdmissionOrder(t *testing.T) {
 	engine := &Engine{}
 	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	engine.stepLifecycle = lifecycle
+	if engine.HasActiveOrScheduledStepWork() {
+		t.Fatal("fresh Engine reports active or scheduled Step work")
+	}
 	first := &exclusiveStepReservation{
 		Kind:        exclusiveStepReservationManualCompaction,
 		queueable:   true,
@@ -1199,6 +1203,9 @@ func TestExclusiveStepOperationalReservationsReceiveAdmissionOrder(t *testing.T)
 	pending := lifecycle.pendingOperationalWork()
 	if len(pending) != 2 || pending[0].order == 0 || pending[1].order != pending[0].order+1 {
 		t.Fatalf("operational admission order = %+v, want two consecutive nonzero values", pending)
+	}
+	if !engine.HasActiveOrScheduledStepWork() {
+		t.Fatal("operational reservations are absent from Engine Step work")
 	}
 }
 

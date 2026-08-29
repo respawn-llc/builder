@@ -361,6 +361,7 @@ func hasBlockingRuntimeActivity(resource *agentResource) bool {
 			liveRun = false
 		}
 		active = liveRun ||
+			engine.HasActiveOrScheduledStepWork() ||
 			engine.HasPendingRuntimeOperations() ||
 			engine.HasQueuedUserWork() ||
 			engine.HasScheduledQueuedUserWork() ||

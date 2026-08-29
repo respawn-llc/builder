@@ -615,8 +615,7 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 			resource.callbacks != 0 ||
 			resource.steps != 0
 		queued := resource.engine != nil && resource.engine.HasQueuedUserWork()
-		scheduled := resource.engine != nil && resource.engine.HasScheduledQueuedUserWork()
-		if inFlight || scheduled || (!request.DropOwner && queued) {
+		if inFlight || engineHasWorkPreventingIdleClose(resource.engine) || (!request.DropOwner && queued) {
 			if request.DropOwner {
 				resource.ownerlessDisposition = agentResourceRetireWhenIdle
 			}
@@ -655,12 +654,17 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		resource.mu.Unlock()
 		return nil
 	}
-	if resource.engine != nil && resource.engine.HasScheduledQueuedUserWork() {
+	if engineHasWorkPreventingIdleClose(resource.engine) {
 		resource.mu.Unlock()
 		return nil
 	}
 	_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
 	return closeErr
+}
+
+func engineHasWorkPreventingIdleClose(engine *runtime.Engine) bool {
+	return engine != nil &&
+		(engine.HasActiveOrScheduledStepWork() || engine.HasScheduledQueuedUserWork())
 }
 
 func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *agentResource) error {

@@ -422,6 +422,14 @@ func (e *Engine) BeginRetirement() bool {
 	return true
 }
 
+func (e *Engine) HasActiveOrScheduledStepWork() bool {
+	if e == nil {
+		return false
+	}
+	e.ensureOrchestrationCollaborators()
+	return e.stepLifecycle.IsBusy()
+}
+
 func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 	if e == nil {
 		return
