@@ -136,15 +136,16 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 	if result.Applied != nil {
 		result.Applied.Changed = changed
 	}
-	service, err := s.materializedService(ctx, sessionID.String())
+	responseCtx := context.WithoutCancel(ctx)
+	service, err := s.materializedService(responseCtx, sessionID.String())
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	settings, err := service.MaterializedChatSettings(ctx, sessionID)
+	settings, err := service.MaterializedChatSettings(responseCtx, sessionID)
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	contextFacts, err := s.core.safeBundles().Sessions.sessionContextOwner.ReadSessionChatContext(ctx, sessionID)
+	contextFacts, err := s.core.safeBundles().Sessions.sessionContextOwner.ReadSessionChatContext(responseCtx, sessionID)
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}

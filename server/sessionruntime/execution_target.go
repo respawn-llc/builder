@@ -619,6 +619,7 @@ type maintenanceAdmission uint8
 const (
 	maintenanceAdmissionAuthorized maintenanceAdmission = iota + 1
 	maintenanceAdmissionExactStepBoundary
+	maintenanceAdmissionSessionChatSettings
 )
 
 func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runtimeids.SessionID, callback maintenanceCallback) error {
@@ -648,7 +649,9 @@ func (a *Authority) withMaintenanceResourceAdmission(
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
 	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil &&
-		(admission != maintenanceAdmissionExactStepBoundary || block.reason != SessionStartBlockMaintenance) {
+		((admission != maintenanceAdmissionExactStepBoundary &&
+			admission != maintenanceAdmissionSessionChatSettings) ||
+			block.reason != SessionStartBlockMaintenance) {
 		gate.lock.Unlock()
 		return errors.Join(
 			ErrSessionStartsBlocked,
