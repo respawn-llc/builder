@@ -11,6 +11,7 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testing.T) {
@@ -144,6 +145,14 @@ func TestManualCompactionLocalRetriesWhenModelAttemptsToolCalls(t *testing.T) {
 			}},
 		},
 		{
+			Assistant: llm.Message{Role: llm.RoleAssistant},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "second-compaction-tool-call",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"cmd":"pwd"}`),
+			}},
+		},
+		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		},
 	}}
@@ -170,16 +179,33 @@ func TestManualCompactionLocalRetriesWhenModelAttemptsToolCalls(t *testing.T) {
 	if !hasEventKind(events, EventCompactionCompleted) {
 		t.Fatalf("manual local compaction events = %+v, want completed event", events)
 	}
-	if probe.called || len(client.calls) != 2 {
+	if probe.called || len(client.calls) != 3 {
 		t.Fatalf(
-			"manual local compaction tool-execution/model-calls = %t/%d, want false/two",
+			"manual local compaction tool-execution/model-calls = %t/%d, want false/three",
 			probe.called,
 			len(client.calls),
 		)
 	}
 	assertRequestsPreserveCacheIdentity(t, client.calls[0], client.calls[1])
+	assertRequestsPreserveCacheIdentity(t, client.calls[1], client.calls[2])
 	if !requestHasCompactionToolError(client.calls[1], "compaction-tool-call") {
 		t.Fatalf("manual local compaction retry omitted the synthetic tool error: %+v", client.calls[1].Items)
+	}
+	if !requestHasCompactionToolError(client.calls[2], "second-compaction-tool-call") {
+		t.Fatalf("manual local compaction second retry omitted the synthetic tool error: %+v", client.calls[2].Items)
+	}
+	feedbackCount := 0
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			feedbackCount++
+		}
+	}
+	if feedbackCount != 2 {
+		t.Fatalf(
+			"manual local compaction developer-error feedback entries = %d, want two; entries=%+v",
+			feedbackCount,
+			engine.ChatSnapshot().Entries,
+		)
 	}
 }
 

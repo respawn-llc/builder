@@ -54,12 +54,13 @@ var (
 )
 
 type compactionResult struct {
-	engine            string
-	items             []llm.ResponseItem
-	usage             llm.Usage
-	trimmedItemsCount *int
-	overflowRepair    compactionOverflowRepairStats
-	provider          string
+	engine                      string
+	items                       []llm.ResponseItem
+	usage                       llm.Usage
+	trimmedItemsCount           *int
+	overflowRepair              compactionOverflowRepairStats
+	localToolCallRejectionCount int
+	provider                    string
 }
 
 type defaultContextCompactor struct {
@@ -631,10 +632,11 @@ func (e *Engine) compactNowWithAcceptance(
 	providerID := "unknown"
 	persistence := newCompactionPersistence(e)
 	compactionFailure := func(result compactionResult, err error) error {
+		feedbackErr := e.emitLocalCompactionToolCallFeedback(stepID, result.localToolCallRejectionCount)
 		if accept != nil {
-			return err
+			return errors.Join(err, feedbackErr)
 		}
-		return errors.Join(err, persistence.emitStatus(stepID, requestID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error()))
+		return errors.Join(err, feedbackErr, persistence.emitStatus(stepID, requestID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error()))
 	}
 
 	caps, err := e.providerCapabilities(ctx)
@@ -757,6 +759,9 @@ func (e *Engine) compactNowWithAcceptance(
 	e.compactionRuntimeState().SetManualCompactionEligible(false)
 	e.persistCompletedCompactionFactsBestEffort(stepID, e.compactionRuntimeState().Count())
 	finalizationErr := replacementErr
+	if err := e.emitLocalCompactionToolCallFeedback(stepID, result.localToolCallRejectionCount); err != nil {
+		finalizationErr = errors.Join(finalizationErr, err)
+	}
 	if result.overflowRepair.Collapsed() {
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleDeveloperErrorFeedback), Text: fmt.Sprintf(
 			"Context compaction succeeded after collapsing tool payloads: %d shell outputs, %d patch inputs, ~%d tokens omitted. Full original tool payloads remain in pre-compaction transcript history but are omitted from the compacted model context.",
@@ -797,6 +802,17 @@ func (e *Engine) compactNowWithAcceptance(
 		finalizationErr = errors.Join(finalizationErr, err)
 	}
 	return result, replacementReceipt, finalizationErr
+}
+
+func (e *Engine) emitLocalCompactionToolCallFeedback(stepID string, count int) error {
+	var err error
+	for range count {
+		err = errors.Join(err, e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+			Role: string(transcript.EntryRoleDeveloperErrorFeedback),
+			Text: localCompactionToolsDisabledMessage,
+		})))
+	}
+	return err
 }
 
 func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) *string {
