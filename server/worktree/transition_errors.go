@@ -2,86 +2,46 @@ package worktree
 
 import "errors"
 
-type worktreeUnappliedError struct {
-	cause error
-}
+type worktreeError struct{ cause error }
 
-func (e *worktreeUnappliedError) Error() string {
-	return e.cause.Error()
-}
+func (e worktreeError) Error() string { return e.cause.Error() }
+func (e worktreeError) Unwrap() error { return e.cause }
 
-func (e *worktreeUnappliedError) Unwrap() error {
-	return e.cause
-}
+type worktreeUnappliedError struct{ worktreeError }
+type worktreeAppliedError struct{ worktreeError }
+type worktreeIndeterminateError struct{ worktreeError }
+type worktreeTechnicalError struct{ worktreeError }
 
-type worktreeAppliedError struct {
-	cause error
-}
-
-func (e *worktreeAppliedError) Error() string {
-	return e.cause.Error()
-}
-
-func (e *worktreeAppliedError) Unwrap() error {
-	return e.cause
-}
-
-func (e *worktreeAppliedError) WorktreeTransitionApplied() {}
-
-type worktreeIndeterminateError struct {
-	cause error
-}
-
-func (e *worktreeIndeterminateError) Error() string {
-	return e.cause.Error()
-}
-
-func (e *worktreeIndeterminateError) Unwrap() error {
-	return e.cause
-}
-
-func (e *worktreeIndeterminateError) WorktreeTransitionIndeterminate() {}
-
-type worktreeTechnicalError struct {
-	cause error
-}
-
-func (e *worktreeTechnicalError) Error() string {
-	return e.cause.Error()
-}
-
-func (e *worktreeTechnicalError) Unwrap() error {
-	return e.cause
-}
-
-func (e *worktreeTechnicalError) WorktreeTechnicalFailure() {}
+func (*worktreeAppliedError) WorktreeTransitionApplied()             {}
+func (*worktreeIndeterminateError) WorktreeTransitionIndeterminate() {}
+func (e *worktreeTechnicalError) WorktreeTechnicalFailure()          {}
 
 func worktreeUnappliedTechnical(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &worktreeUnappliedError{cause: &worktreeTechnicalError{cause: err}}
+	return &worktreeUnappliedError{worktreeError{cause: &worktreeTechnicalError{worktreeError{cause: err}}}}
 }
 
 func worktreeUnappliedUserCorrectable(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &worktreeUnappliedError{cause: err}
+	return &worktreeUnappliedError{worktreeError{cause: err}}
 }
 
 func worktreeApplied(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &worktreeAppliedError{cause: err}
+	return &worktreeAppliedError{worktreeError{cause: err}}
 }
 
 func worktreeIndeterminate(err error) error {
 	if err == nil {
 		err = errors.New("Worktree target application is indeterminate")
 	}
-	return &worktreeIndeterminateError{cause: err}
+	return &worktreeIndeterminateError{worktreeError{cause: err}}
 }
 
 func isWorktreeUnapplied(err error) bool {
