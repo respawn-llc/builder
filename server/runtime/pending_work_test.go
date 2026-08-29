@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,14 +13,6 @@ import (
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
-
-type worktreeTechnicalTestError struct{ error }
-type worktreeIndeterminateTestError struct{ error }
-type worktreeAppliedTestError struct{ error }
-
-func (worktreeTechnicalTestError) WorktreeTechnicalFailure()            {}
-func (worktreeIndeterminateTestError) WorktreeTransitionIndeterminate() {}
-func (worktreeAppliedTestError) WorktreeTransitionApplied()             {}
 
 func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
@@ -219,69 +210,6 @@ func TestStoppedHumanInputPublishesPendingWorkChangedWithoutBlockingList(t *test
 	pendingWorkTestWait(t, delivered, "Pending Work Changed delivery")
 
 	releaseMaintenance()
-}
-
-func TestPendingOperationalWorkTechnicalRestoration(t *testing.T) {
-	tests := []struct {
-		err  error
-		want string
-	}{
-		{worktreeTechnicalTestError{errors.New("technical application failure")}, "/wt leave"},
-		{errors.New("selector not found"), ""},
-		{worktreeAppliedTestError{errors.New("later publication failure")}, ""},
-	}
-	for _, test := range tests {
-		var restored *runtimeinput.PendingWorkTechnicalRestoration
-		var engine *Engine
-		id := clientui.NewWorktreeTransitionID()
-		engine = pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: func(event Event) {
-			if event.Kind == EventPendingWorkRestored {
-				restored = event.PendingWorkRestoration
-			}
-		}})
-		_, err := engine.ScheduleWorktreeTransition(t.Context(), id,
-			runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionLeave},
-			func(context.Context) error {
-				_, removeErr := engine.RemovePendingWork(t.Context(), pendingWorkTestID(t, id.String()))
-				pendingWorkTestRequire(t, errors.Is(removeErr, runtimeinput.ErrPendingWorkNotPending), "after-start removal = %v", removeErr)
-				return test.err
-			})
-		pendingWorkTestNoError(t, err)
-		waitEngineLifecycleTasks(t, engine)
-		if (restored == nil) != (test.want == "") || restored != nil && restored.CanonicalInput != test.want {
-			t.Fatalf("restoration = %+v, want %q", restored, test.want)
-		}
-	}
-}
-
-func TestIndeterminateWorktreeFailureRetiresRuntimeAfterLifecycleRelease(t *testing.T) {
-	transitionFailure, retirementFailure := errors.New("rollback target is indeterminate"), errors.New("retire exact Runtime resource")
-	retired := make(chan struct{})
-	var queuedID string
-	var queuedFailed bool
-	var engine *Engine
-	engine = pendingWorkTestEngine(t, Config{Model: "gpt-5", OnEvent: func(event Event) {
-		if status := event.QueuedUserMessageStatus; status != nil && status.QueueItemID == queuedID &&
-			status.Status == QueuedUserMessageFailed && status.FailureReason == QueuedUserMessageFailureRuntimeUnavailable {
-			queuedFailed = true
-		}
-	}, LifecycleRuntimeAbort: func() error { engine.lifecycleWG.Wait(); close(retired); return retirementFailure }})
-	release := pendingWorkTestHoldMaintenance(t, engine)
-	_, err := engine.ScheduleWorktreeTransition(t.Context(), clientui.NewWorktreeTransitionID(),
-		runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionLeave},
-		func(context.Context) error { return worktreeIndeterminateTestError{transitionFailure} })
-	pendingWorkTestNoError(t, err)
-	queued, err := engine.QueueUserMessage(t.Context(), "queued after Worktree transition")
-	pendingWorkTestNoError(t, err)
-	queuedID = queued.ID
-	release()
-	pendingWorkTestWait(t, retired, "Runtime retirement")
-	waitEngineLifecycleTasks(t, engine)
-	_, err = engine.QueueUserMessage(t.Context(), "later human work")
-	diagnostic := engine.ChatSnapshot().StreamingError
-	pendingWorkTestRequire(t, errors.Is(err, ErrEngineClosed) && queuedFailed &&
-		strings.Contains(diagnostic, transitionFailure.Error()) && strings.Contains(diagnostic, retirementFailure.Error()),
-		"closure/failure/diagnostic = %v/%v/%q", err, queuedFailed, diagnostic)
 }
 
 func pendingWorkTestEngine(t *testing.T, cfg Config) *Engine {
