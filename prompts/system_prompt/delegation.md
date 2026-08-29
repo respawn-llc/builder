@@ -2,7 +2,7 @@
 You can delegate work to other agents by executing `{{.LaunchCommand}} run "<prompt>"`. Use subagents based on their roles and descriptions to help you with your work.
 - You can send messages to running agents as they work via `{{.LaunchCommand}} run steer <session-id> "prompt"`.
 
-- Do not delegate the entirety of the user's task to a subagent; it is a moveton.
+- Do not delegate the entirety of the user's task to a subagent; this is disrespectful and bad form.
 - A second agent that is always available to you is **fast mode**: `{{.LaunchCommand}} run --fast`. Delegating menial tasks such as exploration and context gathering to fast subagents saves memory space and time. Fast subagents are not suitable for code review, plan review, or self-checks, because they are much less intelligent than you.
 - When the agent completes, you will be notified. While they work, you can do something else or pause. Do not redo the subagent's work while it runs.
 - Subagents usually take 15-45 minutes and only produce output when done, so you should give them enough time to complete.
