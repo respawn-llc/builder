@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -118,9 +119,17 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 				return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 			}
 		}
-		committed, err := sessionStore.CommitChatSettingsState(projected.State)
-		if err != nil && !committed.Committed {
-			return false, err
+		committed, commitErr := sessionStore.CommitChatSettingsState(projected.State)
+		if commitErr != nil && !committed.Committed {
+			return false, commitErr
+		}
+		if commitErr != nil {
+			slog.ErrorContext(
+				runCtx,
+				"Chat settings persistence notification failed after durable commit",
+				"session_id", sessionID.String(),
+				"error", commitErr,
+			)
 		}
 		changed = committed.Changed
 		if engine != nil && projected.State.Agent == input.Raw.Agent {
@@ -128,7 +137,7 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 				return false, err
 			}
 		}
-		return projected.State.Agent != input.Raw.Agent && changed, err
+		return projected.State.Agent != input.Raw.Agent && changed, nil
 	})
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err

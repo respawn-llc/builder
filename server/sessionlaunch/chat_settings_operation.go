@@ -57,7 +57,7 @@ func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInp
 			if persistedThinking == "" {
 				return PreparedChatSettingsOperationResult{}, errors.New("persisted Chat settings Thinking is required when present")
 			}
-			if slices.Contains(selectedEntry.Settings.SupportedThinkingValues, persistedThinking) {
+			if projectChatThinking(persistedThinking, selectedEntry.Settings) != nil {
 				baseSettings.Thinking = persistedThinking
 			}
 		}
@@ -91,7 +91,7 @@ func ProjectPreparedChatSettingsOperation(input PreparedChatSettingsOperationInp
 		target.Settings.Supervisor = operation.Value
 	case serverapi.ChatSettingsMutationThinking:
 		thinking := strings.TrimSpace(*operation.Value)
-		thinkingProjection := projectChatThinking(input.Effective.Thinking, selectedEntry.Settings)
+		thinkingProjection := projectChatThinking(baseSettings.Thinking, selectedEntry.Settings)
 		if thinkingProjection == nil ||
 			(thinkingProjection.Kind == serverapi.ChatSettingsThinkingEnumerated &&
 				!slices.Contains(thinkingProjection.Values, thinking)) {

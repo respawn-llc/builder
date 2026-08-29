@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"core/server/auth"
@@ -440,7 +441,21 @@ func validateWorkspaceChatDraftTransform(draft WorkspaceChatDraft, resolved Work
 	if !ok {
 		return fmt.Errorf("workspace Chat draft Agent %q is unavailable", draft.Agent)
 	}
-	if _, ok := limit.thinking[draft.Thinking]; !ok {
+	selected, ok := resolved.Catalog.Lookup(agent)
+	if !ok {
+		return fmt.Errorf("workspace Chat draft Agent %q is unavailable", draft.Agent)
+	}
+	currentAgent := normalizeWorkspaceChatDraftAgent(resolved.Draft.Agent)
+	currentThinking := resolved.Draft.Thinking
+	if agent == currentAgent && resolved.PersistedThinking != nil {
+		currentThinking = *resolved.PersistedThinking
+	} else if agent != currentAgent {
+		currentThinking = selected.Settings.Baseline.Thinking
+	}
+	thinking := projectChatThinking(currentThinking, selected.Settings)
+	if thinking == nil ||
+		(thinking.Kind == serverapi.ChatSettingsThinkingEnumerated &&
+			!slices.Contains(thinking.Values, strings.TrimSpace(draft.Thinking))) {
 		return fmt.Errorf("workspace Chat draft thinking %q is unavailable for Agent %q", draft.Thinking, agent)
 	}
 	if draft.Fast && !limit.fast {
