@@ -42,6 +42,25 @@ type sequenceRuntimeActivityResolver struct {
 	calls     int
 }
 
+type runtimeControlSettingPublisher struct {
+	feedback []clientui.TranscriptSessionSettingFeedback
+}
+
+func (p *runtimeControlSettingPublisher) RuntimeReadModelFeedSnapshot(
+	context.Context,
+	string,
+) (clientui.RuntimeReadModelUpdate, error) {
+	return clientui.RuntimeReadModelUpdate{}, nil
+}
+
+func (p *runtimeControlSettingPublisher) PublishSessionSettingFeedback(
+	_ string,
+	feedback clientui.TranscriptSessionSettingFeedback,
+) error {
+	p.feedback = append(p.feedback, feedback)
+	return nil
+}
+
 type runtimeControlPromptFeed struct {
 	mu            sync.Mutex
 	pending       chan struct{}
@@ -2775,6 +2794,35 @@ func TestServiceRemovePendingWorkIsRuntimeOnly(t *testing.T) {
 	}
 	if got := countPromptHistoryEvents(t, sessionStore, "discard runtime only"); got != 0 {
 		t.Fatalf("prompt history count after runtime-only discard = %d, want 0", got)
+	}
+}
+
+func TestSetSessionNamePublishesChangedAndUnchangedFeedback(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	publisher := &runtimeControlSettingPublisher{}
+	service.WithRuntimeActivityResolver(publisher)
+	request := serverapi.RuntimeSetSessionNameRequest{
+		SessionID: store.Meta().SessionID,
+		Name:      "renamed",
+	}
+	if err := service.SetSessionName(t.Context(), request); err != nil {
+		t.Fatalf("SetSessionName changed: %v", err)
+	}
+	if err := service.SetSessionName(t.Context(), request); err != nil {
+		t.Fatalf("SetSessionName unchanged: %v", err)
+	}
+	if len(publisher.feedback) != 2 {
+		t.Fatalf("published feedback = %+v, want changed and unchanged events", publisher.feedback)
+	}
+	if !publisher.feedback[0].Changed || publisher.feedback[1].Changed {
+		t.Fatalf("published change facts = %+v, want true then false", publisher.feedback)
+	}
+	for _, feedback := range publisher.feedback {
+		if feedback.Kind != clientui.SessionSettingSessionName ||
+			feedback.SessionName == nil ||
+			*feedback.SessionName != "renamed" {
+			t.Fatalf("published Session Name feedback = %+v", feedback)
+		}
 	}
 }
 

@@ -385,6 +385,40 @@ func TestPendingWorkTechnicalRestorationMergesBeforeComposer(t *testing.T) {
 	}
 }
 
+func TestTranscriptSessionSettingFeedbackUsesTransientStatusWithoutTranscriptRows(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	client := &runtimeControlFakeClient{}
+	model := newProjectedClosedUIModel(client)
+	enabled := true
+	cmd := model.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptSessionSettingFeedback{
+			Kind: clientui.SessionSettingFastMode, Changed: true, FastMode: &enabled,
+		})),
+		runtimeTupleMergeResult{},
+	)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ := model.Update(msg)
+		model = next.(*uiModel)
+	}
+	if model.transientStatus == "" || model.transientStatusKind != uiStatusNoticeSuccess {
+		t.Fatalf("setting feedback status = %q kind=%v, want success notice", model.transientStatus, model.transientStatusKind)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("setting feedback appended %d transcript rows", client.appendCalls)
+	}
+
+	model.transientStatus = ""
+	model.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptSessionSettingFeedback{
+			Kind: clientui.SessionSettingFastMode, Changed: false, FastMode: &enabled,
+		})),
+		runtimeTupleMergeResult{},
+	)
+	if model.transientStatus != "" {
+		t.Fatalf("unchanged setting emitted success notice %q", model.transientStatus)
+	}
+}
+
 func TestThinkingQueryUsesStatusOnly(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 

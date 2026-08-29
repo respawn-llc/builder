@@ -49,7 +49,6 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 	pendingCtx, cancelPending := context.WithCancelCause(context.Background())
 	committed, acceptErr := runCommandAcceptance(request.accept, func() (bool, error) {
 		reservation.pendingWork = &pendingOperationalWork{
-			order:  *e.nextPendingWorkSteerAdmission(),
 			item:   request.item,
 			cancel: cancelPending,
 		}

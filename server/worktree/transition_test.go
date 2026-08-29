@@ -35,6 +35,7 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 		{name: "pre-write technical failure", write: writeFailure, outcome: &failed, diagnostic: writeFailure},
 		{name: "successful rollback after target-sync failure", finish: syncFailure, outcome: &failed, diagnostic: syncFailure},
 		{name: "selector user-correctable failure", selector: true, outcome: &failed, diagnostic: selectorFailure},
+		{name: "dormant selector user-correctable failure", dormant: true, selector: true, outcome: &failed, diagnostic: selectorFailure},
 		{name: "applied target then identity publication failure", outcome: &completed, publication: publicationFailure, surface: publicationDiagnostic},
 		{name: "active rollback failure", finish: syncFailure, rollback: rollbackFailure, surface: rollbackDiagnostic},
 		{name: "runtime target rollback failure", finish: &externalIndeterminateWorktreeError{syncFailure}, rollback: worktreeApplied(rollbackFailure), surface: rollbackDiagnostic},

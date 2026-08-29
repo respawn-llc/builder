@@ -74,6 +74,12 @@ func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiv
 	if s.reservationPendingLocked(reservation) {
 		return ErrExclusiveStepReservationPending
 	}
+	if reservation.pendingWork != nil {
+		if reservation.pendingWork.order != 0 {
+			return errors.New("operational Pending Work admission order is already assigned")
+		}
+		reservation.pendingWork.order = *s.engine.nextPendingWorkSteerAdmission()
+	}
 	waiter := &exclusiveStepWaiter{ready: make(chan struct{}), reservation: reservation}
 	if s.reservationWaiters == nil {
 		s.reservationWaiters = make(map[*exclusiveStepReservation]*exclusiveStepWaiter)

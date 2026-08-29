@@ -280,6 +280,9 @@ func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.Tran
 	case clientui.TranscriptMessagePendingWorkRestored:
 		// Composer restoration is owned by the transcript state observer.
 		return false
+	case clientui.TranscriptMessageSessionSettingFeedback:
+		// Typed setting feedback is owned by the app transient-status surface.
+		return false
 	case clientui.TranscriptMessageSessionStatus:
 		// Session status is already represented by the app status line.
 	case clientui.TranscriptMessageSessionIdentity:
@@ -450,6 +453,7 @@ func isAppOwnedOngoingMessage(kind clientui.TranscriptMessageKind) bool {
 		clientui.TranscriptMessageQueuedMessageState,
 		clientui.TranscriptMessagePendingWorkChanged,
 		clientui.TranscriptMessagePendingWorkRestored,
+		clientui.TranscriptMessageSessionSettingFeedback,
 		clientui.TranscriptMessageUserMessageFlushed,
 		clientui.TranscriptMessageSessionStatus,
 		clientui.TranscriptMessageSessionIdentity,

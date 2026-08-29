@@ -40,7 +40,7 @@
 - Pending messages survive only until delivery or process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - Pending Work renders as a visible pane between transcript and input until drained. The pane shows Queue messages first in Queue order and then Steer items in server acceptance order.
 - There is no standalone per-item removal or reordering affordance. The only TUI removal action is the busy `Ctrl+C` interrupt, which drains pending human Send/Steer and post-turn Queue messages into the main input (see Interrupts And Exit). Operational Pending Work remains accepted and is not removed.
-- When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server submission order, followed by any existing composer draft.
+- When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server acceptance order, followed by any existing composer draft.
 - When the live TUI observes a definitely-unapplied technical restoration, it restores the canonical presentation through the same composer merge behavior. Every observing TUI restores the same broadcast independently, and Kent does not replay it after reconnect.
 - Pending Queue and Steer messages are not persisted for restoration. Process exit before the TUI observes the interrupt loses them.
 - The following creation-failure behavior applies to every queued message or Steer, including Allow commentary.

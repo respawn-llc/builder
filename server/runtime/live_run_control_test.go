@@ -77,6 +77,46 @@ func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
 	}
 }
 
+func TestQueueMessageForActiveRunStopsWhenRuntimeFIFOCloses(t *testing.T) {
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng.liveRun.beginStep(&RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  time.Now().UTC(),
+	})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	type result struct {
+		accepted bool
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, accepted, err := eng.QueueUserMessageForActiveRun(t.Context(), "queued", func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+		done <- result{accepted: accepted, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("queued message did not enter Runtime operation")
+	}
+	eng.runtimeFIFO.beginClose()
+	close(release)
+	got := <-done
+	if got.accepted || !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("queue result accepted=%t err=%v, want unaccepted canceled operation", got.accepted, got.err)
+	}
+	if eng.HasQueuedUserWork() {
+		t.Fatal("Runtime FIFO shutdown admitted queued message")
+	}
+}
+
 func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})

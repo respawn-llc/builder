@@ -237,7 +237,7 @@
 - The progress bar never recolors its complete fill when usage crosses a threshold.
 - Authoritative usage changes animate the progress value. Reduced motion applies the new value immediately.
 - The pop-up has no compaction-guidance field. Its `Compact` action is equivalent to `/compact` with no guidance.
-- Activating `Compact` closes the Context pop-up and uses the same immediate-or-Steer flow as `/compact`. Every other transient surface that initiates manual compaction also closes after accepting the action.
+- Activating `Compact` closes the Context pop-up and uses the same Pending Work flow as `/compact`. Every other transient surface that initiates manual compaction also closes after accepting the action.
 - Manual compaction guidance is available only through `/compact <guidance>`.
 - While any compaction is active, the compact Context meter replaces its ordinary percentage and ring with a secondary-tone spinner and `Compacting` in the same trigger footprint.
 - The compacting Context trigger remains interactive and can open the Context pop-up. The pop-up keeps the last authoritative usage values visible until new usage arrives.

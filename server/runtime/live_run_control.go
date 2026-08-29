@@ -242,11 +242,11 @@ func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSte
 }
 
 func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
-	result, err := awaitEngineRuntimeOperation(ctx, e, func(context.Context) (struct {
+	result, err := awaitEngineRuntimeOperation(ctx, e, func(operationCtx context.Context) (struct {
 		item     QueuedUserMessage
 		accepted bool
 	}, error) {
-		item, accepted, operationErr := e.queueMessageForActiveRunRaw(ctx, message, onActive, beforeQueue, accept)
+		item, accepted, operationErr := e.queueMessageForActiveRunRaw(operationCtx, ctx, message, onActive, beforeQueue, accept)
 		return struct {
 			item     QueuedUserMessage
 			accepted bool
@@ -255,14 +255,20 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	return result.item, result.accepted, err
 }
 
-func (e *Engine) queueMessageForActiveRunRaw(ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
+func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if operationCtx == nil {
+		operationCtx = context.Background()
 	}
-	if err := ctx.Err(); err != nil {
+	if callerCtx == nil {
+		callerCtx = context.Background()
+	}
+	if err := operationCtx.Err(); err != nil {
+		return QueuedUserMessage{}, false, err
+	}
+	if err := callerCtx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
 	if message.Content == nil || strings.TrimSpace(*message.Content) == "" {
@@ -285,7 +291,10 @@ func (e *Engine) queueMessageForActiveRunRaw(ctx context.Context, message llm.Me
 			e.liveRun.rollbackAdmission(admission)
 		}
 	}()
-	if err := ctx.Err(); err != nil {
+	if err := operationCtx.Err(); err != nil {
+		return QueuedUserMessage{}, false, err
+	}
+	if err := callerCtx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
 	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Message: message}
@@ -295,7 +304,10 @@ func (e *Engine) queueMessageForActiveRunRaw(ctx context.Context, message llm.Me
 				return false, err
 			}
 		}
-		if err := ctx.Err(); err != nil {
+		if err := operationCtx.Err(); err != nil {
+			return false, err
+		}
+		if err := callerCtx.Err(); err != nil {
 			return false, err
 		}
 		finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {

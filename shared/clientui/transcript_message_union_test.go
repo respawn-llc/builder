@@ -42,6 +42,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 		CreatedAt: time.Unix(1_700_000_000, 0),
 	}
 	queueText := "queued input"
+	fastModeEnabled := true
 	tests := []struct {
 		name  string
 		event TranscriptEvent
@@ -108,6 +109,11 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 				CanonicalInput: "/compact",
 			},
 		}), TranscriptMessagePendingWorkRestored},
+		{"session setting feedback", NewTranscriptEvent(TranscriptSessionSettingFeedback{
+			Kind:     SessionSettingFastMode,
+			Changed:  true,
+			FastMode: &fastModeEnabled,
+		}), TranscriptMessageSessionSettingFeedback},
 		{"interrupted human input", NewTranscriptEvent(TranscriptHumanInputInterrupted{
 			Items: []TranscriptInterruptedHumanInputItem{{
 				QueueItemID: transcriptTestQueueItemID(t),

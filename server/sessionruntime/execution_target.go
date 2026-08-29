@@ -117,7 +117,7 @@ func (a *Authority) RunWorktreeTransition(
 				},
 				nil,
 			)
-			if worktreeTransitionIsIndeterminate(runErr) {
+			if runErr != nil {
 				return false, runErr
 			}
 			acknowledgement = &worktreepb.ScheduledAcknowledgement{OperationId: operationID.String()}
