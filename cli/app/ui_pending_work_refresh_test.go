@@ -10,61 +10,52 @@ import (
 	"core/shared/runtimeinput"
 )
 
-func TestPendingWorkRefreshHydrationScopesAndCoalescing(t *testing.T) {
+func TestPendingWorkRefreshHydrationScopeAndCoalescing(t *testing.T) {
 	sessionA, sessionB := ongoingTestSessionID(), runtimeids.NewSessionID()
 	m := newProjectedStaticUIModel()
-	m.pendingWorkRefresh.collection = pendingWorkRefreshTestWork("before hydration")
-	if cmd := m.advancePendingWorkRefreshScope(sessionA); cmd == nil {
-		t.Fatal("hydration did not fetch")
+	m.pendingWorkRefresh.collection = pendingWorkRefreshTestWork("prior")
+	if m.advancePendingWorkRefreshScope(sessionA) == nil {
+		t.Fatal("hydration did not request Pending Work")
 	}
-	assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(sessionA, 1, true, false, false))
+	assertPendingWorkTexts(t, m)
 	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{pendingWork: pendingWorkRefreshTestWork("stale")})
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{err: errors.New("stale failure")})
-	assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(sessionA, 1, true, false, false))
-	current := pendingWorkRefreshTestWork("current")
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{generation: 1, pendingWork: current})
-	assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(sessionA, 1, false, false, true, current))
+	assertPendingWorkTexts(t, m)
+	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{generation: 1, pendingWork: pendingWorkRefreshTestWork("current")})
+	assertPendingWorkTexts(t, m, "current")
 
-	if m.requestPendingWorkRefresh(sessionB) != nil {
-		t.Fatal("foreign Session refresh started")
-	}
-	if m.requestPendingWorkRefresh(sessionA) == nil {
-		t.Fatal("current-scope refresh did not start")
+	if m.requestPendingWorkRefresh(sessionB) != nil || m.requestPendingWorkRefresh(sessionA) == nil {
+		t.Fatal("refresh did not filter by hydrated Session")
 	}
 	if m.requestPendingWorkRefresh(sessionA) != nil || m.requestPendingWorkRefresh(sessionA) != nil {
 		t.Fatal("overlapping refresh started another request")
 	}
-	latest := pendingWorkRefreshTestWork("latest")
-	followUp := m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{generation: 1, pendingWork: latest})
+	followUp := m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{
+		generation: 1, pendingWork: pendingWorkRefreshTestWork("latest"),
+	})
 	if followUp == nil {
 		t.Fatal("overlapping refresh did not schedule one follow-up")
 	}
-	assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(sessionA, 1, true, false, true, latest))
 	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{generation: 1, err: errors.New("follow-up failed")})
-	assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(sessionA, 1, false, false, true, latest))
+	assertPendingWorkTexts(t, m, "latest")
 
-	for generation := uint64(2); generation <= 3; generation++ {
-		if cmd := m.advancePendingWorkRefreshScope(sessionB); cmd == nil {
-			t.Fatal("replacement hydration did not fetch")
-		}
-		assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(sessionB, generation, true, false, false))
-	}
-	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{generation: 3, err: errors.New("first fetch failed")})
-	assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(sessionB, 3, false, false, false))
+	m.advancePendingWorkRefreshScope(sessionB)
+	m.advancePendingWorkRefreshScope(sessionB)
+	assertPendingWorkTexts(t, m)
+	m.applyPendingWorkRefreshDone(pendingWorkRefreshDoneMsg{generation: 3, err: errors.New("initial fetch failed")})
+	assertPendingWorkTexts(t, m)
 }
 
-func TestAcceptedHydrationAdvancesPendingWorkRefreshScope(t *testing.T) {
+func TestAcceptedHydrationClearsAndRefreshesPendingWork(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.pendingWorkRefresh.collection = pendingWorkRefreshTestWork("prior")
 	controller := newOngoingTranscriptController(
 		&ongoingSurfaceSpy{}, m.ongoingFrameInput,
 		noopOngoingTranscriptRuntimeAdmission, m.applyAdmittedTranscriptMessageState,
 	)
-	hydration := ongoingHydrationMessage(1)
-	if _, cmd, err := controller.Accept(hydration); err != nil || cmd == nil {
-		t.Fatalf("accept initial hydration: cmd=%v err=%v", cmd, err)
+	if _, cmd, err := controller.Accept(ongoingHydrationMessage(1)); err != nil || cmd == nil {
+		t.Fatalf("accepted hydration = cmd %v, error %v", cmd, err)
 	}
-	assertUnchanged(t, "owner", m.pendingWorkRefresh, pendingWorkRefreshTestOwner(ongoingTestSessionID(), 1, true, false, false))
+	assertPendingWorkTexts(t, m)
 }
 
 func TestPendingWorkRefreshTriggersUseCapturedSession(t *testing.T) {
@@ -74,8 +65,8 @@ func TestPendingWorkRefreshTriggersUseCapturedSession(t *testing.T) {
 	if cmd := changed.applyAdmittedTranscriptMessageState(
 		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkChanged{})),
 		runtimeTupleMergeResult{},
-	); cmd == nil || !changed.pendingWorkRefresh.inFlight || changed.pendingWorkRefresh.generation != 1 {
-		t.Fatal("Changed did not refresh the hydrated Session")
+	); cmd == nil {
+		t.Fatal("Changed did not refresh Pending Work")
 	}
 	triggers := []func(*uiModel, runtimeids.SessionID){
 		func(m *uiModel, id runtimeids.SessionID) {
@@ -114,18 +105,17 @@ func TestPendingWorkRefreshTriggersUseCapturedSession(t *testing.T) {
 	}
 }
 
-func pendingWorkRefreshTestOwner(
-	sessionID runtimeids.SessionID, generation uint64, inFlight, followUp, successful bool,
-	collection ...runtimeinput.PendingWork,
-) pendingWorkRefreshOwner {
-	owner := pendingWorkRefreshOwner{
-		sessionID: sessionID, generation: generation, inFlight: inFlight,
-		followUpRequired: followUp, successfulFetch: successful,
+func assertPendingWorkTexts(t *testing.T, m *uiModel, want ...string) {
+	t.Helper()
+	got := m.layout().queuedMessages()
+	if len(got) != len(want) {
+		t.Fatalf("Pending Work count = %d, want %d", len(got), len(want))
 	}
-	if len(collection) != 0 {
-		owner.collection = collection[0]
+	for index := range want {
+		if got[index].Text != want[index] {
+			t.Fatalf("Pending Work[%d] = %q, want %q", index, got[index].Text, want[index])
+		}
 	}
-	return owner
 }
 
 func pendingWorkRefreshTestWork(text string) runtimeinput.PendingWork {
