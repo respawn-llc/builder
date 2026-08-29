@@ -632,9 +632,13 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 		State:       outcome.State,
 	}
 	if outcome.Failure != nil {
-		transcriptOutcome.Failure = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode("worktree_transition_failed"),
-			Detail: outcome.Failure.Diagnostic,
+		if outcome.Failure.SelectorError != nil {
+			transcriptOutcome.SelectorError = outcome.Failure.SelectorError
+		} else {
+			transcriptOutcome.Failure = &clientui.TranscriptDiagnostic{
+				Code:   clientui.TranscriptDiagnosticCode("worktree_transition_failed"),
+				Detail: outcome.Failure.Diagnostic,
+			}
 		}
 		if outcome.Failure.DeletePrecondition != nil {
 			dirtyState := *outcome.Failure.DeletePrecondition

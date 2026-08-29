@@ -10,18 +10,9 @@ import (
 	"core/shared/clientui"
 )
 
-type immediateSessionSettingOwner struct {
-	mu sync.Mutex
-}
+type immediateSessionSettingOwner struct{ mu sync.Mutex }
 
-func (e *Engine) mutateImmediateSessionSetting(
-	ctx context.Context,
-	prepare func() error,
-	persist func() (session.CommitReceipt, bool, error),
-	apply func(),
-	feedback clientui.TranscriptSessionSettingFeedback,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, error) {
+func (e *Engine) mutateImmediateSessionSetting(ctx context.Context, prepare func() error, persist func() (session.CommitReceipt, bool, error), apply func(), feedback clientui.TranscriptSessionSettingFeedback, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -61,13 +52,7 @@ func (e *Engine) mutateImmediateSessionSetting(
 	return changed, errors.Join(mutationErr, publish(feedback))
 }
 
-func (e *Engine) mutateImmediateChatSetting(
-	ctx context.Context,
-	mutation session.ChatSettingsMutation,
-	apply func(),
-	feedback clientui.TranscriptSessionSettingFeedback,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, error) {
+func (e *Engine) mutateImmediateChatSetting(ctx context.Context, mutation session.ChatSettingsMutation, apply func(), feedback clientui.TranscriptSessionSettingFeedback, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, error) {
 	return e.mutateImmediateSessionSetting(
 		ctx,
 		nil,
@@ -81,11 +66,7 @@ func (e *Engine) mutateImmediateChatSetting(
 	)
 }
 
-func (e *Engine) SetFastModeEnabledWithPublication(
-	ctx context.Context,
-	enabled bool,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, error) {
+func (e *Engine) SetFastModeEnabledWithPublication(ctx context.Context, enabled bool, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, error) {
 	if enabled && !e.FastModeAvailable() {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
@@ -93,19 +74,12 @@ func (e *Engine) SetFastModeEnabledWithPublication(
 		ctx,
 		session.ChatSettingsMutation{Fast: &enabled},
 		func() { e.applyFastModeEnabled(enabled) },
-		clientui.TranscriptSessionSettingFeedback{
-			Kind:     clientui.SessionSettingFastMode,
-			FastMode: &enabled,
-		},
+		clientui.TranscriptSessionSettingFeedback{Kind: clientui.SessionSettingFastMode, FastMode: &enabled},
 		publish,
 	)
 }
 
-func (e *Engine) SetSessionNameWithPublication(
-	ctx context.Context,
-	name string,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, error) {
+func (e *Engine) SetSessionNameWithPublication(ctx context.Context, name string, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, error) {
 	normalized := strings.TrimSpace(name)
 	return e.mutateImmediateSessionSetting(
 		ctx,
@@ -115,19 +89,12 @@ func (e *Engine) SetSessionNameWithPublication(
 			return result.CommitReceipt, result.Changed, err
 		},
 		nil,
-		clientui.TranscriptSessionSettingFeedback{
-			Kind:        clientui.SessionSettingSessionName,
-			SessionName: &normalized,
-		},
+		clientui.TranscriptSessionSettingFeedback{Kind: clientui.SessionSettingSessionName, SessionName: &normalized},
 		publish,
 	)
 }
 
-func (e *Engine) SetThinkingLevelWithPublication(
-	ctx context.Context,
-	level string,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, error) {
+func (e *Engine) SetThinkingLevelWithPublication(ctx context.Context, level string, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, error) {
 	normalized := strings.TrimSpace(level)
 	if normalized == "" {
 		return false, errors.New("thinking level is required")
@@ -136,27 +103,17 @@ func (e *Engine) SetThinkingLevelWithPublication(
 		ctx,
 		session.ChatSettingsMutation{Thinking: &normalized},
 		func() { _ = e.setThinkingValue(normalized) },
-		clientui.TranscriptSessionSettingFeedback{
-			Kind:     clientui.SessionSettingThinking,
-			Thinking: &normalized,
-		},
+		clientui.TranscriptSessionSettingFeedback{Kind: clientui.SessionSettingThinking, Thinking: &normalized},
 		publish,
 	)
 }
 
-func (e *Engine) SetAutoCompactionEnabledWithPublication(
-	ctx context.Context,
-	enabled bool,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, bool, error) {
+func (e *Engine) SetAutoCompactionEnabledWithPublication(ctx context.Context, enabled bool, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, bool, error) {
 	changed, err := e.mutateImmediateChatSetting(
 		ctx,
 		session.ChatSettingsMutation{AutoCompaction: &enabled},
 		func() { e.applyAutoCompactionEnabled(enabled) },
-		clientui.TranscriptSessionSettingFeedback{
-			Kind:           clientui.SessionSettingAutoCompaction,
-			AutoCompaction: &enabled,
-		},
+		clientui.TranscriptSessionSettingFeedback{Kind: clientui.SessionSettingAutoCompaction, AutoCompaction: &enabled},
 		publish,
 	)
 	if err != nil {
@@ -165,19 +122,12 @@ func (e *Engine) SetAutoCompactionEnabledWithPublication(
 	return changed, enabled, nil
 }
 
-func (e *Engine) SetQuestionsEnabledWithPublication(
-	ctx context.Context,
-	enabled bool,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, bool, error) {
+func (e *Engine) SetQuestionsEnabledWithPublication(ctx context.Context, enabled bool, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, bool, error) {
 	changed, err := e.mutateImmediateChatSetting(
 		ctx,
 		session.ChatSettingsMutation{Questions: &enabled},
 		func() { e.applyQuestionsEnabled(enabled) },
-		clientui.TranscriptSessionSettingFeedback{
-			Kind:      clientui.SessionSettingQuestions,
-			Questions: &enabled,
-		},
+		clientui.TranscriptSessionSettingFeedback{Kind: clientui.SessionSettingQuestions, Questions: &enabled},
 		publish,
 	)
 	if err != nil {
@@ -186,32 +136,20 @@ func (e *Engine) SetQuestionsEnabledWithPublication(
 	return changed, enabled, nil
 }
 
-func (e *Engine) SetReviewerEnabledWithPublication(
-	ctx context.Context,
-	enabled bool,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, string, error) {
+func (e *Engine) SetReviewerEnabledWithPublication(ctx context.Context, enabled bool, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, string, error) {
 	return e.setReviewerSettingWithPublication(ctx, func() (string, error) {
 		_, target, err := e.reviewerEnabledChange(enabled)
 		return target, err
 	}, publish)
 }
 
-func (e *Engine) SetReviewerFrequencyWithPublication(
-	ctx context.Context,
-	frequency string,
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, string, error) {
+func (e *Engine) SetReviewerFrequencyWithPublication(ctx context.Context, frequency string, publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, string, error) {
 	return e.setReviewerSettingWithPublication(ctx, func() (string, error) {
 		return e.PrepareReviewerFrequency(frequency)
 	}, publish)
 }
 
-func (e *Engine) setReviewerSettingWithPublication(
-	ctx context.Context,
-	resolve func() (string, error),
-	publish func(clientui.TranscriptSessionSettingFeedback) error,
-) (bool, string, error) {
+func (e *Engine) setReviewerSettingWithPublication(ctx context.Context, resolve func() (string, error), publish func(clientui.TranscriptSessionSettingFeedback) error) (bool, string, error) {
 	target := ""
 	changed, err := e.mutateImmediateSessionSetting(
 		ctx,
@@ -225,10 +163,7 @@ func (e *Engine) setReviewerSettingWithPublication(
 			return result.CommitReceipt, result.Changed, err
 		},
 		func() { e.setReviewerFrequency(target) },
-		clientui.TranscriptSessionSettingFeedback{
-			Kind:       clientui.SessionSettingSupervisor,
-			Supervisor: &target,
-		},
+		clientui.TranscriptSessionSettingFeedback{Kind: clientui.SessionSettingSupervisor, Supervisor: &target},
 		publish,
 	)
 	if err != nil {

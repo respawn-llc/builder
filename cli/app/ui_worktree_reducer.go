@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
@@ -20,8 +21,14 @@ func (m *uiModel) reconcileTranscriptWorktreeTransitionOutcome(outcome clientui.
 	}
 	var statusCmd tea.Cmd
 	if outcome.State == clientui.WorktreeTransitionFailed {
+		failureText := ""
+		if selector := outcome.SelectorError; selector != nil {
+			failureText = fmt.Sprintf("Worktree selector %q did not resolve to one available Worktree; choose an exact Worktree ID or path", selector.Input)
+		} else {
+			failureText = outcome.Failure.Detail
+		}
 		statusCmd = m.sendTransientStatusWithNoticeID(
-			outcome.Failure.Detail,
+			failureText,
 			uiStatusNoticeError,
 			transientStatusDuration,
 			uiStatusNoticeReplace,
