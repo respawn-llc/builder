@@ -16,12 +16,12 @@ export type PendingWorkItemID = UUIDv4Value<"pending_work_item">;
 export type CompactionRequestID = UUIDv4Value<"compaction_request">;
 export type WorktreeOperationID = UUIDv4Value<"worktree_operation">;
 
-export const parsePendingWorkItemID = createUUIDv4ValueParser<"pending_work_item">(
-  "Pending Work item id must be a UUID v4.");
-export const parseCompactionRequestID = createUUIDv4ValueParser<"compaction_request">(
-  "Compaction request id must be a UUID v4.");
-export const parseWorktreeOperationID = createUUIDv4ValueParser<"worktree_operation">(
-  "Worktree operation id must be a UUID v4.");
+export const parsePendingWorkItemID =
+  createUUIDv4ValueParser<"pending_work_item">("Invalid Pending Work UUID v4.");
+export const parseCompactionRequestID =
+  createUUIDv4ValueParser<"compaction_request">("Invalid compaction UUID v4.");
+export const parseWorktreeOperationID =
+  createUUIDv4ValueParser<"worktree_operation">("Invalid Worktree operation UUID v4.");
 
 export const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID);
 const compactionRequestIDSchema = uuidSchema(parseCompactionRequestID);
@@ -38,12 +38,27 @@ const worktreeTransitionSchema = z.discriminatedUnion("transition", [
 
 export const pendingWorkItemSchema = z
   .discriminatedUnion("kind", [
-    strict({ ...itemBase, id: pendingWorkItemIDSchema, lane: z.enum(["queue", "steer"]),
-      kind: z.literal("message"), message: strict({ text: nonBlankExact }) }),
-    strict({ ...itemBase, id: compactionRequestIDSchema, lane: z.literal("steer"),
-      kind: z.literal("manual_compaction"), manual_compaction: strict({ guidance: normalizedArgument.optional() }) }),
-    strict({ ...itemBase, id: worktreeOperationIDSchema, lane: z.literal("steer"),
-      kind: z.literal("worktree_transition"), worktree_transition: worktreeTransitionSchema }),
+    strict({
+      ...itemBase,
+      id: pendingWorkItemIDSchema,
+      lane: z.enum(["queue", "steer"]),
+      kind: z.literal("message"),
+      message: strict({ text: nonBlankExact }),
+    }),
+    strict({
+      ...itemBase,
+      id: compactionRequestIDSchema,
+      lane: z.literal("steer"),
+      kind: z.literal("manual_compaction"),
+      manual_compaction: strict({ guidance: normalizedArgument.optional() }),
+    }),
+    strict({
+      ...itemBase,
+      id: worktreeOperationIDSchema,
+      lane: z.literal("steer"),
+      kind: z.literal("worktree_transition"),
+      worktree_transition: worktreeTransitionSchema,
+    }),
   ])
   .superRefine((item, context) => {
     const expected =
@@ -109,8 +124,7 @@ export const pendingWorkSchema = strict({
         });
       }
     }
-  })
-  .transform((value) => ({ items: value.items }));
+  });
 export type PendingWork = Readonly<z.output<typeof pendingWorkSchema>>;
 
 export type PendingWorkIdentity = PendingWorkItemID | CompactionRequestID | WorktreeOperationID;
@@ -193,11 +207,8 @@ function uuidSchema<Domain extends string>(parse: (value: string) => UUIDv4Value
   return z.string().transform((value, context) => {
     try {
       return parse(value);
-    } catch (error) {
-      context.addIssue({
-        code: "custom",
-        message: error instanceof Error ? error.message : "Expected UUID v4.",
-      });
+    } catch {
+      context.addIssue({ code: "custom", message: "Expected UUID v4." });
       return z.NEVER;
     }
   });
@@ -207,15 +218,10 @@ export function normalizeWhitespace(value: string): string {
   let normalized = "";
   let separatorPending = false;
   for (const character of value) {
-    if (character.trim().length === 0) {
-      separatorPending = normalized.length > 0;
-      continue;
-    }
-    if (separatorPending) {
-      normalized += " ";
-      separatorPending = false;
-    }
-    normalized += character;
+    const whitespace = character.trim().length === 0;
+    if (!whitespace && separatorPending) normalized += " ";
+    if (!whitespace) normalized += character;
+    separatorPending = whitespace ? normalized.length > 0 : false;
   }
   return normalized;
 }

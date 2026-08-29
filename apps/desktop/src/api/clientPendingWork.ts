@@ -35,7 +35,8 @@ export async function submitManualCompaction(
   return withPendingWorkErrors(async () => {
     const requestID = parseCompactionRequestID(crypto.randomUUID());
     const normalizedGuidance = guidance === null ? null : normalizeWhitespace(guidance);
-    if (normalizedGuidance === "") throw new TypeError("Manual compaction guidance must be non-blank when provided.");
+    if (normalizedGuidance === "")
+      throw new TypeError("Manual compaction guidance must be non-blank when provided.");
     parseRpcResponse(
       methods.compact,
       emptyResponseSchema,
@@ -50,11 +51,13 @@ export async function submitManualCompaction(
 }
 
 export async function listPendingWork(transport: RpcTransport, sessionID: string): Promise<PendingWork> {
-  return withPendingWorkErrors(async () => parseRpcResponse(
-    methods.list,
-    listResponseSchema,
-    await transport.call(methods.list, { session_id: requiredSessionID(sessionID) }),
-  ));
+  return withPendingWorkErrors(async () =>
+    parseRpcResponse(
+      methods.list,
+      listResponseSchema,
+      await transport.call(methods.list, { session_id: requiredSessionID(sessionID) }),
+    ),
+  );
 }
 
 export async function removePendingWork(
@@ -62,14 +65,16 @@ export async function removePendingWork(
   sessionID: string,
   itemID: PendingWorkIdentity,
 ): Promise<PendingWorkRestoration> {
-  return withPendingWorkErrors(async () => parseRpcResponse(
-    methods.remove,
-    removeResponseSchema,
-    await transport.call(methods.remove, {
-      session_id: requiredSessionID(sessionID),
-      item_id: itemID.toJSONValue(),
-    }),
-  ));
+  return withPendingWorkErrors(async () =>
+    parseRpcResponse(
+      methods.remove,
+      removeResponseSchema,
+      await transport.call(methods.remove, {
+        session_id: requiredSessionID(sessionID),
+        item_id: itemID.toJSONValue(),
+      }),
+    ),
+  );
 }
 
 function requiredSessionID(sessionID: string): string {
@@ -116,10 +121,12 @@ export function decodePendingWorkError(error: unknown): PendingWorkError | null 
   if (!(error instanceof RpcError)) return null;
   if (error.method === methods.compact && error.code === rpcErrorCodes.runtimeCommandNotAccepted) {
     const nested = strict({ cause: nestedCauseSchema }).safeParse(error.data);
-    if (!nested.success || nested.data.cause.code === rpcErrorCodes.runtimeCommandNotAccepted) {
-      return null;
-    }
-    const cause = decodeDirectPendingWorkFailure(error.method, nested.data.cause.code, nested.data.cause.data);
+    if (!nested.success) return null;
+    const cause = decodeDirectPendingWorkFailure(
+      error.method,
+      nested.data.cause.code,
+      nested.data.cause.data,
+    );
     return cause === null ? null : new PendingWorkError(error, { kind: "not_accepted", cause });
   }
   const detail = decodeDirectPendingWorkFailure(error.method, error.code, error.data);
@@ -141,6 +148,14 @@ function decodeDirectPendingWorkFailure(
     const parsed = notPendingErrorSchema.safeParse(data);
     return parsed.success ? { kind: "not_pending", itemID: parsed.data.item_id } : null;
   }
+  return decodeManualCompactionFailure(method, code, data);
+}
+
+function decodeManualCompactionFailure(
+  method: string,
+  code: number,
+  data: RpcError["data"],
+): PendingWorkFailure | null {
   if (method !== methods.compact) return null;
   const reason = manualCompactionReasons.get(code);
   if (reason === undefined) return null;
