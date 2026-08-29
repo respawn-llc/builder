@@ -16,12 +16,10 @@ export type PendingWorkItemID = UUIDv4Value<"pending_work_item">;
 export type CompactionRequestID = UUIDv4Value<"compaction_request">;
 export type WorktreeOperationID = UUIDv4Value<"worktree_operation">;
 
-export const parsePendingWorkItemID =
-  createUUIDv4ValueParser<"pending_work_item">("Invalid Pending Work UUID v4.");
-export const parseCompactionRequestID =
-  createUUIDv4ValueParser<"compaction_request">("Invalid compaction UUID v4.");
-export const parseWorktreeOperationID =
-  createUUIDv4ValueParser<"worktree_operation">("Invalid Worktree operation UUID v4.");
+const uuidParser = createUUIDv4ValueParser;
+export const parsePendingWorkItemID = uuidParser<"pending_work_item">("UUID v4 required.");
+export const parseCompactionRequestID = uuidParser<"compaction_request">("UUID v4 required.");
+export const parseWorktreeOperationID = uuidParser<"worktree_operation">("UUID v4 required.");
 
 export const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID);
 const compactionRequestIDSchema = uuidSchema(parseCompactionRequestID);
@@ -100,31 +98,30 @@ export type PendingWorkItem = Readonly<z.output<typeof pendingWorkItemSchema>>;
 
 export const pendingWorkSchema = strict({
   items: z.array(pendingWorkItemSchema),
-})
-  .superRefine((value, context) => {
-    const identities = new Set<string>();
-    let steerStarted = false;
-    for (const [index, item] of value.items.entries()) {
-      const identity = item.id.toJSONValue();
-      if (identities.has(identity)) {
-        context.addIssue({
-          code: "custom",
-          message: "Pending Work item ids must be unique.",
-          path: ["items", index, "id"],
-        });
-      }
-      identities.add(identity);
-      if (item.lane === "steer") {
-        steerStarted = true;
-      } else if (steerStarted) {
-        context.addIssue({
-          code: "custom",
-          message: "Pending Work Queue items must precede Steer items.",
-          path: ["items", index, "lane"],
-        });
-      }
+}).superRefine((value, context) => {
+  const identities = new Set<string>();
+  let steerStarted = false;
+  for (const [index, item] of value.items.entries()) {
+    const identity = item.id.toJSONValue();
+    if (identities.has(identity)) {
+      context.addIssue({
+        code: "custom",
+        message: "Pending Work item ids must be unique.",
+        path: ["items", index, "id"],
+      });
     }
-  });
+    identities.add(identity);
+    if (item.lane === "steer") {
+      steerStarted = true;
+    } else if (steerStarted) {
+      context.addIssue({
+        code: "custom",
+        message: "Pending Work Queue items must precede Steer items.",
+        path: ["items", index, "lane"],
+      });
+    }
+  }
+});
 export type PendingWork = Readonly<z.output<typeof pendingWorkSchema>>;
 
 export type PendingWorkIdentity = PendingWorkItemID | CompactionRequestID | WorktreeOperationID;
