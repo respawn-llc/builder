@@ -169,16 +169,6 @@ type RuntimeLiveWaitResponse struct {
 	NoAnswerReason *string               `json:"no_answer_reason"`
 }
 
-type RuntimeDiscardQueuedUserMessageRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	QueueItemID     string `json:"queue_item_id"`
-}
-
-type RuntimeDiscardQueuedUserMessageResponse struct {
-	Discarded bool `json:"discarded"`
-}
-
 type RuntimeRecordPromptHistoryRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	SessionID       string `json:"session_id"`
@@ -379,15 +369,6 @@ func (r RuntimeLiveWaitResponse) Validate() error {
 		}
 	default:
 		return errors.New("result_kind must be assistant_final_answer or no_final_answer")
-	}
-	return nil
-}
-func (r RuntimeDiscardQueuedUserMessageRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.QueueItemID) == "" {
-		return errors.New("queue_item_id is required")
 	}
 	return nil
 }

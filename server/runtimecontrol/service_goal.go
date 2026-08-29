@@ -30,11 +30,15 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if record.Meta == nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("persisted session %q metadata is required", sessionID)
 	}
-	if record.Meta.Goal == nil {
-		return serverapi.RuntimeGoalShowResponse{}, nil
+	availability, err := session.GoalAvailabilityFromMeta(*record.Meta)
+	if err != nil {
+		return serverapi.RuntimeGoalShowResponse{}, err
 	}
 	return serverapi.RuntimeGoalShowResponse{
-		GoalEnvelope: clientui.GoalEnvelope{Goal: runtimeview.GoalCoreFromSessionState(record.Meta.Goal)},
+		GoalEnvelope: clientui.GoalEnvelope{
+			Goal:         runtimeview.GoalCoreFromSessionState(record.Meta.Goal),
+			Availability: runtimeview.GoalAvailabilityFromSession(availability),
+		},
 	}, nil
 }
 
@@ -217,6 +221,7 @@ func (s *Service) applyExactAgentGoalMutation(
 			return runtime.ErrAgentGoalStepInactive
 		}
 		result = runtimeGoalResult(goal, false, runtime.GoalCommandQueued, session.CommitReceipt{}, session.CommitReceipt{})
+		result.Availability = engine.GoalMutationAvailability()
 		return nil
 	})
 	return result, err
@@ -252,6 +257,7 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 	case goalMutationSet:
 		goal, metadataReceipt, err := store.SetGoal(mutation.Objective, mutation.Actor)
 		result := runtimeGoalResult(goal, false, runtime.GoalCommandApplied, metadataReceipt, session.CommitReceipt{})
+		result.Availability = store.GoalMutationAvailability()
 		if err != nil || !metadataReceipt.Committed {
 			return result, err
 		}
@@ -260,7 +266,9 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 		return result, noticeErr
 	case goalMutationStatus:
 		if current := store.Meta().Goal; current != nil && current.Status == mutation.Status {
-			return runtimeGoalResult(*current, false, runtime.GoalCommandNoop, session.CommitReceipt{}, session.CommitReceipt{}), nil
+			result := runtimeGoalResult(*current, false, runtime.GoalCommandNoop, session.CommitReceipt{}, session.CommitReceipt{})
+			result.Availability = store.GoalMutationAvailability()
+			return result, nil
 		}
 		goal, transitioned, metadataReceipt, err := store.SetGoalStatus(mutation.Status, mutation.Actor)
 		disposition := runtime.GoalCommandApplied
@@ -268,6 +276,7 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 			disposition = runtime.GoalCommandNoop
 		}
 		result := runtimeGoalResult(goal, false, disposition, metadataReceipt, session.CommitReceipt{})
+		result.Availability = store.GoalMutationAvailability()
 		if err != nil || !transitioned || !metadataReceipt.Committed {
 			return result, err
 		}
@@ -277,6 +286,7 @@ func applyDormantGoalMutation(store *session.Store, mutation goalMutation) (runt
 	case goalMutationClear:
 		goal, metadataReceipt, err := store.ClearGoal(mutation.Actor)
 		result := runtimeGoalResult(goal, true, runtime.GoalCommandApplied, metadataReceipt, session.CommitReceipt{})
+		result.Availability = store.GoalMutationAvailability()
 		if err != nil || !metadataReceipt.Committed {
 			return result, err
 		}
@@ -318,14 +328,23 @@ func goalResponseFromRuntimeResult(
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
+	if result.Availability == nil {
+		return serverapi.RuntimeGoalShowResponse{}, errors.New("accepted Goal mutation is missing availability")
+	}
+	availability := runtimeview.GoalAvailabilityFromSession(*result.Availability)
 	if result.Cleared {
-		return serverapi.RuntimeGoalShowResponse{}, nil
+		return serverapi.RuntimeGoalShowResponse{
+			GoalEnvelope: clientui.GoalEnvelope{Availability: availability},
+		}, nil
 	}
 	if result.Disposition == 0 {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("accepted Goal mutation is missing a result")
 	}
 	return serverapi.RuntimeGoalShowResponse{
-		GoalEnvelope: clientui.GoalEnvelope{Goal: runtimeview.GoalCoreFromSessionState(&result.GoalState)},
+		GoalEnvelope: clientui.GoalEnvelope{
+			Goal:         runtimeview.GoalCoreFromSessionState(&result.GoalState),
+			Availability: availability,
+		},
 	}, nil
 }
 
