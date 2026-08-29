@@ -17,14 +17,11 @@ export type CompactionRequestID = UUIDv4Value<"compaction_request">;
 export type WorktreeOperationID = UUIDv4Value<"worktree_operation">;
 
 export const parsePendingWorkItemID = createUUIDv4ValueParser<"pending_work_item">(
-  "Pending Work item id must be a UUID v4.",
-);
+  "Pending Work item id must be a UUID v4.");
 export const parseCompactionRequestID = createUUIDv4ValueParser<"compaction_request">(
-  "Compaction request id must be a UUID v4.",
-);
+  "Compaction request id must be a UUID v4.");
 export const parseWorktreeOperationID = createUUIDv4ValueParser<"worktree_operation">(
-  "Worktree operation id must be a UUID v4.",
-);
+  "Worktree operation id must be a UUID v4.");
 
 export const pendingWorkItemIDSchema = uuidSchema(parsePendingWorkItemID);
 const compactionRequestIDSchema = uuidSchema(parseCompactionRequestID);
@@ -34,76 +31,56 @@ const itemBase = {
   canonical_input: nonBlankExact,
 };
 
-const messageItemSchema = strict({
-  id: pendingWorkItemIDSchema,
-  lane: z.enum(["queue", "steer"]),
-  kind: z.literal("message"),
-  ...itemBase,
-  message: strict({ text: nonBlankExact }),
-})
-  .refine((value) => value.canonical_input === value.message.text, {
-    message: "Message canonical input must match its text.",
-  })
-  .transform(({ canonical_input, ...value }) => ({ ...value, canonicalInput: canonical_input }));
-
-const manualCompactionItemSchema = strict({
-  id: compactionRequestIDSchema,
-  lane: z.literal("steer"),
-  kind: z.literal("manual_compaction"),
-  ...itemBase,
-  manual_compaction: strict({ guidance: normalizedArgument.optional() }),
-})
-  .refine(
-    (value) =>
-      value.canonical_input ===
-      (value.manual_compaction.guidance === undefined
-        ? "/compact"
-        : `/compact ${value.manual_compaction.guidance}`),
-    { message: "Manual compaction canonical input must match its guidance." },
-  )
-  .transform(({ canonical_input, manual_compaction, ...value }) => ({
-    ...value,
-    canonicalInput: canonical_input,
-    manualCompaction: { guidance: manual_compaction.guidance ?? null },
-  }));
-
 const worktreeTransitionSchema = z.discriminatedUnion("transition", [
-  strict({ transition: z.literal("enter"), selector: normalizedArgument }).transform((value) => ({
-    kind: value.transition,
-    selector: value.selector,
-  })),
-  strict({ transition: z.literal("leave") }).transform((value) => ({
-    kind: value.transition,
-    selector: null,
-  })),
+  strict({ transition: z.literal("enter"), selector: normalizedArgument }),
+  strict({ transition: z.literal("leave") }),
 ]);
 
-const worktreeTransitionItemSchema = strict({
-  id: worktreeOperationIDSchema,
-  lane: z.literal("steer"),
-  kind: z.literal("worktree_transition"),
-  ...itemBase,
-  worktree_transition: worktreeTransitionSchema,
-})
-  .refine(
-    (value) =>
-      value.canonical_input ===
-      (value.worktree_transition.kind === "enter"
-        ? `/wt switch ${value.worktree_transition.selector}`
-        : "/wt leave"),
-    { message: "Worktree canonical input must match its transition." },
-  )
-  .transform(({ canonical_input, worktree_transition, ...value }) => ({
-    ...value,
-    canonicalInput: canonical_input,
-    worktreeTransition: worktree_transition,
-  }));
-
-export const pendingWorkItemSchema = z.union([
-  messageItemSchema,
-  manualCompactionItemSchema,
-  worktreeTransitionItemSchema,
-]);
+export const pendingWorkItemSchema = z
+  .discriminatedUnion("kind", [
+    strict({ ...itemBase, id: pendingWorkItemIDSchema, lane: z.enum(["queue", "steer"]),
+      kind: z.literal("message"), message: strict({ text: nonBlankExact }) }),
+    strict({ ...itemBase, id: compactionRequestIDSchema, lane: z.literal("steer"),
+      kind: z.literal("manual_compaction"), manual_compaction: strict({ guidance: normalizedArgument.optional() }) }),
+    strict({ ...itemBase, id: worktreeOperationIDSchema, lane: z.literal("steer"),
+      kind: z.literal("worktree_transition"), worktree_transition: worktreeTransitionSchema }),
+  ])
+  .superRefine((item, context) => {
+    const expected =
+      item.kind === "message"
+        ? item.message.text
+        : item.kind === "manual_compaction"
+          ? item.manual_compaction.guidance === undefined
+            ? "/compact"
+            : `/compact ${item.manual_compaction.guidance}`
+          : item.worktree_transition.transition === "enter"
+            ? `/wt switch ${item.worktree_transition.selector}`
+            : "/wt leave";
+    if (item.canonical_input !== expected) {
+      context.addIssue({ code: "custom", message: "Canonical input does not match its payload." });
+    }
+  })
+  .transform((item) => {
+    const { canonical_input: canonicalInput, ...value } = item;
+    if (value.kind === "message") return { ...value, canonicalInput };
+    if (value.kind === "manual_compaction") {
+      const { manual_compaction, ...rest } = value;
+      return {
+        ...rest,
+        canonicalInput,
+        manualCompaction: { guidance: manual_compaction.guidance ?? null },
+      };
+    }
+    const { worktree_transition, ...rest } = value;
+    return {
+      ...rest,
+      canonicalInput,
+      worktreeTransition:
+        worktree_transition.transition === "enter"
+          ? { kind: "enter" as const, selector: worktree_transition.selector }
+          : { kind: "leave" as const, selector: null },
+    };
+  });
 export type PendingWorkItem = Readonly<z.output<typeof pendingWorkItemSchema>>;
 
 export const pendingWorkSchema = strict({
@@ -139,11 +116,10 @@ export type PendingWork = Readonly<z.output<typeof pendingWorkSchema>>;
 export type PendingWorkIdentity = PendingWorkItemID | CompactionRequestID | WorktreeOperationID;
 
 const pendingWorkItemKindSchema = z.enum(["message", "manual_compaction", "worktree_transition"]);
-const canonicalInputSchema = nonBlankExact;
 
 export const pendingWorkRestorationSchema = strict({
   kind: pendingWorkItemKindSchema,
-  canonical_input: canonicalInputSchema,
+  canonical_input: nonBlankExact,
 }).transform((value) => ({
   kind: value.kind,
   canonicalInput: value.canonical_input,
@@ -153,7 +129,7 @@ export type PendingWorkRestoration = Readonly<z.output<typeof pendingWorkRestora
 const pendingWorkTechnicalRestorationSchema = strict({
   item_id: pendingWorkItemIDSchema,
   kind: pendingWorkItemKindSchema,
-  canonical_input: canonicalInputSchema,
+  canonical_input: nonBlankExact,
 }).transform((value) => ({
   itemID: value.item_id,
   kind: value.kind,

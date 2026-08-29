@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { parseRpcResponse } from "./clientParse";
 import { RpcError } from "./errors";
-import { jsonValueSchema, type JsonValue } from "./json";
+import { jsonValueSchema } from "./json";
 import {
   normalizeWhitespace,
   parseCompactionRequestID,
@@ -35,14 +35,16 @@ export async function submitManualCompaction(
   return withPendingWorkErrors(async () => {
     const requestID = parseCompactionRequestID(crypto.randomUUID());
     const normalizedGuidance = guidance === null ? null : normalizeWhitespace(guidance);
-    if (normalizedGuidance === "") {
-      throw new TypeError("Manual compaction guidance must be non-blank when provided.");
-    }
-    await callDedicated(transport, methods.compact, {
-      session_id: requiredSessionID(sessionID),
-      request_id: requestID.toJSONValue(),
-      admission: normalizedGuidance === null ? {} : { guidance: normalizedGuidance },
-    });
+    if (normalizedGuidance === "") throw new TypeError("Manual compaction guidance must be non-blank when provided.");
+    parseRpcResponse(
+      methods.compact,
+      emptyResponseSchema,
+      await transport.callDedicated(methods.compact, {
+        session_id: requiredSessionID(sessionID),
+        request_id: requestID.toJSONValue(),
+        admission: normalizedGuidance === null ? {} : { guidance: normalizedGuidance },
+      }),
+    );
     return requestID;
   });
 }
@@ -70,14 +72,8 @@ export async function removePendingWork(
   ));
 }
 
-async function callDedicated(transport: RpcTransport, method: string, params: JsonValue): Promise<void> {
-  parseRpcResponse(method, emptyResponseSchema, await transport.callDedicated(method, params));
-}
-
 function requiredSessionID(sessionID: string): string {
-  if (sessionID.trim().length === 0) {
-    throw new TypeError("Session id is required.");
-  }
+  if (sessionID.trim().length === 0) throw new TypeError("Session id is required.");
   return sessionID;
 }
 
@@ -123,11 +119,7 @@ export function decodePendingWorkError(error: unknown): PendingWorkError | null 
     if (!nested.success || nested.data.cause.code === rpcErrorCodes.runtimeCommandNotAccepted) {
       return null;
     }
-    const cause = decodeDirectPendingWorkFailure(
-      error.method,
-      nested.data.cause.code,
-      nested.data.cause.data,
-    );
+    const cause = decodeDirectPendingWorkFailure(error.method, nested.data.cause.code, nested.data.cause.data);
     return cause === null ? null : new PendingWorkError(error, { kind: "not_accepted", cause });
   }
   const detail = decodeDirectPendingWorkFailure(error.method, error.code, error.data);
@@ -150,26 +142,23 @@ function decodeDirectPendingWorkFailure(
     return parsed.success ? { kind: "not_pending", itemID: parsed.data.item_id } : null;
   }
   if (method !== methods.compact) return null;
-  let reason: ManualCompactionErrorReason | undefined;
-  if (code === rpcErrorCodes.manualCompactionTooSoon) reason = "too_soon";
-  if (code === rpcErrorCodes.manualCompactionDisabled) reason = "disabled";
-  if (code === rpcErrorCodes.manualCompactionActive) reason = "active";
+  const reason = manualCompactionReasons.get(code);
   if (reason === undefined) return null;
   return strict({ reason: z.literal(reason) }).safeParse(data).success
     ? { kind: "manual_compaction", reason }
     : null;
 }
 
-const pendingWorkAdmissionMethods = new Set<string>([
-  methods.compact,
-  methods.worktreeEnter,
-  methods.worktreeLeave,
+const manualCompactionReasons = new Map<number, ManualCompactionErrorReason>([
+  [rpcErrorCodes.manualCompactionTooSoon, "too_soon"],
+  [rpcErrorCodes.manualCompactionDisabled, "disabled"],
+  [rpcErrorCodes.manualCompactionActive, "active"],
 ]);
 function isPendingWorkMethod(method: string): boolean {
   return isPendingWorkAdmissionMethod(method) || method === methods.list || method === methods.remove;
 }
 function isPendingWorkAdmissionMethod(method: string): boolean {
-  return pendingWorkAdmissionMethods.has(method);
+  return method === methods.compact || method === methods.worktreeEnter || method === methods.worktreeLeave;
 }
 
 async function withPendingWorkErrors<Value>(action: () => Promise<Value>): Promise<Value> {
