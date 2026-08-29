@@ -1306,10 +1306,14 @@ func (p Planner) createSession(ctx context.Context, origin serverapi.SessionCrea
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	source, err := p.openPersistedSession(ctx, sourceID)
+	if p.PersistedSessions == nil {
+		return nil, errors.New("persisted session resolver is required")
+	}
+	sourceRecord, err := session.ResolvePersistedSessionRecord(ctx, p.PersistedSessions, sourceID.String())
 	if err != nil {
 		return nil, err
 	}
+	source := session.CreationContextSourceFromMeta(*sourceRecord.Meta)
 	if origin.Kind() == serverapi.SessionCreateOriginParentAgent {
 		if err := (parentAgentDepthPolicy{sessions: p.PersistedSessions}).enforce(
 			ctx,
@@ -1330,7 +1334,7 @@ func (p Planner) createSession(ctx context.Context, origin serverapi.SessionCrea
 	return created, nil
 }
 
-func (p Planner) initializeChildSessionContext(ctx context.Context, child *session.Store, source *session.Store, sourceSessionID runtimeids.SessionID, originKind serverapi.SessionCreateOriginKind, mode Mode) error {
+func (p Planner) initializeChildSessionContext(ctx context.Context, child *session.Store, source session.CreationContextSource, sourceSessionID runtimeids.SessionID, originKind serverapi.SessionCreateOriginKind, mode Mode) error {
 	if child == nil {
 		return errors.New("child session store is required")
 	}
@@ -1368,17 +1372,6 @@ func (p Planner) initializeChildSessionContext(ctx context.Context, child *sessi
 		return errors.Join(err, p.rollbackChildSession(child))
 	}
 	return nil
-}
-
-func (p Planner) openPersistedSession(ctx context.Context, sessionID runtimeids.SessionID) (*session.Store, error) {
-	if p.PersistedSessions == nil {
-		return nil, errors.New("persisted session resolver is required")
-	}
-	record, err := p.PersistedSessions.ResolvePersistedSession(ctx, sessionID.String())
-	if err != nil {
-		return nil, err
-	}
-	return session.OpenResolved(record, p.StoreOptions...)
 }
 
 func (p Planner) openMetadataStore() (MetadataExecutionTargetStore, error) {
