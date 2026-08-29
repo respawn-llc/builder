@@ -109,6 +109,42 @@ func TestWorkspaceChatDraftResolutionRetainsQuestionsPolicyForSettingsRead(t *te
 	}
 }
 
+func TestWorkspaceChatDraftOwnerAllowsQuestionsPolicyWithoutCapability(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	stored := &WorkspaceChatDraft{
+		Message:        "draft",
+		Agent:          "default",
+		Supervisor:     "edits",
+		Thinking:       "medium",
+		Questions:      false,
+		AutoCompaction: true,
+	}
+	persistence := &draftPersistence{draft: stored}
+	owner := NewWorkspaceChatDraftOwner(persistence)
+	enabled := true
+
+	projected, changed, err := owner.MutateWorkspaceChatSettings(
+		context.Background(),
+		"workspace-1",
+		func(context.Context) (WorkspaceChatDraftResolverInput, error) {
+			return draftInput(settings), nil
+		},
+		serverapi.ChatSettingsMutationOperation{
+			Kind:    serverapi.ChatSettingsMutationQuestions,
+			Enabled: &enabled,
+		},
+	)
+	if err != nil {
+		t.Fatalf("MutateWorkspaceChatSettings: %v", err)
+	}
+	if !changed || projected.State.Settings.Questions == nil || !*projected.State.Settings.Questions {
+		t.Fatalf("projected=%+v changed=%t", projected, changed)
+	}
+	if persistence.draft == nil || !persistence.draft.Questions {
+		t.Fatalf("persisted draft = %+v", persistence.draft)
+	}
+}
+
 type draftPersistence struct {
 	draft  *WorkspaceChatDraft
 	reads  int

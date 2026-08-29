@@ -446,10 +446,5 @@ func validateWorkspaceChatDraftTransform(draft WorkspaceChatDraft, resolved Work
 	if draft.Fast && !limit.fast {
 		return fmt.Errorf("workspace Chat draft fast mode is unavailable for Agent %q", agent)
 	}
-	if draft.Questions &&
-		!limit.questions &&
-		!(agent == normalizeWorkspaceChatDraftAgent(resolved.Draft.Agent) && resolved.PersistedQuestionsPolicy) {
-		return fmt.Errorf("workspace Chat draft questions are unavailable for Agent %q", agent)
-	}
 	return nil
 }
