@@ -16,15 +16,9 @@ type immediateSessionSettingOwner struct {
 	mu sync.Mutex
 }
 
-type immediateSessionSettingCommit struct {
-	session.CommitReceipt
-	Changed bool
-}
-
 func (e *Engine) mutateImmediateSessionSetting(
 	ctx context.Context,
-	prepare func() error,
-	persist func() (immediateSessionSettingCommit, error),
+	persist func() (session.CommitReceipt, bool, error),
 	apply func(),
 	feedback clientui.TranscriptSessionSettingFeedback,
 	publish SessionSettingPublication,
@@ -48,23 +42,18 @@ func (e *Engine) mutateImmediateSessionSetting(
 	if e.closed.Load() {
 		return false, ErrEngineClosed
 	}
-	if prepare != nil {
-		if err := prepare(); err != nil {
-			return false, err
-		}
-	}
-	commit, mutationErr := persist()
-	if e.stopAfterDefinitelyUncommittedSessionSetting(commit.CommitReceipt, mutationErr) {
+	receipt, changed, mutationErr := persist()
+	if e.stopAfterDefinitelyUncommittedSessionSetting(receipt, mutationErr) {
 		return false, mutationErr
 	}
 	if apply != nil {
 		apply()
 	}
 	if publish == nil {
-		return commit.Changed, mutationErr
+		return changed, mutationErr
 	}
-	feedback.Changed = commit.Changed
-	return commit.Changed, errors.Join(mutationErr, publish(feedback))
+	feedback.Changed = changed
+	return changed, errors.Join(mutationErr, publish(feedback))
 }
 
 func (e *Engine) stopAfterDefinitelyUncommittedSessionSetting(receipt session.CommitReceipt, err error) bool {
@@ -77,21 +66,20 @@ func (e *Engine) stopAfterDefinitelyUncommittedSessionSetting(receipt session.Co
 
 func (e *Engine) mutateImmediateChatSetting(
 	ctx context.Context,
-	prepare func() error,
-	mutation func() session.ChatSettingsMutation,
+	mutation func() (session.ChatSettingsMutation, error),
 	apply func(),
 	feedback clientui.TranscriptSessionSettingFeedback,
 	publish SessionSettingPublication,
 ) (bool, error) {
 	return e.mutateImmediateSessionSetting(
 		ctx,
-		prepare,
-		func() (immediateSessionSettingCommit, error) {
-			result, err := e.store.MutateChatSettings(mutation())
-			return immediateSessionSettingCommit{
-				CommitReceipt: result.CommitReceipt,
-				Changed:       result.Changed,
-			}, err
+		func() (session.CommitReceipt, bool, error) {
+			update, err := mutation()
+			if err != nil {
+				return session.CommitReceipt{}, false, err
+			}
+			result, err := e.store.MutateChatSettings(update)
+			return result.CommitReceipt, result.Changed, err
 		},
 		apply,
 		feedback,
@@ -109,8 +97,9 @@ func (e *Engine) SetFastModeEnabledWithPublication(
 	}
 	return e.mutateImmediateChatSetting(
 		ctx,
-		nil,
-		func() session.ChatSettingsMutation { return session.ChatSettingsMutation{Fast: &enabled} },
+		func() (session.ChatSettingsMutation, error) {
+			return session.ChatSettingsMutation{Fast: &enabled}, nil
+		},
 		func() { e.applyFastModeEnabled(enabled) },
 		clientui.TranscriptSessionSettingFeedback{
 			Kind:     clientui.SessionSettingFastMode,
@@ -128,13 +117,9 @@ func (e *Engine) SetSessionNameWithPublication(
 	normalized := strings.TrimSpace(name)
 	return e.mutateImmediateSessionSetting(
 		ctx,
-		nil,
-		func() (immediateSessionSettingCommit, error) {
+		func() (session.CommitReceipt, bool, error) {
 			result, err := e.store.MutateName(normalized)
-			return immediateSessionSettingCommit{
-				CommitReceipt: result.CommitReceipt,
-				Changed:       result.Changed,
-			}, err
+			return result.CommitReceipt, result.Changed, err
 		},
 		nil,
 		clientui.TranscriptSessionSettingFeedback{
@@ -156,8 +141,9 @@ func (e *Engine) SetThinkingLevelWithPublication(
 	}
 	return e.mutateImmediateChatSetting(
 		ctx,
-		nil,
-		func() session.ChatSettingsMutation { return session.ChatSettingsMutation{Thinking: &normalized} },
+		func() (session.ChatSettingsMutation, error) {
+			return session.ChatSettingsMutation{Thinking: &normalized}, nil
+		},
 		func() { _ = e.setThinkingValue(normalized) },
 		clientui.TranscriptSessionSettingFeedback{
 			Kind:     clientui.SessionSettingThinking,
@@ -174,9 +160,8 @@ func (e *Engine) SetAutoCompactionEnabledWithPublication(
 ) (bool, bool, error) {
 	changed, err := e.mutateImmediateChatSetting(
 		ctx,
-		nil,
-		func() session.ChatSettingsMutation {
-			return session.ChatSettingsMutation{AutoCompaction: &enabled}
+		func() (session.ChatSettingsMutation, error) {
+			return session.ChatSettingsMutation{AutoCompaction: &enabled}, nil
 		},
 		func() { e.applyAutoCompactionEnabled(enabled) },
 		clientui.TranscriptSessionSettingFeedback{
@@ -198,8 +183,9 @@ func (e *Engine) SetQuestionsEnabledWithPublication(
 ) (bool, bool, error) {
 	changed, err := e.mutateImmediateChatSetting(
 		ctx,
-		nil,
-		func() session.ChatSettingsMutation { return session.ChatSettingsMutation{Questions: &enabled} },
+		func() (session.ChatSettingsMutation, error) {
+			return session.ChatSettingsMutation{Questions: &enabled}, nil
+		},
 		func() { e.applyQuestionsEnabled(enabled) },
 		clientui.TranscriptSessionSettingFeedback{
 			Kind:      clientui.SessionSettingQuestions,
@@ -242,13 +228,10 @@ func (e *Engine) setReviewerSettingWithPublication(
 	target := ""
 	changed, err := e.mutateImmediateChatSetting(
 		ctx,
-		func() error {
-			var prepareErr error
-			target, prepareErr = resolve()
-			return prepareErr
-		},
-		func() session.ChatSettingsMutation {
-			return session.ChatSettingsMutation{Supervisor: &target}
+		func() (session.ChatSettingsMutation, error) {
+			var err error
+			target, err = resolve()
+			return session.ChatSettingsMutation{Supervisor: &target}, err
 		},
 		func() { e.setReviewerFrequency(target) },
 		clientui.TranscriptSessionSettingFeedback{
