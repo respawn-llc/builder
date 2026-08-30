@@ -84,7 +84,8 @@ func TestSessionArchiveCommandSuccess(t *testing.T) {
 	}
 	if envelope.Status != "ok" || envelope.Result == nil ||
 		envelope.Result.SessionID != "session-archive" ||
-		envelope.Result.OutputPath != "/tmp/session-archive.tar.zst" {
+		envelope.Result.OutputPath == nil ||
+		*envelope.Result.OutputPath != "/tmp/session-archive.tar.zst" {
 		t.Fatalf("envelope = %+v", envelope)
 	}
 }
@@ -181,7 +182,7 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 		err          error
 		archive      bool
 		wantCode     string
-		wantPath     string
+		wantPath     *string
 		wantFragment string
 	}{
 		{
@@ -212,7 +213,7 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 				}),
 			archive:  true,
 			wantCode: "invalid_output_path",
-			wantPath: outputPath,
+			wantPath: &outputPath,
 		},
 		{
 			name: "output exists",
@@ -222,7 +223,7 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 				}),
 			archive:  true,
 			wantCode: "output_exists",
-			wantPath: outputPath,
+			wantPath: &outputPath,
 		},
 		{
 			name: "archive path failure",
@@ -235,7 +236,7 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 				}),
 			archive:  true,
 			wantCode: "request_failed",
-			wantPath: outputPath,
+			wantPath: &outputPath,
 		},
 		{
 			name: "internal failure",
@@ -258,7 +259,7 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 				}),
 			archive:      true,
 			wantCode:     "request_failed",
-			wantPath:     outputPath,
+			wantPath:     &outputPath,
 			wantFragment: "kent session delete " + sessionID + " --confirm",
 		},
 		{
@@ -274,7 +275,7 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 					},
 				}),
 			wantCode:     "request_failed",
-			wantPath:     remainingPath,
+			wantPath:     &remainingPath,
 			wantFragment: remainingPath,
 		},
 		{
@@ -294,14 +295,21 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 			}
 			if outcome.Error == nil ||
 				outcome.Error.Code != test.wantCode ||
-				outcome.Error.Path != test.wantPath {
-				t.Fatalf("outcome = %+v, want code %q path %q", outcome, test.wantCode, test.wantPath)
+				!equalOptionalString(outcome.Error.Path, test.wantPath) {
+				t.Fatalf("outcome = %+v, want code %q path %v", outcome, test.wantCode, test.wantPath)
 			}
 			if test.wantFragment != "" && !strings.Contains(outcome.Error.Message, test.wantFragment) {
 				t.Fatalf("message %q does not contain %q", outcome.Error.Message, test.wantFragment)
 			}
 		})
 	}
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func TestSessionRemovalUnknownFutureWireErrorMapsToRequestFailed(t *testing.T) {

@@ -22,27 +22,33 @@ type SessionRemovalMetadata interface {
 	DeleteSession(context.Context, string) error
 }
 
-type SessionRemovalFailureState uint8
+type SessionRemovalFailureState interface {
+	sessionRemovalFailureState()
+}
 
-const (
-	SessionRemovalMetadataNotRemoved SessionRemovalFailureState = iota + 1
-	SessionRemovalMetadataRemovedCleanupFailed
-)
+type SessionRemovalMetadataNotRemoved struct{}
+
+func (SessionRemovalMetadataNotRemoved) sessionRemovalFailureState() {}
+
+type SessionRemovalMetadataRemovedCleanupFailed struct {
+	RemainingPath string
+}
+
+func (SessionRemovalMetadataRemovedCleanupFailed) sessionRemovalFailureState() {}
 
 type SessionRemovalFailureError struct {
-	State         SessionRemovalFailureState
-	RemainingPath string
-	Cause         error
+	State SessionRemovalFailureState
+	Cause error
 }
 
 func (e *SessionRemovalFailureError) Error() string {
-	switch e.State {
+	switch state := e.State.(type) {
 	case SessionRemovalMetadataNotRemoved:
 		return fmt.Sprintf("Session metadata was not removed: %v", e.Cause)
 	case SessionRemovalMetadataRemovedCleanupFailed:
 		return fmt.Sprintf(
 			"Session metadata was removed but artifact cleanup failed at %s: %v",
-			e.RemainingPath,
+			state.RemainingPath,
 			e.Cause,
 		)
 	default:
@@ -60,27 +66,6 @@ type ArchiveDetachExpiryDiagnostic struct {
 	Cause      error
 }
 
-type archiveDetachTimer interface {
-	Done() <-chan time.Time
-	Stop() bool
-}
-
-type standardArchiveDetachTimer struct {
-	timer *time.Timer
-}
-
-func (t standardArchiveDetachTimer) Done() <-chan time.Time {
-	return t.timer.C
-}
-
-func (t standardArchiveDetachTimer) Stop() bool {
-	return t.timer.Stop()
-}
-
-func newArchiveDetachTimer(duration time.Duration) archiveDetachTimer {
-	return standardArchiveDetachTimer{timer: time.NewTimer(duration)}
-}
-
 func logArchiveDetachExpiry(diagnostic ArchiveDetachExpiryDiagnostic) {
 	slog.Error(
 		"accepted Session archive exceeded its detached lifetime",
@@ -88,13 +73,6 @@ func logArchiveDetachExpiry(diagnostic ArchiveDetachExpiryDiagnostic) {
 		"output_path", diagnostic.OutputPath,
 		"error", diagnostic.Cause,
 	)
-}
-
-func (s *SessionLifecycleService) WithSessionRemovalMetadata(source SessionRemovalMetadata) *SessionLifecycleService {
-	if s != nil {
-		s.removal = source
-	}
-	return s
 }
 
 func (s *SessionLifecycleService) WithDebugMode(debug bool) *SessionLifecycleService {
@@ -121,6 +99,9 @@ func (s *SessionLifecycleService) Archive(
 	}
 	if invocationCtx == nil {
 		invocationCtx = context.Background()
+	}
+	if err := session.PreflightSessionArchiveDestination(outputPath); err != nil {
+		return err
 	}
 	result, err := s.authority.AcceptLifecycleTask(func(lifecycleCtx context.Context) error {
 		return s.runAcceptedArchive(lifecycleCtx, invocationCtx, id, outputPath)
@@ -230,12 +211,13 @@ func (s *SessionLifecycleService) runAcceptedArchive(
 				}
 				if err := s.removeSessionUnderAdmission(runCtx, sessionID); err != nil {
 					var removalErr *SessionRemovalFailureError
-					if errors.As(err, &removalErr) &&
-						removalErr.State == SessionRemovalMetadataRemovedCleanupFailed {
-						return err
+					if errors.As(err, &removalErr) {
+						if _, removed := removalErr.State.(SessionRemovalMetadataRemovedCleanupFailed); removed {
+							return err
+						}
 					}
 					return &SessionRemovalFailureError{
-						State: SessionRemovalMetadataNotRemoved,
+						State: SessionRemovalMetadataNotRemoved{},
 						Cause: err,
 					}
 				}
@@ -253,19 +235,33 @@ func (s *SessionLifecycleService) runAcceptedArchive(
 	case <-invocationCtx.Done():
 	}
 
-	timerFactory := s.archiveDetachTimerFactory
-	if timerFactory == nil {
-		timerFactory = newArchiveDetachTimer
-	}
-	timer := timerFactory(detachedArchiveGracePeriod)
-	defer timer.Stop()
+	graceCtx, cancelGrace := context.WithTimeout(context.Background(), detachedArchiveGracePeriod)
+	defer cancelGrace()
+	return s.waitForDetachedArchive(
+		lifecycleCtx,
+		graceCtx,
+		operationDone,
+		cancelOperation,
+		sessionID,
+		outputPath,
+	)
+}
+
+func (s *SessionLifecycleService) waitForDetachedArchive(
+	lifecycleCtx context.Context,
+	graceCtx context.Context,
+	operationDone <-chan error,
+	cancelOperation context.CancelFunc,
+	sessionID runtimeids.SessionID,
+	outputPath string,
+) error {
 	select {
 	case err := <-operationDone:
 		return err
 	case <-lifecycleCtx.Done():
 		cancelOperation()
 		return errors.Join(context.Cause(lifecycleCtx), <-operationDone)
-	case <-timer.Done():
+	case <-graceCtx.Done():
 		cancelOperation()
 		operationErr := <-operationDone
 		cause := errors.Join(ErrDetachedArchiveGraceExpired, operationErr)
@@ -274,11 +270,7 @@ func (s *SessionLifecycleService) runAcceptedArchive(
 			OutputPath: outputPath,
 			Cause:      cause,
 		}
-		diagnosticSink := s.archiveDetachDiagnostic
-		if diagnosticSink == nil {
-			diagnosticSink = logArchiveDetachExpiry
-		}
-		diagnosticSink(diagnostic)
+		logArchiveDetachExpiry(diagnostic)
 		if s.debug {
 			panic(diagnostic)
 		}
@@ -305,9 +297,10 @@ func (s *SessionLifecycleService) removeSessionUnderAdmission(
 		var removalErr *session.SessionArtifactRemovalError
 		if errors.As(err, &removalErr) {
 			return &SessionRemovalFailureError{
-				State:         SessionRemovalMetadataRemovedCleanupFailed,
-				RemainingPath: removalErr.RemainingPath,
-				Cause:         err,
+				State: SessionRemovalMetadataRemovedCleanupFailed{
+					RemainingPath: removalErr.RemainingPath,
+				},
+				Cause: err,
 			}
 		}
 		return err

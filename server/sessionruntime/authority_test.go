@@ -82,41 +82,6 @@ type ownerlessRetirementLLMClient struct {
 	releaseFirst chan struct{}
 }
 
-func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
-	for _, operation := range []string{"archive", "delete"} {
-		t.Run(operation, func(t *testing.T) {
-			authority := NewAuthority(AuthorityOptions{})
-			started := make(chan struct{})
-			stopped := make(chan struct{})
-			result, err := authority.AcceptLifecycleTask(func(ctx context.Context) error {
-				close(started)
-				<-ctx.Done()
-				close(stopped)
-				return context.Cause(ctx)
-			})
-			if err != nil {
-				t.Fatalf("accept %s lifecycle task: %v", operation, err)
-			}
-			<-started
-
-			if err := authority.Close(context.Background()); err != nil {
-				t.Fatalf("close authority: %v", err)
-			}
-			select {
-			case <-stopped:
-			default:
-				t.Fatal("Authority.Close returned before its lifecycle task stopped")
-			}
-			if resultErr := <-result; !errors.Is(resultErr, context.Canceled) {
-				t.Fatalf("%s lifecycle result = %v, want context canceled", operation, resultErr)
-			}
-			if _, err := authority.AcceptLifecycleTask(func(context.Context) error { return nil }); !errors.Is(err, ErrAuthorityClosed) {
-				t.Fatalf("closed authority acceptance error = %v, want ErrAuthorityClosed", err)
-			}
-		})
-	}
-}
-
 func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

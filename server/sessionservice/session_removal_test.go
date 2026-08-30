@@ -7,11 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"core/server/metadata"
+	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/runtimeids"
@@ -49,8 +49,7 @@ func newSessionRemovalServiceFixture(t *testing.T) sessionRemovalServiceFixture 
 		}
 	})
 	service := NewGlobalSessionLifecycleService(cfg.PersistenceRoot, authority, nil).
-		WithPersistedSessionResolver(metadataStore).
-		WithSessionRemovalMetadata(metadataStore)
+		WithPersistedSessionResolver(metadataStore)
 	return sessionRemovalServiceFixture{
 		service:   service,
 		authority: authority,
@@ -86,7 +85,7 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 
 	t.Run("archive metadata not removed", func(t *testing.T) {
 		fixture := newSessionRemovalServiceFixture(t)
-		fixture.service.WithSessionRemovalMetadata(sessionRemovalMetadataDelegate{
+		fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
 			Store: fixture.metadata,
 			delete: func(_ context.Context, sessionID string) error {
 				return &metadata.SessionInUseError{SessionID: sessionID}
@@ -100,9 +99,10 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 			outputPath,
 		)
 		var removalErr *SessionRemovalFailureError
-		if !errors.As(err, &removalErr) ||
-			removalErr.State != SessionRemovalMetadataNotRemoved ||
-			removalErr.RemainingPath != "" {
+		if !errors.As(err, &removalErr) {
+			t.Fatalf("Archive error = %v, want metadata-not-removed state", err)
+		}
+		if _, ok := removalErr.State.(SessionRemovalMetadataNotRemoved); !ok {
 			t.Fatalf("Archive error = %v, want metadata-not-removed state", err)
 		}
 		if _, err := os.Stat(outputPath); err != nil {
@@ -116,7 +116,7 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 	t.Run("archive metadata removed cleanup failed", func(t *testing.T) {
 		fixture := newSessionRemovalServiceFixture(t)
 		eventsPath := filepath.Join(fixture.session.Dir(), "events.jsonl")
-		fixture.service.WithSessionRemovalMetadata(sessionRemovalMetadataDelegate{
+		fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
 			Store: fixture.metadata,
 			delete: func(ctx context.Context, sessionID string) error {
 				if err := fixture.metadata.DeleteSession(ctx, sessionID); err != nil {
@@ -134,9 +134,11 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 			outputPath,
 		)
 		var removalErr *SessionRemovalFailureError
-		if !errors.As(err, &removalErr) ||
-			removalErr.State != SessionRemovalMetadataRemovedCleanupFailed ||
-			removalErr.RemainingPath != eventsPath {
+		if !errors.As(err, &removalErr) {
+			t.Fatalf("Archive error = %v, want cleanup failure for %q", err, eventsPath)
+		}
+		state, ok := removalErr.State.(SessionRemovalMetadataRemovedCleanupFailed)
+		if !ok || state.RemainingPath != eventsPath {
 			t.Fatalf("Archive error = %v, want cleanup failure for %q", err, eventsPath)
 		}
 		if _, err := os.Stat(outputPath); err != nil {
@@ -148,21 +150,43 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 	})
 }
 
-type manualArchiveDetachTimer struct {
-	done chan time.Time
-	once sync.Once
-}
+func TestArchiveDestinationRejectionLeavesIdleRuntimeOpen(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	fixture.openRuntime(t)
+	service := NewGlobalSessionLifecycleService("", fixture.authority, nil).
+		WithPersistedSessionResolver(fixture.metadata)
+	assertRuntimeOpen := func() {
+		t.Helper()
+		if err := fixture.authority.WithCurrentRuntime(
+			t.Context(),
+			fixture.childID,
+			func(context.Context, *runtime.Engine) error { return nil },
+		); err != nil {
+			t.Fatalf("idle Runtime changed by destination rejection: %v", err)
+		}
+	}
 
-func (t *manualArchiveDetachTimer) Done() <-chan time.Time {
-	return t.done
-}
+	err := service.Archive(t.Context(), fixture.child.Meta().SessionID, "relative.tar.zst")
+	var invalid *session.InvalidArchiveOutputPathError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("Archive relative-path error = %v, want invalid output path", err)
+	}
+	assertRuntimeOpen()
 
-func (*manualArchiveDetachTimer) Stop() bool {
-	return true
-}
+	outputPath := filepath.Join(t.TempDir(), "existing.tar.zst")
+	if err := os.WriteFile(outputPath, []byte("existing"), 0o644); err != nil {
+		t.Fatalf("write existing archive destination: %v", err)
+	}
 
-func (t *manualArchiveDetachTimer) Fire() {
-	t.once.Do(func() { t.done <- time.Now() })
+	err = service.Archive(t.Context(), fixture.child.Meta().SessionID, outputPath)
+	var exists *session.ArchiveOutputExistsError
+	if !errors.As(err, &exists) {
+		t.Fatalf("Archive error = %v, want output exists", err)
+	}
+	assertRuntimeOpen()
+	if body, err := os.ReadFile(outputPath); err != nil || string(body) != "existing" {
+		t.Fatalf("existing destination = %q, %v", body, err)
+	}
 }
 
 func TestDetachedArchiveGraceExpiryCancelsAndDiagnosesAcceptedWork(t *testing.T) {
@@ -181,80 +205,107 @@ func TestDetachedArchiveGraceExpiryCancelsAndDiagnosesAcceptedWork(t *testing.T)
 
 func runDetachedArchiveGraceExpiryCase(t *testing.T, debug bool) {
 	t.Helper()
-	fixture := newSessionRemovalServiceFixture(t)
-	fixture.service.WithDebugMode(debug)
-	eventsPath := filepath.Join(fixture.session.Dir(), "events.jsonl")
-	events, err := os.OpenFile(eventsPath, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open event log fixture: %v", err)
-	}
-	if err := events.Truncate(1 << 30); err != nil {
-		_ = events.Close()
-		t.Fatalf("expand event log fixture: %v", err)
-	}
-	if err := events.Close(); err != nil {
-		t.Fatalf("close event log fixture: %v", err)
-	}
-
-	createdTimer := make(chan *manualArchiveDetachTimer, 1)
-	fixture.service.archiveDetachTimerFactory = func(duration time.Duration) archiveDetachTimer {
-		if duration != detachedArchiveGracePeriod {
-			t.Fatalf("detached archive grace = %s, want %s", duration, detachedArchiveGracePeriod)
-		}
-		timer := &manualArchiveDetachTimer{done: make(chan time.Time, 1)}
-		createdTimer <- timer
-		return timer
-	}
-	diagnostics := make(chan ArchiveDetachExpiryDiagnostic, 1)
-	fixture.service.archiveDetachDiagnostic = func(diagnostic ArchiveDetachExpiryDiagnostic) {
-		diagnostics <- diagnostic
-	}
-
-	outputDir := t.TempDir()
-	outputPath := filepath.Join(outputDir, "session.tar.zst")
-	invocationCtx, cancelInvocation := context.WithCancel(context.Background())
-	archiveDone := make(chan error, 1)
+	service := &SessionLifecycleService{debug: debug}
+	operationCtx, cancelOperation := context.WithCancel(context.Background())
+	operationDone := make(chan error, 1)
 	go func() {
-		archiveDone <- fixture.service.Archive(
-			invocationCtx,
-			fixture.session.Meta().SessionID,
-			outputPath,
-		)
+		<-operationCtx.Done()
+		operationDone <- context.Cause(operationCtx)
 	}()
-	awaitArchiveTemporary(t, outputDir, filepath.Base(outputPath))
-	cancelInvocation()
-	if err := <-archiveDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("detached Archive result = %v, want context canceled", err)
-	}
-	timer := <-createdTimer
-	timer.Fire()
-	diagnostic := <-diagnostics
-	if diagnostic.SessionID != fixture.session.Meta().SessionID ||
-		diagnostic.OutputPath != outputPath ||
-		!errors.Is(diagnostic.Cause, ErrDetachedArchiveGraceExpired) {
-		t.Fatalf("detached archive diagnostic = %+v", diagnostic)
-	}
-	if debug {
-		select {}
-	}
-
-	if _, err := os.Lstat(outputPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("archive output after grace expiry = %v, want absent", err)
-	}
-	assertNoSessionArchiveTemporary(t, outputDir, filepath.Base(outputPath))
-	if _, err := fixture.metadata.ResolvePersistedSession(t.Context(), fixture.session.Meta().SessionID); err != nil {
-		t.Fatalf("Session metadata after grace expiry: %v", err)
-	}
-	sessionID, err := runtimeids.ParseSessionID(fixture.session.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID("11111111-1111-4111-8111-111111111111")
 	if err != nil {
 		t.Fatalf("parse Session ID: %v", err)
 	}
-	if err := fixture.authority.WithDestructiveSessionAdmission(
+	graceCtx, expireGrace := context.WithCancel(context.Background())
+	expireGrace()
+	err = service.waitForDetachedArchive(
 		context.Background(),
+		graceCtx,
+		operationDone,
+		cancelOperation,
 		sessionID,
-		func(context.Context) error { return nil },
-	); err != nil {
-		t.Fatalf("Session admission remained held after grace-expired archive joined: %v", err)
+		filepath.Join(t.TempDir(), "session.tar.zst"),
+	)
+	if !errors.Is(err, ErrDetachedArchiveGraceExpired) ||
+		!errors.Is(err, context.Canceled) {
+		t.Fatalf("detached archive expiry = %v, want grace expiry joined with cancellation", err)
+	}
+}
+
+func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
+	for _, operation := range []string{"archive", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			fixture := newSessionRemovalServiceFixture(t)
+			deleteStarted := make(chan struct{})
+			fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
+				Store: fixture.metadata,
+				delete: func(ctx context.Context, _ string) error {
+					close(deleteStarted)
+					<-ctx.Done()
+					return context.Cause(ctx)
+				},
+			})
+			operationDone := make(chan error, 1)
+			outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
+			go func() {
+				if operation == "archive" {
+					operationDone <- fixture.service.Archive(
+						context.Background(),
+						fixture.session.Meta().SessionID,
+						outputPath,
+					)
+					return
+				}
+				operationDone <- fixture.service.Delete(
+					context.Background(),
+					fixture.session.Meta().SessionID,
+				)
+			}()
+			select {
+			case <-deleteStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s did not reach metadata removal", operation)
+			}
+
+			sessionID, err := runtimeids.ParseSessionID(fixture.session.Meta().SessionID)
+			if err != nil {
+				t.Fatalf("parse Session ID: %v", err)
+			}
+			competingAdmission := make(chan error, 1)
+			go func() {
+				competingAdmission <- fixture.authority.WithDestructiveSessionAdmission(
+					context.Background(),
+					sessionID,
+					func(context.Context) error { return nil },
+				)
+			}()
+			select {
+			case err := <-competingAdmission:
+				t.Fatalf("Session admission released before %s completed: %v", operation, err)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			if err := fixture.authority.Close(context.Background()); err != nil {
+				t.Fatalf("close Authority: %v", err)
+			}
+			if err := <-operationDone; !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s result = %v, want cancellation", operation, err)
+			}
+			if err := <-competingAdmission; !errors.Is(err, sessionruntime.ErrAuthorityClosed) {
+				t.Fatalf("competing admission after shutdown = %v, want Authority closed", err)
+			}
+			if _, err := fixture.metadata.ResolvePersistedSession(
+				t.Context(),
+				fixture.session.Meta().SessionID,
+			); err != nil {
+				t.Fatalf("Session metadata after canceled %s: %v", operation, err)
+			}
+			if operation == "archive" {
+				if _, err := os.Stat(outputPath); err != nil {
+					t.Fatalf("published archive after shutdown cancellation: %v", err)
+				}
+			}
+		})
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
-	"time"
 
 	"core/server/auth"
 	"core/server/metadata"
@@ -21,17 +20,15 @@ import (
 var errSessionWorkspaceRetargeterRequired = errors.New("session workspace retargeter is required")
 
 type SessionLifecycleService struct {
-	persistenceRoot           string
-	containerDir              string
-	authority                 *sessionruntime.Authority
-	retargeter                sessionWorkspaceRetargeter
-	navigation                sessionNavigationTargetResolver
-	authManager               *auth.Manager
-	persisted                 session.PersistedSessionResolver
-	removal                   SessionRemovalMetadata
-	debug                     bool
-	archiveDetachTimerFactory func(time.Duration) archiveDetachTimer
-	archiveDetachDiagnostic   func(ArchiveDetachExpiryDiagnostic)
+	persistenceRoot string
+	containerDir    string
+	authority       *sessionruntime.Authority
+	retargeter      sessionWorkspaceRetargeter
+	navigation      sessionNavigationTargetResolver
+	authManager     *auth.Manager
+	persisted       session.PersistedSessionResolver
+	removal         SessionRemovalMetadata
+	debug           bool
 }
 
 func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *SessionLifecycleService {
@@ -55,21 +52,17 @@ type sessionNavigationTargetResolver interface {
 
 func NewSessionLifecycleService(persistenceRoot string, authority *sessionruntime.Authority, authManager *auth.Manager) *SessionLifecycleService {
 	return &SessionLifecycleService{
-		containerDir:              strings.TrimSpace(persistenceRoot),
-		authority:                 authority,
-		authManager:               authManager,
-		archiveDetachTimerFactory: newArchiveDetachTimer,
-		archiveDetachDiagnostic:   logArchiveDetachExpiry,
+		containerDir: strings.TrimSpace(persistenceRoot),
+		authority:    authority,
+		authManager:  authManager,
 	}
 }
 
 func NewGlobalSessionLifecycleService(persistenceRoot string, authority *sessionruntime.Authority, authManager *auth.Manager) *SessionLifecycleService {
 	return &SessionLifecycleService{
-		persistenceRoot:           strings.TrimSpace(persistenceRoot),
-		authority:                 authority,
-		authManager:               authManager,
-		archiveDetachTimerFactory: newArchiveDetachTimer,
-		archiveDetachDiagnostic:   logArchiveDetachExpiry,
+		persistenceRoot: strings.TrimSpace(persistenceRoot),
+		authority:       authority,
+		authManager:     authManager,
 	}
 }
 

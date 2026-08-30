@@ -45,7 +45,7 @@ func registerSessionRemovalGatewayBinaryBindings(bindings map[string]gatewayBina
 				request *sessionlaunchpb.SessionArchiveRequest,
 				err error,
 			) proto.Message {
-				return sessionRemovalFailureDetails(request.SessionId, err)
+				return sessionRemovalFailureDetails(sessionRemovalRequestID(request), err)
 			},
 		),
 		registerGatewayBinaryUnary(
@@ -75,24 +75,49 @@ func registerSessionRemovalGatewayBinaryBindings(bindings map[string]gatewayBina
 				request *sessionlaunchpb.SessionDeleteRequest,
 				err error,
 			) proto.Message {
-				return sessionRemovalFailureDetails(request.SessionId, err)
+				return sessionRemovalFailureDetails(sessionRemovalRequestID(request), err)
 			},
 		),
 	)
 }
 
-func sessionRemovalFailureDetails(sessionID string, err error) proto.Message {
+func sessionRemovalRequestID(request proto.Message) *string {
+	var sessionID string
+	switch typed := request.(type) {
+	case *sessionlaunchpb.SessionArchiveRequest:
+		if typed == nil {
+			return nil
+		}
+		sessionID = typed.SessionId
+	case *sessionlaunchpb.SessionDeleteRequest:
+		if typed == nil {
+			return nil
+		}
+		sessionID = typed.SessionId
+	default:
+		return nil
+	}
+	return &sessionID
+}
+
+func sessionRemovalFailureDetails(sessionID *string, err error) proto.Message {
 	var removalFailure *sessionservice.SessionRemovalFailureError
 	if errors.As(err, &removalFailure) {
 		return sessionRemovalFailureStateDetails(removalFailure)
 	}
 	if errors.Is(err, session.ErrSessionNotFound) {
-		return &sessionlaunchpb.SessionNotFoundDetails{SessionId: sessionID}
+		if sessionID == nil {
+			return binaryInternalFailure(err)
+		}
+		return &sessionlaunchpb.SessionNotFoundDetails{SessionId: *sessionID}
 	}
 	var runtimeInUse *sessionruntime.SessionInUseError
 	var metadataInUse *metadata.SessionInUseError
 	if errors.As(err, &runtimeInUse) || errors.As(err, &metadataInUse) {
-		return &sessionlaunchpb.SessionInUseDetails{SessionId: sessionID}
+		if sessionID == nil {
+			return binaryInternalFailure(err)
+		}
+		return &sessionlaunchpb.SessionInUseDetails{SessionId: *sessionID}
 	}
 	var invalidPath *session.InvalidArchiveOutputPathError
 	if errors.As(err, &invalidPath) {
@@ -149,7 +174,7 @@ func sessionRemovalFailureStateDetails(
 	failure *sessionservice.SessionRemovalFailureError,
 ) *sessionlaunchpb.SessionRemovalFailureDetails {
 	details := &sessionlaunchpb.SessionRemovalFailureDetails{}
-	switch failure.State {
+	switch state := failure.State.(type) {
 	case sessionservice.SessionRemovalMetadataNotRemoved:
 		details.State = &sessionlaunchpb.SessionRemovalFailureDetails_MetadataNotRemoved{
 			MetadataNotRemoved: &sessionlaunchpb.SessionRemovalMetadataNotRemoved{},
@@ -157,7 +182,7 @@ func sessionRemovalFailureStateDetails(
 	case sessionservice.SessionRemovalMetadataRemovedCleanupFailed:
 		details.State = &sessionlaunchpb.SessionRemovalFailureDetails_MetadataRemovedCleanupFailed{
 			MetadataRemovedCleanupFailed: &sessionlaunchpb.SessionRemovalMetadataRemovedCleanupFailed{
-				RemainingPath: failure.RemainingPath,
+				RemainingPath: state.RemainingPath,
 			},
 		}
 	}

@@ -153,7 +153,7 @@ var (
 		"The output path must be absolute on the Kent server. Existing destinations are preserved.",
 		"An executing Session or one retained by unfinished Workflow work or a pending Approval is rejected.",
 	)
-	sessionDeleteUsage  = commandUsage{
+	sessionDeleteUsage = commandUsage{
 		title: "Usage:",
 		lines: []string{
 			"  " + config.Command + " session delete <session-id> [--json]",

@@ -88,6 +88,26 @@ func ArchiveSessionDirectory(
 	if !filepath.IsAbs(sessionDir) {
 		return errors.New("Session directory must be absolute")
 	}
+	if err := PreflightSessionArchiveDestination(outputPath); err != nil {
+		return err
+	}
+	outputPath = filepath.Clean(outputPath)
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return &ArchivePathError{
+			Path:  outputPath,
+			Phase: ArchivePathPhaseParent,
+			Err:   err,
+		}
+	}
+
+	prepared, err := prepareSessionArchive(ctx, sessionID, sessionDir, outputPath)
+	if err != nil {
+		return err
+	}
+	return prepared.publish()
+}
+
+func PreflightSessionArchiveDestination(outputPath string) error {
 	if !filepath.IsAbs(outputPath) {
 		return &InvalidArchiveOutputPathError{
 			Path:   outputPath,
@@ -110,19 +130,7 @@ func ArchiveSessionDirectory(
 			Err:   err,
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return &ArchivePathError{
-			Path:  outputPath,
-			Phase: ArchivePathPhaseParent,
-			Err:   err,
-		}
-	}
-
-	prepared, err := prepareSessionArchive(ctx, sessionID, sessionDir, outputPath)
-	if err != nil {
-		return err
-	}
-	return prepared.publish()
+	return nil
 }
 
 func prepareSessionArchive(

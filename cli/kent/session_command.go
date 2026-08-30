@@ -13,6 +13,7 @@ import (
 	"core/shared/client"
 	"core/shared/config"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/sessionenv"
 )
 
@@ -30,16 +31,23 @@ type sessionCommand struct {
 	openRemote sessionCommandRemoteOpener
 }
 
+type sessionRemovalOperation uint8
+
+const (
+	sessionArchiveOperation sessionRemovalOperation = iota + 1
+	sessionDeleteOperation
+)
+
 type sessionRemovalResult struct {
-	SessionID  string `json:"session_id"`
-	OutputPath string `json:"output_path,omitempty"`
+	SessionID  string  `json:"session_id"`
+	OutputPath *string `json:"output_path,omitempty"`
 }
 
 type sessionRemovalError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	SessionID string `json:"session_id"`
-	Path      string `json:"path,omitempty"`
+	Code      string  `json:"code"`
+	Message   string  `json:"message"`
+	SessionID string  `json:"session_id"`
+	Path      *string `json:"path,omitempty"`
 }
 
 type sessionRemovalOutcome struct {
@@ -94,7 +102,6 @@ func (c sessionCommand) archive(args []string, stdout io.Writer, stderr io.Write
 			sessionID,
 			"self_session_forbidden",
 			selfSessionRemovalMessage,
-			"",
 		), *jsonOut)
 	}
 	remote, err := c.dial()
@@ -138,7 +145,6 @@ func (c sessionCommand) delete(args []string, stdout io.Writer, stderr io.Writer
 			sessionID,
 			"self_session_forbidden",
 			selfSessionRemovalMessage,
-			"",
 		), *jsonOut)
 	}
 	if !*confirmed {
@@ -149,7 +155,6 @@ func (c sessionCommand) delete(args []string, stdout io.Writer, stderr io.Writer
 				"Session deletion was not confirmed. Rerun with --confirm to delete session %s.",
 				sessionID,
 			),
-			"",
 		), *jsonOut)
 	}
 	remote, err := c.dial()
@@ -208,12 +213,11 @@ func runSessionArchiveUseCase(
 			sessionID,
 			"request_failed",
 			"Session archive returned an invalid response.",
-			"",
 		)
 	}
 	return sessionRemovalOutcome{Result: &sessionRemovalResult{
 		SessionID:  sessionID,
-		OutputPath: outputPath,
+		OutputPath: &outputPath,
 	}}
 }
 
@@ -233,7 +237,6 @@ func runSessionDeleteUseCase(
 			sessionID,
 			"request_failed",
 			"Session deletion returned an invalid response.",
-			"",
 		)
 	}
 	return sessionRemovalOutcome{Result: &sessionRemovalResult{SessionID: sessionID}}
@@ -242,36 +245,23 @@ func runSessionDeleteUseCase(
 func sessionArchiveFailure(sessionID string, outputPath string, err error) sessionRemovalOutcome {
 	var wire *client.SessionArchiveFailureError
 	if !errors.As(err, &wire) || wire == nil || wire.Failure == nil {
-		return sessionRemovalFailureOutcome(
-			sessionID,
-			"request_failed",
-			"Session archive request failed.",
-			"",
-		)
+		return sessionRemovalRequestFailure(sessionID, sessionArchiveOperation)
 	}
 	failure := wire.Failure
+	if outcome, handled := commonSessionRemovalFailure(
+		sessionID,
+		sessionArchiveOperation,
+		failure.Code,
+		failure.GetSessionNotFound(),
+		failure.GetSessionInUse(),
+		failure.GetInternalFailure(),
+	); handled {
+		return outcome
+	}
 	switch failure.Code {
-	case "session_not_found":
-		if failure.GetSessionNotFound() != nil {
-			return sessionRemovalFailureOutcome(
-				sessionID,
-				"session_not_found",
-				fmt.Sprintf("Session %s was not found.", sessionID),
-				"",
-			)
-		}
-	case "session_in_use":
-		if failure.GetSessionInUse() != nil {
-			return sessionRemovalFailureOutcome(
-				sessionID,
-				"session_in_use",
-				fmt.Sprintf("Session %s is in use and cannot be removed.", sessionID),
-				"",
-			)
-		}
 	case "invalid_output_path":
 		if details := failure.GetInvalidOutputPath(); details != nil {
-			return sessionRemovalFailureOutcome(
+			return sessionRemovalPathFailureOutcome(
 				sessionID,
 				"invalid_output_path",
 				invalidArchiveOutputPathMessage(details),
@@ -280,7 +270,7 @@ func sessionArchiveFailure(sessionID string, outputPath string, err error) sessi
 		}
 	case "output_exists":
 		if details := failure.GetOutputExists(); details != nil {
-			return sessionRemovalFailureOutcome(
+			return sessionRemovalPathFailureOutcome(
 				sessionID,
 				"output_exists",
 				fmt.Sprintf("Archive output already exists at %s.", details.Path),
@@ -289,7 +279,7 @@ func sessionArchiveFailure(sessionID string, outputPath string, err error) sessi
 		}
 	case "archive_path_failure":
 		if details := failure.GetArchivePathFailure(); details != nil {
-			return sessionRemovalFailureOutcome(
+			return sessionRemovalPathFailureOutcome(
 				sessionID,
 				"request_failed",
 				fmt.Sprintf(
@@ -304,74 +294,110 @@ func sessionArchiveFailure(sessionID string, outputPath string, err error) sessi
 		if details := failure.GetSessionRemovalFailure(); details != nil {
 			return archiveRemovalFailureOutcome(sessionID, outputPath, details)
 		}
-	case "internal_failure":
-		if failure.GetInternalFailure() != nil {
-			return sessionRemovalFailureOutcome(
-				sessionID,
-				"request_failed",
-				"Session archive request failed.",
-				"",
-			)
-		}
 	}
-	return sessionRemovalFailureOutcome(
-		sessionID,
-		"request_failed",
-		"Session archive returned an unsupported failure response.",
-		"",
-	)
+	return sessionRemovalUnsupportedFailure(sessionID, sessionArchiveOperation)
 }
 
 func sessionDeleteFailure(sessionID string, err error) sessionRemovalOutcome {
 	var wire *client.SessionDeleteFailureError
 	if !errors.As(err, &wire) || wire == nil || wire.Failure == nil {
-		return sessionRemovalFailureOutcome(
-			sessionID,
-			"request_failed",
-			"Session deletion request failed.",
-			"",
-		)
+		return sessionRemovalRequestFailure(sessionID, sessionDeleteOperation)
 	}
 	failure := wire.Failure
+	if outcome, handled := commonSessionRemovalFailure(
+		sessionID,
+		sessionDeleteOperation,
+		failure.Code,
+		failure.GetSessionNotFound(),
+		failure.GetSessionInUse(),
+		failure.GetInternalFailure(),
+	); handled {
+		return outcome
+	}
 	switch failure.Code {
-	case "session_not_found":
-		if failure.GetSessionNotFound() != nil {
-			return sessionRemovalFailureOutcome(
-				sessionID,
-				"session_not_found",
-				fmt.Sprintf("Session %s was not found.", sessionID),
-				"",
-			)
-		}
-	case "session_in_use":
-		if failure.GetSessionInUse() != nil {
-			return sessionRemovalFailureOutcome(
-				sessionID,
-				"session_in_use",
-				fmt.Sprintf("Session %s is in use and cannot be removed.", sessionID),
-				"",
-			)
-		}
 	case "session_removal_failure":
 		if details := failure.GetSessionRemovalFailure(); details != nil {
 			return deleteRemovalFailureOutcome(sessionID, details)
 		}
-	case "internal_failure":
-		if failure.GetInternalFailure() != nil {
+	}
+	return sessionRemovalUnsupportedFailure(sessionID, sessionDeleteOperation)
+}
+
+func commonSessionRemovalFailure(
+	sessionID string,
+	operation sessionRemovalOperation,
+	code string,
+	notFound *sessionlaunchpb.SessionNotFoundDetails,
+	inUse *sessionlaunchpb.SessionInUseDetails,
+	internal *sharedpb.InternalFailureDetails,
+) (sessionRemovalOutcome, bool) {
+	switch code {
+	case "session_not_found":
+		if notFound != nil {
 			return sessionRemovalFailureOutcome(
 				sessionID,
-				"request_failed",
-				"Session deletion request failed.",
-				"",
-			)
+				"session_not_found",
+				fmt.Sprintf("Session %s was not found.", sessionID),
+			), true
+		}
+	case "session_in_use":
+		if inUse != nil {
+			return sessionRemovalFailureOutcome(
+				sessionID,
+				"session_in_use",
+				fmt.Sprintf("Session %s is in use and cannot be removed.", sessionID),
+			), true
+		}
+	case "internal_failure":
+		if internal != nil {
+			return sessionRemovalRequestFailure(sessionID, operation), true
 		}
 	}
+	return sessionRemovalOutcome{}, false
+}
+
+func sessionRemovalRequestFailure(
+	sessionID string,
+	operation sessionRemovalOperation,
+) sessionRemovalOutcome {
 	return sessionRemovalFailureOutcome(
 		sessionID,
 		"request_failed",
-		"Session deletion returned an unsupported failure response.",
-		"",
+		operation.requestFailureMessage(),
 	)
+}
+
+func sessionRemovalUnsupportedFailure(
+	sessionID string,
+	operation sessionRemovalOperation,
+) sessionRemovalOutcome {
+	return sessionRemovalFailureOutcome(
+		sessionID,
+		"request_failed",
+		operation.unsupportedFailureMessage(),
+	)
+}
+
+func (o sessionRemovalOperation) requestFailureMessage() string {
+	switch o {
+	case sessionArchiveOperation:
+		return "Session archive request failed."
+	case sessionDeleteOperation:
+		return "Session deletion request failed."
+	default:
+		return "Session removal request failed."
+	}
+}
+
+func (o sessionRemovalOperation) unsupportedFailureMessage() string {
+	switch o {
+	case sessionArchiveOperation:
+		return "Session archive returned an unsupported failure response."
+	case sessionDeleteOperation:
+		return "Session deletion returned an unsupported failure response."
+	default:
+		return "Session removal returned an unsupported failure response."
+	}
 }
 
 func invalidArchiveOutputPathMessage(details *sessionlaunchpb.InvalidArchiveOutputPathDetails) string {
@@ -408,7 +434,7 @@ func archiveRemovalFailureOutcome(
 	details *sessionlaunchpb.SessionRemovalFailureDetails,
 ) sessionRemovalOutcome {
 	if details.GetMetadataNotRemoved() != nil {
-		return sessionRemovalFailureOutcome(
+		return sessionRemovalPathFailureOutcome(
 			sessionID,
 			"request_failed",
 			fmt.Sprintf(
@@ -427,7 +453,6 @@ func archiveRemovalFailureOutcome(
 		sessionID,
 		"request_failed",
 		"Session archive returned an unsupported removal state.",
-		"",
 	)
 }
 
@@ -442,7 +467,6 @@ func deleteRemovalFailureOutcome(
 		sessionID,
 		"request_failed",
 		"Session deletion failed before metadata removal.",
-		"",
 	)
 }
 
@@ -450,7 +474,7 @@ func metadataRemovedCleanupFailureOutcome(
 	sessionID string,
 	remainingPath string,
 ) sessionRemovalOutcome {
-	return sessionRemovalFailureOutcome(
+	return sessionRemovalPathFailureOutcome(
 		sessionID,
 		"request_failed",
 		fmt.Sprintf(
@@ -466,14 +490,23 @@ func sessionRemovalFailureOutcome(
 	sessionID string,
 	code string,
 	message string,
-	path string,
 ) sessionRemovalOutcome {
 	return sessionRemovalOutcome{Error: &sessionRemovalError{
 		Code:      code,
 		Message:   message,
 		SessionID: sessionID,
-		Path:      path,
 	}}
+}
+
+func sessionRemovalPathFailureOutcome(
+	sessionID string,
+	code string,
+	message string,
+	path string,
+) sessionRemovalOutcome {
+	outcome := sessionRemovalFailureOutcome(sessionID, code, message)
+	outcome.Error.Path = &path
+	return outcome
 }
 
 func writeSessionRemovalOutcome(
