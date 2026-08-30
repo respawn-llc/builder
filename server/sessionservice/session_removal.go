@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 )
 
@@ -157,6 +158,35 @@ func (s *SessionLifecycleService) Delete(invocationCtx context.Context, sessionI
 		return err
 	}
 	return waitForAcceptedSessionOperation(invocationCtx, result)
+}
+
+func (s *SessionLifecycleService) ArchiveSession(
+	ctx context.Context,
+	request *sessionlaunchpb.SessionArchiveRequest,
+) (*sessionlaunchpb.SessionArchiveSuccess, error) {
+	if request == nil {
+		return nil, errors.New("Session archive request is required")
+	}
+	if err := s.Archive(ctx, request.SessionId, request.OutputPath); err != nil {
+		return nil, err
+	}
+	return &sessionlaunchpb.SessionArchiveSuccess{
+		SessionId:  request.SessionId,
+		OutputPath: request.OutputPath,
+	}, nil
+}
+
+func (s *SessionLifecycleService) DeleteSession(
+	ctx context.Context,
+	request *sessionlaunchpb.SessionDeleteRequest,
+) (*sessionlaunchpb.SessionDeleteSuccess, error) {
+	if request == nil {
+		return nil, errors.New("Session delete request is required")
+	}
+	if err := s.Delete(ctx, request.SessionId); err != nil {
+		return nil, err
+	}
+	return &sessionlaunchpb.SessionDeleteSuccess{SessionId: request.SessionId}, nil
 }
 
 func waitForAcceptedSessionOperation(invocationCtx context.Context, result <-chan error) error {
