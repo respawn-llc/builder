@@ -24,7 +24,7 @@ func TestRunLoggerWritesStepsFile(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatalf("close logger: %v", err)
 	}
-	info, err := os.Stat(filepath.Join(dir, RunLogFileName))
+	info, err := os.Stat(session.RunLogPath(dir))
 	if err != nil {
 		t.Fatalf("stat run log: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestRunLoggerNoopsWhenSessionDirDoesNotExist(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatalf("close logger: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(missingDir, RunLogFileName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(session.RunLogPath(missingDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stat missing run log: %v", err)
 	}
 }
