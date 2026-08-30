@@ -1,5 +1,22 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
+  ChatApi,
+  ChatContext,
+  ChatContextTarget,
+  ChatMainView,
+  ChatProjectTarget,
+  ChatRuntimeAttachment,
+  ChatRuntimeRelease,
+  ChatSessionTarget,
+  ChatSettings,
+  ChatSettingsTarget,
+  ChatTranscriptCompletion,
+  ChatTranscriptHandler,
+  ChatTranscriptMessage,
+  ChatTranscriptPage,
+  ChatWorkspaceSelector,
+} from "./chat";
+export type {
   BoardNodeCardsInput,
   PromptAnswerBatchInput,
   PromptAnswerBatchResponse,

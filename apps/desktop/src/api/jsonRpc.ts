@@ -7,7 +7,7 @@ import {
   descriptorResponseCorrelation,
   encodeDescriptorCall,
 } from "./descriptorRpc";
-import { TransportError } from "./errors";
+import { ContractError, TransportError } from "./errors";
 import type { JsonValue } from "./json";
 import {
   unaryConnectionPolicy,
@@ -18,7 +18,6 @@ import {
 import { z } from "zod";
 import {
   delay,
-  handleSubscriptionMessage,
   jsonRpcVersion,
   openSocket,
   parseFrame,
@@ -28,17 +27,24 @@ import {
   sendSocketRequest,
   setupSocket,
   socketRequestError,
-  subscriptionCompleteMethod,
-  waitForSubscriptionEnd,
+  requireSessionAttachment,
 } from "./jsonRpcSocket";
+import { JsonRpcRuntimeOwner } from "./jsonRpcRuntimeOwner";
+import { isTerminalSubscriptionError, runJsonSubscription } from "./jsonRpcSubscription";
 import type {
   RpcCallOptions,
   DescriptorRpcTransport,
   DescriptorSubscriptionInput,
+  AttachedProjectCall,
+  ChatSubscriptionInput,
   RpcDedicatedCallOptions,
   RpcEventHandler,
   RpcSubscription,
   RpcTransport,
+  ProjectAttachment,
+  SessionAttachment,
+  RuntimeOwnerContext,
+  RuntimeOwnerOptions,
 } from "./transport";
 
 const socketOpenTimeoutMs = 10_000;
@@ -74,10 +80,12 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   #opening: Promise<WebSocket> | null = null;
   #nextID = 1;
   #pending = new Map<string, PendingRequest>();
+  #runtimeOwner: JsonRpcRuntimeOwner;
 
   constructor(endpoint: string, expectedRootId: string) {
     this.#endpoint = endpoint;
     this.#expectedRootId = expectedRootId;
+    this.#runtimeOwner = new JsonRpcRuntimeOwner(endpoint, expectedRootId);
   }
 
   async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
@@ -112,6 +120,29 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     );
   }
 
+  async callAttachedProject(
+    input: AttachedProjectCall,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<Readonly<{ result: unknown; attachment: ProjectAttachment }>> {
+    const { projectID, selector, method, request } = input;
+    return this.#withDedicatedSocket(
+      options,
+      async (socket, requestOptions, attachment) => {
+        const validatedAttachment = requireProjectAttachment(attachment, { projectID, workspace: selector });
+        return {
+          result: await sendSocketRequest(
+            socket,
+            method,
+            request.kind === "factory" ? request.create(validatedAttachment) : request.value,
+            requestOptions,
+          ),
+          attachment: validatedAttachment,
+        };
+      },
+      { projectID, workspace: selector },
+    );
+  }
+
   async callAttachedSession(
     sessionID: string,
     method: string,
@@ -125,8 +156,41 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     return this.#withDedicatedSocket(
       options,
       async (socket, requestOptions) => sendSocketRequest(socket, method, params, requestOptions),
-      attachedSessionID,
+      { sessionID: attachedSessionID },
     );
+  }
+
+  async callChatAttachedSession(
+    sessionID: string,
+    method: string,
+    params: JsonValue,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<Readonly<{ result: unknown; attachment: SessionAttachment }>> {
+    const attachedSessionID = sessionID.trim();
+    if (attachedSessionID.length === 0) {
+      throw new TransportError("Session attachment requires a Session ID.");
+    }
+    return this.#withDedicatedSocket(
+      options,
+      async (socket, requestOptions, attachment) => {
+        if (attachment === null || !("sessionID" in attachment)) {
+          throw new TransportError("Session attachment was not established.");
+        }
+        return {
+          result: await sendSocketRequest(socket, method, params, requestOptions),
+          attachment,
+        };
+      },
+      { sessionID: attachedSessionID },
+    );
+  }
+
+  async runRuntimeOwner<Result>(
+    sessionID: string,
+    options: RuntimeOwnerOptions,
+    run: (context: RuntimeOwnerContext) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runtimeOwner.run(sessionID, options, run);
   }
 
   async #withDedicatedSocket<Result>(
@@ -134,23 +198,26 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     run: (
       socket: WebSocket,
       requestOptions: Readonly<{ timeoutMilliseconds: number | null; signal?: AbortSignal }>,
+      attachment: ProjectAttachment | SessionAttachment | null,
     ) => Promise<Result>,
-    sessionID?: string,
+    attachmentTarget?: Readonly<{
+      sessionID?: string;
+      projectID?: string;
+      workspace?: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
+    }>,
   ): Promise<Result> {
     const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs, options?.signal);
     try {
-      await setupSocket(socket, {
-        timeoutMilliseconds: rpcRequestTimeoutMs,
-        expectedRootId: this.#expectedRootId,
-        ...(options?.signal === undefined ? {} : { signal: options.signal }),
-        ...(sessionID === undefined ? {} : { sessionID }),
-      });
+      const setupAttachment = await setupSocket(
+        socket,
+        socketSetupOptions(this.#expectedRootId, options, attachmentTarget),
+      );
       const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
       const requestOptions =
         options?.signal === undefined
           ? { timeoutMilliseconds: timeoutMs }
           : { timeoutMilliseconds: timeoutMs, signal: options.signal };
-      return await run(socket, requestOptions);
+      return await run(socket, requestOptions, setupAttachment);
     } finally {
       socket.close();
     }
@@ -160,7 +227,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     const controller = new AbortController();
     void this.#openSubscription(
       async (socket) =>
-        this.#runJsonSubscription({
+        runJsonSubscription({
           socket,
           method,
           params,
@@ -196,6 +263,29 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     );
     return {
       close: () => {
+        controller.abort();
+      },
+    };
+  }
+
+  subscribeChatSession(input: ChatSubscriptionInput): RpcSubscription {
+    const { projectID, sessionID, method, params, handler } = input;
+    const controller = new AbortController();
+    void this.#openSubscription(
+      async (socket) =>
+        runJsonSubscription({
+          socket,
+          method,
+          params,
+          handler,
+          signal: controller.signal,
+        }),
+      handler.onError,
+      controller.signal,
+      { projectID, sessionID },
+    );
+    return {
+      close() {
         controller.abort();
       },
     };
@@ -434,14 +524,18 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     run: (socket: WebSocket) => Promise<void>,
     onError: (error: Error) => void,
     signal: AbortSignal,
+    attachmentTarget?: Readonly<{ sessionID?: string; projectID?: string }>,
   ): Promise<void> {
     let attempt = 0;
     while (!signal.aborted) {
       try {
-        await this.#withSubscriptionSocket(signal, run);
+        await this.#withSubscriptionSocket(signal, run, attachmentTarget);
         return;
       } catch (error) {
         if (abortSignalWasRequested(signal)) {
+          return;
+        }
+        if (isTerminalSubscriptionError(error)) {
           return;
         }
         onError(error instanceof Error ? error : new TransportError("Subscription failed."));
@@ -451,52 +545,10 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     }
   }
 
-  async #runJsonSubscription({
-    socket,
-    method,
-    params,
-    handler,
-    signal,
-  }: Readonly<{
-    socket: WebSocket;
-    method: string;
-    params: JsonValue;
-    handler: RpcEventHandler;
-    signal: AbortSignal;
-  }>): Promise<void> {
-    const terminalCompleteRef: { current: Readonly<{ code: number; message: string }> | null } = {
-      current: null,
-    };
-    const completeMethod = subscriptionCompleteMethod(method);
-    const subscriptionListener = (event: MessageEvent<unknown>) => {
-      const result = handleSubscriptionMessage(event, handler, completeMethod);
-      if (result.kind === "complete") {
-        terminalCompleteRef.current = { code: result.code, message: result.message };
-        socket.close();
-      }
-    };
-    try {
-      socket.addEventListener("message", subscriptionListener);
-      await sendSocketRequest(socket, method, params, {
-        timeoutMilliseconds: rpcRequestTimeoutMs,
-      });
-      handler.onOpen?.();
-      await waitForSubscriptionEnd(socket, signal);
-      this.#throwNonZeroComplete(method, terminalCompleteRef.current);
-    } catch (error) {
-      if (terminalCompleteRef.current?.code === 0) {
-        return;
-      }
-      this.#throwNonZeroComplete(method, terminalCompleteRef.current);
-      throw error;
-    } finally {
-      socket.removeEventListener("message", subscriptionListener);
-    }
-  }
-
   async #withSubscriptionSocket(
     signal: AbortSignal,
     run: (socket: WebSocket) => Promise<void>,
+    attachmentTarget?: Readonly<{ sessionID?: string; projectID?: string }>,
   ): Promise<void> {
     const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs, signal);
     const abort = () => {
@@ -504,29 +556,87 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     };
     signal.addEventListener("abort", abort, { once: true });
     try {
-      await setupSocket(socket, {
+      const attachment = await setupSocket(socket, {
         timeoutMilliseconds: rpcRequestTimeoutMs,
         expectedRootId: this.#expectedRootId,
         signal,
+        ...(attachmentTarget?.sessionID === undefined ? {} : { sessionID: attachmentTarget.sessionID }),
       });
+      if (attachmentTarget?.sessionID !== undefined) {
+        requireSessionAttachment(attachment, {
+          ...(attachmentTarget.projectID === undefined ? {} : { projectID: attachmentTarget.projectID }),
+          sessionID: attachmentTarget.sessionID,
+        });
+      }
       await run(socket);
     } finally {
       signal.removeEventListener("abort", abort);
       socket.close();
     }
   }
-
-  #throwNonZeroComplete(method: string, complete: Readonly<{ code: number; message: string }> | null): void {
-    if (complete === null || complete.code === 0) {
-      return;
-    }
-    const suffix = complete.message.length === 0 ? "" : `: ${complete.message}`;
-    throw new TransportError(
-      `${method} subscription completed with code ${complete.code.toString()}${suffix}`,
-    );
-  }
 }
 
 function abortSignalWasRequested(signal: AbortSignal): boolean {
   return signal.aborted;
+}
+
+function socketSetupOptions(
+  expectedRootId: string,
+  options: RpcDedicatedCallOptions | undefined,
+  attachmentTarget:
+    | Readonly<{
+        sessionID?: string;
+        projectID?: string;
+        workspace?: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
+      }>
+    | undefined,
+): Parameters<typeof setupSocket>[1] {
+  const result: {
+    timeoutMilliseconds: number;
+    expectedRootId: string;
+    signal?: AbortSignal;
+    sessionID?: string;
+    projectSelector?: Readonly<{
+      projectID: string;
+      workspace: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
+    }>;
+  } = {
+    timeoutMilliseconds: rpcRequestTimeoutMs,
+    expectedRootId,
+  };
+  if (options?.signal !== undefined) {
+    result.signal = options.signal;
+  }
+  if (attachmentTarget?.sessionID !== undefined) {
+    result.sessionID = attachmentTarget.sessionID;
+  }
+  if (attachmentTarget?.projectID !== undefined && attachmentTarget.workspace !== undefined) {
+    result.projectSelector = {
+      projectID: attachmentTarget.projectID,
+      workspace: attachmentTarget.workspace,
+    };
+  }
+  return result;
+}
+
+function requireProjectAttachment(
+  attachment: ProjectAttachment | SessionAttachment | null,
+  target: Readonly<{
+    projectID: string;
+    workspace: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
+  }>,
+): ProjectAttachment {
+  if (attachment === null || !("projectID" in attachment) || "sessionID" in attachment) {
+    throw new ContractError("Project attachment was not established.");
+  }
+  if (attachment.projectID !== target.projectID) {
+    throw new ContractError("Project attachment does not match the requested Project.");
+  }
+  if ("workspaceID" in target.workspace && attachment.workspaceID !== target.workspace.workspaceID) {
+    throw new ContractError("Project attachment does not match the requested Workspace.");
+  }
+  if ("workspaceRoot" in target.workspace && attachment.workspaceRoot !== target.workspace.workspaceRoot) {
+    throw new ContractError("Project attachment does not match the requested Workspace.");
+  }
+  return attachment;
 }
