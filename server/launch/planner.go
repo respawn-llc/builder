@@ -51,7 +51,7 @@ type SessionManagedWorktreeRootsResolver interface {
 type MetadataExecutionTargetStore interface {
 	SessionExecutionTargetResolver
 	UpdateSessionExecutionTarget(ctx context.Context, update metadata.SessionExecutionTargetUpdate) error
-	DeleteSessionRecordByID(ctx context.Context, sessionID string) error
+	DeleteFailedSessionCreationRecordByID(ctx context.Context, sessionID string) error
 	Close() error
 }
 
@@ -1421,7 +1421,7 @@ func (p Planner) rollbackChildSession(child *session.Store) error {
 	defer cancel()
 	var rollbackErrs []error
 	if store, err := p.openMetadataStore(); err == nil {
-		if err := store.DeleteSessionRecordByID(rollbackCtx, childMeta.SessionID); err != nil {
+		if err := store.DeleteFailedSessionCreationRecordByID(rollbackCtx, childMeta.SessionID); err != nil {
 			rollbackErrs = append(rollbackErrs, err)
 		}
 		if err := store.Close(); err != nil {

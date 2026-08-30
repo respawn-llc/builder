@@ -36,8 +36,8 @@ func (s *failingUpdateMetadataExecutionTargetStore) UpdateSessionExecutionTarget
 	return s.updateErr
 }
 
-func (s *failingUpdateMetadataExecutionTargetStore) DeleteSessionRecordByID(ctx context.Context, sessionID string) error {
-	return s.base.DeleteSessionRecordByID(ctx, sessionID)
+func (s *failingUpdateMetadataExecutionTargetStore) DeleteFailedSessionCreationRecordByID(ctx context.Context, sessionID string) error {
+	return s.base.DeleteFailedSessionCreationRecordByID(ctx, sessionID)
 }
 
 func (s *failingUpdateMetadataExecutionTargetStore) Close() error {
