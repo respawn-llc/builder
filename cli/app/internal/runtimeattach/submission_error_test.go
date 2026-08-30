@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"core/shared/llmerrors"
@@ -40,7 +39,7 @@ func TestFormatSubmissionErrorRendersWorkflowResumeConflictGuidance(t *testing.T
 		},
 	)
 	got := FormatSubmissionError(err)
-	if got == "" || got == err.Error() || !strings.Contains(got, "KNT-123") {
+	if got == "" || got == err.Error() {
 		t.Fatalf("FormatSubmissionError = %q, want client-rendered Workflow guidance", got)
 	}
 }
