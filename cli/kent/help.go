@@ -145,14 +145,22 @@ var (
 	rootUsage           = commandUsage{helpFile: "root.txt", includeEmbeddedFlags: true}
 	runUsage            = commandUsage{helpFile: "run.txt", includeEmbeddedFlags: true}
 	sessionIDUsage      = commandUsage{helpFile: "session_id.txt"}
-	sessionUsage        = leafCommandUsage(config.Command+" session <archive|delete> ...", "Archive or delete Sessions.")
-	sessionArchiveUsage = leafCommandUsage(config.Command+" session archive <session-id> --output <path> [--json]", "Create a server-local .tar.zst archive and remove the Session.")
+	sessionUsage        = commandUsage{helpFile: "session.txt"}
+	sessionArchiveUsage = leafCommandUsage(
+		config.Command+" session archive <session-id> --output <path> [--json]",
+		"Create a server-local .tar.zst archive and remove the Session.",
+		"",
+		"The output path must be absolute on the Kent server. Existing destinations are preserved.",
+		"An executing Session or one retained by unfinished Workflow work or a pending Approval is rejected.",
+	)
 	sessionDeleteUsage  = commandUsage{
 		title: "Usage:",
 		lines: []string{
 			"  " + config.Command + " session delete <session-id> [--json]",
 			"",
-			"Remove a Session.",
+			"Permanently remove a Session without creating an archive.",
+			"An executing Session or one retained by unfinished Workflow work or a pending Approval is rejected.",
+			"Cleanup failures name the exact remaining path to remove manually.",
 		},
 	}
 	goalUsage           = commandUsage{helpFile: "goal.txt"}
