@@ -211,6 +211,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
 		WithPersistedSessionResolver(metadataStore).
+		WithDebugMode(cfg.Settings.Debug).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
 		WithNavigationTargetResolver(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter

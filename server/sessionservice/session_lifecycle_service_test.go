@@ -12,7 +12,6 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	"core/server/runlog"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	sessionruntime "core/server/sessionruntime"
@@ -745,7 +744,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	if err != nil {
 		t.Fatalf("OpenByID child: %v", err)
 	}
-	logBody, err := os.ReadFile(filepath.Join(childStore.Dir(), runlog.RunLogFileName))
+	logBody, err := os.ReadFile(session.RunLogPath(childStore.Dir()))
 	if err != nil {
 		t.Fatalf("ReadFile steps.log: %v", err)
 	}

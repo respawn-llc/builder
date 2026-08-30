@@ -16,7 +16,6 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
@@ -84,28 +83,141 @@ type ownerlessRetirementLLMClient struct {
 }
 
 func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
-	authority := NewAuthority(AuthorityOptions{})
-	started := make(chan struct{})
-	stopped := make(chan struct{})
-	if !authority.launchLifecycleTask(func(ctx context.Context) {
-		close(started)
-		<-ctx.Done()
-		close(stopped)
-	}) {
-		t.Fatal("authority rejected lifecycle task before close")
-	}
-	<-started
+	for _, operation := range []string{"archive", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			authority := NewAuthority(AuthorityOptions{})
+			started := make(chan struct{})
+			stopped := make(chan struct{})
+			result, err := authority.AcceptLifecycleTask(func(ctx context.Context) error {
+				close(started)
+				<-ctx.Done()
+				close(stopped)
+				return context.Cause(ctx)
+			})
+			if err != nil {
+				t.Fatalf("accept %s lifecycle task: %v", operation, err)
+			}
+			<-started
 
-	if err := authority.Close(context.Background()); err != nil {
-		t.Fatalf("close authority: %v", err)
+			if err := authority.Close(context.Background()); err != nil {
+				t.Fatalf("close authority: %v", err)
+			}
+			select {
+			case <-stopped:
+			default:
+				t.Fatal("Authority.Close returned before its lifecycle task stopped")
+			}
+			if resultErr := <-result; !errors.Is(resultErr, context.Canceled) {
+				t.Fatalf("%s lifecycle result = %v, want context canceled", operation, resultErr)
+			}
+			if _, err := authority.AcceptLifecycleTask(func(context.Context) error { return nil }); !errors.Is(err, ErrAuthorityClosed) {
+				t.Fatalf("closed authority acceptance error = %v, want ErrAuthorityClosed", err)
+			}
+		})
 	}
+}
+
+func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "open-client", &plan)
+
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- fixture.authority.WithRuntime(
+			context.Background(),
+			attachment.Resource(),
+			func(context.Context, *runtime.Engine) error {
+				close(callbackEntered)
+				<-releaseCallback
+				return nil
+			},
+		)
+	}()
+	<-callbackEntered
+
+	destructiveCalled := false
+	err := fixture.authority.WithDestructiveSessionAdmission(
+		context.Background(),
+		sessionID,
+		func(context.Context) error {
+			destructiveCalled = true
+			return nil
+		},
+	)
+	var inUse *SessionInUseError
+	if !errors.As(err, &inUse) || inUse.SessionID != sessionID {
+		t.Fatalf("destructive admission error = %v, want SessionInUseError for %s", err, sessionID)
+	}
+	if destructiveCalled {
+		t.Fatal("destructive callback ran after the Runtime callback won admission")
+	}
+	if _, resolveErr := fixture.metadata.ResolvePersistedSession(t.Context(), sessionID.String()); resolveErr != nil {
+		t.Fatalf("callback-winning Session was mutated: %v", resolveErr)
+	}
+	close(releaseCallback)
+	if err := <-callbackDone; err != nil {
+		t.Fatalf("Runtime callback: %v", err)
+	}
+
+	deleted := make(chan struct{})
+	releaseDeletion := make(chan struct{})
+	var releaseDeletionOnce sync.Once
+	releaseDestructiveDeletion := func() {
+		releaseDeletionOnce.Do(func() { close(releaseDeletion) })
+	}
+	t.Cleanup(releaseDestructiveDeletion)
+	deletionDone := make(chan error, 1)
+	go func() {
+		deletionDone <- fixture.authority.WithDestructiveSessionAdmission(
+			context.Background(),
+			sessionID,
+			func(ctx context.Context) error {
+				record, resolveErr := fixture.metadata.ResolvePersistedSession(ctx, sessionID.String())
+				if resolveErr != nil {
+					return resolveErr
+				}
+				schedule, preflightErr := session.PreflightSessionArtifactRemoval(record.SessionDir)
+				if preflightErr != nil {
+					return preflightErr
+				}
+				if deleteErr := fixture.metadata.DeleteSession(ctx, sessionID.String()); deleteErr != nil {
+					return deleteErr
+				}
+				close(deleted)
+				<-releaseDeletion
+				return session.RemovePreflightedSessionArtifacts(schedule)
+			},
+		)
+	}()
 	select {
-	case <-stopped:
-	default:
-		t.Fatal("Authority.Close returned before its lifecycle task stopped")
+	case <-deleted:
+	case err := <-deletionDone:
+		t.Fatalf("destructive admission completed before deletion callback entered: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("destructive deletion callback did not enter")
 	}
-	if authority.launchLifecycleTask(func(context.Context) {}) {
-		t.Fatal("closed authority accepted another lifecycle task")
+
+	if runtimeErr := fixture.authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(context.Context, *runtime.Engine) error { return nil },
+	); !errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("Runtime use while destructive admission was held = %v, want Runtime unavailable", runtimeErr)
+	}
+	releaseDestructiveDeletion()
+	if err := <-deletionDone; err != nil {
+		t.Fatalf("destructive deletion: %v", err)
+	}
+	if _, openErr := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "recreate-client",
+		Runtime:   &plan,
+	}); !errors.Is(openErr, session.ErrSessionNotFound) {
+		t.Fatalf("Runtime recreation error = %v, want Session not found", openErr)
 	}
 }
 
@@ -493,7 +605,7 @@ func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
-	if err := os.Mkdir(filepath.Join(fixture.store.Dir(), runlog.RunLogFileName), 0o755); err != nil {
+	if err := os.Mkdir(session.RunLogPath(fixture.store.Dir()), 0o755); err != nil {
 		t.Fatalf("replace run log with directory: %v", err)
 	}
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
