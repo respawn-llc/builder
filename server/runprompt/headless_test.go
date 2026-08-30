@@ -580,6 +580,7 @@ func TestInProcessRunPromptRetainedBoundaryOutcomes(t *testing.T) {
 			Kind: runtime.UserTurnResultAssistantFinal,
 			FinalAnswer: &llm.Message{Content: textutil.Value("selected result")},
 		},
+		nil,
 		selectedErr,
 		sibling,
 		func(continuation *workflowexecution.WorkflowSessionContinuation) {
