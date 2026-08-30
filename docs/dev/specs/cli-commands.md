@@ -122,16 +122,18 @@
 - Kent trusts the metadata-resolved lexical Session directory path and follows it when the Session root is a symbolic link. Archive then uses a standard one-pass traversal: nested symbolic links are stored as symbolic-link tar entries with their link target and are not recursively traversed.
 - Archive and delete do not enforce real-path containment, final-directory/Session-ID identity, or no-follow ownership. Deletion uses ordinary filesystem resolution for symlinked parent components of fixed Kent-owned paths. A user-created symlink that redirects those paths outside the expected Session tree is user error.
 - An archive output path inside the source Session directory is supported.
-- When output is inside the source Session directory, archive excludes its own temporary artifact by filesystem identity and its exact published artifact path from traversal.
-- Filesystem identity, rather than resolved path spelling alone, is authoritative for the already-created temporary artifact. This excludes the growing temporary file through symbolic-link aliases and ordinary-component case aliases on case-insensitive filesystems. Archive may also use exact normalized paths relative to the resolved traversal root for the not-yet-created published destination and as an exact-path optimization. A path outside the resolved traversal root is not rejected; it simply has no traversal exclusion identity.
+- Filesystem identity is the sole authority for excluding archive's open temporary artifact from traversal. This excludes that temporary artifact through symbolic-link aliases and ordinary-component case aliases on case-insensitive filesystems.
+- Archive does not reject an output path outside the Session directory.
 - The in-Session `.tar.zst` artifact survives Session removal at the requested path.
 - Archive writes to a temporary sibling of the requested output and atomically publishes with create-if-absent behavior only after the standard tar and Zstandard writers complete successfully.
 - Archive never replaces a destination created before or during publication.
 - Archive does not reopen, decompress, restore, inspect, or hash the completed artifact before publication.
 - Archive removes the Session only after publishing the artifact.
-- A failure before Session metadata removal retains the Session and cleans Kent's temporary archive artifacts.
+- A failure before publication retains the Session and cleans Kent's temporary archive artifact.
 - Archive leaves destination parent directories it created in place after a later failure.
-- If Session metadata removal fails after archive publication, the valid artifact and Session both remain and the failure directs the operator to use `kent session delete <session-id> --confirm`.
+- A Session removal failure is `session_removal_failure` with exactly one typed state: `metadata_not_removed` or `metadata_removed_cleanup_failed {remaining_path}`.
+- After publication, a removal failure before Session metadata commits reports `metadata_not_removed`. The valid artifact and Session both remain, and the failure directs the operator to resolve the blocker with `kent session delete <session-id> --confirm`.
+- After Session metadata commits, an owned-artifact cleanup failure reports `metadata_removed_cleanup_failed` with the exact remaining path. The Session remains absent from Kent, any archive artifact survives, and the failure directs the operator to remove that path manually.
 - Archive does not overwrite or rename a published artifact on retry.
 - Archive requires no confirmation flag.
 - Delete is non-interactive and requires a hidden `--confirm` flag.
@@ -143,16 +145,18 @@
 - Archive and delete also reject a Session retained as an exact continuation source by current non-terminal serial, parallel, or active fan-out work.
 - Archive and delete also reject a Session retained as an exact reused target or exact active continuation source in a pending approval branch, even when the approval source Current Node belongs to another Session.
 - A Session retained only by a terminal Task is eligible.
-- Session removal clears terminal and historical source references to the removed Session while preserving the remaining Task, Node, branch, and association history.
+- A retained Session that is neither current nor frozen in a pending Approval remains eligible even when a Workflow could otherwise select its association as future context.
+- Removing an eligible Session removes that Session's own Workflow node associations while preserving the Task, Current Nodes, and every unrelated Session association.
+- Surviving Session lineage and Worktree origin identifiers remain as historical provenance when they name the removed Session. Navigation to the absent Session fails, and a missing parent-agent ancestor ends the available ancestry chain.
 - An agent cannot archive or delete the Session identified by its own `KENT_SESSION_ID`.
 - Self-targeting reports exactly `You're trying to delete your own session, which is effectively a suicide. Don't do it, you still have things worth living for! Seek help immediately via ask_question, or exclude your session if this is accidental`.
 - An otherwise-idle Session remains eligible when it is open in a client.
 - After deletion, an already-open client uses its existing failure handling and cannot recreate the deleted Session.
-- Before metadata removal, Kent resolves the authoritative Session directory from metadata without opening or materializing a dormant Session Store, then checks the required event log and any present event-log lock, committed `append-recovery.json` record, or exact migration artifact for deletion access.
-- Delete treats the committed `append-recovery.json` record as an owned artifact to remove and never executes Session Store recovery.
+- Before metadata removal, Kent resolves the authoritative Session directory from metadata without opening or materializing a dormant Session Store, then checks every required fixed Session-owned artifact for deletion access.
+- Delete never executes Session Store recovery.
 - The deletion preflight does not parse, hash, or validate file contents and does not inspect unknown paths.
 - A metadata removal failure leaves Session files unchanged.
-- After metadata removal succeeds, Kent removes only the exact Kent-owned Session artifact schedule produced during preflight; it does not rescan or broaden filename matching.
+- After metadata removal succeeds, Kent removes all and only the fixed Session-owned artifacts scheduled during preflight; it does not rescan or broaden ownership.
 - A preflighted path already absent during removal is a successful no-op.
 - Any other Kent-owned artifact removal failure fails the command, reports the exact remaining path for manual deletion, and never resurrects the Session.
 - Delete and archive never remove unknown files or directories from a Session directory.
@@ -164,6 +168,7 @@
 - After caller cancellation or disconnection, an accepted archive continues under the Kent server lifetime for at most five additional minutes.
 - Kent cancels an archive that remains after the post-disconnect grace period and writes a diagnostic log; debug mode also panics.
 - Detached archive work has no durable job status, reconnectable outcome, retry, or restart recovery.
+- Caller cancellation or disconnection after delete acceptance stops only that caller's waiting and delivery. The accepted delete continues until completion or server shutdown.
 - Successful plain output is exactly `done`.
 - Plain archive and delete emit no progress output.
 - Both commands accept `--json`.

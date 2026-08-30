@@ -428,7 +428,7 @@ The user-facing TUI action that injects a message to take effect after the curre
 
 Every client attached to a Session has the same control capabilities over the shared Active Session Runtime. Kent has no controller client, limited-control client, read-only attachment, or client lease.
 
-The client and Runtime boundary for this attach is defined in [Core Runtime And Tools](core-runtime-tools.md).
+The client and Runtime boundary for this attach, including the detached Session archive exception, is defined in [Core Runtime And Tools](core-runtime-tools.md).
 
 ### Goal
 
