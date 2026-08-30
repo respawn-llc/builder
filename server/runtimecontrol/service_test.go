@@ -1768,6 +1768,47 @@ func TestServiceSetThinkingLevelAcceptsProviderSpecificValue(t *testing.T) {
 	}
 }
 
+func TestServiceSetThinkingLevelPersistsForDormantRetainedSession(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(
+		t,
+		&runtimeControlFakeClient{},
+		nil,
+		runtime.Config{},
+	)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse Session ID: %v", err)
+	}
+	resource, err := runtimeids.NewSessionResourceRef(sessionID, 1)
+	if err != nil {
+		t.Fatalf("new Session resource reference: %v", err)
+	}
+	if _, err := service.authority.ReleaseRuntime(context.Background(), sessionruntime.RuntimeReleaseRequest{
+		Resource: resource,
+		OwnerID:  "runtimecontrol-test",
+		Policy:   sessionruntime.RuntimeReleaseClose,
+	}); err != nil {
+		t.Fatalf("release retained Session runtime: %v", err)
+	}
+	if _, live := service.authority.SessionExecution(sessionID); live {
+		t.Fatal("Thinking mutation test retained a live runtime")
+	}
+
+	if err := service.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{
+		SessionID: store.Meta().SessionID,
+		Level:     "high",
+	}); err != nil {
+		t.Fatalf("SetThinkingLevel for dormant Session: %v", err)
+	}
+	reopened, err := session.Open(store.Dir(), runtimeControlTestSessionPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen dormant Session: %v", err)
+	}
+	if settings := reopened.Meta().ChatSettings; settings == nil || settings.Thinking == nil || *settings.Thinking != "high" {
+		t.Fatalf("dormant Session Chat settings = %+v, want Thinking high", settings)
+	}
+}
+
 func TestServiceSetAutoCompactionEnabledPropagatesClosedRuntime(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	if err := engine.Close(); err != nil {
