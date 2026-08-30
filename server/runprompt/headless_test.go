@@ -2,7 +2,6 @@ package runprompt
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	modelstub "core/internal/testharness/pty/blackbox"
+	testsqlite "core/internal/testharness/sqlite"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/launch"
@@ -62,38 +62,19 @@ type blockingPromptHistoryStore struct {
 	err     error
 }
 
-type headlessAssignmentOrderClient struct {
-	assigned atomic.Bool
-	called   atomic.Bool
-	mu       sync.Mutex
-	request  llm.Request
+type observingPromptHistoryStore struct {
+	delegate promptHistoryStore
+	started  chan struct{}
+	proceed  chan struct{}
 }
 
-func (c *headlessAssignmentOrderClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
-	c.called.Store(true)
-	c.mu.Lock()
-	c.request = request
-	c.mu.Unlock()
-	if !c.assigned.Load() {
-		return llm.Response{}, errors.New("provider request preceded Workflow assignment")
-	}
-	return llm.Response{}, &llm.APIStatusError{
-		StatusCode: 400,
-		Body:       "provider stopped after assignment",
-	}
-}
-
-func (c *headlessAssignmentOrderClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{
-		ProviderID:           "test",
-		SupportsResponsesAPI: true,
-	}, nil
-}
-
-func (c *headlessAssignmentOrderClient) requestSnapshot() llm.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.request
+func (s *observingPromptHistoryStore) RecordPromptHistoryEntry(
+	ctx context.Context,
+	entry metadata.PromptHistoryEntry,
+) (metadata.PromptHistoryRecord, error) {
+	close(s.started)
+	<-s.proceed
+	return s.delegate.RecordPromptHistoryEntry(ctx, entry)
 }
 
 func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
@@ -273,26 +254,6 @@ func TestRunPromptProgressFromRuntimeEventDropsOperationalSpam(t *testing.T) {
 	}
 }
 
-func TestRetainedWorkflowAssertionsUseOverrideFreePlan(t *testing.T) {
-	plan := launch.SessionPlan{
-		ActiveSettings: config.Settings{Model: "persisted-model"},
-		EnabledTools:   []toolspec.ID{toolspec.ToolExecCommand},
-	}
-	err := validateRetainedWorkflowAssertions(plan, serverapi.RunPromptOverrides{
-		Model: "requested-model",
-	})
-	if err == nil {
-		t.Fatal("conflicting retained model assertion was accepted")
-	}
-	role := "worker"
-	err = validateRetainedWorkflowAssertions(plan, serverapi.RunPromptOverrides{
-		AgentRole: &role,
-	})
-	if err == nil {
-		t.Fatal("conflicting retained default Agent assertion was accepted")
-	}
-}
-
 func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T) {
 	reservedRole := "self"
 	validIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
@@ -316,6 +277,45 @@ func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T
 				t.Fatal("RunPrompt succeeded before validating the request")
 			}
 		})
+	}
+}
+
+func TestInProcessRunPromptRejectsConflictingRetainedAssertionBeforeMutation(t *testing.T) {
+	history := &recordingPromptHistoryStore{}
+	fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", history)
+	sessionID := bindRetainedWorkflowForRunPrompt(t, fixture)
+	reactivated := false
+	fixture.boot.WorkflowSessionReactivator = headlessWorkflowReactivatorFunc(
+		func(
+			context.Context,
+			runtimeids.SessionID,
+			runtime.CommandAcceptance,
+			context.Context,
+			*workflowexecution.WorkflowSessionContinuation,
+		) (workflowexecution.WorkflowSessionContinuationResult, error) {
+			reactivated = true
+			return workflowexecution.WorkflowSessionContinuationResult{}, errors.New("unexpected retained Resume")
+		},
+	)
+	_, err := NewInProcessRunPromptClient(fixture.boot).RunPrompt(
+		context.Background(),
+		serverapi.RunPromptRequest{
+			Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
+			Prompt: "continue",
+			Overrides: serverapi.RunPromptOverrides{
+				Model: "conflicting-model",
+			},
+		},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("RunPrompt accepted a conflicting retained model assertion")
+	}
+	if reactivated {
+		t.Fatal("RunPrompt attempted retained Resume before validating assertions")
+	}
+	if len(history.entries) != 0 {
+		t.Fatalf("prompt history entries = %+v, want none after assertion rejection", history.entries)
 	}
 }
 
@@ -552,39 +552,16 @@ func newFileBackedSelectedRunPromptFixture(t *testing.T, history promptHistorySt
 	}
 }
 
-func acquireMetadataWriteLock(t *testing.T, persistenceRoot string) func() {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(persistenceRoot, "db", "main.sqlite3"))
-	if err != nil {
-		t.Fatalf("sql.Open metadata: %v", err)
-	}
-	conn, err := db.Conn(context.Background())
-	if err != nil {
-		_ = db.Close()
-		t.Fatalf("metadata DB connection: %v", err)
-	}
-	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
-		_ = conn.Close()
-		_ = db.Close()
-		t.Fatalf("acquire metadata write lock: %v", err)
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
-			_ = conn.Close()
-			_ = db.Close()
-		})
-	}
-}
-
 func TestInProcessRunPromptRetainedFileBackedHistoryContentionUsesFreshRunWait(t *testing.T) {
-	releaseTurn := make(chan struct{})
-	var releaseTurnOnce sync.Once
-	t.Cleanup(func() { releaseTurnOnce.Do(func() { close(releaseTurn) }) })
 	fixture := newFileBackedSelectedRunPromptFixture(t, nil)
 	sessionID := bindRetainedWorkflowForRunPrompt(t, fixture)
-	lockReady := make(chan func(), 1)
+	historyStarted := make(chan struct{})
+	proceedHistory := make(chan struct{})
+	fixture.boot.PromptHistory = &observingPromptHistoryStore{
+		delegate: fixture.boot.PromptHistory,
+		started:  historyStarted,
+		proceed:  proceedHistory,
+	}
 	fixture.boot.WorkflowSessionReactivator = headlessWorkflowReactivatorFunc(
 		func(
 			_ context.Context,
@@ -600,15 +577,11 @@ func TestInProcessRunPromptRetainedFileBackedHistoryContentionUsesFreshRunWait(t
 			if !committed {
 				return workflowexecution.WorkflowSessionContinuationResult{}, errors.New("retained continuation was not accepted")
 			}
-			lockReady <- acquireMetadataWriteLock(t, fixture.persistenceRoot)
-			go func() {
-				<-releaseTurn
-				continuation.RecordTurn(runtime.UserTurnResult{
-					Kind:        runtime.UserTurnResultAssistantFinal,
-					FinalAnswer: &llm.Message{Content: textutil.Value("selected result")},
-				}, nil)
-				continuation.RecordExact(sessionruntime.ExecutionResult{}, nil)
-			}()
+			continuation.RecordTurn(runtime.UserTurnResult{
+				Kind:        runtime.UserTurnResultAssistantFinal,
+				FinalAnswer: &llm.Message{Content: textutil.Value("selected result")},
+			}, nil)
+			continuation.RecordExact(sessionruntime.ExecutionResult{}, nil)
 			return workflowexecution.WorkflowSessionContinuationResult{
 				Handle: headlessRetainedExecutionHandle{},
 			}, nil
@@ -632,23 +605,19 @@ func TestInProcessRunPromptRetainedFileBackedHistoryContentionUsesFreshRunWait(t
 		done <- result{response: response, err: err}
 	}()
 	select {
-	case release := <-lockReady:
-		t.Cleanup(release)
-		select {
-		case got := <-done:
-			t.Fatalf("RunPrompt returned while file-backed history was locked: %+v", got)
-		case <-time.After(150 * time.Millisecond):
-		}
-		release()
+	case <-historyStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("retained Resume did not acquire the metadata lock")
+		t.Fatal("retained prompt history did not start")
 	}
+	release := testsqlite.AcquireWriteLock(t, fixture.persistenceRoot)
+	t.Cleanup(release)
+	close(proceedHistory)
 	select {
 	case got := <-done:
-		t.Fatalf("RunPrompt returned before selected execution release: %+v", got)
-	case <-time.After(25 * time.Millisecond):
+		t.Fatalf("RunPrompt returned while file-backed history was locked: %+v", got)
+	case <-time.After(150 * time.Millisecond):
 	}
-	releaseTurnOnce.Do(func() { close(releaseTurn) })
+	release()
 	select {
 	case got := <-done:
 		if got.err != nil {
@@ -659,6 +628,13 @@ func TestInProcessRunPromptRetainedFileBackedHistoryContentionUsesFreshRunWait(t
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunPrompt did not finish after lock and selected execution release")
+	}
+	history, err := fixture.boot.PromptHistory.(*observingPromptHistoryStore).delegate.(*metadata.Store).ReadPromptHistory(context.Background(), sessionID.String())
+	if err != nil {
+		t.Fatalf("ReadPromptHistory: %v", err)
+	}
+	if len(history) != 1 || history[0] != "continue" {
+		t.Fatalf("prompt history = %v, want one persisted continuation entry", history)
 	}
 }
 
@@ -879,67 +855,6 @@ func TestInProcessRunPromptRetainedSiblingDiagnosticsFollowSelectedOutcome(t *te
 	}
 }
 
-func TestInProcessRunPromptRetainedProgressIsScopedToSelectedExecution(t *testing.T) {
-	fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", nil)
-	sessionID := bindRetainedWorkflowForRunPrompt(t, fixture)
-	fixture.boot.WorkflowSessionReactivator = newHeadlessRetainedContinuationReactivator(
-		runtime.UserTurnResult{},
-		nil,
-		nil,
-		nil,
-		func(continuation *workflowexecution.WorkflowSessionContinuation) {
-			selected := "selected-step"
-			sibling := "sibling-step"
-			older := "older-step"
-			continuation.RegisterStep(selected)
-			for step, text := range map[string]string{
-				selected: "selected progress",
-				sibling:  "sibling progress",
-				older:    "older progress",
-			} {
-				continuation.PublishEvent(runtime.Event{
-					Kind: runtime.EventAssistantMessage, StepID: &step,
-					Message: llm.Message{
-						Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary),
-						Content: textutil.Value(text),
-					},
-				})
-			}
-			continuation.PublishEvent(runtime.Event{
-				Kind:   runtime.EventAssistantMessage,
-				StepID: nil,
-			})
-			continuation.PublishEvent(runtime.Event{
-				Kind: runtime.EventAssistantMessage, StepID: &selected,
-				Message: llm.Message{
-					Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary),
-					Content: textutil.Value("selected post-turn progress"),
-				},
-			})
-		},
-	)
-	var progress []serverapi.RunPromptProgress
-	if _, err := NewInProcessRunPromptClient(fixture.boot).RunPrompt(
-		context.Background(),
-		serverapi.RunPromptRequest{
-			Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
-			Prompt: "continue",
-		},
-		serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) {
-			progress = append(progress, event)
-		}),
-	); err != nil {
-		t.Fatalf("RunPrompt: %v", err)
-	}
-	if len(progress) != 2 ||
-		progress[0].AssistantMessage == nil ||
-		progress[0].AssistantMessage.Content != "selected progress" ||
-		progress[1].AssistantMessage == nil ||
-		progress[1].AssistantMessage.Content != "selected post-turn progress" {
-		t.Fatalf("RunPrompt progress = %+v, want selected pre/post-turn progress only", progress)
-	}
-}
-
 type failingPromptHistoryStore struct {
 	err error
 }
@@ -990,167 +905,6 @@ func TestInProcessRunPromptRetainedHistoryFailureJoinsSelectedOutcome(t *testing
 				t.Fatalf("RunPrompt result = %q, want selected result despite history failure", response.Result)
 			}
 		})
-	}
-}
-
-func TestInProcessRunPromptRetainedWorkflowReinjectsAssignmentBeforeProvider(t *testing.T) {
-	provider := &headlessAssignmentOrderClient{}
-	fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", nil)
-	sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
-	workflowID := runtimeids.NewWorkflowID()
-	currentNode, err := workflow.NewCurrentNodeReference(
-		workflow.TaskID("headless-retained-task"),
-		workflow.NodeID("headless-retained-node"),
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("new retained Current Node reference: %v", err)
-	}
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new Session descriptor: %v", err)
-	}
-	filesystem, err := runtimewire.NewFilesystemContext(
-		fixture.store.Meta().WorkspaceRoot,
-		fixture.store.Meta().WorkspaceRoot,
-		metadata.ProjectWorkspaceBoundary{
-			ProjectID:  "test-project",
-			Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: fixture.store.Meta().WorkspaceRoot}},
-		},
-	)
-	if err != nil {
-		t.Fatalf("new filesystem context: %v", err)
-	}
-	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings: config.Settings{
-			Model:            "gpt-5",
-			ProviderOverride: "openai",
-			OpenAIBaseURL:    "http://unused.invalid",
-			Workflow: config.WorkflowSettings{
-				CompletionMode: config.WorkflowCompletionModeUnstructured,
-			},
-			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
-		},
-		FilesystemContext:     askquestion.FilesystemContext{Access: filesystem.Access},
-		Headless:              true,
-		QuestionsEnabled:      textutil.Value(false),
-		AutoCompactionEnabled: textutil.Value(false),
-		Client:                provider,
-	})
-	if err != nil {
-		t.Fatalf("new retained runtime plan: %v", err)
-	}
-	if _, err := fixture.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
-		SessionID: sessionID,
-		OwnerID:   "retained-assignment-order",
-		Runtime:   &plan,
-	}); err != nil {
-		t.Fatalf("open retained runtime: %v", err)
-	}
-	executionConfig := &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID:        runtimeids.NewExecutionScopeID(),
-		CompletionMode: workflowruntime.CompletionModeUnstructuredOutput,
-		Instructions: workflowruntime.TaskInstructions{
-			CurrentNode: currentNode,
-			WorkflowID:  workflowID,
-		},
-	}
-	var binding *runtime.CurrentNodeExecutionBinding
-	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		var err error
-		binding, err = engine.BindCurrentNodeExecution(executionConfig)
-		return err
-	}); err != nil {
-		t.Fatalf("bind retained Workflow activation: %v", err)
-	}
-	bindingClosed := false
-	t.Cleanup(func() {
-		if !bindingClosed && binding != nil {
-			if err := binding.Close(); err != nil && !errors.Is(err, runtime.ErrEngineClosed) {
-				t.Errorf("close retained Workflow activation: %v", err)
-			}
-		}
-	})
-	fixture.boot.WorkflowSessionReactivator = headlessWorkflowReactivatorFunc(
-		func(
-			ctx context.Context,
-			gotSessionID runtimeids.SessionID,
-			accept runtime.CommandAcceptance,
-			acceptedCtx context.Context,
-			continuation *workflowexecution.WorkflowSessionContinuation,
-		) (workflowexecution.WorkflowSessionContinuationResult, error) {
-			if gotSessionID != sessionID {
-				return workflowexecution.WorkflowSessionContinuationResult{}, fmt.Errorf("reactivated Session = %s, want %s", gotSessionID, sessionID)
-			}
-			committed, err := accept(func() (bool, error) {
-				provider.assigned.Store(true)
-				return true, nil
-			})
-			if err != nil || !committed {
-				return workflowexecution.WorkflowSessionContinuationResult{}, errors.Join(err, errors.New("Resume was not accepted"))
-			}
-			if err := binding.Close(); err != nil {
-				return workflowexecution.WorkflowSessionContinuationResult{}, err
-			}
-			bindingClosed = true
-			handle, err := fixture.authority.StartAgentExecution(
-				acceptedCtx,
-				sessionruntime.AgentExecutionRequest{
-					Descriptor: descriptor,
-					Workflow: &sessionruntime.WorkflowAgentExecution{
-						Reference: sessionruntime.WorkflowExecutionRef{
-							ProjectID:   "test-project",
-							WorkflowID:  workflowID,
-							CurrentNode: currentNode,
-						},
-						Config:           executionConfig,
-						OnSelectedResult: continuation.RecordExact,
-					},
-					Resource: sessionruntime.CurrentAgentResource{},
-					Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-						return bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
-							result, turnErr := engine.SubmitWorkflowTurnWithInput(
-								engineCtx,
-								currentNode,
-								continuation.Input().(workflowexecution.WorkflowSessionTextInput).Text,
-								nil,
-							)
-							continuation.RecordTurn(runtime.WorkflowTurnUserResult(result), turnErr)
-							return turnErr
-						})
-					},
-				},
-			)
-			if err != nil {
-				return workflowexecution.WorkflowSessionContinuationResult{}, err
-			}
-			_ = ctx
-			return workflowexecution.WorkflowSessionContinuationResult{Handle: handle}, nil
-		},
-	)
-	client := NewInProcessRunPromptClient(fixture.boot)
-	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
-		Prompt: "continue",
-	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "provider stopped after assignment") {
-		t.Fatalf("RunPrompt error = %v, want provider failure after assignment", err)
-	}
-	if !provider.called.Load() || !provider.assigned.Load() {
-		t.Fatalf("provider called=%t assignment committed=%t, want both", provider.called.Load(), provider.assigned.Load())
-	}
-	foundWorkflowAssignment := false
-	for _, message := range llm.MessagesFromItems(provider.requestSnapshot().Items) {
-		if message.MessageType != nil && *message.MessageType == llm.MessageTypeWorkflowMode {
-			foundWorkflowAssignment = true
-			break
-		}
-	}
-	if !foundWorkflowAssignment {
-		t.Fatal("provider request omitted the Workflow assignment")
-	}
-	if response.SessionID != sessionID.String() {
-		t.Fatalf("RunPrompt response Session = %q, want %q", response.SessionID, sessionID)
 	}
 }
 
@@ -1234,6 +988,107 @@ func TestInProcessRunPromptRetainedHistoryFailureWaitsForFreshRunTimeout(t *test
 	case got := <-done:
 		if !errors.Is(got.err, historyErr) {
 			t.Fatalf("RunPrompt error = %v, want prompt history failure", got.err)
+		}
+		if got.response.Result != "selected result" {
+			t.Fatalf("RunPrompt result = %q, want selected result", got.response.Result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunPrompt did not finish after selected execution release")
+	}
+}
+
+func TestInProcessRunPromptRetainedHistoryFailurePreservesDelayedSelectedFailure(t *testing.T) {
+	historyErr := errors.New("prompt history unavailable")
+	selectedErr := errors.New("selected execution finalization failed")
+	siblingErr := errors.New("sibling Resume failed")
+	historyStarted := make(chan struct{})
+	releaseHistory := make(chan struct{})
+	releaseTurn := make(chan struct{})
+	var releaseHistoryOnce sync.Once
+	var releaseTurnOnce sync.Once
+	t.Cleanup(func() {
+		releaseHistoryOnce.Do(func() { close(releaseHistory) })
+		releaseTurnOnce.Do(func() { close(releaseTurn) })
+	})
+
+	fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", &blockingPromptHistoryStore{
+		started: historyStarted,
+		release: releaseHistory,
+		err:     historyErr,
+	})
+	sessionID := bindRetainedWorkflowForRunPrompt(t, fixture)
+	fixture.boot.WorkflowSessionReactivator = headlessWorkflowReactivatorFunc(
+		func(
+			_ context.Context,
+			_ runtimeids.SessionID,
+			accept runtime.CommandAcceptance,
+			_ context.Context,
+			continuation *workflowexecution.WorkflowSessionContinuation,
+		) (workflowexecution.WorkflowSessionContinuationResult, error) {
+			committed, err := accept(func() (bool, error) { return true, nil })
+			if err != nil {
+				return workflowexecution.WorkflowSessionContinuationResult{}, err
+			}
+			if !committed {
+				return workflowexecution.WorkflowSessionContinuationResult{}, errors.New("retained continuation was not accepted")
+			}
+			go func() {
+				<-releaseTurn
+				continuation.RecordTurn(runtime.UserTurnResult{
+					Kind:        runtime.UserTurnResultAssistantFinal,
+					FinalAnswer: &llm.Message{Content: textutil.Value("selected result")},
+				}, nil)
+				continuation.RecordExact(sessionruntime.ExecutionResult{}, selectedErr)
+			}()
+			return workflowexecution.WorkflowSessionContinuationResult{
+				Handle: headlessRetainedExecutionHandle{},
+				SiblingDiagnostics: []workflowexecution.WorkflowSessionResumeDiagnostic{{
+					Reference: workflow.CurrentNodeReference{TaskID: "sibling-task", NodeID: "sibling-node"},
+					Cause:     siblingErr,
+				}},
+			}, nil
+		},
+	)
+	type result struct {
+		response serverapi.RunPromptResponse
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		response, err := NewInProcessRunPromptClient(fixture.boot).RunPrompt(
+			context.Background(),
+			serverapi.RunPromptRequest{
+				Intent:  serverapi.OpenExistingSessionLaunchIntent(sessionID),
+				Prompt:  "continue",
+				Timeout: 250 * time.Millisecond,
+			},
+			nil,
+		)
+		done <- result{response: response, err: err}
+	}()
+	select {
+	case <-historyStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retained prompt history did not start")
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("RunPrompt returned during technical history persistence: %+v", got)
+	case <-time.After(350 * time.Millisecond):
+	}
+	releaseHistoryOnce.Do(func() { close(releaseHistory) })
+	select {
+	case got := <-done:
+		t.Fatalf("RunPrompt returned before selected execution released: %+v", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+	releaseTurnOnce.Do(func() { close(releaseTurn) })
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, selectedErr) ||
+			!errors.Is(got.err, historyErr) ||
+			!errors.Is(got.err, siblingErr) {
+			t.Fatalf("RunPrompt error = %v, want selected, history, and sibling causes", got.err)
 		}
 		if got.response.Result != "selected result" {
 			t.Fatalf("RunPrompt result = %q, want selected result", got.response.Result)

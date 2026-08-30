@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -344,37 +343,6 @@ type runtimeControlFakeClient struct {
 	capabilities        llm.ProviderCapabilities
 	calls               int
 	compactionCalls     int
-}
-
-type runtimeControlAssignmentOrderClient struct {
-	assigned atomic.Bool
-	called   atomic.Bool
-	mu       sync.Mutex
-	request  llm.Request
-}
-
-func (c *runtimeControlAssignmentOrderClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
-	c.called.Store(true)
-	c.mu.Lock()
-	c.request = request
-	c.mu.Unlock()
-	if !c.assigned.Load() {
-		return llm.Response{}, errors.New("provider request preceded Workflow assignment")
-	}
-	return llm.Response{}, &llm.APIStatusError{
-		StatusCode: 400,
-		Body:       "provider stopped after assignment",
-	}
-}
-
-func (c *runtimeControlAssignmentOrderClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return runtimeControlOpenAICapabilities, nil
-}
-
-func (c *runtimeControlAssignmentOrderClient) requestSnapshot() llm.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.request
 }
 
 type blockingRuntimeControlClient struct {
@@ -797,137 +765,6 @@ func (f runtimeControlWorkflowReactivatorFunc) ReactivateWorkflowSessionWithAcce
 	continuation *workflowexecution.WorkflowSessionContinuation,
 ) (workflowexecution.WorkflowSessionContinuationResult, error) {
 	return f(ctx, sessionID, accept, acceptedCtx, continuation)
-}
-
-func TestServiceSubmitUserTurnRetainedWorkflowReinjectsAssignmentBeforeProvider(t *testing.T) {
-	provider := &runtimeControlAssignmentOrderClient{}
-	store, engine, service := newRuntimeControlTestService(t, provider, nil, runtime.Config{Model: "gpt-5"})
-	config := runtimeControlExactExecution(t)
-	config.Instructions.WorkflowID = runtimeids.NewWorkflowID()
-	config.CompletionMode = workflowruntime.CompletionModeUnstructuredOutput
-	binding, err := engine.BindCurrentNodeExecution(config)
-	if err != nil {
-		t.Fatalf("bind retained Workflow activation: %v", err)
-	}
-	bindingClosed := false
-	t.Cleanup(func() {
-		if !bindingClosed {
-			if err := binding.Close(); err != nil && !errors.Is(err, runtime.ErrEngineClosed) {
-				t.Errorf("close retained Workflow activation: %v", err)
-			}
-		}
-	})
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse Session id: %v", err)
-	}
-	workflowRef := sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "runtime-control-test-project",
-		WorkflowID:  config.Instructions.WorkflowID,
-		CurrentNode: config.Instructions.CurrentNode,
-	}
-	if _, err := engine.QueueUserMessage(context.Background(), "older pending input"); err != nil {
-		t.Fatalf("queue older pending input: %v", err)
-	}
-	service.WithWorkflowSessionReactivator(runtimeControlWorkflowReactivatorFunc(
-		func(
-			ctx context.Context,
-			gotSessionID runtimeids.SessionID,
-			accept runtime.CommandAcceptance,
-			acceptedCtx context.Context,
-			continuation *workflowexecution.WorkflowSessionContinuation,
-		) (workflowexecution.WorkflowSessionContinuationResult, error) {
-			if gotSessionID != sessionID {
-				t.Fatalf("reactivated Session = %s, want %s", gotSessionID, sessionID)
-			}
-			committed, err := accept(func() (bool, error) {
-				provider.assigned.Store(true)
-				return true, nil
-			})
-			if err != nil || !committed {
-				return workflowexecution.WorkflowSessionContinuationResult{}, errors.Join(err, errors.New("Resume was not accepted"))
-			}
-			if err := binding.Close(); err != nil {
-				return workflowexecution.WorkflowSessionContinuationResult{}, err
-			}
-			bindingClosed = true
-			descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-			if err != nil {
-				return workflowexecution.WorkflowSessionContinuationResult{}, err
-			}
-			handle, err := service.authority.StartAgentExecution(
-				acceptedCtx,
-				sessionruntime.AgentExecutionRequest{
-					Descriptor: descriptor,
-					Workflow: &sessionruntime.WorkflowAgentExecution{
-						Reference:        workflowRef,
-						Config:           config,
-						OnSelectedResult: continuation.RecordExact,
-					},
-					Resource: sessionruntime.CurrentAgentResource{},
-					Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-						return bridge.WithEngine(runCtx, func(engineCtx context.Context, current *runtime.Engine) error {
-							result, turnErr := current.SubmitWorkflowTurnWithInput(
-								engineCtx,
-								workflowRef.CurrentNode,
-								continuation.Input().(workflowexecution.WorkflowSessionTextInput).Text,
-								nil,
-							)
-							continuation.RecordTurn(runtime.WorkflowTurnUserResult(result), turnErr)
-							return turnErr
-						})
-					},
-				},
-			)
-			if err != nil {
-				return workflowexecution.WorkflowSessionContinuationResult{}, err
-			}
-			_ = ctx
-			return workflowexecution.WorkflowSessionContinuationResult{Handle: handle}, nil
-		},
-	))
-
-	response, err := service.SubmitUserTurn(
-		context.Background(),
-		runtimeControlUserTurnRequest(store, "retained-assignment-order", "continue"),
-	)
-	if err == nil || !strings.Contains(err.Error(), "provider stopped after assignment") {
-		t.Fatalf("SubmitUserTurn error = %v, want provider failure after assignment", err)
-	}
-	if !provider.called.Load() || !provider.assigned.Load() {
-		t.Fatalf("provider called=%t assignment committed=%t, want both", provider.called.Load(), provider.assigned.Load())
-	}
-	request := provider.requestSnapshot()
-	foundWorkflowAssignment := false
-	for _, message := range llm.MessagesFromItems(request.Items) {
-		if message.MessageType != nil && *message.MessageType == llm.MessageTypeWorkflowMode {
-			foundWorkflowAssignment = true
-			break
-		}
-	}
-	if !foundWorkflowAssignment {
-		t.Fatalf("provider request omitted the Workflow assignment: %+v", request)
-	}
-	messages := llm.MessagesFromItems(request.Items)
-	foundSelectedInput := false
-	foundOlderInput := false
-	for _, message := range messages {
-		if message.Content == nil {
-			continue
-		}
-		switch *message.Content {
-		case "continue":
-			foundSelectedInput = true
-		case "older pending input":
-			foundOlderInput = true
-		}
-	}
-	if !foundSelectedInput || foundOlderInput {
-		t.Fatalf("first selected Workflow request messages = %+v, want selected input without older pending input", messages)
-	}
-	if response.ResultKind != clientui.UserTurnResultKindNoFinal {
-		t.Fatalf("SubmitUserTurn response = %+v, want no-final response on provider failure", response)
-	}
 }
 
 func (c *runtimeControlFakeClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
