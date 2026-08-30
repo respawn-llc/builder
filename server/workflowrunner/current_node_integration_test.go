@@ -56,9 +56,10 @@ type currentNodeRunnerFixture struct {
 	persistenceGate *sessiontest.PersistenceGate
 	controllerClose error
 
-	mu             sync.Mutex
-	clientRequests []runtimewire.RuntimeClientRequest
-	clientErr      error
+	stepLifecycleFailure *error
+	mu                   sync.Mutex
+	clientRequests       []runtimewire.RuntimeClientRequest
+	clientErr            error
 }
 
 type currentNodeRunnerClient interface {
@@ -159,6 +160,7 @@ func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResp
 
 type currentNodeRunnerStepLifecycle struct {
 	runtimes *registry.RuntimeRegistry
+	failure  *error
 }
 
 func (s currentNodeRunnerStepLifecycle) StepBegan(
@@ -177,10 +179,14 @@ func (s currentNodeRunnerStepLifecycle) StepEnded(
 	resource sessionruntime.AgentResourceDescriptor,
 	snapshot agentruntime.StepLifecycleSnapshot,
 ) error {
-	return runtimewire.NewStepLifecycleSink(
+	err := runtimewire.NewStepLifecycleSink(
 		resource.Ref.SessionID().String(),
 		s.runtimes,
 	).StepEnded(ctx, snapshot)
+	if s.failure != nil && *s.failure != nil {
+		return errors.Join(err, *s.failure)
+	}
+	return err
 }
 
 type currentNodeStartContextStore struct {
@@ -294,6 +300,8 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		}
 	}
 	fixture.runtimes = registry.NewRuntimeRegistry()
+	var stepLifecycleFailure error
+	fixture.stepLifecycleFailure = &stepLifecycleFailure
 	var controller *workflowexecution.CurrentNodeController
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
@@ -303,7 +311,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			fixture.runtimes.PublishAuthorityRuntimeEvent(resource, event)
 		},
 		ResourceLifecycle: fixture.runtimes,
-		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes},
+		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes, failure: &stepLifecycleFailure},
 	})
 	t.Cleanup(func() {
 		if fixture.controller != nil {
@@ -605,6 +613,7 @@ func (f *currentNodeRunnerFixture) onlyProjectSessionMeta(t *testing.T) session.
 func (f *currentNodeRunnerFixture) workflowAssignmentRecordCount(
 	t *testing.T,
 	sessionID runtimeids.SessionID,
+	expected ...workflow.CurrentNodeReference,
 ) int {
 	t.Helper()
 	record, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID.String())
@@ -635,6 +644,10 @@ func (f *currentNodeRunnerFixture) workflowAssignmentRecordCount(
 			if ok &&
 				message.MessageType != nil &&
 				*message.MessageType == session.MessageTypeWorkflowMode {
+				if len(expected) != 0 && (message.SourcePath == nil ||
+					*message.SourcePath != workflowruntime.CurrentNodePromptIdentity(expected[0])) {
+					continue
+				}
 				count++
 			}
 		}

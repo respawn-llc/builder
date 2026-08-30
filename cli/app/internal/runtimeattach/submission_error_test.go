@@ -32,15 +32,19 @@ func TestFormatSubmissionErrorSuppressesCancellation(t *testing.T) {
 }
 
 func TestFormatSubmissionErrorRendersWorkflowResumeConflictGuidance(t *testing.T) {
-	err := errors.Join(
-		serverapi.ErrRuntimeCommandNotAccepted,
-		&serverapi.WorkflowTaskResumeConflictError{
-			TaskID: "KNT-123",
-			State:  serverapi.WorkflowTaskResumeConflictPendingApproval,
-		},
-	)
-	got := FormatSubmissionError(err)
-	if got == "" || got == err.Error() || !strings.Contains(got, "KNT-123") {
-		t.Fatalf("FormatSubmissionError = %q, want client-rendered Workflow guidance", got)
+	for _, state := range []serverapi.WorkflowTaskResumeConflictState{
+		serverapi.WorkflowTaskResumeConflictPendingApproval,
+		serverapi.WorkflowTaskResumeConflictFinished,
+		serverapi.WorkflowTaskResumeConflictMovedCurrentNode,
+		serverapi.WorkflowTaskResumeConflictCurrentNodeNotInterrupted,
+		serverapi.WorkflowTaskResumeConflictNoResumableCurrentNode,
+	} {
+		err := errors.Join(serverapi.ErrRuntimeCommandNotAccepted, &serverapi.WorkflowTaskResumeConflictError{
+			TaskID: "KNT-123", State: state,
+		})
+		got := FormatSubmissionError(err)
+		if got == "" || got == err.Error() || !strings.Contains(got, "KNT-123") {
+			t.Fatalf("FormatSubmissionError(%s) = %q, want state-specific guidance", state, got)
+		}
 	}
 }

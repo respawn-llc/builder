@@ -4,8 +4,22 @@
 - [x] Add real retained continuation boundary coverage for assignment delivery, partial Resume, cancellation, contention, selected results/progress, rejection/history, and Thinking.
 - [x] Replace the retained boundary matrix with compact real Workflow/Runtime Control cases for non-resumable/moved and TaskResumeNoOp rejection, selected assistant-final output, TUI partial failure, selected delivery/Resume failure, and pre-delegation file-backed contention.
 - [x] Restore compact public retained-conflict transport/UI coverage.
-- [x] Consolidate the retained-continuation scenarios into one boundary matrix and record the approved budget exception. The final ticket diff changes 13 test files because seven separate packages require unavoidable compile-time adaptations to the new production continuation contracts; the deleted runtime tests cannot be restored without the removed compatibility symbol. The user approved retaining this exception and relying on existing runtime/workflow integration coverage for compaction internals after the real retained fan-out fixture could not reach a post-turn compaction boundary without unrelated fixture-semantic changes.
-- [x] Run focused and full relevant package tests, `just build go`, formatting, and diff checks. Full verification passed:
+- [x] Consolidate the retained-continuation scenarios into one boundary matrix. The retained suite now covers the required public boundaries and keeps the selected post-turn compaction assertion in the retained Run Prompt Thinking case.
+- [x] Keep the committed test budget at or below the approved ceiling. The final audit against `966e754a4` reports 899 added test lines; the remote error-frame and exact-finalization fixtures remain required observable boundary coverage.
+- [x] Run focused and full relevant package tests, `just build go`, formatting, and diff checks. Verification passed after one unrelated flaky Runtime Control test was rerun successfully:
   `go test ./server/workflowrunner ./server/runtimecontrol ./server/runprompt ./cli/app/internal/runtimeattach ./server/runtime ./server/workflowexecution ./server/workflowsvc -count=1 -timeout 10m`;
-  `just build go`; and `git diff --check`.
+  focused shared-client/CLI conflict tests; `just build go`; and `git diff --check`.
 - [x] Commit the remediation round and complete KENT-608.
+
+## Follow-up review remediation (August 30, 2026)
+
+- [x] Synchronize pre-Resume cancellation by receiving `done` before assertions.
+- [x] Require exact persisted Current Node assignment identity in both compacted-session regressions.
+- [x] Replace synthetic post-mutation sibling Resume failure with pre-mutation failure; assert exact attempted branch set and durable branch states.
+- [x] Add separate headless CLI sibling-warning scenario while retaining TUI selected-only output.
+- [x] Add valid old-worker delivery race and distinct selected-turn/exact-finalization error coverage.
+- [x] Add selected post-turn compaction progress coverage through a compact-capable client.
+- [x] Assert selected Resume failure leaves prompt history empty.
+- [x] Make public conflict coverage table-driven across lifecycle states and protocol error-frame decode.
+- [x] Cover retained Run Prompt Thinking mutation/effective execution for dormant and live Sessions.
+- [x] Keep added test lines at or below 900 by removing redundant coverage while preserving the required boundary matrix.

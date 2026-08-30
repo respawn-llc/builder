@@ -50,19 +50,12 @@ func (s *recordingPromptHistoryStore) RecordPromptHistoryEntry(_ context.Context
 	return metadata.PromptHistoryRecord{}, nil
 }
 
-type blockingPromptHistoryStore struct {
-	started chan struct{}
-	release chan struct{}
-	err     error
-}
+type blockingPromptHistoryStore struct{}
 
 func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
-	if s.started != nil {
-		close(s.started)
-	}
 	select {
-	case <-s.release:
-		return metadata.PromptHistoryRecord{}, s.err
+	case <-time.After(1500 * time.Millisecond):
+		return metadata.PromptHistoryRecord{}, nil
 	case <-ctx.Done():
 		return metadata.PromptHistoryRecord{}, ctx.Err()
 	}
@@ -1215,44 +1208,19 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		}))
 		defer server.Close()
 
-		historyStarted := make(chan struct{})
-		releaseHistory := make(chan struct{})
-		fixture := newSelectedRunPromptFixture(t, server.URL, &blockingPromptHistoryStore{
-			started: historyStarted,
-			release: releaseHistory,
-		})
-		done := make(chan error, 1)
-		go func() {
-			_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-				Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
-				Prompt:  "hello",
-				Timeout: 500 * time.Millisecond,
-			}, nil)
-			done <- err
-		}()
-		select {
-		case <-historyStarted:
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for prompt history")
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("RunPrompt returned during prompt history: %v", err)
-		case <-time.After(600 * time.Millisecond):
-		}
-		close(releaseHistory)
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("RunPrompt error = %v, want success after history release", err)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("RunPrompt did not finish after prompt history release")
+		fixture := newSelectedRunPromptFixture(t, server.URL, &blockingPromptHistoryStore{})
+		_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+			Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+			Prompt:  "hello",
+			Timeout: time.Second,
+		}, nil)
+		if err != nil {
+			t.Fatalf("RunPrompt error = %v, want success after history", err)
 		}
 		sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
 		_, active := fixture.authority.SessionExecution(sessionID)
 		if providerCalls != 1 || active {
-			t.Fatalf("provider calls=%d runtime active=%t, want 1/false", providerCalls, active)
+			t.Fatalf("provider calls=%d runtime active=%t, want one completed run", providerCalls, active)
 		}
 	})
 
