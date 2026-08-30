@@ -274,4 +274,3 @@ func awaitSessionAbsent(t *testing.T, store *metadata.Store, sessionID string) {
 }
 
 var _ GatewayDependencies = (*sessionRemovalGatewayDependencies)(nil)
-var _ sessionservice.SessionRemovalMetadata = (*blockingSessionRemovalMetadata)(nil)

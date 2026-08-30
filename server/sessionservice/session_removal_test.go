@@ -1,13 +1,16 @@
 package sessionservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"core/server/metadata"
@@ -19,7 +22,18 @@ import (
 
 type sessionRemovalMetadataDelegate struct {
 	*metadata.Store
-	delete func(context.Context, string) error
+	resolve func(context.Context, string) (session.PersistedSessionRecord, error)
+	delete  func(context.Context, string) error
+}
+
+func (m sessionRemovalMetadataDelegate) ResolvePersistedSession(
+	ctx context.Context,
+	sessionID string,
+) (session.PersistedSessionRecord, error) {
+	if m.resolve != nil {
+		return m.resolve(ctx, sessionID)
+	}
+	return m.Store.ResolvePersistedSession(ctx, sessionID)
 }
 
 func (m sessionRemovalMetadataDelegate) DeleteSession(ctx context.Context, sessionID string) error {
@@ -205,37 +219,142 @@ func TestDetachedArchiveGraceExpiryCancelsAndDiagnosesAcceptedWork(t *testing.T)
 
 func runDetachedArchiveGraceExpiryCase(t *testing.T, debug bool) {
 	t.Helper()
-	service := &SessionLifecycleService{debug: debug}
-	operationCtx, cancelOperation := context.WithCancel(context.Background())
-	operationDone := make(chan error, 1)
-	go func() {
-		<-operationCtx.Done()
-		operationDone <- context.Cause(operationCtx)
-	}()
-	sessionID, err := runtimeids.ParseSessionID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		t.Fatalf("parse Session ID: %v", err)
-	}
-	graceCtx, expireGrace := context.WithCancel(context.Background())
-	expireGrace()
-	err = service.waitForDetachedArchive(
-		context.Background(),
-		graceCtx,
-		operationDone,
-		cancelOperation,
-		sessionID,
-		filepath.Join(t.TempDir(), "session.tar.zst"),
-	)
-	if !errors.Is(err, ErrDetachedArchiveGraceExpired) ||
-		!errors.Is(err, context.Canceled) {
-		t.Fatalf("detached archive expiry = %v, want grace expiry joined with cancellation", err)
-	}
+	cfg, metadataStore, _, persisted := createAuthoritativeSessionLifecycleSession(t, t.TempDir())
+	outputDir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+			PersistenceRoot: cfg.PersistenceRoot,
+			StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+		})
+		defer func() {
+			if err := authority.Close(context.Background()); err != nil {
+				t.Errorf("close Session Runtime authority: %v", err)
+			}
+		}()
+		service := NewGlobalSessionLifecycleService(cfg.PersistenceRoot, authority, nil).
+			WithPersistedSessionResolver(metadataStore).
+			WithDebugMode(debug)
+		resolveStarted := make(chan struct{})
+		service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
+			Store: metadataStore,
+			resolve: func(ctx context.Context, _ string) (session.PersistedSessionRecord, error) {
+				close(resolveStarted)
+				<-ctx.Done()
+				return session.PersistedSessionRecord{}, context.Cause(ctx)
+			},
+		})
+		var logs bytes.Buffer
+		previousLogger := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		defer slog.SetDefault(previousLogger)
+
+		outputPath := filepath.Join(outputDir, "session.tar.zst")
+		invocationCtx, cancelInvocation := context.WithCancel(context.Background())
+		archiveDone := make(chan error, 1)
+		go func() {
+			archiveDone <- service.Archive(
+				invocationCtx,
+				persisted.Meta().SessionID,
+				outputPath,
+			)
+		}()
+		<-resolveStarted
+		cancelInvocation()
+		if err := <-archiveDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("detached Archive result = %v, want context canceled", err)
+		}
+
+		sessionID, err := runtimeids.ParseSessionID(persisted.Meta().SessionID)
+		if err != nil {
+			t.Fatalf("parse Session ID: %v", err)
+		}
+		competingAdmission := make(chan error, 1)
+		go func() {
+			competingAdmission <- authority.WithDestructiveSessionAdmission(
+				context.Background(),
+				sessionID,
+				func(context.Context) error { return nil },
+			)
+		}()
+		synctest.Wait()
+		select {
+		case err := <-competingAdmission:
+			t.Fatalf("Session admission released before grace expiry: %v", err)
+		default:
+		}
+
+		// synctest advances the fixed product grace period without changing production timing.
+		time.Sleep(detachedArchiveGracePeriod)
+		synctest.Wait()
+		if debug {
+			t.Fatal("debug detached archive grace expiry did not panic")
+		}
+		if err := <-competingAdmission; err != nil {
+			t.Fatalf("Session admission after grace expiry: %v", err)
+		}
+		if !strings.Contains(logs.String(), ErrDetachedArchiveGraceExpired.Error()) {
+			t.Fatalf("detached archive diagnostic = %q, want grace-expiry cause", logs.String())
+		}
+		if _, err := os.Lstat(outputPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("archive output after grace expiry = %v, want absent", err)
+		}
+		assertNoSessionArchiveTemporary(t, outputDir, filepath.Base(outputPath))
+		if _, err := metadataStore.ResolvePersistedSession(
+			context.Background(),
+			persisted.Meta().SessionID,
+		); err != nil {
+			t.Fatalf("Session metadata after grace expiry: %v", err)
+		}
+	})
 }
 
 func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 	for _, operation := range []string{"archive", "delete"} {
 		t.Run(operation, func(t *testing.T) {
 			fixture := newSessionRemovalServiceFixture(t)
+			operationDone := make(chan error, 1)
+			outputDir := t.TempDir()
+			outputPath := filepath.Join(outputDir, "session.tar.zst")
+			if operation == "archive" {
+				eventsPath := filepath.Join(fixture.session.Dir(), "events.jsonl")
+				events, err := os.OpenFile(eventsPath, os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatalf("open event log fixture: %v", err)
+				}
+				if err := events.Truncate(1 << 30); err != nil {
+					_ = events.Close()
+					t.Fatalf("expand event log fixture: %v", err)
+				}
+				if err := events.Close(); err != nil {
+					t.Fatalf("close event log fixture: %v", err)
+				}
+				go func() {
+					operationDone <- fixture.service.Archive(
+						context.Background(),
+						fixture.session.Meta().SessionID,
+						outputPath,
+					)
+				}()
+				awaitArchiveTemporary(t, outputDir, filepath.Base(outputPath))
+				if err := fixture.authority.Close(context.Background()); err != nil {
+					t.Fatalf("close Authority: %v", err)
+				}
+				if err := <-operationDone; !errors.Is(err, context.Canceled) {
+					t.Fatalf("archive result = %v, want cancellation", err)
+				}
+				if _, err := os.Lstat(outputPath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("archive output after shutdown cancellation = %v, want absent", err)
+				}
+				assertNoSessionArchiveTemporary(t, outputDir, filepath.Base(outputPath))
+				if _, err := fixture.metadata.ResolvePersistedSession(
+					t.Context(),
+					fixture.session.Meta().SessionID,
+				); err != nil {
+					t.Fatalf("Session metadata after canceled archive: %v", err)
+				}
+				return
+			}
+
 			deleteStarted := make(chan struct{})
 			fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
 				Store: fixture.metadata,
@@ -245,17 +364,7 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 					return context.Cause(ctx)
 				},
 			})
-			operationDone := make(chan error, 1)
-			outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 			go func() {
-				if operation == "archive" {
-					operationDone <- fixture.service.Archive(
-						context.Background(),
-						fixture.session.Meta().SessionID,
-						outputPath,
-					)
-					return
-				}
 				operationDone <- fixture.service.Delete(
 					context.Background(),
 					fixture.session.Meta().SessionID,
@@ -298,12 +407,7 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 				t.Context(),
 				fixture.session.Meta().SessionID,
 			); err != nil {
-				t.Fatalf("Session metadata after canceled %s: %v", operation, err)
-			}
-			if operation == "archive" {
-				if _, err := os.Stat(outputPath); err != nil {
-					t.Fatalf("published archive after shutdown cancellation: %v", err)
-				}
+				t.Fatalf("Session metadata after canceled delete: %v", err)
 			}
 		})
 	}

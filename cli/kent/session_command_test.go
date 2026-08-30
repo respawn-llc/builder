@@ -12,6 +12,7 @@ import (
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/sessionenv"
+	"core/shared/textutil"
 )
 
 type sessionCommandTestRemote struct {
@@ -295,7 +296,7 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 			}
 			if outcome.Error == nil ||
 				outcome.Error.Code != test.wantCode ||
-				!equalOptionalString(outcome.Error.Path, test.wantPath) {
+				!textutil.EqualOptional(outcome.Error.Path, test.wantPath) {
 				t.Fatalf("outcome = %+v, want code %q path %v", outcome, test.wantCode, test.wantPath)
 			}
 			if test.wantFragment != "" && !strings.Contains(outcome.Error.Message, test.wantFragment) {
@@ -303,13 +304,6 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 			}
 		})
 	}
-}
-
-func equalOptionalString(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
 }
 
 func TestSessionRemovalUnknownFutureWireErrorMapsToRequestFailed(t *testing.T) {

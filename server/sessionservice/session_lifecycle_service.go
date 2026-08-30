@@ -27,14 +27,14 @@ type SessionLifecycleService struct {
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
 	persisted       session.PersistedSessionResolver
-	removal         SessionRemovalMetadata
+	removal         sessionRemovalMetadata
 	debug           bool
 }
 
 func (s *SessionLifecycleService) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *SessionLifecycleService {
 	if s != nil {
 		s.persisted = resolver
-		if removal, ok := resolver.(SessionRemovalMetadata); ok {
+		if removal, ok := resolver.(sessionRemovalMetadata); ok {
 			s.removal = removal
 		}
 	}

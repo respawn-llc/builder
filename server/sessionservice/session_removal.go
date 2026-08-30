@@ -17,7 +17,7 @@ const detachedArchiveGracePeriod = 5 * time.Minute
 
 var ErrDetachedArchiveGraceExpired = errors.New("detached Session archive grace period expired")
 
-type SessionRemovalMetadata interface {
+type sessionRemovalMetadata interface {
 	session.PersistedSessionResolver
 	DeleteSession(context.Context, string) error
 }
@@ -308,4 +308,4 @@ func (s *SessionLifecycleService) removeSessionUnderAdmission(
 	return nil
 }
 
-var _ SessionRemovalMetadata = (*metadata.Store)(nil)
+var _ sessionRemovalMetadata = (*metadata.Store)(nil)
