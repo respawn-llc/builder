@@ -200,11 +200,16 @@ func validateRetainedWorkflowAssertions(plan launch.SessionPlan, overrides serve
 		return err
 	}
 	var expectedRole string
+	expectedRole = config.DefaultSubagentRole
 	if plan.Continuation != nil && plan.Continuation.AgentRole != nil {
-		expectedRole = strings.TrimSpace(string(*plan.Continuation.AgentRole))
+		if role := strings.TrimSpace(string(*plan.Continuation.AgentRole)); role != "" {
+			expectedRole = role
+		}
 	}
-	if expectedRole == "" && plan.ActivationAgentSelection != nil {
-		expectedRole = strings.TrimSpace(plan.ActivationAgentSelection.Agent)
+	if plan.ActivationAgentSelection != nil {
+		if role := strings.TrimSpace(plan.ActivationAgentSelection.Agent); role != "" {
+			expectedRole = role
+		}
 	}
 	if role.Present {
 		requestedRole := role.Role

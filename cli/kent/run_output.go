@@ -81,19 +81,7 @@ func runErrorMessage(err error) string {
 	}
 	var resumeConflict *serverapi.WorkflowTaskResumeConflictError
 	if errors.As(err, &resumeConflict) {
-		switch resumeConflict.State {
-		case serverapi.WorkflowTaskResumeConflictPendingApproval:
-			return fmt.Sprintf("Workflow Task %q is waiting for an Approval; resolve that Approval before continuing the Task", resumeConflict.TaskID)
-		case serverapi.WorkflowTaskResumeConflictFinished:
-			return fmt.Sprintf("Workflow Task %q has finished; start a new ordinary Session", resumeConflict.TaskID)
-		case serverapi.WorkflowTaskResumeConflictMovedCurrentNode:
-			return fmt.Sprintf("the retained Session for Workflow Task %q is no longer its current Workflow Node; continue through the Task's current Node", resumeConflict.TaskID)
-		case serverapi.WorkflowTaskResumeConflictCurrentNodeNotInterrupted:
-			return fmt.Sprintf("Workflow Task %q's retained Current Node is no longer interrupted", resumeConflict.TaskID)
-		case serverapi.WorkflowTaskResumeConflictNoResumableCurrentNode:
-			return fmt.Sprintf("Workflow Task %q has no interrupted executable Current Node", resumeConflict.TaskID)
-		}
-		return fmt.Sprintf("Workflow Task %q cannot be resumed", resumeConflict.TaskID)
+		return resumeConflict.Error()
 	}
 	if message := llmerrors.UserFacingError(err); message != "" {
 		return message

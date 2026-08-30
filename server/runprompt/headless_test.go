@@ -282,6 +282,13 @@ func TestRetainedWorkflowAssertionsUseOverrideFreePlan(t *testing.T) {
 	if err == nil {
 		t.Fatal("conflicting retained model assertion was accepted")
 	}
+	role := "worker"
+	err = validateRetainedWorkflowAssertions(plan, serverapi.RunPromptOverrides{
+		AgentRole: &role,
+	})
+	if err == nil {
+		t.Fatal("conflicting retained default Agent assertion was accepted")
+	}
 }
 
 func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T) {

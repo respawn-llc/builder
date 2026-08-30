@@ -27,10 +27,11 @@ import (
 )
 
 type retainedAssignmentOrderClient struct {
-	base      *compactingScriptedClient
-	fixture   *currentNodeRunnerFixture
-	sessionID runtimeids.SessionID
-	observed  atomic.Bool
+	base              *compactingScriptedClient
+	fixture           *currentNodeRunnerFixture
+	sessionID         runtimeids.SessionID
+	expectedReference workflow.CurrentNodeReference
+	observed          atomic.Bool
 }
 
 func (c *retainedAssignmentOrderClient) Generate(
@@ -38,7 +39,11 @@ func (c *retainedAssignmentOrderClient) Generate(
 	request llm.Request,
 	callbacks llm.StreamCallbacks,
 ) (llm.Response, error) {
-	if c.fixture.workflowAssignmentRecordCountForTest(c.sessionID) == 0 {
+	matched, err := c.fixture.workflowAssignmentMatchesForTest(c.sessionID, c.expectedReference)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	if !matched {
 		return llm.Response{}, errors.New("provider called before durable Workflow assignment")
 	}
 	c.observed.Store(true)
@@ -57,37 +62,46 @@ func (c *retainedAssignmentOrderClient) Requests() []llm.Request {
 	return c.base.Requests()
 }
 
-func (f *currentNodeRunnerFixture) workflowAssignmentRecordCountForTest(sessionID runtimeids.SessionID) int {
+func (f *currentNodeRunnerFixture) workflowAssignmentMatchesForTest(
+	sessionID runtimeids.SessionID,
+	expected workflow.CurrentNodeReference,
+) (bool, error) {
 	record, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID.String())
 	if err != nil || record.Meta == nil {
-		return 0
+		return false, err
 	}
 	store, err := session.Open(record.SessionDir, f.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
-		return 0
+		return false, err
 	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		return 0
+		return false, err
 	}
 	window, err := eventLog.ReadRecentRecords(128)
 	if err != nil {
-		return 0
+		return false, err
 	}
-	count := 0
 	for {
 		for _, event := range window.Records {
 			payload, payloadErr := event.Payload()
 			if payloadErr != nil {
-				continue
+				return false, payloadErr
 			}
 			message, ok := payload.(session.MessageRecord)
-			if ok && message.MessageType != nil && *message.MessageType == session.MessageTypeWorkflowMode {
-				count++
+			if !ok ||
+				message.MessageType == nil ||
+				*message.MessageType != session.MessageTypeWorkflowMode ||
+				message.SourcePath == nil {
+				continue
+			}
+			identity := workflowruntime.CurrentNodePromptIdentity(expected)
+			if *message.SourcePath == identity {
+				return true, nil
 			}
 		}
 		if window.ReachedStart {
-			return count
+			return false, nil
 		}
 		seen := 0
 		window, err = eventLog.ReadSegmentBackward(window.StartOffset, func(session.EventRecord) bool {
@@ -95,7 +109,7 @@ func (f *currentNodeRunnerFixture) workflowAssignmentRecordCountForTest(sessionI
 			return seen == 128
 		})
 		if err != nil {
-			return count
+			return false, err
 		}
 	}
 }
@@ -241,8 +255,9 @@ func TestRetainedCompactedNeverActivatedWorkflowAssignmentPrecedesTUISteerProvid
 	f := newCurrentNodeRunnerFixtureWithClient(t, base)
 	order := &retainedAssignmentOrderClient{base: base, fixture: f}
 	f.client = order
-	sessionID, _, _ := prepareCompactedRetainedWorkflowSession(t, f, order)
+	sessionID, reference, _ := prepareCompactedRetainedWorkflowSession(t, f, order)
 	order.sessionID = sessionID
+	order.expectedReference = reference
 
 	service := runtimecontrol.NewService(f.authority).
 		WithWorkflowSessionReactivator(f.controller).
@@ -256,7 +271,7 @@ func TestRetainedCompactedNeverActivatedWorkflowAssignmentPrecedesTUISteerProvid
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 	if !order.observed.Load() {
-		t.Fatalf("provider was not called after durable assignment: err=%v requests=%d assignments=%d", err, len(order.Requests()), f.workflowAssignmentRecordCountForTest(sessionID))
+		t.Fatalf("provider was not called after exact durable assignment: err=%v requests=%d", err, len(order.Requests()))
 	}
 	if response.ResultKind != clientui.UserTurnResultKindNoFinal {
 		t.Fatalf("SubmitUserTurn response = %+v, want no-final result", response)
@@ -276,8 +291,9 @@ func TestRetainedCompactedNeverActivatedWorkflowAssignmentPrecedesHeadlessContin
 	f := newCurrentNodeRunnerFixtureWithClient(t, base)
 	order := &retainedAssignmentOrderClient{base: base, fixture: f}
 	f.client = order
-	sessionID, _, _ := prepareCompactedRetainedWorkflowSession(t, f, order)
+	sessionID, reference, _ := prepareCompactedRetainedWorkflowSession(t, f, order)
 	order.sessionID = sessionID
+	order.expectedReference = reference
 
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
 		SessionLaunch: sessionlaunch.NewService(launch.Planner{
@@ -300,7 +316,7 @@ func TestRetainedCompactedNeverActivatedWorkflowAssignmentPrecedesHeadlessContin
 		t.Fatalf("RunPrompt: %v", err)
 	}
 	if !order.observed.Load() {
-		t.Fatalf("provider was not called after durable assignment: err=%v requests=%d assignments=%d", err, len(order.Requests()), f.workflowAssignmentRecordCountForTest(sessionID))
+		t.Fatalf("provider was not called after exact durable assignment: err=%v requests=%d", err, len(order.Requests()))
 	}
 	if response.SessionID != sessionID.String() {
 		t.Fatalf("RunPrompt response Session = %q, want %q", response.SessionID, sessionID)
