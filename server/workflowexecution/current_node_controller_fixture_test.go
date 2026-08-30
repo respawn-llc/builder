@@ -1233,24 +1233,6 @@ func (r failingCurrentNodeRunner) PublishCurrentNode(context.Context, workflow.C
 	return nil
 }
 
-type selectedFailureSiblingSuccessRunner struct {
-	failed  workflow.CurrentNodeReference
-	cause   error
-	started chan workflow.CurrentNodeReference
-}
-
-func (r selectedFailureSiblingSuccessRunner) PrepareCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery) error {
-	if reference.Equal(r.failed) {
-		return r.cause
-	}
-	return nil
-}
-
-func (r selectedFailureSiblingSuccessRunner) PublishCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ workflowExecutionStart, _ workflowruntime.Controller) error {
-	r.started <- reference
-	return nil
-}
-
 type blockingCurrentNodeRunner struct {
 	entered chan struct{}
 	release chan struct{}
