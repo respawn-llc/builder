@@ -21,31 +21,25 @@ import (
 
 type retainedContinuationExecutionHandle struct{}
 
-type runtimeControlWorkflowReactivatorFunc func(
-	context.Context,
-	runtimeids.SessionID,
-	runtime.CommandAcceptance,
-	context.Context,
-	*workflowexecution.WorkflowSessionContinuation,
-) (workflowexecution.WorkflowSessionContinuationResult, error)
-
-func (f runtimeControlWorkflowReactivatorFunc) ReactivateWorkflowSessionWithAcceptance(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	accept runtime.CommandAcceptance,
-	acceptedCtx context.Context,
-	continuation *workflowexecution.WorkflowSessionContinuation,
-) (workflowexecution.WorkflowSessionContinuationResult, error) {
-	return f(ctx, sessionID, accept, acceptedCtx, continuation)
+func (retainedContinuationExecutionHandle) Scope() sessionruntime.ExecutionScope {
+	return sessionruntime.ExecutionScope{}
 }
 
-func (retainedContinuationExecutionHandle) Scope() sessionruntime.ExecutionScope { return sessionruntime.ExecutionScope{} }
-func (retainedContinuationExecutionHandle) RequestStop() bool                    { return false }
-func (retainedContinuationExecutionHandle) Stop(context.Context) error            { return nil }
+func (retainedContinuationExecutionHandle) RequestStop() bool {
+	return false
+}
+
+func (retainedContinuationExecutionHandle) Stop(context.Context) error {
+	return nil
+}
+
 func (retainedContinuationExecutionHandle) Wait(context.Context) (sessionruntime.ExecutionResult, error) {
 	return sessionruntime.ExecutionResult{}, nil
 }
-func (retainedContinuationExecutionHandle) Close(context.Context) error { return nil }
+
+func (retainedContinuationExecutionHandle) Close(context.Context) error {
+	return nil
+}
 
 func newRetainedContinuationService(
 	t *testing.T,
@@ -116,6 +110,7 @@ func TestSetThinkingLevelPersistsForDormantRetainedSession(t *testing.T) {
 
 func acceptedRetainedContinuationReactivator(
 	turn runtime.UserTurnResult,
+	turnErr error,
 	exactErr error,
 	diagnostics []workflowexecution.WorkflowSessionResumeDiagnostic,
 ) runtimeControlWorkflowReactivatorFunc {
@@ -135,7 +130,7 @@ func acceptedRetainedContinuationReactivator(
 		if !committed {
 			return workflowexecution.WorkflowSessionContinuationResult{}, errors.New("retained continuation was not accepted")
 		}
-		continuation.RecordTurn(turn, nil)
+		continuation.RecordTurn(turn, turnErr)
 		continuation.RecordExact(sessionruntime.ExecutionResult{}, exactErr)
 		return workflowexecution.WorkflowSessionContinuationResult{
 			Handle:             retainedContinuationExecutionHandle{},
@@ -257,27 +252,75 @@ func TestSubmitUserTurnRetainedCancellationAfterAcceptanceKeepsHistory(t *testin
 }
 
 func TestSubmitUserTurnRetainedSelectedOutcomeAndSiblingDiagnostics(t *testing.T) {
+	selectedTurnFailure := errors.New("selected turn failed")
 	selectedExecutionFailure := errors.New("selected execution failed")
-	diagnostics := []workflowexecution.WorkflowSessionResumeDiagnostic{{
-		Reference: workflow.CurrentNodeReference{TaskID: "sibling-task", NodeID: "sibling-node"},
-		Cause:     errors.New("sibling Resume failed"),
-	}}
-	store, service := newRetainedContinuationService(t, acceptedRetainedContinuationReactivator(
-		runtime.UserTurnResult{
-			Kind: runtime.UserTurnResultAssistantFinal,
-			FinalAnswer: &llm.Message{Content: textutil.Value("selected final")},
+	tests := []struct {
+		name       string
+		turn       runtime.UserTurnResult
+		turnErr    error
+		exactErr   error
+		wantKind   clientui.UserTurnResultKind
+		wantErr    error
+		diagnostic bool
+	}{
+		{
+			name: "selected final",
+			turn: runtime.UserTurnResult{
+				Kind: runtime.UserTurnResultAssistantFinal,
+				FinalAnswer: &llm.Message{
+					Content: textutil.Value("selected final"),
+				},
+			},
+			wantKind:   clientui.UserTurnResultKindAssistantFinal,
+			diagnostic: true,
 		},
-		selectedExecutionFailure,
-		diagnostics,
-	))
-	response, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "retained-outcome", "continue"))
-	if !errors.Is(err, selectedExecutionFailure) {
-		t.Fatalf("SubmitUserTurn error = %v, want %v", err, selectedExecutionFailure)
+		{
+			name:     "selected no final",
+			wantKind: clientui.UserTurnResultKindNoFinal,
+		},
+		{
+			name:     "selected turn error",
+			turnErr:  selectedTurnFailure,
+			wantErr:  selectedTurnFailure,
+			wantKind: clientui.UserTurnResultKindNoFinal,
+		},
+		{
+			name:     "exact error takes precedence",
+			turnErr:  selectedTurnFailure,
+			exactErr: selectedExecutionFailure,
+			wantErr:  selectedExecutionFailure,
+			wantKind: clientui.UserTurnResultKindNoFinal,
+		},
 	}
-	if response.ResultKind != clientui.UserTurnResultKindNoFinal {
-		t.Fatalf("SubmitUserTurn result kind = %q, want no-final result", response.ResultKind)
-	}
-	if countPromptHistoryEvents(t, store, "continue") != 1 {
-		t.Fatal("accepted retained continuation did not record prompt history once")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diagnostics := []workflowexecution.WorkflowSessionResumeDiagnostic(nil)
+			if test.diagnostic {
+				diagnostics = []workflowexecution.WorkflowSessionResumeDiagnostic{{
+					Reference: workflow.CurrentNodeReference{TaskID: "sibling-task", NodeID: "sibling-node"},
+					Cause:     errors.New("sibling Resume failed"),
+				}}
+			}
+			store, service := newRetainedContinuationService(t, acceptedRetainedContinuationReactivator(
+				test.turn,
+				test.turnErr,
+				test.exactErr,
+				diagnostics,
+			))
+			response, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "retained-outcome", "continue"))
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("SubmitUserTurn error = %v, want %v", err, test.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("SubmitUserTurn: %v", err)
+			}
+			if response.ResultKind != test.wantKind {
+				t.Fatalf("SubmitUserTurn result kind = %q, want %q", response.ResultKind, test.wantKind)
+			}
+			if countPromptHistoryEvents(t, store, "continue") != 1 {
+				t.Fatal("accepted retained continuation did not record prompt history once")
+			}
+		})
 	}
 }

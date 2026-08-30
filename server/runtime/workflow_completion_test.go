@@ -751,6 +751,42 @@ func TestWorkflowModePromptResumedCurrentNodeMessageSkipsTaskAwarenessQueryAndRe
 	}
 }
 
+func TestWorkflowModePromptResumeInjectsMissingCurrentNodeAssignmentBeforeModelRequest(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	counter := &fakeTaskAwarenessSource{
+		awareness: workflowruntime.TaskAwareness{CommentCount: 2},
+	}
+	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
+	workflowCfg.TaskAwarenessSource = counter
+	workflowCfg.TaskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
+	client := &fakeClient{responses: []llm.Response{commentaryResponse(
+		"complete",
+		completeNodeCall(
+			"call_complete",
+			json.RawMessage(`{"commentary":"complete","summary":"done"}`),
+		),
+	)}}
+	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{})
+	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit resumed workflow turn: %v", err)
+	}
+	assertModelCallCount(t, client, 1)
+	messages := requestMessages(client.calls[0])
+	assignmentCount := 0
+	for _, message := range messages {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeWorkflowMode {
+			assignmentCount++
+		}
+	}
+	if assignmentCount != 1 {
+		t.Fatalf("resumed workflow assignment count = %d, want one assignment", assignmentCount)
+	}
+	if got := counter.calls.Load(); got == 0 {
+		t.Fatal("resumed workflow assignment did not resolve Task awareness")
+	}
+}
+
 func TestWorkflowModePromptSameNodeReentryRefreshesAssignment(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
