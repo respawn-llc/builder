@@ -1,16 +1,14 @@
 import type { ApiSubscription } from "./apiService";
 import type {
-  ChatBackgroundActivityWire,
   ChatCommittedRowWire,
   ChatDiagnosticWire,
-  ChatHydrationWire,
-  ChatPromptWire,
   ChatReasoningIdentityWire,
   ChatRuntimeReadModelUpdateWire,
   ChatSessionIdentityWire,
   ChatSessionStatusWire,
   ChatToolMetaWire,
 } from "./chatSchemas";
+import type { ChatBackgroundActivityWire, ChatHydrationWire, ChatPromptWire } from "./chatHydrationSchemas";
 
 type DeepReadonly<Value> = Value extends (...args: never[]) => unknown
   ? Value

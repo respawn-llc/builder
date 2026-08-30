@@ -7,7 +7,8 @@ export const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nulla
 export const timestamp = z.iso.datetime({ offset: true });
 export const identifier = nonBlank;
 export const optionalIdentifier = optionalNullable(identifier);
-export const text = z.string();
+export const text = nonBlank;
+export const nonEmptyText = z.string().min(1);
 export const runtimeWorktreeSchema = z
   .object({
     ID: identifier,
@@ -280,7 +281,7 @@ export const toolRowSchema = z
     StepID: optionalIdentifier,
     ToolCallID: identifier,
     ToolName: identifier,
-    Text: text,
+    Text: z.string(),
     IsError: z.boolean(),
     ResultSummary: optionalText,
     CondensedText: optionalText,
@@ -464,7 +465,8 @@ export const sessionIdentitySchema = z
     ConversationFreshness: z.union([z.literal(0), z.literal(1)]),
     ExecutionTarget: executionTargetSchema.nullable(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({ ...value, SessionName: value.SessionName ?? null }));
 export const sessionStatusSchema = z
   .object({
     ReviewerFrequency: identifier,
@@ -494,127 +496,10 @@ export const runtimeReadModelUpdateSchema = z
     Activity: runtimeActivitySchema,
   })
   .strict();
-export const hydrationSchema = z
-  .object({
-    SessionIdentity: sessionIdentitySchema,
-    SessionStatus: sessionStatusSchema,
-    RuntimeReadModelUpdate: runtimeReadModelUpdateSchema,
-    CommittedRows: z.array(committedRowSchema),
-    ActiveAssistant: z
-      .object({
-        StepID: identifier,
-        StreamID: identifier,
-        Text: text,
-        Phase: z.enum(["commentary", "final_answer"]),
-      })
-      .strict()
-      .nullable(),
-    ActiveThinkingStatus: z.object({ StepID: identifier, Text: text }).strict().nullable(),
-    ActiveReasoningTraces: z.array(
-      z
-        .object({
-          StepID: identifier,
-          Identity: reasoningIdentitySchema,
-          CompactText: text,
-          Text: text,
-        })
-        .strict(),
-    ),
-    ActiveStep: z
-      .object({
-        RunID: identifier,
-        StepID: identifier,
-        ActiveKind: identifier,
-        Lifecycle: z.string(),
-        Status: z.string(),
-      })
-      .strict()
-      .nullable(),
-    ActiveCompaction: z
-      .object({
-        StepID: identifier,
-        RequestID: optionalIdentifier,
-        State: z.string(),
-        Mode: z.string(),
-        Count: z.number().int(),
-        Diagnostic: optionalNullable(diagnosticSchema),
-      })
-      .strict()
-      .nullable(),
-    InFlightTools: z.array(
-      z
-        .object({
-          StepID: identifier,
-          ToolCallID: identifier,
-          ToolName: identifier,
-          Presentation: optionalNullable(toolMetaSchema),
-        })
-        .strict(),
-    ),
-    PendingPrompts: z.array(
-      z
-        .object({
-          Kind: z.enum(["question", "approval"]),
-          State: z.enum(["pending", "resolved"]),
-          PromptID: identifier,
-          SessionID: identifier,
-          StepID: identifier,
-          Question: text,
-          CreatedAt: timestamp,
-          Suggestions: z.array(z.string()),
-          RecommendedOptionIndex: optionalNullable(z.number().int()),
-          ApprovalOptions: z.array(z.string()),
-          Tool: z.object({ ToolCallID: identifier, ToolName: identifier }).strict().nullable(),
-        })
-        .strict(),
-    ),
-    BackgroundActivities: z.array(
-      z
-        .object({
-          ActivityID: identifier,
-          ProcessID: identifier,
-          OwnerRunID: identifier,
-          OwnerStepID: identifier,
-          Lifecycle: z.enum(["backgrounded", "completed", "killed"]),
-          Command: text,
-          Workdir: identifier,
-          LogPath: optionalText,
-          Preview: optionalText,
-          ExitCode: optionalNullable(z.number().int()),
-          UserRequestedKill: z.boolean(),
-          NoticeSuppressed: z.boolean(),
-          Diagnostic: optionalNullable(diagnosticSchema),
-        })
-        .strict(),
-    ),
-    ContextUsage: z
-      .object({
-        UsedTokens: z.number().int().nonnegative(),
-        WindowTokens: z.number().int().positive(),
-        CacheHitPercent: optionalNullable(z.number().int().nonnegative()),
-      })
-      .strict()
-      .nullable(),
-    GoalStatus: z
-      .object({
-        Goal: z
-          .object({ ...goalSchema.shape, Suspended: z.boolean() })
-          .strict()
-          .nullable(),
-        Availability: z.enum(["available", "agent_capability_missing"]).nullable(),
-      })
-      .strict()
-      .nullable(),
-  })
-  .strict();
-
 export type ChatCommittedRowWire = z.output<typeof committedRowSchema>;
 export type ChatDiagnosticWire = z.output<typeof diagnosticSchema>;
-export type ChatHydrationWire = z.output<typeof hydrationSchema>;
 export type ChatReasoningIdentityWire = z.output<typeof reasoningIdentitySchema>;
 export type ChatRuntimeReadModelUpdateWire = z.output<typeof runtimeReadModelUpdateSchema>;
 export type ChatSessionIdentityWire = z.output<typeof sessionIdentitySchema>;
 export type ChatSessionStatusWire = z.output<typeof sessionStatusSchema>;
 export type ChatToolMetaWire = z.output<typeof toolMetaSchema>;
-export type ChatBackgroundActivityWire = ChatHydrationWire["BackgroundActivities"][number];
-export type ChatPromptWire = ChatHydrationWire["PendingPrompts"][number];

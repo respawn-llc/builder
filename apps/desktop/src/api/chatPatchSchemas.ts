@@ -27,7 +27,7 @@ const wholeFileDeletionDispositionSchema = z
 const wholeFileDeletionOperationSchema = z
   .object({
     id: wholeFileDeletionOperationIDSchema,
-    disposition: wholeFileDeletionDispositionSchema.nullable().optional(),
+    disposition: wholeFileDeletionDispositionSchema.nullable(),
   })
   .strict();
 
@@ -37,15 +37,15 @@ const renderedFileSchema = z
     RelPath: z.string(),
     Added: z.number().int().nonnegative(),
     Removed: z.number().int().nonnegative(),
-    Diff: z.array(z.string()).nullable().optional(),
-    WholeFileDeletions: z.array(wholeFileDeletionOperationSchema).nullable().optional(),
+    Diff: z.array(z.string()).nullable(),
+    WholeFileDeletions: z.array(wholeFileDeletionOperationSchema).nullable(),
   })
   .strict();
 
 export const renderedPatchSchema = z
   .object({
-    Files: z.array(renderedFileSchema).nullable().optional(),
-    SummaryLines: z.array(renderedLineSchema).nullable().optional(),
-    DetailLines: z.array(renderedLineSchema).nullable().optional(),
+    Files: z.array(renderedFileSchema).nullable(),
+    SummaryLines: z.array(renderedLineSchema).nullable(),
+    DetailLines: z.array(renderedLineSchema).nullable(),
   })
   .strict();

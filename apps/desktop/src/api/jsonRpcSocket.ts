@@ -278,6 +278,7 @@ export async function setupSocket(
     }>;
   }>,
 ): Promise<ProjectAttachment | SessionAttachment | null> {
+  const requestedSessionID = options.sessionID?.trim();
   const requestOptions =
     options.signal === undefined
       ? { timeoutMilliseconds: options.timeoutMilliseconds }
@@ -308,16 +309,16 @@ export async function setupSocket(
     );
     attachment = requireProjectAttachment(projectAttachmentFromResult(result), options.projectSelector);
   }
-  if (options.sessionID !== undefined) {
+  if (requestedSessionID !== undefined) {
     const attachment = await sendSocketDescriptorRequest(
       socket,
       ConnectionService.method.attachSession,
-      create(ConnectionService.method.attachSession.input, { sessionId: options.sessionID }),
+      create(ConnectionService.method.attachSession.input, { sessionId: requestedSessionID }),
       requestOptions,
     );
     requireDescriptorSuccess(ConnectionService.method.attachSession, attachment);
     const attached = attachSessionFromResult(attachment);
-    if (options.sessionID !== attached.sessionID) {
+    if (requestedSessionID !== attached.sessionID) {
       throw new TransportError("Session attachment does not match its requested Session.");
     }
     return attached;
@@ -370,10 +371,11 @@ export function requireSessionAttachment(
   attachment: ProjectAttachment | SessionAttachment | null,
   target: Readonly<{ projectID?: string; sessionID: string }>,
 ): SessionAttachment {
+  const requestedSessionID = target.sessionID.trim();
   if (attachment === null || !("sessionID" in attachment)) {
     throw new ContractError("Session attachment was not established.");
   }
-  if (attachment.sessionID !== target.sessionID) {
+  if (attachment.sessionID !== requestedSessionID) {
     throw new ContractError("Session attachment does not match the requested Session.");
   }
   if (target.projectID !== undefined && attachment.projectID !== target.projectID) {
@@ -601,12 +603,12 @@ export function handleSubscriptionMessage(
 ): SubscriptionMessageResult {
   const textFrame = textFrameSchema.safeParse(event.data);
   if (!textFrame.success) {
-    throw new TransportError("Subscription received a non-text frame.");
+    throw new ContractError("Subscription received a non-text frame.");
   }
   const parsed = parseFrame(textFrame.data);
   const notification = notificationSchema.safeParse(parsed);
   if (!notification.success) {
-    throw new TransportError("Subscription notification envelope is invalid.");
+    throw new ContractError("Subscription notification envelope is invalid.");
   }
   if (completeMethod !== null && notification.data.method === completeMethod) {
     const completeSchema = z
@@ -621,7 +623,7 @@ export function handleSubscriptionMessage(
       .strict();
     const complete = completeSchema.safeParse(notification.data.params);
     if (!complete.success) {
-      throw new TransportError("Subscription completion notification is invalid.");
+      throw new ContractError("Subscription completion notification is invalid.");
     }
     handler.onComplete(complete.data.code, complete.data.message, complete.data.transcript_close_reason);
     return {

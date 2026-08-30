@@ -5,8 +5,9 @@ import {
   committedRowSchema,
   diagnosticSchema,
   goalSchema,
-  hydrationSchema,
   identifier,
+  nonEmptyText,
+  nonBlank,
   optionalIdentifier,
   optionalNullable,
   optionalText,
@@ -18,6 +19,7 @@ import {
   timestamp,
   toolMetaSchema,
 } from "./chatSchemas";
+import { hydrationSchema, promptSchema } from "./chatHydrationSchemas";
 
 const selectorErrorKindSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 const topologyVariantSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
@@ -25,8 +27,8 @@ const selectorCandidateSchema = z
   .object({
     variant: topologyVariantSchema,
     selector: identifier,
-    branch_name: z.string().optional(),
-    display_name: z.string().optional(),
+    branch_name: nonBlank.optional(),
+    display_name: nonBlank.optional(),
     fallback_identity: identifier,
   })
   .strict();
@@ -36,14 +38,45 @@ const selectorErrorDetailsSchema = z
     input: text,
     candidates: z.array(selectorCandidateSchema).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const hasCandidates = value.candidates !== undefined && value.candidates.length > 0;
+    if (value.kind === 2 && !hasCandidates) {
+      context.addIssue({
+        code: "custom",
+        path: ["candidates"],
+        message: "ambiguous selector errors require candidates",
+      });
+    }
+    if ((value.kind === 1 || value.kind === 3) && hasCandidates) {
+      context.addIssue({
+        code: "custom",
+        path: ["candidates"],
+        message: "only ambiguous selector errors may contain candidates",
+      });
+    }
+  });
 const deletePreconditionSchema = z
   .object({
-    kind: z.enum(["clean", "dirty", "unknown"]),
-    dirty_file_count: z.number().int().optional(),
-    unknown_cause: z.string().optional(),
+    kind: z.enum(["dirty", "unknown"]),
+    dirty_file_count: z.number().int().positive().optional(),
+    unknown_cause: nonBlank.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.kind === "dirty" &&
+      (value.dirty_file_count === undefined || value.unknown_cause !== undefined)
+    ) {
+      context.addIssue({ code: "custom", message: "dirty preconditions require a positive count only" });
+    }
+    if (
+      value.kind === "unknown" &&
+      (value.dirty_file_count !== undefined || value.unknown_cause === undefined)
+    ) {
+      context.addIssue({ code: "custom", message: "unknown preconditions require an unknown cause only" });
+    }
+  });
 
 export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
   kind: Kind,
@@ -55,7 +88,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
       .object({
         StepID: identifier,
         StreamID: identifier,
-        Delta: text,
+        Delta: nonEmptyText,
         Phase: z.enum(["commentary", "final_answer"]),
       })
       .strict(),
@@ -179,21 +212,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         Diagnostic: optionalNullable(diagnosticSchema),
       })
       .strict(),
-    prompt: z
-      .object({
-        Kind: z.enum(["question", "approval"]),
-        State: z.enum(["pending", "resolved"]),
-        PromptID: identifier,
-        SessionID: identifier,
-        StepID: identifier,
-        Question: text,
-        CreatedAt: timestamp,
-        Suggestions: z.array(z.string()),
-        RecommendedOptionIndex: optionalNullable(z.number().int()),
-        ApprovalOptions: z.array(z.string()),
-        Tool: z.object({ ToolCallID: identifier, ToolName: identifier }).strict().nullable(),
-      })
-      .strict(),
+    prompt: promptSchema,
     worktree_transition_outcome: z
       .object({
         OperationID: identifier,
@@ -203,7 +222,10 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         SelectorError: optionalNullable(selectorErrorDetailsSchema),
         DeletePrecondition: optionalNullable(deletePreconditionSchema),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, context) => {
+        validateWorktreeTransition(value, context);
+      }),
     operational_diagnostic: z
       .object({
         Code: z.enum([
@@ -216,7 +238,20 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         StepID: optionalIdentifier,
         Detail: z.string(),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, context) => {
+        if (value.Code === "provider_turn_state_invalid") {
+          if (value.Detail !== "") {
+            context.addIssue({
+              code: "custom",
+              path: ["Detail"],
+              message: "provider turn-state diagnostics have no detail",
+            });
+          }
+        } else if (value.Detail.trim().length === 0) {
+          context.addIssue({ code: "custom", path: ["Detail"], message: "diagnostic detail is required" });
+        }
+      }),
     live_run_finished: z
       .object({
         Status: z.enum(["completed", "interrupted", "failed"]),
@@ -232,10 +267,59 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
   };
   return schemas[kind];
 }
+
+type WorktreeTransitionValue = Readonly<{
+  Transition: "enter" | "leave" | "delete";
+  State: "completed" | "failed";
+  Failure?: unknown;
+  SelectorError?: unknown;
+  DeletePrecondition?: unknown;
+}>;
+
+function validateWorktreeTransition(value: WorktreeTransitionValue, context: z.RefinementCtx): void {
+  if (value.State === "completed") {
+    validateCompletedWorktreeTransition(value, context);
+    return;
+  }
+  validateFailedWorktreeTransition(value, context);
+}
+
+function validateCompletedWorktreeTransition(value: WorktreeTransitionValue, context: z.RefinementCtx): void {
+  if (
+    (value.Failure !== undefined && value.Failure !== null) ||
+    (value.SelectorError !== undefined && value.SelectorError !== null) ||
+    (value.DeletePrecondition !== undefined && value.DeletePrecondition !== null)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "completed transitions cannot carry failure details",
+    });
+  }
+}
+
+function validateFailedWorktreeTransition(value: WorktreeTransitionValue, context: z.RefinementCtx): void {
+  const hasFailure = value.Failure !== undefined && value.Failure !== null;
+  const hasSelectorError = value.SelectorError !== undefined && value.SelectorError !== null;
+  const hasDeletePrecondition = value.DeletePrecondition !== undefined && value.DeletePrecondition !== null;
+  if (hasFailure === hasSelectorError) {
+    context.addIssue({
+      code: "custom",
+      message: "failed transitions require exactly one failure detail",
+    });
+  }
+  if (hasDeletePrecondition && (value.Transition !== "delete" || !hasFailure || hasSelectorError)) {
+    context.addIssue({
+      code: "custom",
+      path: ["DeletePrecondition"],
+      message: "delete preconditions require a failed delete with a diagnostic",
+    });
+  }
+}
+
 function transcriptMessageVariant<Kind extends ChatTranscriptKind>(kind: Kind) {
   return z
     .object({
-      Sequence: z.number().int().positive(),
+      Sequence: kind === "hydration" ? z.literal(1) : z.number().int().min(2),
       Kind: z.literal(kind),
       Payload: transcriptPayloadSchema(kind),
     })

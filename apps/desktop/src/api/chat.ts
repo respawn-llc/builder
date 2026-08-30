@@ -15,6 +15,7 @@ import type { executionTargetSchema, runtimeActivitySchema, runtimeStatusSchema 
 import { transcriptEventSchema } from "./chatTranscriptSchemas";
 import { requireProjectAttachment } from "./chatAttachment";
 import { requireSessionAttachment } from "./jsonRpcSocket";
+import { SubscriptionErrorAlreadyReported } from "./jsonRpcSubscription";
 import type {
   ChatApi,
   ChatContextTarget,
@@ -69,21 +70,27 @@ function sessionTarget(target: ChatSessionTarget): void {
   projectTarget(target);
   if (!nonBlank.safeParse(target.sessionID).success) throw new TypeError("Session ID is required.");
 }
+function canonicalSessionID(sessionID: string): string {
+  const canonical = sessionID.trim();
+  if (canonical.length === 0) throw new TypeError("Session ID is required.");
+  return canonical;
+}
 class RecoverableTranscriptEventError extends Error {
   constructor(readonly contractError: ContractError) {
     super(contractError.message);
   }
 }
 function transcriptMessageFromTarget(input: ChatTranscriptMessage, sessionID: string): ChatTranscriptMessage {
+  const requestedSessionID = canonicalSessionID(sessionID);
   if (input.kind === "session_identity") {
-    if (input.payload.SessionID !== sessionID) {
+    if (input.payload.SessionID !== requestedSessionID) {
       throw new RecoverableTranscriptEventError(
         new ContractError("Transcript event Session identity does not match the requested Session."),
       );
     }
   }
   if (input.kind === "hydration") {
-    if (input.payload.SessionIdentity.SessionID !== sessionID) {
+    if (input.payload.SessionIdentity.SessionID !== requestedSessionID) {
       throw new RecoverableTranscriptEventError(
         new ContractError("Transcript hydration Session identity does not match the requested Session."),
       );
@@ -159,11 +166,7 @@ function runtimeActivity(input: z.output<typeof runtimeActivitySchema>): ChatRun
   };
 }
 function settingsFromWire(input: z.output<typeof settingsSchema>, target: ChatSettingsTarget): ChatSettings {
-  const isSession = target.kind === "session";
-  if (isSession !== (input.session !== undefined))
-    throw new ContractError("Chat Settings response target kind does not match the request.");
-  if (isSession && input.session?.session_id !== target.sessionID)
-    throw new ContractError("Chat Settings response Session does not match the request.");
+  validateSettingsTarget(input, target);
   return {
     selectedAgent: {
       role: input.settings.selected_agent.role,
@@ -207,20 +210,32 @@ function settingsFromWire(input: z.output<typeof settingsSchema>, target: ChatSe
           },
   };
 }
+function validateSettingsTarget(input: z.output<typeof settingsSchema>, target: ChatSettingsTarget): void {
+  if (target.kind === "lazy") {
+    if (input.session !== undefined)
+      throw new ContractError("Chat Settings response target kind does not match the request.");
+    return;
+  }
+  if (input.session === undefined)
+    throw new ContractError("Chat Settings response target kind does not match the request.");
+  if (input.session.session_id !== canonicalSessionID(target.sessionID))
+    throw new ContractError("Chat Settings response Session does not match the request.");
+}
 
 export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
   return {
     async getMainView(target) {
       sessionTarget(target);
+      const requestedSessionID = canonicalSessionID(target.sessionID);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
         method: "session.getMainView",
-        request: { kind: "value", value: { SessionID: target.sessionID } },
+        request: { kind: "value", value: { SessionID: requestedSessionID } },
       });
       requireProjectAttachment(call.attachment, target);
       const response = parseRpcResponse("session.getMainView", mainViewSchema, call.result);
-      if (response.MainView.Session.SessionID !== target.sessionID)
+      if (response.MainView.Session.SessionID !== requestedSessionID)
         throw new ContractError("Session Main View does not match the requested Session.");
       return {
         version: {
@@ -238,6 +253,8 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
     },
     async getContext(target) {
       contextTarget(target);
+      const requestedSessionID =
+        target.sessionID === undefined ? undefined : canonicalSessionID(target.sessionID);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -245,9 +262,9 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
         request: {
           kind: "value",
           value:
-            target.sessionID === undefined
+            requestedSessionID === undefined
               ? { target: { workspace_chat: {} } }
-              : { target: { session: { session_id: target.sessionID } } },
+              : { target: { session: { session_id: requestedSessionID } } },
         },
       });
       requireProjectAttachment(call.attachment, target);
@@ -273,16 +290,23 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
         method: "chat.settings.read",
         request: {
           kind: "factory",
-          create: (attachment) =>
-            target.kind === "lazy"
-              ? {
-                  target: {
-                    kind: "lazy",
-                    project_id: attachment.projectID,
-                    workspace_id: attachment.workspaceID,
-                  },
-                }
-              : { target: { kind: "session", session_id: target.sessionID } },
+          create: (attachment) => {
+            if (target.kind === "lazy") {
+              return {
+                target: {
+                  kind: "lazy",
+                  project_id: attachment.projectID,
+                  workspace_id: attachment.workspaceID,
+                },
+              };
+            }
+            return {
+              target: {
+                kind: "session",
+                session_id: canonicalSessionID(target.sessionID),
+              },
+            };
+          },
         },
       });
       requireProjectAttachment(call.attachment, target);
@@ -290,6 +314,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
     },
     async getTranscriptPage(target, cursor) {
       sessionTarget(target);
+      const requestedSessionID = canonicalSessionID(target.sessionID);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -297,7 +322,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
         request: {
           kind: "value",
           value: {
-            session_id: target.sessionID,
+            session_id: requestedSessionID,
             ...(cursor === undefined
               ? {}
               : cursor.direction === "older"
@@ -308,7 +333,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       });
       requireProjectAttachment(call.attachment, target);
       const value = parseRpcResponse("session.getTranscriptPage", pageSchema, call.result).transcript;
-      if (value.SessionID !== target.sessionID)
+      if (value.SessionID !== requestedSessionID)
         throw new ContractError("Transcript page does not match the requested Session.");
       return {
         sessionID: value.SessionID,
@@ -326,9 +351,13 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
     },
     async activateRuntime(target) {
       sessionTarget(target);
-      return transport.runRuntimeOwner(target.sessionID, { createIfMissing: true }, async (owner) => {
-        requireSessionAttachment(owner.attachment, target);
-        return activateRuntime(owner, target.sessionID);
+      const requestedSessionID = canonicalSessionID(target.sessionID);
+      return transport.runRuntimeOwner(requestedSessionID, { createIfMissing: true }, async (owner) => {
+        requireSessionAttachment(owner.attachment, {
+          projectID: target.projectID,
+          sessionID: requestedSessionID,
+        });
+        return activateRuntime(owner, requestedSessionID);
       });
     },
     async releaseRuntime(attachment) {
@@ -338,16 +367,17 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
         attachment.generation <= 0
       )
         throw new TypeError("Runtime attachment is invalid.");
+      const requestedSessionID = canonicalSessionID(attachment.sessionID);
       return transport.runRuntimeOwner(
-        attachment.sessionID,
+        requestedSessionID,
         { createIfMissing: false, closeAfter: true },
         async (owner) => {
-          requireSessionAttachment(owner.attachment, { sessionID: attachment.sessionID });
+          requireSessionAttachment(owner.attachment, { sessionID: requestedSessionID });
           const result = parseRpcResponse(
             "session.runtime.release",
             z.object({ released: z.boolean(), active: z.boolean().optional() }).strict(),
             await owner.call("session.runtime.release", {
-              attachment: { session_id: attachment.sessionID, generation: attachment.generation },
+              attachment: { session_id: requestedSessionID, generation: attachment.generation },
               drop_owner: true,
               close_policy: "close_if_idle",
             }),
@@ -358,6 +388,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
     },
     subscribeTranscript(target, handler) {
       sessionTarget(target);
+      const requestedSessionID = canonicalSessionID(target.sessionID);
       const rpcHandler: RpcEventHandler = {
         ...(handler.onOpen === undefined ? {} : { onOpen: handler.onOpen }),
         onEvent(method, params) {
@@ -367,7 +398,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
           try {
             event = transcriptMessageFromTarget(
               parseRpcResponse("session.transcript", transcriptEventSchema, params).message,
-              target.sessionID,
+              requestedSessionID,
             );
           } catch (error) {
             if (error instanceof RecoverableTranscriptEventError) throw error;
@@ -379,7 +410,13 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
         },
         onEventFailure(error) {
           if (!(error instanceof RecoverableTranscriptEventError)) return false;
-          handler.onError(error.contractError);
+          try {
+            handler.onError(error.contractError);
+          } catch (cause) {
+            throw new SubscriptionErrorAlreadyReported(
+              cause instanceof Error ? cause : new ContractError("Subscription error handler failed."),
+            );
+          }
           return true;
         },
         onComplete(code, message, reason) {
@@ -393,9 +430,9 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
       return transport.subscribeChatSession({
         projectID: target.projectID,
-        sessionID: target.sessionID,
+        sessionID: requestedSessionID,
         method: "session.subscribeTranscript",
-        params: { SessionID: target.sessionID },
+        params: { SessionID: requestedSessionID },
         handler: rpcHandler,
       });
     },
