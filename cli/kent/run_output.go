@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"core/cli/clienterrors"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -79,9 +80,8 @@ func runErrorMessage(err error) string {
 			return "the subagent launch request is invalid"
 		}
 	}
-	var resumeConflict *serverapi.WorkflowTaskResumeConflictError
-	if errors.As(err, &resumeConflict) {
-		return resumeConflict.Error()
+	if message, ok := clienterrors.WorkflowTaskResumeConflictMessage(err); ok {
+		return message
 	}
 	if message := llmerrors.UserFacingError(err); message != "" {
 		return message

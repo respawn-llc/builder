@@ -500,6 +500,310 @@ func (f headlessWorkflowReactivatorFunc) ReactivateWorkflowSessionWithAcceptance
 	return f(ctx, sessionID, accept, acceptedCtx, continuation)
 }
 
+type headlessRetainedExecutionHandle struct{}
+
+func (headlessRetainedExecutionHandle) Scope() sessionruntime.ExecutionScope {
+	return sessionruntime.ExecutionScope{}
+}
+
+func (headlessRetainedExecutionHandle) RequestStop() bool {
+	return false
+}
+
+func (headlessRetainedExecutionHandle) Stop(context.Context) error {
+	return nil
+}
+
+func (headlessRetainedExecutionHandle) Wait(context.Context) (sessionruntime.ExecutionResult, error) {
+	return sessionruntime.ExecutionResult{}, nil
+}
+
+func (headlessRetainedExecutionHandle) Close(context.Context) error {
+	return nil
+}
+
+func bindRetainedWorkflowForRunPrompt(t *testing.T, fixture selectedRunPromptFixture) runtimeids.SessionID {
+	t.Helper()
+	sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
+	currentNode, err := workflow.NewCurrentNodeReference(
+		workflow.TaskID("headless-retained-task"),
+		workflow.NodeID("headless-retained-node"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new retained Current Node reference: %v", err)
+	}
+	filesystem, err := runtimewire.NewFilesystemContext(
+		fixture.store.Meta().WorkspaceRoot,
+		fixture.store.Meta().WorkspaceRoot,
+		metadata.ProjectWorkspaceBoundary{
+			ProjectID:  "test-project",
+			Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: fixture.store.Meta().WorkspaceRoot}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("new retained filesystem context: %v", err)
+	}
+	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: config.Settings{
+			Model:            "gpt-5",
+			ProviderOverride: "openai",
+			OpenAIBaseURL:    "http://unused.invalid",
+			Shell:            config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		FilesystemContext:     askquestion.FilesystemContext{Access: filesystem.Access},
+		Headless:              true,
+		QuestionsEnabled:      textutil.Value(false),
+		AutoCompactionEnabled: textutil.Value(false),
+	})
+	if err != nil {
+		t.Fatalf("new retained runtime plan: %v", err)
+	}
+	if _, err := fixture.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "run-prompt-retained-boundary-test",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open retained runtime: %v", err)
+	}
+	config := &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: currentNode,
+			WorkflowID:  runtimeids.NewWorkflowID(),
+		},
+	}
+	var binding *runtime.CurrentNodeExecutionBinding
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		var bindErr error
+		binding, bindErr = engine.BindCurrentNodeExecution(config)
+		return bindErr
+	}); err != nil {
+		t.Fatalf("bind retained Workflow activation: %v", err)
+	}
+	t.Cleanup(func() {
+		if binding != nil {
+			_ = binding.Close()
+		}
+	})
+	return sessionID
+}
+
+func newHeadlessRetainedContinuationReactivator(
+	turn runtime.UserTurnResult,
+	turnErr error,
+	exactErr error,
+	diagnostics []workflowexecution.WorkflowSessionResumeDiagnostic,
+	publish func(*workflowexecution.WorkflowSessionContinuation),
+) headlessWorkflowReactivatorFunc {
+	return func(
+		_ context.Context,
+		_ runtimeids.SessionID,
+		accept runtime.CommandAcceptance,
+		_ context.Context,
+		continuation *workflowexecution.WorkflowSessionContinuation,
+	) (workflowexecution.WorkflowSessionContinuationResult, error) {
+		committed, err := accept(func() (bool, error) {
+			return true, nil
+		})
+		if err != nil {
+			return workflowexecution.WorkflowSessionContinuationResult{}, err
+		}
+		if !committed {
+			return workflowexecution.WorkflowSessionContinuationResult{}, errors.New("retained continuation was not accepted")
+		}
+		if publish != nil {
+			publish(continuation)
+		}
+		continuation.RecordTurn(turn, turnErr)
+		continuation.RecordExact(sessionruntime.ExecutionResult{}, exactErr)
+		return workflowexecution.WorkflowSessionContinuationResult{
+			Handle:             headlessRetainedExecutionHandle{},
+			SiblingDiagnostics: diagnostics,
+		}, nil
+	}
+}
+
+func TestInProcessRunPromptRetainedSiblingDiagnosticsFollowSelectedOutcome(t *testing.T) {
+	sibling := []workflowexecution.WorkflowSessionResumeDiagnostic{{
+		Reference: workflow.CurrentNodeReference{TaskID: "sibling-task", NodeID: "sibling-node"},
+		Cause:     errors.New("sibling Resume failed"),
+	}}
+	selectedFailure := errors.New("selected execution failed")
+	tests := []struct {
+		name           string
+		exactErr       error
+		wantErr        error
+		wantWarning    bool
+		wantDiagnostic bool
+	}{
+		{
+			name:        "selected success",
+			wantWarning: true,
+		},
+		{
+			name:           "selected terminal failure",
+			exactErr:       selectedFailure,
+			wantErr:        selectedFailure,
+			wantWarning:    true,
+			wantDiagnostic: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", nil)
+			sessionID := bindRetainedWorkflowForRunPrompt(t, fixture)
+			fixture.boot.WorkflowSessionReactivator = newHeadlessRetainedContinuationReactivator(
+				runtime.UserTurnResult{
+					Kind: runtime.UserTurnResultAssistantFinal,
+					FinalAnswer: &llm.Message{
+						Content: textutil.Value("selected result"),
+					},
+				},
+				nil,
+				test.exactErr,
+				sibling,
+				nil,
+			)
+			var progress []serverapi.RunPromptProgress
+			response, err := NewInProcessRunPromptClient(fixture.boot).RunPrompt(
+				context.Background(),
+				serverapi.RunPromptRequest{
+					Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
+					Prompt: "continue",
+				},
+				serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) {
+					progress = append(progress, event)
+				}),
+			)
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) || !errors.Is(err, sibling[0].Cause) {
+					t.Fatalf("RunPrompt error = %v, want selected and sibling failures", err)
+				}
+			} else if err != nil {
+				t.Fatalf("RunPrompt: %v", err)
+			}
+			if response.Result != "selected result" {
+				t.Fatalf("RunPrompt result = %q, want selected result", response.Result)
+			}
+			if (len(response.Warnings) > 0) != test.wantWarning {
+				t.Fatalf("RunPrompt warnings = %v, wantWarning=%t", response.Warnings, test.wantWarning)
+			}
+			if test.wantDiagnostic && len(response.Warnings) == 0 {
+				t.Fatal("terminal retained failure omitted sibling warning projection")
+			}
+			if len(progress) != 0 {
+				t.Fatalf("unexpected progress for fake retained completion: %+v", progress)
+			}
+		})
+	}
+}
+
+func TestInProcessRunPromptRetainedProgressIsScopedToSelectedExecution(t *testing.T) {
+	fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", nil)
+	sessionID := bindRetainedWorkflowForRunPrompt(t, fixture)
+	fixture.boot.WorkflowSessionReactivator = newHeadlessRetainedContinuationReactivator(
+		runtime.UserTurnResult{},
+		nil,
+		nil,
+		nil,
+		func(continuation *workflowexecution.WorkflowSessionContinuation) {
+			selected := "selected-step"
+			sibling := "sibling-step"
+			continuation.RegisterStep(selected)
+			continuation.PublishEvent(runtime.Event{
+				Kind:   runtime.EventAssistantMessage,
+				StepID: &selected,
+				Message: llm.Message{
+					Role:    llm.RoleAssistant,
+					Phase:   textutil.Value(llm.MessagePhaseCommentary),
+					Content: textutil.Value("selected progress"),
+				},
+			})
+			continuation.PublishEvent(runtime.Event{
+				Kind:   runtime.EventAssistantMessage,
+				StepID: &sibling,
+				Message: llm.Message{
+					Role:    llm.RoleAssistant,
+					Phase:   textutil.Value(llm.MessagePhaseCommentary),
+					Content: textutil.Value("sibling progress"),
+				},
+			})
+		},
+	)
+	var progress []serverapi.RunPromptProgress
+	if _, err := NewInProcessRunPromptClient(fixture.boot).RunPrompt(
+		context.Background(),
+		serverapi.RunPromptRequest{
+			Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
+			Prompt: "continue",
+		},
+		serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) {
+			progress = append(progress, event)
+		}),
+	); err != nil {
+		t.Fatalf("RunPrompt: %v", err)
+	}
+	if len(progress) != 1 ||
+		progress[0].AssistantMessage == nil ||
+		progress[0].AssistantMessage.Content != "selected progress" {
+		t.Fatalf("RunPrompt progress = %+v, want selected execution only", progress)
+	}
+}
+
+type failingPromptHistoryStore struct {
+	err error
+}
+
+func (s failingPromptHistoryStore) RecordPromptHistoryEntry(context.Context, metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
+	return metadata.PromptHistoryRecord{}, s.err
+}
+
+func TestInProcessRunPromptRetainedHistoryFailureJoinsSelectedOutcome(t *testing.T) {
+	historyErr := errors.New("prompt history unavailable")
+	selectedErr := errors.New("selected execution failed")
+	tests := []struct {
+		name     string
+		exactErr error
+		wantErrs []error
+	}{
+		{name: "history failure", wantErrs: []error{historyErr}},
+		{name: "selected failure takes precedence with history", exactErr: selectedErr, wantErrs: []error{selectedErr, historyErr}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", failingPromptHistoryStore{err: historyErr})
+			sessionID := bindRetainedWorkflowForRunPrompt(t, fixture)
+			fixture.boot.WorkflowSessionReactivator = newHeadlessRetainedContinuationReactivator(
+				runtime.UserTurnResult{
+					Kind:        runtime.UserTurnResultAssistantFinal,
+					FinalAnswer: &llm.Message{Content: textutil.Value("selected result")},
+				},
+				nil,
+				test.exactErr,
+				nil,
+				nil,
+			)
+			response, err := NewInProcessRunPromptClient(fixture.boot).RunPrompt(
+				context.Background(),
+				serverapi.RunPromptRequest{
+					Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
+					Prompt: "continue",
+				},
+				nil,
+			)
+			for _, wantErr := range test.wantErrs {
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("RunPrompt error = %v, want %v", err, wantErr)
+				}
+			}
+			if response.Result != "selected result" {
+				t.Fatalf("RunPrompt result = %q, want selected result despite history failure", response.Result)
+			}
+		})
+	}
+}
+
 func TestInProcessRunPromptRetainedWorkflowReinjectsAssignmentBeforeProvider(t *testing.T) {
 	provider := &headlessAssignmentOrderClient{}
 	fixture := newSelectedRunPromptFixture(t, "http://unused.invalid", nil)

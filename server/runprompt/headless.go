@@ -551,7 +551,10 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 	if turn.FinalAnswer != nil && turn.FinalAnswer.Content != nil {
 		content = *turn.FinalAnswer.Content
 	}
-	err := errors.Join(exactErr, turnErr, r.retainedAdmission.DiagnosticsError())
+	err := errors.Join(exactErr, turnErr)
+	if err != nil {
+		err = errors.Join(err, r.retainedAdmission.DiagnosticsError())
+	}
 	return serverapi.RunPromptResponse{
 		SessionID:   r.retainedSessionID.String(),
 		SessionName: firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),

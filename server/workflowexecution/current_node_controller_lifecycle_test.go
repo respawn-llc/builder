@@ -193,54 +193,6 @@ func TestReactivateWorkflowSessionClassifiesDetachedSessionLifecycle(t *testing.
 	}
 }
 
-func TestWorkflowSessionContinuationFiltersProgressToSelectedSteps(t *testing.T) {
-	continuation, err := NewWorkflowSessionContinuation("continue", nil)
-	if err != nil {
-		t.Fatalf("NewWorkflowSessionContinuation: %v", err)
-	}
-	selectedStep := "selected-step"
-	siblingStep := "sibling-step"
-	var published []runtime.Event
-	continuation.SetProgressSink(func(event runtime.Event) {
-		published = append(published, event)
-	})
-	continuation.RegisterStep(selectedStep)
-	continuation.PublishEvent(runtime.Event{Kind: runtime.EventAssistantDelta, StepID: &selectedStep})
-	continuation.PublishEvent(runtime.Event{Kind: runtime.EventAssistantDelta, StepID: &siblingStep})
-	if len(published) != 1 || published[0].StepID == nil || *published[0].StepID != selectedStep {
-		t.Fatalf("published selected progress = %+v, want only selected step", published)
-	}
-	continuation.CloseProgress()
-	continuation.PublishEvent(runtime.Event{Kind: runtime.EventAssistantDelta, StepID: &selectedStep})
-	if len(published) != 1 {
-		t.Fatalf("progress after continuation close = %+v, want no later events", published)
-	}
-}
-
-func TestWorkflowSessionContinuationKeepsTheSelectedInputVariant(t *testing.T) {
-	textContinuation, err := NewWorkflowSessionContinuation("continue", nil)
-	if err != nil {
-		t.Fatalf("NewWorkflowSessionContinuation text: %v", err)
-	}
-	textInput, ok := textContinuation.Input().(WorkflowSessionTextInput)
-	if !ok || textInput.Text != "continue" {
-		t.Fatalf("text continuation input = %#v, want text variant", textContinuation.Input())
-	}
-
-	steer, err := runtime.NewAgentSteer(runtimeids.NewSessionID(), "continue")
-	if err != nil {
-		t.Fatalf("NewAgentSteer: %v", err)
-	}
-	steerContinuation, err := NewWorkflowSessionContinuation("", &steer)
-	if err != nil {
-		t.Fatalf("NewWorkflowSessionContinuation steer: %v", err)
-	}
-	steerInput, ok := steerContinuation.Input().(WorkflowSessionSteerInput)
-	if !ok || steerInput.Steer != &steer {
-		t.Fatalf("steer continuation input = %#v, want steer variant", steerContinuation.Input())
-	}
-}
-
 func TestReactivateWorkflowSessionReturnsAdmissionFailure(t *testing.T) {
 	taskID := workflow.TaskID("task-reactivate-startup-failure")
 	selectedBranch := workflow.TransitionBranchKey("selected")

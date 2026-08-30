@@ -3,7 +3,6 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"core/shared/protocol"
@@ -37,45 +36,8 @@ type WorkflowTaskResumeConflictError struct {
 	State  WorkflowTaskResumeConflictState
 }
 
-func (e *WorkflowTaskResumeConflictError) Error() string {
-	if e == nil {
-		return "workflow task resume conflict"
-	}
-	const unsupported = "Direct interactive continuation of this retained Workflow Session is not currently supported."
-	switch e.State {
-	case WorkflowTaskResumeConflictPendingApproval:
-		return fmt.Sprintf(
-			"Workflow Task %q is waiting for an Approval; resolve that Approval before continuing the Task. %s",
-			e.TaskID,
-			unsupported,
-		)
-	case WorkflowTaskResumeConflictFinished:
-		return fmt.Sprintf(
-			"Workflow Task %q has finished; start a new ordinary Session. %s",
-			e.TaskID,
-			unsupported,
-		)
-	case WorkflowTaskResumeConflictMovedCurrentNode:
-		return fmt.Sprintf(
-			"Workflow Task %q has moved to a different Current Node; continue through the Task's current Node. %s",
-			e.TaskID,
-			unsupported,
-		)
-	case WorkflowTaskResumeConflictCurrentNodeNotInterrupted:
-		return fmt.Sprintf(
-			"Workflow Task %q's Current Node is no longer interrupted; use the Task's current Node controls or wait for its lifecycle state to change. %s",
-			e.TaskID,
-			unsupported,
-		)
-	case WorkflowTaskResumeConflictNoResumableCurrentNode:
-		return fmt.Sprintf(
-			"Workflow Task %q has no interrupted executable Current Node; use the Task's current Node controls or start a new ordinary Session. %s",
-			e.TaskID,
-			unsupported,
-		)
-	default:
-		return fmt.Sprintf("Workflow Task %q cannot be resumed. %s", e.TaskID, unsupported)
-	}
+func (*WorkflowTaskResumeConflictError) Error() string {
+	return "workflow task resume conflict"
 }
 
 func (e *WorkflowTaskResumeConflictError) RPCErrorCode() int {

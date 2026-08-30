@@ -826,6 +826,9 @@ func TestServiceSubmitUserTurnRetainedWorkflowReinjectsAssignmentBeforeProvider(
 		WorkflowID:  config.Instructions.WorkflowID,
 		CurrentNode: config.Instructions.CurrentNode,
 	}
+	if _, err := engine.QueueUserMessage(context.Background(), "older pending input"); err != nil {
+		t.Fatalf("queue older pending input: %v", err)
+	}
 	service.WithWorkflowSessionReactivator(runtimeControlWorkflowReactivatorFunc(
 		func(
 			ctx context.Context,
@@ -904,6 +907,23 @@ func TestServiceSubmitUserTurnRetainedWorkflowReinjectsAssignmentBeforeProvider(
 	}
 	if !foundWorkflowAssignment {
 		t.Fatalf("provider request omitted the Workflow assignment: %+v", request)
+	}
+	messages := llm.MessagesFromItems(request.Items)
+	foundSelectedInput := false
+	foundOlderInput := false
+	for _, message := range messages {
+		if message.Content == nil {
+			continue
+		}
+		switch *message.Content {
+		case "continue":
+			foundSelectedInput = true
+		case "older pending input":
+			foundOlderInput = true
+		}
+	}
+	if !foundSelectedInput || foundOlderInput {
+		t.Fatalf("first selected Workflow request messages = %+v, want selected input without older pending input", messages)
 	}
 	if response.ResultKind != clientui.UserTurnResultKindNoFinal {
 		t.Fatalf("SubmitUserTurn response = %+v, want no-final response on provider failure", response)

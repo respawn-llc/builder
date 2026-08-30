@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/cli/clienterrors"
 	"core/shared/llmerrors"
 )
 
@@ -17,6 +18,9 @@ func FormatSubmissionError(err error) string {
 	}
 	if errors.Is(err, ErrSubmissionInterrupted) || errors.Is(err, context.Canceled) {
 		return ""
+	}
+	if message, ok := clienterrors.WorkflowTaskResumeConflictMessage(err); ok {
+		return message
 	}
 	if formatted := llmerrors.UserFacingError(err); strings.TrimSpace(formatted) != "" {
 		return formatted

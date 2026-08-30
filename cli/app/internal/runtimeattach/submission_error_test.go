@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"core/shared/llmerrors"
+	"core/shared/serverapi"
 )
 
 func TestFormatSubmissionErrorSurfacesStall(t *testing.T) {
@@ -26,5 +28,19 @@ func TestFormatSubmissionErrorSuppressesCancellation(t *testing.T) {
 	}
 	if got := FormatSubmissionError(errors.Join(ErrSubmissionInterrupted, errors.New("noise"))); got != "" {
 		t.Fatalf("interrupt should not surface a submission error, got %q", got)
+	}
+}
+
+func TestFormatSubmissionErrorRendersWorkflowResumeConflictGuidance(t *testing.T) {
+	err := errors.Join(
+		serverapi.ErrRuntimeCommandNotAccepted,
+		&serverapi.WorkflowTaskResumeConflictError{
+			TaskID: "KNT-123",
+			State:  serverapi.WorkflowTaskResumeConflictPendingApproval,
+		},
+	)
+	got := FormatSubmissionError(err)
+	if got == "" || got == err.Error() || !strings.Contains(got, "KNT-123") {
+		t.Fatalf("FormatSubmissionError = %q, want client-rendered Workflow guidance", got)
 	}
 }
