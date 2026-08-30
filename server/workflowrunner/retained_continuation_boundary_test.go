@@ -2,6 +2,7 @@ package workflowrunner
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sync/atomic"
@@ -32,6 +33,32 @@ type retainedAssignmentOrderClient struct {
 	sessionID         runtimeids.SessionID
 	expectedReference workflow.CurrentNodeReference
 	observed          atomic.Bool
+}
+
+func acquireWorkflowMetadataWriteLock(t *testing.T, persistenceRoot string) func() {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(persistenceRoot, "db", "main.sqlite3"))
+	if err != nil {
+		t.Fatalf("sql.Open metadata: %v", err)
+	}
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("metadata DB connection: %v", err)
+	}
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		_ = conn.Close()
+		_ = db.Close()
+		t.Fatalf("acquire metadata write lock: %v", err)
+	}
+	var once atomic.Bool
+	return func() {
+		if once.CompareAndSwap(false, true) {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+			_ = conn.Close()
+			_ = db.Close()
+		}
+	}
 }
 
 func (c *retainedAssignmentOrderClient) Generate(
@@ -320,5 +347,102 @@ func TestRetainedCompactedNeverActivatedWorkflowAssignmentPrecedesHeadlessContin
 	}
 	if response.SessionID != sessionID.String() {
 		t.Fatalf("RunPrompt response Session = %q, want %q", response.SessionID, sessionID)
+	}
+}
+
+func TestRetainedSiblingResumeWaitsForFileBackedMetadataLock(t *testing.T) {
+	sourceStarted := make(chan struct{})
+	sourceRelease := make(chan struct{})
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(sourceStarted)
+				select {
+				case <-sourceRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`).Response,
+		},
+	)
+	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store, false)
+	f.starter.store = currentNodeStartContextStore{
+		RuntimeStore: f.store,
+		transform: func(input workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext {
+			if input.IsFanoutBranch {
+				root := *input.ExecutionRoot
+				root.SourceWorkspaceID = "workspace-missing"
+				input.ExecutionRoot = &root
+			}
+			return input
+		},
+	}
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	select {
+	case <-sourceStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("fan-out source did not start")
+	}
+	close(sourceRelease)
+	branches := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		if len(nodes) != len(branchNodeIDs) {
+			return false
+		}
+		for _, node := range nodes {
+			if node.SessionID == nil ||
+				node.Scheduling == nil ||
+				node.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+				return false
+			}
+		}
+		return true
+	})
+	selected := branches[0]
+	selectedSession := *selected.SessionID
+	continuation, err := workflowexecution.NewWorkflowSessionContinuation("continue", nil)
+	if err != nil {
+		t.Fatalf("new Workflow continuation: %v", err)
+	}
+	lockReady := make(chan func(), 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.controller.ReactivateWorkflowSessionWithAcceptance(
+			context.Background(),
+			selectedSession,
+			func(commit agentruntime.CommandAcceptance) (bool, error) {
+				committed, err := commit(func() (bool, error) {
+					return true, nil
+				})
+				if !committed || err != nil {
+					return committed, err
+				}
+				lockReady <- acquireWorkflowMetadataWriteLock(t, f.cfg.PersistenceRoot)
+				return true, nil
+			},
+			context.Background(),
+			continuation,
+		)
+		done <- err
+	}()
+	select {
+	case release := <-lockReady:
+		t.Cleanup(release)
+		select {
+		case err := <-done:
+			t.Fatalf("sibling Resume returned while metadata was locked: %v", err)
+		case <-time.After(150 * time.Millisecond):
+		}
+		release()
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("selected Resume did not acquire the metadata lock")
+	}
+	select {
+	case <-done:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("sibling Resume did not continue after metadata lock release")
 	}
 }

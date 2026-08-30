@@ -284,6 +284,149 @@ func TestReactivateWorkflowSessionReturnsAdmissionFailure(t *testing.T) {
 	}
 }
 
+func TestReactivateWorkflowSessionKeepsSiblingResumeAfterSelectedStartFailure(t *testing.T) {
+	taskID := workflow.TaskID("task-selected-failure-sibling-success")
+	selected := currentNodeReferenceForControllerTest(t, string(taskID), "selected")
+	sibling := currentNodeReferenceForControllerTest(t, string(taskID), "sibling")
+	sessionID := runtimeids.NewSessionID()
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{
+				Reference: selected,
+				SessionID: &sessionID,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+				},
+			},
+			{
+				Reference: sibling,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+				},
+			},
+		},
+		sessionTaskID: &taskID,
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: selected,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	selectedErr := errors.New("selected Workflow start failed")
+	runner := selectedFailureSiblingSuccessRunner{
+		failed:  selected,
+		cause:   selectedErr,
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 2)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	_, err := controller.ReactivateWorkflowSession(context.Background(), sessionID)
+	if !errors.Is(err, selectedErr) {
+		t.Fatalf("ReactivateWorkflowSession error = %v, want selected start failure", err)
+	}
+	select {
+	case started := <-runner.started:
+		if !started.Equal(sibling) {
+			t.Fatalf("started sibling = %v, want %v", started, sibling)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("eligible sibling did not proceed after selected start failure")
+	}
+	store.mu.Lock()
+	resumed := append([]workflow.CurrentNodeReference(nil), store.resumed...)
+	store.mu.Unlock()
+	if len(resumed) != 2 || !resumed[0].Equal(selected) || !resumed[1].Equal(sibling) {
+		t.Fatalf("ResumeCurrentNode mutations = %+v, want selected and sibling", resumed)
+	}
+}
+
+func TestReactivateWorkflowSessionPostAcceptanceCancellationKeepsSiblingResume(t *testing.T) {
+	taskID := workflow.TaskID("task-post-acceptance-cancellation")
+	selected := currentNodeReferenceForControllerTest(t, string(taskID), "selected")
+	sibling := currentNodeReferenceForControllerTest(t, string(taskID), "sibling")
+	sessionID := runtimeids.NewSessionID()
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{
+				Reference: selected,
+				SessionID: &sessionID,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+				},
+			},
+			{
+				Reference: sibling,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+				},
+			},
+		},
+		sessionTaskID: &taskID,
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: selected,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 2)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	continuation, err := NewWorkflowSessionContinuation("continue", nil)
+	if err != nil {
+		t.Fatalf("new Workflow continuation: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	accepted := make(chan struct{})
+	done := make(chan struct {
+		result WorkflowSessionContinuationResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := controller.ReactivateWorkflowSessionWithAcceptance(
+			ctx,
+			sessionID,
+			func(commit func() (bool, error)) (bool, error) {
+				committed, err := commit()
+				close(accepted)
+				cancel()
+				return committed, err
+			},
+			context.Background(),
+			continuation,
+		)
+		done <- struct {
+			result WorkflowSessionContinuationResult
+			err    error
+		}{result: result, err: err}
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("selected Resume was not accepted")
+	}
+	select {
+	case outcome := <-done:
+		if outcome.err != nil {
+			t.Fatalf("post-acceptance Resume error = %v", outcome.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("post-acceptance Resume did not complete")
+	}
+	store.mu.Lock()
+	resumed := append([]workflow.CurrentNodeReference(nil), store.resumed...)
+	store.mu.Unlock()
+	if len(resumed) != 2 || !resumed[0].Equal(selected) || !resumed[1].Equal(sibling) {
+		t.Fatalf("ResumeCurrentNode mutations = %+v, want selected and sibling", resumed)
+	}
+}
+
 func TestReactivateWorkflowSessionReturnsOwnQueuedStartHandle(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	taskID := workflow.TaskID("task-reactivate-own-start")
