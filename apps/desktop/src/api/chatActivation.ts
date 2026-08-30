@@ -60,7 +60,10 @@ export async function activateRuntime(
 const activationResponseSchema = z
   .object({
     attachment: z
-      .object({ session_id: z.string().trim().min(1), generation: z.number().int().positive() })
+      .object({
+        session_id: z.string().refine((value) => value.trim().length > 0),
+        generation: z.number().int().positive(),
+      })
       .strict(),
   })
   .strict();

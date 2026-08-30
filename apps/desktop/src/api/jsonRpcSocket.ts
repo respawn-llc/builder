@@ -27,6 +27,7 @@ import {
 } from "./errors";
 import { jsonValueSchema, type JsonValue } from "./json";
 import { protobufRpcError } from "./protobufRpc";
+import { requireProjectAttachment } from "./chatAttachment";
 import type {
   DescriptorSubscriptionInput,
   ProjectAttachment,
@@ -50,11 +51,13 @@ export const responseSchema = z.object({
     .optional(),
 });
 
-const notificationSchema = z.object({
-  jsonrpc: z.literal(jsonRpcVersion),
-  method: z.string().trim().min(1),
-  params: z.unknown(),
-});
+const notificationSchema = z
+  .object({
+    jsonrpc: z.literal(jsonRpcVersion),
+    method: z.string().refine((value) => value.trim().length > 0),
+    params: z.unknown(),
+  })
+  .strict();
 const textFrameSchema = z.string();
 type SocketResponse<Result> = Readonly<{ kind: "unmatched" }> | Readonly<{ kind: "matched"; result: Result }>;
 type SocketRequestOptions = Readonly<{
@@ -303,7 +306,7 @@ export async function setupSocket(
       request,
       requestOptions,
     );
-    attachment = projectAttachmentFromResult(result);
+    attachment = requireProjectAttachment(projectAttachmentFromResult(result), options.projectSelector);
   }
   if (options.sessionID !== undefined) {
     const attachment = await sendSocketDescriptorRequest(
@@ -329,10 +332,22 @@ function projectAttachmentFromResult(
   if (result.outcome.case !== "success" || result.outcome.value.attachment.case !== "project")
     throw new ContractError("Project attachment returned an unexpected attachment arm.");
   const attachment = result.outcome.value.attachment.value;
+  const workspaceSelection = attachment.workspaceSelection;
+  if (workspaceSelection.case === undefined) {
+    throw new ContractError("Project attachment omitted its workspace selection.");
+  }
   return {
     projectID: attachment.projectId,
     workspaceID: attachment.workspaceId,
     workspaceRoot: attachment.workspaceRoot,
+    workspaceSelection:
+      workspaceSelection.case === "selectedById"
+        ? { kind: "workspaceID", workspaceID: workspaceSelection.value.workspaceId }
+        : {
+            kind: "workspaceRoot",
+            requestedRoot: workspaceSelection.value.requestedRoot,
+            canonicalRoot: workspaceSelection.value.canonicalRoot,
+          },
   };
 }
 

@@ -213,12 +213,6 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     params: JsonValue;
     options?: RpcDedicatedCallOptions;
   }>[] = [];
-  readonly chatAttachedSessionCalls: Readonly<{
-    sessionID: string;
-    method: string;
-    params: JsonValue;
-    options?: RpcDedicatedCallOptions;
-  }>[] = [];
   readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
   readonly descriptorSubscriptionStarts: Readonly<{
     descriptor: DescMethod;
@@ -347,6 +341,14 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
       projectID,
       workspaceID: "workspaceID" in selector ? selector.workspaceID : "workspace-1",
       workspaceRoot: "workspaceRoot" in selector ? selector.workspaceRoot : "/workspace",
+      workspaceSelection:
+        "workspaceID" in selector
+          ? { kind: "workspaceID" as const, workspaceID: selector.workspaceID }
+          : {
+              kind: "workspaceRoot" as const,
+              requestedRoot: selector.workspaceRoot,
+              canonicalRoot: selector.workspaceRoot,
+            },
     };
     const params = request.kind === "factory" ? request.create(attachment) : request.value;
     this.attachedProjectCalls.push(
@@ -370,26 +372,6 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
       options === undefined ? { sessionID, method, params } : { sessionID, method, params, options },
     );
     return this.#dispatch(method, params);
-  }
-
-  async callChatAttachedSession(
-    sessionID: string,
-    method: string,
-    params: JsonValue,
-    options?: RpcDedicatedCallOptions,
-  ): Promise<Readonly<{ result: unknown; attachment: SessionAttachment }>> {
-    this.chatAttachedSessionCalls.push(
-      options === undefined ? { sessionID, method, params } : { sessionID, method, params, options },
-    );
-    return {
-      result: this.#dispatch(method, params),
-      attachment: {
-        projectID: "project-1",
-        workspaceID: "workspace-1",
-        workspaceRoot: "/workspace",
-        sessionID,
-      },
-    };
   }
 
   async runRuntimeOwner<Result>(

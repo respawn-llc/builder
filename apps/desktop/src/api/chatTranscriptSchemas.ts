@@ -10,14 +10,40 @@ import {
   optionalIdentifier,
   optionalNullable,
   optionalText,
-  record,
   reasoningIdentitySchema,
   runtimeReadModelUpdateSchema,
   sessionIdentitySchema,
   sessionStatusSchema,
+  text,
   timestamp,
   toolMetaSchema,
 } from "./chatSchemas";
+
+const selectorErrorKindSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+const topologyVariantSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+const selectorCandidateSchema = z
+  .object({
+    variant: topologyVariantSchema,
+    selector: identifier,
+    branch_name: z.string().optional(),
+    display_name: z.string().optional(),
+    fallback_identity: identifier,
+  })
+  .strict();
+const selectorErrorDetailsSchema = z
+  .object({
+    kind: selectorErrorKindSchema,
+    input: text,
+    candidates: z.array(selectorCandidateSchema).optional(),
+  })
+  .strict();
+const deletePreconditionSchema = z
+  .object({
+    kind: z.enum(["clean", "dirty", "unknown"]),
+    dirty_file_count: z.number().int().optional(),
+    unknown_cause: z.string().optional(),
+  })
+  .strict();
 
 export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
   kind: Kind,
@@ -29,7 +55,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
       .object({
         StepID: identifier,
         StreamID: identifier,
-        Delta: identifier,
+        Delta: text,
         Phase: z.enum(["commentary", "final_answer"]),
       })
       .strict(),
@@ -41,13 +67,13 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         Diagnostic: optionalNullable(diagnosticSchema),
       })
       .strict(),
-    thinking_status_update: z.object({ StepID: identifier, Text: identifier }).strict(),
+    thinking_status_update: z.object({ StepID: identifier, Text: text }).strict(),
     reasoning_trace_update: z
       .object({
         StepID: identifier,
         Identity: reasoningIdentitySchema,
-        CompactText: identifier,
-        Text: identifier,
+        CompactText: text,
+        Text: text,
       })
       .strict(),
     reasoning_trace_reset: z.object({ StepID: identifier }).strict(),
@@ -81,7 +107,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
     pending_work_changed: z.object({}).strict(),
     pending_work_restored: z
       .object({
-        Restoration: z.object({ ItemID: identifier, Kind: identifier, CanonicalInput: identifier }).strict(),
+        Restoration: z.object({ ItemID: identifier, Kind: identifier, CanonicalInput: text }).strict(),
       })
       .strict(),
     session_setting_feedback: z
@@ -98,7 +124,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
       .strict(),
     human_input_interrupted: z
       .object({
-        Items: z.array(z.object({ QueueItemID: identifier, Text: identifier }).strict()),
+        Items: z.array(z.object({ QueueItemID: identifier, Text: text }).strict()),
       })
       .strict(),
     step_state: z
@@ -143,7 +169,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         OwnerRunID: identifier,
         OwnerStepID: identifier,
         Lifecycle: z.enum(["backgrounded", "completed", "killed"]),
-        Command: identifier,
+        Command: text,
         Workdir: identifier,
         LogPath: optionalText,
         Preview: optionalText,
@@ -160,7 +186,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         PromptID: identifier,
         SessionID: identifier,
         StepID: identifier,
-        Question: identifier,
+        Question: text,
         CreatedAt: timestamp,
         Suggestions: z.array(z.string()),
         RecommendedOptionIndex: optionalNullable(z.number().int()),
@@ -174,16 +200,8 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         Transition: z.enum(["enter", "leave", "delete"]),
         State: z.enum(["completed", "failed"]),
         Failure: optionalNullable(diagnosticSchema),
-        SelectorError: optionalNullable(record),
-        DeletePrecondition: optionalNullable(
-          z
-            .object({
-              Kind: identifier,
-              DirtyFileCount: optionalNullable(z.number().int()),
-              UnknownCause: optionalText,
-            })
-            .strict(),
-        ),
+        SelectorError: optionalNullable(selectorErrorDetailsSchema),
+        DeletePrecondition: optionalNullable(deletePreconditionSchema),
       })
       .strict(),
     operational_diagnostic: z
@@ -214,42 +232,53 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
   };
   return schemas[kind];
 }
+function transcriptMessageVariant<Kind extends ChatTranscriptKind>(kind: Kind) {
+  return z
+    .object({
+      Sequence: z.number().int().positive(),
+      Kind: z.literal(kind),
+      Payload: transcriptPayloadSchema(kind),
+    })
+    .strict()
+    .transform((value) => ({
+      sequence: value.Sequence,
+      kind: value.Kind,
+      payload: value.Payload,
+    }));
+}
+
+export const transcriptMessageSchema = z.discriminatedUnion("Kind", [
+  transcriptMessageVariant("hydration"),
+  transcriptMessageVariant("committed_row"),
+  transcriptMessageVariant("assistant_delta"),
+  transcriptMessageVariant("assistant_stream_abort"),
+  transcriptMessageVariant("thinking_status_update"),
+  transcriptMessageVariant("reasoning_trace_update"),
+  transcriptMessageVariant("reasoning_trace_reset"),
+  transcriptMessageVariant("tool_start"),
+  transcriptMessageVariant("tool_abort"),
+  transcriptMessageVariant("user_message_flushed"),
+  transcriptMessageVariant("queued_message_state"),
+  transcriptMessageVariant("pending_work_changed"),
+  transcriptMessageVariant("pending_work_restored"),
+  transcriptMessageVariant("session_setting_feedback"),
+  transcriptMessageVariant("human_input_interrupted"),
+  transcriptMessageVariant("step_state"),
+  transcriptMessageVariant("runtime_read_model_update"),
+  transcriptMessageVariant("session_status"),
+  transcriptMessageVariant("session_identity"),
+  transcriptMessageVariant("compaction_status"),
+  transcriptMessageVariant("context_usage"),
+  transcriptMessageVariant("goal_status"),
+  transcriptMessageVariant("background_activity"),
+  transcriptMessageVariant("prompt"),
+  transcriptMessageVariant("worktree_transition_outcome"),
+  transcriptMessageVariant("operational_diagnostic"),
+  transcriptMessageVariant("live_run_finished"),
+]);
+
 export const transcriptEventSchema = z
   .object({
-    message: z
-      .object({
-        Sequence: z.number().int().positive(),
-        Kind: z.enum([
-          "hydration",
-          "committed_row",
-          "assistant_delta",
-          "assistant_stream_abort",
-          "thinking_status_update",
-          "reasoning_trace_update",
-          "reasoning_trace_reset",
-          "tool_start",
-          "tool_abort",
-          "user_message_flushed",
-          "queued_message_state",
-          "pending_work_changed",
-          "pending_work_restored",
-          "session_setting_feedback",
-          "human_input_interrupted",
-          "step_state",
-          "runtime_read_model_update",
-          "session_status",
-          "session_identity",
-          "compaction_status",
-          "context_usage",
-          "goal_status",
-          "background_activity",
-          "prompt",
-          "worktree_transition_outcome",
-          "operational_diagnostic",
-          "live_run_finished",
-        ]),
-        Payload: record,
-      })
-      .strict(),
+    message: transcriptMessageSchema,
   })
   .strict();

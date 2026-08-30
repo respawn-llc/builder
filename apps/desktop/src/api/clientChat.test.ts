@@ -268,10 +268,10 @@ describe("Desktop Chat read client", () => {
               AgentRole: null,
               ConversationFreshness: 0,
               ExecutionTarget: {
-                WorkspaceID: "workspace-1",
+                WorkspaceID: "",
                 WorkspaceName: "Workspace",
                 WorkspaceRoot: "/workspace",
-                WorkspaceAvailability: "available",
+                WorkspaceAvailability: "unlinked",
                 Worktree: null,
                 CwdRelpath: ".",
                 EffectiveWorkdir: "/workspace",
@@ -341,7 +341,7 @@ describe("Desktop Chat read client", () => {
     await expect(client.chat.getMainView(target)).resolves.toMatchObject({
       sessionID,
       sessionName: null,
-      executionTarget: { workspaceID: "workspace-1", workspaceAvailability: "available" },
+      executionTarget: { workspaceID: "", workspaceAvailability: "unlinked" },
     });
     await expect(client.chat.getContext(target)).resolves.toMatchObject({
       contextWindowTokens: 100,

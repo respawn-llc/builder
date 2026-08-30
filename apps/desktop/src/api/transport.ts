@@ -47,12 +47,17 @@ export type ProjectAttachment = Readonly<{
   projectID: string;
   workspaceID: string;
   workspaceRoot: string;
+  workspaceSelection:
+    | Readonly<{ kind: "workspaceID"; workspaceID: string }>
+    | Readonly<{ kind: "workspaceRoot"; requestedRoot: string; canonicalRoot: string }>;
 }>;
 
-export type SessionAttachment = ProjectAttachment &
-  Readonly<{
-    sessionID: string;
-  }>;
+export type SessionAttachment = Readonly<{
+  projectID: string;
+  workspaceID: string;
+  workspaceRoot: string;
+  sessionID: string;
+}>;
 
 export type AttachedRequest =
   | Readonly<{ kind: "value"; value: JsonValue }>
@@ -102,12 +107,6 @@ export type RpcTransport = Readonly<{
     params: JsonValue,
     options?: RpcDedicatedCallOptions,
   ): Promise<unknown>;
-  callChatAttachedSession(
-    sessionID: string,
-    method: string,
-    params: JsonValue,
-    options?: RpcDedicatedCallOptions,
-  ): Promise<Readonly<{ result: unknown; attachment: SessionAttachment }>>;
   runRuntimeOwner<Result>(
     sessionID: string,
     options: RuntimeOwnerOptions,

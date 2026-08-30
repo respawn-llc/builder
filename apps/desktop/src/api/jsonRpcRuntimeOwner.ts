@@ -36,11 +36,18 @@ export class JsonRpcRuntimeOwner {
     options: RuntimeOwnerOptions,
     run: (context: RuntimeOwnerContext) => Promise<Result>,
   ): Promise<Result> {
-    const requestedSessionID = sessionID.trim();
-    if (requestedSessionID.length === 0) {
+    if (sessionID.trim().length === 0) {
       throw new TransportError("Session attachment requires a Session ID.");
     }
+    const requestedSessionID = sessionID;
     let owner = this.#owner;
+    if (owner !== null && owner.attachment.sessionID !== requestedSessionID) {
+      if (!options.createIfMissing) {
+        throw new TransportError("Runtime owner connection is bound to another Session.");
+      }
+      this.#discard(owner);
+      owner = null;
+    }
     if (owner === null) {
       if (!options.createIfMissing) {
         throw new TransportError("Runtime owner connection is unavailable.");
@@ -61,8 +68,6 @@ export class JsonRpcRuntimeOwner {
         socket.close();
         throw error;
       }
-    } else if (owner.attachment.sessionID !== requestedSessionID) {
-      throw new TransportError("Runtime owner connection is bound to another Session.");
     }
 
     const context: RuntimeOwnerContext = {

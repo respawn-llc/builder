@@ -6,19 +6,18 @@ import { parseRpcResponse } from "./clientParse";
 import {
   committedRowSchema,
   contextSchema,
-  hydrationSchema,
   mainViewSchema,
   nonBlank,
   pageSchema,
-  projectAttachmentSchema,
   settingsSchema,
-  sessionIdentitySchema,
 } from "./chatSchemas";
 import type { executionTargetSchema, runtimeActivitySchema, runtimeStatusSchema } from "./chatSchemas";
-import { transcriptEventSchema, transcriptPayloadSchema } from "./chatTranscriptSchemas";
+import { transcriptEventSchema } from "./chatTranscriptSchemas";
+import { requireProjectAttachment } from "./chatAttachment";
 import { requireSessionAttachment } from "./jsonRpcSocket";
 import type {
   ChatApi,
+  ChatContextTarget,
   ChatMainView,
   ChatProjectTarget,
   ChatRuntimeActivity,
@@ -26,9 +25,7 @@ import type {
   ChatSessionTarget,
   ChatSettings,
   ChatSettingsTarget,
-  ChatTranscriptPayload,
   ChatTranscriptMessage,
-  ChatTranscriptKind,
 } from "./chatTypes";
 export type {
   ChatApi,
@@ -49,80 +46,50 @@ export type {
   ChatTranscriptHandler,
   ChatTranscriptKind,
   ChatTranscriptMessage,
+  ChatTranscriptMessageByKind,
   ChatTranscriptPage,
   ChatTranscriptPayload,
+  ChatTranscriptPayloadByKind,
   ChatWorkspaceSelector,
 } from "./chatTypes";
-import type { ProjectAttachment, RpcEventHandler, DescriptorRpcTransport } from "./transport";
-import type { JsonObject } from "./json";
-
-type TranscriptEvent = Readonly<{
-  message: Readonly<{
-    Sequence: number;
-    Kind: ChatTranscriptKind;
-    Payload: JsonObject;
-  }>;
-}>;
-
+import type { RpcEventHandler, DescriptorRpcTransport } from "./transport";
 function projectTarget(target: ChatProjectTarget): void {
   if (!nonBlank.safeParse(target.projectID).success) throw new TypeError("Project ID is required.");
   const selector =
     "workspaceID" in target.workspace ? target.workspace.workspaceID : target.workspace.workspaceRoot;
   if (!nonBlank.safeParse(selector).success) throw new TypeError("Workspace selector is required.");
 }
+function contextTarget(target: ChatContextTarget): void {
+  projectTarget(target);
+  if (target.sessionID !== undefined && !nonBlank.safeParse(target.sessionID).success) {
+    throw new TypeError("Session ID is required.");
+  }
+}
 function sessionTarget(target: ChatSessionTarget): void {
   projectTarget(target);
   if (!nonBlank.safeParse(target.sessionID).success) throw new TypeError("Session ID is required.");
-}
-function requireProjectAttachment(
-  attachment: ProjectAttachment,
-  target: ChatProjectTarget,
-): ProjectAttachment {
-  const parsed = projectAttachmentSchema.safeParse(attachment);
-  if (!parsed.success || parsed.data.projectID !== target.projectID) {
-    throw new ContractError("Project attachment does not match the requested Project.");
-  }
-  if ("workspaceID" in target.workspace && parsed.data.workspaceID !== target.workspace.workspaceID) {
-    throw new ContractError("Project attachment does not match the requested Workspace.");
-  }
-  if ("workspaceRoot" in target.workspace && parsed.data.workspaceRoot !== target.workspace.workspaceRoot) {
-    throw new ContractError("Project attachment does not match the requested Workspace.");
-  }
-  return parsed.data;
-}
-function messageFromWire(input: TranscriptEvent, payload: ChatTranscriptPayload): ChatTranscriptMessage {
-  const sequence: number = input.message.Sequence;
-  const kind: ChatTranscriptKind = input.message.Kind;
-  const typedPayload: ChatTranscriptPayload = payload;
-  return { sequence, kind, payload: typedPayload };
 }
 class RecoverableTranscriptEventError extends Error {
   constructor(readonly contractError: ContractError) {
     super(contractError.message);
   }
 }
-function transcriptMessageFromTarget(input: TranscriptEvent, sessionID: string): ChatTranscriptMessage {
-  const payload = transcriptPayloadSchema(input.message.Kind).safeParse(input.message.Payload);
-  if (!payload.success) {
-    throw new RecoverableTranscriptEventError(new ContractError("Transcript event is invalid."));
-  }
-  if (input.message.Kind === "session_identity") {
-    const identity = sessionIdentitySchema.safeParse(payload.data);
-    if (!identity.success || identity.data.SessionID !== sessionID) {
+function transcriptMessageFromTarget(input: ChatTranscriptMessage, sessionID: string): ChatTranscriptMessage {
+  if (input.kind === "session_identity") {
+    if (input.payload.SessionID !== sessionID) {
       throw new RecoverableTranscriptEventError(
         new ContractError("Transcript event Session identity does not match the requested Session."),
       );
     }
   }
-  if (input.message.Kind === "hydration") {
-    const hydration = hydrationSchema.safeParse(payload.data);
-    if (!hydration.success || hydration.data.SessionIdentity.SessionID !== sessionID) {
+  if (input.kind === "hydration") {
+    if (input.payload.SessionIdentity.SessionID !== sessionID) {
       throw new RecoverableTranscriptEventError(
         new ContractError("Transcript hydration Session identity does not match the requested Session."),
       );
     }
   }
-  return messageFromWire(input, payload.data);
+  return input;
 }
 function executionTarget(input: z.output<typeof executionTargetSchema>): ChatMainView["executionTarget"] {
   return {
@@ -221,7 +188,7 @@ function settingsFromWire(input: z.output<typeof settingsSchema>, target: ChatSe
             kind: input.settings.thinking.kind,
             value: input.settings.thinking.value,
             baselineValue: input.settings.thinking.baseline_value,
-            values: input.settings.thinking.values,
+            values: input.settings.thinking.values ?? [],
             editability: input.settings.thinking.editability,
           },
     fast: input.settings.fast ?? null,
@@ -270,7 +237,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
     },
     async getContext(target) {
-      projectTarget(target);
+      contextTarget(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -298,7 +265,8 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
     },
     async getSettings(target) {
-      projectTarget(target);
+      if (target.kind === "session") sessionTarget(target);
+      else projectTarget(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -395,12 +363,11 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
         onEvent(method, params) {
           if (method !== "session.transcript")
             throw new ContractError("Transcript subscription received an unexpected event.");
+          let event: ChatTranscriptMessage;
           try {
-            handler.onEvent(
-              transcriptMessageFromTarget(
-                parseRpcResponse("session.transcript", transcriptEventSchema, params),
-                target.sessionID,
-              ),
+            event = transcriptMessageFromTarget(
+              parseRpcResponse("session.transcript", transcriptEventSchema, params).message,
+              target.sessionID,
             );
           } catch (error) {
             if (error instanceof RecoverableTranscriptEventError) throw error;
@@ -408,6 +375,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
               throw new RecoverableTranscriptEventError(new ContractError("Transcript event is invalid."));
             throw error;
           }
+          handler.onEvent(event);
         },
         onEventFailure(error) {
           if (!(error instanceof RecoverableTranscriptEventError)) return false;

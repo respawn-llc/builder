@@ -263,10 +263,6 @@ class BootstrapErrorTransport implements DescriptorRpcTransport {
     throw this.#error;
   }
 
-  async callChatAttachedSession(): Promise<never> {
-    throw this.#error;
-  }
-
   async runRuntimeOwner(): Promise<never> {
     throw this.#error;
   }

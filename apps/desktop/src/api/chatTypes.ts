@@ -1,5 +1,4 @@
 import type { ApiSubscription } from "./apiService";
-import type { JsonObject } from "./json";
 import type {
   ChatBackgroundActivityWire,
   ChatCommittedRowWire,
@@ -271,12 +270,27 @@ export interface ChatTranscriptPayloadByKind {
     Transition: "enter" | "leave" | "delete";
     State: "completed" | "failed";
     Failure?: DeepReadonly<ChatDiagnosticWire> | null | undefined;
-    SelectorError?: JsonObject | null | undefined;
+    SelectorError?:
+      | Readonly<{
+          kind: 1 | 2 | 3;
+          input: string;
+          candidates?:
+            | readonly Readonly<{
+                variant: 1 | 2 | 3;
+                selector: string;
+                branch_name?: string | undefined;
+                display_name?: string | undefined;
+                fallback_identity: string;
+              }>[]
+            | undefined;
+        }>
+      | null
+      | undefined;
     DeletePrecondition?:
       | Readonly<{
-          Kind: string;
-          DirtyFileCount?: number | null | undefined;
-          UnknownCause?: string | null | undefined;
+          kind: "clean" | "dirty" | "unknown";
+          dirty_file_count?: number | undefined;
+          unknown_cause?: string | undefined;
         }>
       | null
       | undefined;
@@ -310,11 +324,7 @@ export type ChatTranscriptMessageByKind = {
     payload: ChatTranscriptPayloadByKind[Kind];
   }>;
 }[ChatTranscriptKind];
-export type ChatTranscriptMessage = Readonly<{
-  sequence: number;
-  kind: ChatTranscriptKind;
-  payload: ChatTranscriptPayload;
-}>;
+export type ChatTranscriptMessage = ChatTranscriptMessageByKind;
 export type ChatTranscriptCompletion = Readonly<{
   code: number;
   message: string;

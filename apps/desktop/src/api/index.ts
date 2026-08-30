@@ -12,8 +12,12 @@ export type {
   ChatSettingsTarget,
   ChatTranscriptCompletion,
   ChatTranscriptHandler,
+  ChatTranscriptKind,
   ChatTranscriptMessage,
+  ChatTranscriptMessageByKind,
   ChatTranscriptPage,
+  ChatTranscriptPayload,
+  ChatTranscriptPayloadByKind,
   ChatWorkspaceSelector,
 } from "./chat";
 export type {

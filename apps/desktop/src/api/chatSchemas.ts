@@ -1,18 +1,13 @@
 import { z } from "zod";
 
-import { jsonValueSchema } from "./json";
+import { renderedPatchSchema } from "./chatPatchSchemas";
 
-export const nonBlank = z.string().trim().min(1);
-export const record = z.record(z.string(), jsonValueSchema);
+export const nonBlank = z.string().refine((value) => value.trim().length > 0);
 export const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
 export const timestamp = z.iso.datetime({ offset: true });
-export const identifier = z.string().trim().min(1);
+export const identifier = nonBlank;
 export const optionalIdentifier = optionalNullable(identifier);
-export const projectAttachmentSchema = z.object({
-  projectID: nonBlank,
-  workspaceID: nonBlank,
-  workspaceRoot: nonBlank,
-});
+export const text = z.string();
 export const runtimeWorktreeSchema = z
   .object({
     ID: identifier,
@@ -177,7 +172,7 @@ export const settingsSchema = z
             kind: z.enum(["enumerated", "custom"]),
             value: nonBlank,
             baseline_value: nonBlank,
-            values: z.array(nonBlank),
+            values: z.array(nonBlank).optional(),
             editability: z.enum(["editable", "workflow_lock", "caching_lock", "policy_disabled"]),
           })
           .strict()
@@ -230,7 +225,7 @@ export const diagnosticSchema = z.object({ Code: identifier, Detail: identifier 
 export const userRowSchema = z
   .object({
     StepID: optionalIdentifier,
-    Text: identifier,
+    Text: text,
     CondensedText: optionalText,
     RollbackTargetID: optionalText,
     committed_at_unix_ms: optionalNullable(committedAtSchema),
@@ -240,7 +235,7 @@ export const assistantRowSchema = z
   .object({
     StepID: identifier,
     StreamID: optionalIdentifier,
-    Text: identifier,
+    Text: text,
     CondensedText: optionalText,
     Phase: z.enum(["commentary", "final_answer"]),
     committed_at_unix_ms: optionalNullable(committedAtSchema),
@@ -259,7 +254,7 @@ export const toolMetaSchema = z
     TimeoutLabel: z.string(),
     PatchSummary: z.string(),
     PatchDetail: z.string(),
-    PatchRender: optionalNullable(record),
+    PatchRender: optionalNullable(renderedPatchSchema),
     RenderHint: optionalNullable(
       z
         .object({
@@ -285,7 +280,7 @@ export const toolRowSchema = z
     StepID: optionalIdentifier,
     ToolCallID: identifier,
     ToolName: identifier,
-    Text: z.string(),
+    Text: text,
     IsError: z.boolean(),
     ResultSummary: optionalText,
     CondensedText: optionalText,
@@ -294,19 +289,27 @@ export const toolRowSchema = z
   .strict();
 export const reasoningIdentitySchema = z
   .object({
-    Provider: optionalNullable(
-      z
-        .object({ ItemID: identifier, SummaryIndex: optionalNullable(z.number().int().nonnegative()) })
-        .strict(),
-    ),
+    Provider: z
+      .object({ ItemID: identifier, SummaryIndex: z.number().int().nonnegative() })
+      .strict()
+      .nullable()
+      .optional(),
     Kent: optionalIdentifier,
   })
-  .strict();
+  .strict()
+  .superRefine((identity, context) => {
+    if (
+      (identity.Provider === undefined || identity.Provider === null) ===
+      (identity.Kent === undefined || identity.Kent === null)
+    ) {
+      context.addIssue({ code: "custom", message: "reasoning identity requires exactly one branch" });
+    }
+  });
 export const reasoningRowSchema = z
   .object({
     StepID: identifier,
-    CompactText: identifier,
-    Text: identifier,
+    CompactText: text,
+    Text: text,
     duration_ms: optionalNullable(z.number().int().nonnegative()),
     ProvisionalIdentity: optionalNullable(reasoningIdentitySchema),
   })
@@ -461,8 +464,7 @@ export const sessionIdentitySchema = z
     ConversationFreshness: z.union([z.literal(0), z.literal(1)]),
     ExecutionTarget: executionTargetSchema.nullable(),
   })
-  .strict()
-  .transform((value) => ({ ...value, SessionName: value.SessionName ?? null }));
+  .strict();
 export const sessionStatusSchema = z
   .object({
     ReviewerFrequency: identifier,
@@ -502,19 +504,19 @@ export const hydrationSchema = z
       .object({
         StepID: identifier,
         StreamID: identifier,
-        Text: identifier,
+        Text: text,
         Phase: z.enum(["commentary", "final_answer"]),
       })
       .strict()
       .nullable(),
-    ActiveThinkingStatus: z.object({ StepID: identifier, Text: identifier }).strict().nullable(),
+    ActiveThinkingStatus: z.object({ StepID: identifier, Text: text }).strict().nullable(),
     ActiveReasoningTraces: z.array(
       z
         .object({
           StepID: identifier,
           Identity: reasoningIdentitySchema,
-          CompactText: identifier,
-          Text: identifier,
+          CompactText: text,
+          Text: text,
         })
         .strict(),
     ),
@@ -557,7 +559,7 @@ export const hydrationSchema = z
           PromptID: identifier,
           SessionID: identifier,
           StepID: identifier,
-          Question: identifier,
+          Question: text,
           CreatedAt: timestamp,
           Suggestions: z.array(z.string()),
           RecommendedOptionIndex: optionalNullable(z.number().int()),
@@ -574,7 +576,7 @@ export const hydrationSchema = z
           OwnerRunID: identifier,
           OwnerStepID: identifier,
           Lifecycle: z.enum(["backgrounded", "completed", "killed"]),
-          Command: identifier,
+          Command: text,
           Workdir: identifier,
           LogPath: optionalText,
           Preview: optionalText,

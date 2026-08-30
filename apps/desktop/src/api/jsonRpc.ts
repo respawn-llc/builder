@@ -31,6 +31,7 @@ import {
 } from "./jsonRpcSocket";
 import { JsonRpcRuntimeOwner } from "./jsonRpcRuntimeOwner";
 import { isTerminalSubscriptionError, runJsonSubscription } from "./jsonRpcSubscription";
+import { requireProjectAttachment } from "./chatAttachment";
 import type {
   RpcCallOptions,
   DescriptorRpcTransport,
@@ -149,39 +150,13 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     params: JsonValue,
     options?: RpcDedicatedCallOptions,
   ): Promise<unknown> {
-    const attachedSessionID = sessionID.trim();
-    if (attachedSessionID.length === 0) {
+    if (sessionID.trim().length === 0) {
       throw new TransportError("Session attachment requires a Session ID.");
     }
     return this.#withDedicatedSocket(
       options,
       async (socket, requestOptions) => sendSocketRequest(socket, method, params, requestOptions),
-      { sessionID: attachedSessionID },
-    );
-  }
-
-  async callChatAttachedSession(
-    sessionID: string,
-    method: string,
-    params: JsonValue,
-    options?: RpcDedicatedCallOptions,
-  ): Promise<Readonly<{ result: unknown; attachment: SessionAttachment }>> {
-    const attachedSessionID = sessionID.trim();
-    if (attachedSessionID.length === 0) {
-      throw new TransportError("Session attachment requires a Session ID.");
-    }
-    return this.#withDedicatedSocket(
-      options,
-      async (socket, requestOptions, attachment) => {
-        if (attachment === null || !("sessionID" in attachment)) {
-          throw new TransportError("Session attachment was not established.");
-        }
-        return {
-          result: await sendSocketRequest(socket, method, params, requestOptions),
-          attachment,
-        };
-      },
-      { sessionID: attachedSessionID },
+      { sessionID },
     );
   }
 
@@ -538,6 +513,10 @@ class JsonRpcWebSocketTransport implements RpcTransport {
         if (isTerminalSubscriptionError(error)) {
           return;
         }
+        if (error instanceof ContractError) {
+          onError(error);
+          return;
+        }
         onError(error instanceof Error ? error : new TransportError("Subscription failed."));
         await delay(Math.min(subscriptionReconnectBaseMs * 2 ** attempt, subscriptionReconnectMaxMs), signal);
         attempt += 1;
@@ -617,26 +596,4 @@ function socketSetupOptions(
     };
   }
   return result;
-}
-
-function requireProjectAttachment(
-  attachment: ProjectAttachment | SessionAttachment | null,
-  target: Readonly<{
-    projectID: string;
-    workspace: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
-  }>,
-): ProjectAttachment {
-  if (attachment === null || !("projectID" in attachment) || "sessionID" in attachment) {
-    throw new ContractError("Project attachment was not established.");
-  }
-  if (attachment.projectID !== target.projectID) {
-    throw new ContractError("Project attachment does not match the requested Project.");
-  }
-  if ("workspaceID" in target.workspace && attachment.workspaceID !== target.workspace.workspaceID) {
-    throw new ContractError("Project attachment does not match the requested Workspace.");
-  }
-  if ("workspaceRoot" in target.workspace && attachment.workspaceRoot !== target.workspace.workspaceRoot) {
-    throw new ContractError("Project attachment does not match the requested Workspace.");
-  }
-  return attachment;
 }

@@ -98,10 +98,29 @@ function throwTerminalResult(
 function isResponseFrame(data: unknown): boolean {
   const text = z.string().safeParse(data);
   if (!text.success) return false;
-  return z
-    .object({ jsonrpc: z.literal("2.0"), id: z.string() })
-    .loose()
-    .safeParse(parseFrame(text.data)).success;
+  const parsed = parseFrame(text.data);
+  const parsedRecord = z.record(z.string(), z.unknown()).safeParse(parsed);
+  if (!parsedRecord.success) return false;
+  const response = z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: z.string().min(1),
+      result: z.unknown().optional(),
+      error: z
+        .object({
+          code: z.number(),
+          message: z.string(),
+          data: z.unknown().optional(),
+        })
+        .optional(),
+    })
+    .strict()
+    .safeParse(parsedRecord.data);
+  if (!response.success) return false;
+  const keys = Object.keys(parsedRecord.data);
+  const hasResult = keys.includes("result");
+  const hasError = keys.includes("error");
+  return keys.length === 3 && hasResult !== hasError;
 }
 
 export function isTerminalSubscriptionError(error: unknown): boolean {
