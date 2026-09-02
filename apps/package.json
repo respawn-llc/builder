@@ -7,7 +7,7 @@
   },
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "2.13.0",
-    "postcss": "8.5.25",
+    "postcss": "8.5.26",
     "prettier": "^3.9.6"
   }
 }
