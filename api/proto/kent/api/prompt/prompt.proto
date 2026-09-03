@@ -115,7 +115,7 @@ message Approval {
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  string question = 4 [
+  optional string question = 4 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
       id: "kent.prompt.approval_question_nonblank"
@@ -137,6 +137,11 @@ message Approval {
     id: "kent.prompt.approval_decisions_unique"
     message: "approval option decisions must be unique"
     expression: "this.options.map(option, option.decision).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.prompt.approval_presentation"
+    message: "approval must carry either question copy or access targets"
+    expression: "has(this.question) != (size(this.access_targets) > 0)"
   };
 }
 

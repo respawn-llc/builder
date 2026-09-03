@@ -107,6 +107,7 @@ describe("attentionItemSchema", () => {
       { ...baseAttentionItem, workflow_id: "" },
       { ...baseAttentionItem, current_node: { ...baseAttentionItem.current_node, node_id: "" } },
       { ...baseAttentionItem, question: { ...baseAttentionItem.question, tool_call_id: "" } },
+      { ...baseAttentionItem, question: { ...baseAttentionItem.question, tool_call_id: " ask-1 " } },
       { ...baseAttentionItem, question: { ...baseAttentionItem.question, session_id: "" } },
       { ...baseAttentionItem, question: { ...baseAttentionItem.question, step_id: "" } },
       { ...baseAttentionItem, session_name: "" },
@@ -180,7 +181,7 @@ describe("attentionItemSchema", () => {
         kind: "approval",
         approval_decisions: ["allow_once", "allow_session", "deny"],
         access_targets: [
-          { requested_path: "/alias/a", resolved_path: "/real/file" },
+          { requested_path: " /alias/a ", resolved_path: " /real/file " },
           { requested_path: "/alias/b", resolved_path: "/real/file" },
           { requested_path: "/real/other", resolved_path: "/real/other" },
         ],
@@ -197,7 +198,7 @@ describe("attentionItemSchema", () => {
       kind: "approval",
       approvalDecisions: ["allow_once", "allow_session", "deny"],
       accessTargets: [
-        { requestedPath: "/alias/a", resolvedPath: "/real/file" },
+        { requestedPath: " /alias/a ", resolvedPath: " /real/file " },
         { requestedPath: "/alias/b", resolvedPath: "/real/file" },
         { requestedPath: "/real/other", resolvedPath: "/real/other" },
       ],

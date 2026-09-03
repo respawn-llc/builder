@@ -869,7 +869,7 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 				return a.AwaitPromptResolution(ctx, scope.ID(), req)
 			}
 		}
-		resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
+		resource.askBroker.SetLifecycleAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 			return askHandler(ctx, execution.scope, req)
 		})
 		resource.askScope = &scopeID

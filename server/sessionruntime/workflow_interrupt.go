@@ -44,7 +44,8 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	executions := a.workflowTaskExecutionsLocked(taskID)
 	a.mu.Unlock()
 	lockExactExecutions(executions)
-	defer unlockExactExecutions(executions)
+	lockedExecutions := executions
+	defer unlockExactExecutions(lockedExecutions)
 	a.mu.Lock()
 	executions = a.liveExactExecutionsLocked(executions)
 	locked := make([]*execution, 0, len(executions))
@@ -140,7 +141,8 @@ func (a *Authority) WithWorkflowInterruptSelection(
 	}
 	a.mu.Unlock()
 	lockExactExecutions(executions)
-	defer unlockExactExecutions(executions)
+	lockedExecutions := executions
+	defer unlockExactExecutions(lockedExecutions)
 	a.mu.Lock()
 	executions = a.liveExactExecutionsLocked(executions)
 	if len(executions) == 0 {

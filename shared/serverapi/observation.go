@@ -96,8 +96,11 @@ func validateObservationApproval(approval clientui.PendingApproval) error {
 	if err := validateObservationToolCallIdentity(approval.ToolCallID, approval.SessionID, approval.StepID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(approval.Question) == "" {
+	if strings.TrimSpace(approval.Question) == "" && len(approval.AccessTargets) == 0 {
 		return errors.New("observation approval question is required")
+	}
+	if strings.TrimSpace(approval.Question) != "" && len(approval.AccessTargets) > 0 {
+		return errors.New("observation access approval cannot carry question copy")
 	}
 	if len(approval.Options) == 0 {
 		return errors.New("observation approval options are required")

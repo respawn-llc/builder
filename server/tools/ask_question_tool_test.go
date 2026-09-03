@@ -527,6 +527,27 @@ func TestAskHandlerModeDoesNotQueuePendingRequest(t *testing.T) {
 	}
 }
 
+func TestSynchronousInternalApprovalAcceptsConsumerExactlyOnce(t *testing.T) {
+	b := NewAskQuestionBroker()
+	consumerCalls := 0
+	request := testApprovalRequest("approval-sync")
+	request.ApprovalConsumer = func(AskQuestionApproval) error {
+		consumerCalls++
+		return nil
+	}
+	b.SetLifecycleAskHandler(func(_ context.Context, handled AskQuestionRequest) (AskQuestionResolution, error) {
+		resolution := AskQuestionApproval{Decision: AskQuestionApprovalDecisionAllowOnce}
+		return resolution, handled.AcceptApproval(resolution)
+	})
+
+	if _, err := b.Ask(testApprovalContext(context.Background(), request.ToolCallID), request); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if consumerCalls != 1 {
+		t.Fatalf("Approval consumer calls = %d, want 1", consumerCalls)
+	}
+}
+
 func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 	b := NewAskQuestionBroker()
 	tl := NewAskQuestionTool(b, nil)

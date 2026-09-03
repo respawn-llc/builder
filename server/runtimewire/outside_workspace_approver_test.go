@@ -7,7 +7,6 @@ import (
 	"time"
 
 	askquestion "core/server/tools"
-	"core/shared/clientui"
 )
 
 func TestOutsideWorkspaceApprovalRetainsExecutingToolIdentity(t *testing.T) {
@@ -42,8 +41,8 @@ func TestOutsideWorkspaceApprovalRetainsExecutingToolIdentity(t *testing.T) {
 	if !reflect.DeepEqual(received.AccessTargets, targets) {
 		t.Fatalf("approval targets = %+v, want %+v", received.AccessTargets, targets)
 	}
-	if received.Question != clientui.FormatFileAccessApprovalMarkdown(targets) {
-		t.Fatalf("approval presentation was not derived from typed targets")
+	if received.Question != "" {
+		t.Fatalf("server materialized access Approval copy %q", received.Question)
 	}
 }
 

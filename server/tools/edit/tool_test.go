@@ -3,6 +3,7 @@ package edit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -280,6 +281,15 @@ func TestOutsideWorkspaceDenialReturnsTypedOuterOutcome(t *testing.T) {
 	result := callEdit(t, tool, map[string]any{"path": target, "old_string": "old", "new_string": "new"})
 	if !result.IsError || result.CallID != "call" || result.Name != toolspec.ToolEdit || result.QuestionAnswer != nil {
 		t.Fatalf("terminal denied result = %+v", result)
+	}
+	denial := editFileAccessFailure(tools.FileAccessOutcome{
+		Kind: tools.FileAccessDeniedByUser, Request: tools.FileAccessRequest{RequestedPath: target},
+		Commentary: &commentary,
+	})
+	var typed failure
+	if !errors.As(denial, &typed) || typed.denialCommentary == nil ||
+		typed.denialCommentary.Value() == nil || *typed.denialCommentary.Value() != commentary {
+		t.Fatalf("typed edit denial commentary = %+v", typed.denialCommentary)
 	}
 	assertEditTestFileContent(t, target, "old\n")
 }

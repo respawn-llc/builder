@@ -300,8 +300,13 @@ func readImageOutsideWorkspaceApprovalFailed(req tools.FileAccessRequest, err er
 	return errors.New(message)
 }
 
-func readImageOutsideWorkspaceUserDenied(req tools.FileAccessRequest, commentary *string) error {
-	path := readImageOutsideWorkspacePath(req)
+type outsideWorkspaceUserDeniedError struct {
+	request      tools.FileAccessRequest
+	presentation tools.DenialCommentaryPresentation
+}
+
+func (e outsideWorkspaceUserDeniedError) Error() string {
+	path := readImageOutsideWorkspacePath(e.request)
 
 	var builder strings.Builder
 	builder.WriteString("view_image path outside workspace rejected by user")
@@ -311,15 +316,21 @@ func readImageOutsideWorkspaceUserDenied(req tools.FileAccessRequest, commentary
 	}
 	builder.WriteString(".")
 	builder.WriteString(" User rejected the approval request for this tool call.")
-	message := (tools.DenialCommentaryPresentation{Commentary: commentary}).AppendQuoted(builder.String())
-	if commentary != nil {
+	message := e.presentation.AppendQuoted(builder.String())
+	if e.presentation.Value() != nil {
 		message += "."
 	}
 	message += " Do not attempt to circumvent, hack around, or re-execute the same path. Treat this rejection as authoritative."
 	if instruction := strings.TrimSpace(outsideWorkspaceRejectionInstruction); instruction != "" {
 		message += " " + instruction
 	}
-	return errors.New(message)
+	return message
+}
+
+func readImageOutsideWorkspaceUserDenied(req tools.FileAccessRequest, commentary *string) error {
+	return outsideWorkspaceUserDeniedError{
+		request: req, presentation: tools.DenialCommentaryPresentation{Commentary: commentary},
+	}
 }
 
 func readImageOutsideWorkspacePath(req tools.FileAccessRequest) string {

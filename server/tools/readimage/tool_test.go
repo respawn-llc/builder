@@ -358,8 +358,11 @@ func TestCall_OutsideWorkspaceRejectionIncludesReadSpecificGuidance(t *testing.T
 		Request:    tools.FileAccessRequest{RequestedPath: outside, ResolvedPath: outside},
 		Commentary: &commentary,
 	}
-	if err := readImageFileAccessFailure(outcome); err == nil {
-		t.Fatal("typed read denial outcome must fail")
+	err := readImageFileAccessFailure(outcome)
+	var typed outsideWorkspaceUserDeniedError
+	if !errors.As(err, &typed) || typed.presentation.Value() == nil ||
+		*typed.presentation.Value() != commentary {
+		t.Fatalf("typed view_image denial commentary = %+v", typed.presentation.Value())
 	}
 }
 

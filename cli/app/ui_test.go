@@ -666,7 +666,7 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 }
 
 func TestOutsideWorkspaceApprovalRendersDistinctSuppliedPathsBeforeOptions(t *testing.T) {
-	event := testApprovalAskEvent("approval-paths", "server-authored singular question", clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny)
+	event := testApprovalAskEvent("approval-paths", "", clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny)
 	event.prompt.AccessTargets = []clientui.FileAccessTarget{
 		{RequestedPath: "/alias/a", ResolvedPath: "/real/file"},
 		{RequestedPath: "/alias/b", ResolvedPath: "/real/file"},

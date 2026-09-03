@@ -83,6 +83,10 @@ func (r AskQuestionRequest) IsTaskScopedApprovalQuestion() bool {
 	return r.AttentionTarget.Focus.Kind == clientui.AttentionNotificationFocusQuestion
 }
 
+func (r AskQuestionRequest) IsInternalApproval() bool {
+	return r.Approval && !r.IsTaskScopedApprovalQuestion()
+}
+
 // AskQuestionToolRequest is the model-facing ask_question payload. Keep this limited to
 // ordinary question flows; internal approval uses AskQuestionRequest instead.
 type AskQuestionToolRequest struct {
@@ -126,7 +130,12 @@ type AskQuestionBroker struct {
 	queue []*pending
 	// onAsk switches the broker into synchronous handler mode. When unset, Ask
 	// uses queued submit mode and requests complete only via Submit.
-	onAsk func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)
+	onAsk *synchronousAskHandler
+}
+
+type synchronousAskHandler struct {
+	resolve func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)
+	finish  func(AskQuestionRequest, AskQuestionResolution) error
 }
 
 type pending struct {
@@ -145,21 +154,35 @@ func NewAskQuestionBroker() *AskQuestionBroker {
 }
 
 func (b *AskQuestionBroker) SetAskHandler(handler func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)) {
+	b.setAskHandler(handler, func(req AskQuestionRequest, resolution AskQuestionResolution) error {
+		return req.acceptResolution(resolution)
+	})
+}
+
+func (b *AskQuestionBroker) SetLifecycleAskHandler(handler func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)) {
+	b.setAskHandler(handler, ValidateAskQuestionResolution)
+}
+
+func (b *AskQuestionBroker) setAskHandler(handler func(context.Context, AskQuestionRequest) (AskQuestionResolution, error), finish func(AskQuestionRequest, AskQuestionResolution) error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.onAsk = handler
+	if handler == nil {
+		b.onAsk = nil
+		return
+	}
+	b.onAsk = &synchronousAskHandler{resolve: handler, finish: finish}
 }
 
 func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
 	req.Suggestions = normalizedSuggestions(req.Suggestions)
 	req.RecommendedOptionIndex = normalizedRecommendedOptionIndex(req.RecommendedOptionIndex, len(req.Suggestions))
-	if req.Question == "" {
+	if req.Question == "" && len(req.AccessTargets) == 0 {
 		return nil, errors.New("question is required")
 	}
 	if err := validateRequest(req); err != nil {
 		return nil, err
 	}
-	internalApproval := req.Approval && !req.IsTaskScopedApprovalQuestion()
+	internalApproval := req.IsInternalApproval()
 	if internalApproval {
 		identity, err := ExecutionIdentityFromContext(ctx)
 		if err != nil {
@@ -205,24 +228,24 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 	return b.askQueued(ctx, req)
 }
 
-func (b *AskQuestionBroker) askHandler() func(context.Context, AskQuestionRequest) (AskQuestionResolution, error) {
+func (b *AskQuestionBroker) askHandler() *synchronousAskHandler {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.onAsk
 }
 
-func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest, handler func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)) (AskQuestionResolution, error) {
+func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest, handler *synchronousAskHandler) (AskQuestionResolution, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	resolution, err := handler(ctx, req)
+	resolution, err := handler.resolve(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := req.acceptResolution(resolution); err != nil {
+	if err := handler.finish(req, resolution); err != nil {
 		return nil, err
 	}
 	return resolution, nil
@@ -291,6 +314,9 @@ func (b *AskQuestionBroker) deliverPendingResponseLocked(p *pending, rr response
 func validateRequest(req AskQuestionRequest) error {
 	if err := clientui.ToolCallID(req.ToolCallID).Validate(); err != nil {
 		return fmt.Errorf("invalid tool call identity: %w", err)
+	}
+	if len(req.AccessTargets) > 0 && (!req.Approval || req.Question != "") {
+		return errors.New("access-target Approvals must not carry question copy")
 	}
 	if req.Approval {
 		if req.RecommendedOptionIndex != 0 {

@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"core/server/tools"
-	"core/shared/clientui"
 )
 
 const (
@@ -45,7 +44,6 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req tools.FileAc
 	var consumerOnce sync.Once
 	var consumerErr error
 	request := tools.AskQuestionRequest{
-		Question:      clientui.FormatFileAccessApprovalMarkdown(targets),
 		Approval:      true,
 		AccessTargets: targets,
 		RunID:         identity.RunID,

@@ -11,6 +11,14 @@ type DenialCommentaryPresentation struct {
 	Commentary *string
 }
 
+func (p DenialCommentaryPresentation) Value() *string {
+	if p.Commentary == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*p.Commentary)
+	return &value
+}
+
 func (p DenialCommentaryPresentation) Append(base string) string {
 	return p.append(base, false)
 }
@@ -20,12 +28,13 @@ func (p DenialCommentaryPresentation) AppendQuoted(base string) string {
 }
 
 func (p DenialCommentaryPresentation) append(base string, quoted bool) string {
-	if p.Commentary == nil {
+	commentary := p.Value()
+	if commentary == nil {
 		return base
 	}
-	commentary := strings.TrimSpace(*p.Commentary)
+	value := *commentary
 	if quoted {
-		commentary = strconv.Quote(commentary)
+		value = strconv.Quote(value)
 	}
-	return base + "\n" + DenialCommentaryMarker + " " + commentary
+	return base + "\n" + DenialCommentaryMarker + " " + value
 }

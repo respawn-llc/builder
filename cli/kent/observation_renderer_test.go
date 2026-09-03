@@ -14,7 +14,7 @@ import (
 func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 	question := serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
 		ToolCallID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
-		StepID: questionCommandStepID(), Question: "server-authored singular question",
+		StepID:  questionCommandStepID(),
 		Options: []clientui.ApprovalOption{{Label: "dynamic allow", Decision: clientui.ApprovalDecisionAllowOnce}},
 		AccessTargets: []clientui.FileAccessTarget{{
 			RequestedPath: "/alias/file", ResolvedPath: "/real/file",

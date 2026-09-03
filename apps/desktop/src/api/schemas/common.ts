@@ -37,6 +37,11 @@ export { workflowIDSchema } from "./workflowID";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
+const canonicalToolCallID = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim() === value);
+const verbatimNonBlankString = z.string().refine((value) => value.trim().length > 0);
 export const nullableGraphEntityIDSchema = z
   .string()
   .refine((value) => value.trim().length > 0)
@@ -71,7 +76,7 @@ export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
 ]);
 const ordinaryQuestionPromptSchema = z
   .object({
-    tool_call_id: nonBlankString,
+    tool_call_id: canonicalToolCallID,
     session_id: nonBlankString,
     step_id: nonBlankString,
     kind: z.literal("ordinary"),
@@ -82,13 +87,20 @@ const ordinaryQuestionPromptSchema = z
 
 const approvalQuestionPromptSchema = z
   .object({
-    tool_call_id: nonBlankString,
+    tool_call_id: canonicalToolCallID,
     session_id: nonBlankString,
     step_id: nonBlankString,
     kind: z.literal("approval"),
     approval_decisions: z.array(approvalDecisionSchema).min(1),
     access_targets: z
-      .array(z.object({ requested_path: nonBlankString, resolved_path: nonBlankString }).strict())
+      .array(
+        z
+          .object({
+            requested_path: verbatimNonBlankString,
+            resolved_path: verbatimNonBlankString,
+          })
+          .strict(),
+      )
       .optional()
       .default([]),
   })

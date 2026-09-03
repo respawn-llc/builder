@@ -53,7 +53,7 @@ func (p TranscriptPrompt) Validate() error {
 	if p.StepID.IsZero() {
 		return fmt.Errorf("pending prompt step id is required")
 	}
-	if strings.TrimSpace(p.Question) == "" {
+	if strings.TrimSpace(p.Question) == "" && len(p.AccessTargets) == 0 {
 		return fmt.Errorf("pending prompt question is required")
 	}
 	if p.CreatedAt.IsZero() {
@@ -109,6 +109,9 @@ func (p TranscriptPrompt) validateQuestion() error {
 }
 
 func (p TranscriptPrompt) validateApproval() error {
+	if len(p.AccessTargets) > 0 && strings.TrimSpace(p.Question) != "" {
+		return fmt.Errorf("access approval prompt cannot carry question copy")
+	}
 	if len(p.Suggestions) > 0 {
 		return fmt.Errorf("approval prompt cannot carry suggestions")
 	}

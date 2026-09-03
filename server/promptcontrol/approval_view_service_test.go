@@ -26,7 +26,6 @@ func TestServiceListsPendingApprovalsBySession(t *testing.T) {
 		{Request: askquestion.AskQuestionRequest{
 			ToolCallID: "approval-1",
 			StepID:     promptViewStepID,
-			Question:   "allow?",
 			Approval:   true,
 			ApprovalOptions: []askquestion.AskQuestionApprovalOption{
 				{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},

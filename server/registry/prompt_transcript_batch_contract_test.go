@@ -13,7 +13,6 @@ func TestPromptProjectionPreservesOrderedFileAccessAliases(t *testing.T) {
 	request := askquestion.AskQuestionRequest{
 		ToolCallID: "approval-1",
 		StepID:     registryTestStepID,
-		Question:   "Approve?",
 		Approval:   true,
 		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
 			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},

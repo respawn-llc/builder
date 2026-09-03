@@ -75,7 +75,6 @@ func TestPendingPromptAcceptsTypedApprovalWithoutServerLabels(t *testing.T) {
 		ToolCallID: ToolCallID("approval-1"),
 		SessionID:  transcriptTestSessionID(t),
 		StepID:     transcriptTestStepID(t),
-		Question:   "Allow this operation?",
 		CreatedAt:  time.Unix(1_700_000_000, 0),
 		ApprovalOptions: []ApprovalDecision{
 			ApprovalDecisionAllowOnce,

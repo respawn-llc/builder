@@ -138,7 +138,7 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 			{Kind: serverapi.WorkflowTaskObservationDone, SessionID: &sessionID, NodeKey: &nodeKey},
 			{Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &sessionID, NodeKey: &nodeKey,
 				Question: &serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
-					ToolCallID: "ask", SessionID: typedSessionID, StepID: questionCommandStepID(), Question: "Approve access?",
+					ToolCallID: "ask", SessionID: typedSessionID, StepID: questionCommandStepID(),
 					Options:       []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
 					AccessTargets: []clientui.FileAccessTarget{{RequestedPath: "/alias/file", ResolvedPath: "/real/file"}},
 				}}},

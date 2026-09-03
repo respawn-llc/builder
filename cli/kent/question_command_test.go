@@ -637,7 +637,7 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 	attention.Question.ApprovalDecisions = []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce}
 	approval := clientui.PendingApproval{
 		ToolCallID: clientui.ToolCallID(toolCallID), SessionID: mustQuestionCommandSessionID(sessionID),
-		StepID: questionCommandStepID(), Question: "Allow access?",
+		StepID:  questionCommandStepID(),
 		Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: approvalLabel}},
 		AccessTargets: []clientui.FileAccessTarget{
 			{RequestedPath: "/alias/a", ResolvedPath: "/real/file"},
