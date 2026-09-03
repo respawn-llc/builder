@@ -175,7 +175,8 @@ func TestWorktreeListControllerGitMainRowHasNoDeleteActions(t *testing.T) {
 		},
 	}
 	listResponse.Worktrees = append(listResponse.Worktrees, gitMain)
-	fixture := newWorktreeListFixture(t, nil)
+	client := &worktreeCommandTestClient{}
+	fixture := newWorktreeListFixture(t, client)
 	fixture.model.worktrees.entries = make([]worktreeui.Item, 0, len(listResponse.Worktrees))
 	for _, entry := range listResponse.Worktrees {
 		fixture.model.worktrees.entries = append(fixture.model.worktrees.entries, mustProjectWorktreeItem(t, entry))
@@ -184,6 +185,17 @@ func TestWorktreeListControllerGitMainRowHasNoDeleteActions(t *testing.T) {
 	target, ok := fixture.model.selectedWorktreeRow()
 	if !ok || worktreeDeleteActionsAvailableForSelection(fixture.model) {
 		t.Fatalf("selected Git main row = %+v, want no projected delete action", target)
+	}
+	for _, key := range []rune{'d', 'x'} {
+		cmd := fixture.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if cmd != nil ||
+			fixture.model.worktrees.intent.OpenDelete ||
+			fixture.model.worktrees.phase != uiWorktreeOverlayPhaseList ||
+			fixture.model.transientStatus != "" ||
+			len(client.deleteRequests) != 0 {
+			t.Fatalf("Git main key %q changed deletion state: cmd=%v intent=%+v phase=%q status=%q requests=%d",
+				key, cmd, fixture.model.worktrees.intent, fixture.model.worktrees.phase, fixture.model.transientStatus, len(client.deleteRequests))
+		}
 	}
 }
 
