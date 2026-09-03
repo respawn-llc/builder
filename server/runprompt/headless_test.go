@@ -1253,7 +1253,7 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		select {
 		case got := <-done:
 			t.Fatalf("RunPrompt returned while history was pending: %+v", got)
-		case <-time.After(1200 * time.Millisecond):
+		case <-time.After(2200 * time.Millisecond):
 		}
 		close(historyRelease)
 		select {
