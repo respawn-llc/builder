@@ -416,10 +416,7 @@ function VirtualizedInfiniteListViewport<TItem>({
   const horizontal = orientation === "horizontal";
   const hasHorizontalBoundary =
     horizontal &&
-    (layout.emptyCount > 0 ||
-      layout.previousBoundaryIndex !== null ||
-      rowContext.nextBoundary !== undefined ||
-      layout.legacyPlaceholderIndex !== null);
+    (layout.emptyCount > 0 || layout.previousBoundaryIndex !== null || rowContext.nextBoundary !== undefined);
   if (layout.count > 0 && virtualItems.length === 0) {
     return (
       <div
