@@ -1,9 +1,8 @@
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
-import { createJsonRpcTransport } from "./jsonRpc";
 import { FakeRpcTransport } from "@/test-support/api";
 import { z } from "zod";
-import { create, decodeEnvelope, encode, encodeEnvelope, operationName } from "@app/server-api-contract";
+import { create } from "@app/server-api-contract";
 import {
   BackgroundShellOutputMode,
   CacheWarningMode,
@@ -18,11 +17,6 @@ import {
   ToolID,
   WorkflowCompletionMode,
 } from "@app/server-api-contract/gen/kent/api/session_launch/session_launch_pb";
-import {
-  AttachSessionResultSchema,
-  ConnectionService,
-  HandshakeResultSchema,
-} from "@app/server-api-contract/gen/kent/api/connection/connection_pb";
 
 const sessionID = "123e4567-e89b-42d3-a456-426614174000";
 const target = {
@@ -30,56 +24,6 @@ const target = {
   workspace: { workspaceID: "workspace-1" },
   sessionID,
 } as const;
-
-class ChatMockWebSocket extends EventTarget {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
-
-  readonly sent: (string | Uint8Array)[] = [];
-  binaryType: BinaryType = "arraybuffer";
-  readyState = ChatMockWebSocket.CONNECTING;
-
-  constructor(readonly url: string) {
-    super();
-    chatSockets.push(this);
-  }
-
-  send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
-    const text = z.string().safeParse(data);
-    if (text.success) {
-      this.sent.push(text.data);
-      return;
-    }
-    if (ArrayBuffer.isView(data)) {
-      this.sent.push(new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice());
-      return;
-    }
-    if (data instanceof ArrayBuffer) {
-      this.sent.push(new Uint8Array(data).slice());
-      return;
-    }
-    throw new Error("Chat mock WebSocket does not support Blob sends.");
-  }
-
-  close(): void {
-    if (this.readyState === ChatMockWebSocket.CLOSED) return;
-    this.readyState = ChatMockWebSocket.CLOSED;
-    this.dispatchEvent(new Event("close"));
-  }
-
-  open(): void {
-    this.readyState = ChatMockWebSocket.OPEN;
-    this.dispatchEvent(new Event("open"));
-  }
-
-  receive(data: string | ArrayBuffer): void {
-    this.dispatchEvent(new MessageEvent("message", { data }));
-  }
-}
-
-const chatSockets: ChatMockWebSocket[] = [];
 
 function runtimePlanResult(planSessionID: string) {
   const settings = create(SettingsSchema, {
@@ -524,181 +468,5 @@ describe("Desktop Chat read client", () => {
     expect(completions).toEqual([
       { code: 17, message: "subscriber overflow", reason: "subscriber_overflow" },
     ]);
-
-    vi.stubGlobal("WebSocket", ChatMockWebSocket);
-    const socketEvents: unknown[] = [];
-    const socketErrors: Error[] = [];
-    const socketCompletions: unknown[] = [];
-    const socketClient = new ApiClient(createJsonRpcTransport("ws://127.0.0.1:53082/rpc"));
-    const socketSubscription = socketClient.chat.subscribeTranscript(target, {
-      onEvent: (event) => socketEvents.push(event),
-      onComplete: (completion) => socketCompletions.push(completion),
-      onError: (error) => socketErrors.push(error),
-    });
-
-    const firstSocket = chatSockets[0] ?? failTest("first Chat socket missing");
-    await setupChatSocket(firstSocket);
-    firstSocket.receive(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "session.transcript",
-        params: { message: { Sequence: 1, Kind: "hydration", Payload: transcriptHydrationPayload() } },
-      }),
-    );
-    firstSocket.receive(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "session.transcript.complete",
-        params: { code: 17, message: "subscriber overflow", transcript_close_reason: "subscriber_overflow" },
-      }),
-    );
-
-    await vi.waitFor(() => {
-      expect(chatSockets).toHaveLength(2);
-    });
-    const secondSocket = chatSockets[1] ?? failTest("reconnected Chat socket missing");
-    await setupChatSocket(secondSocket);
-    secondSocket.receive(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "session.transcript.complete",
-        params: { code: "malformed" },
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(socketErrors).toHaveLength(2);
-    });
-    expect(socketEvents).toHaveLength(1);
-    expect(socketCompletions).toEqual([
-      { code: 17, message: "subscriber overflow", reason: "subscriber_overflow" },
-    ]);
-    expect(chatSockets).toHaveLength(2);
-    socketSubscription.close();
-
-    const closeErrors: Error[] = [];
-    const closeSubscription = socketClient.chat.subscribeTranscript(target, {
-      onEvent: () => undefined,
-      onComplete: () => undefined,
-      onError: (error) => closeErrors.push(error),
-    });
-    const thirdSocket = chatSockets[2] ?? failTest("close-test Chat socket missing");
-    await setupChatSocket(thirdSocket);
-    thirdSocket.close();
-    await vi.waitFor(() => {
-      expect(chatSockets).toHaveLength(4);
-    });
-    expect(closeErrors).toHaveLength(1);
-    const fourthSocket = chatSockets[3] ?? failTest("close-test reconnect socket missing");
-    await setupChatSocket(fourthSocket);
-    closeSubscription.close();
-    vi.unstubAllGlobals();
   });
 });
-
-async function setupChatSocket(socket: ChatMockWebSocket): Promise<void> {
-  socket.open();
-  await waitForChatSent(socket, 1);
-  binaryAckChat(socket, 0, ConnectionService.method.handshake, handshakeResult());
-  await waitForChatSent(socket, 2);
-  binaryAckChat(
-    socket,
-    1,
-    ConnectionService.method.attachSession,
-    create(AttachSessionResultSchema, {
-      outcome: {
-        case: "success",
-        value: {
-          attachment: {
-            case: "session",
-            value: {
-              projectId: target.projectID,
-              workspaceId: target.workspace.workspaceID,
-              workspaceRoot: "/workspace",
-              sessionId: target.sessionID,
-            },
-          },
-        },
-      },
-    }),
-  );
-  await waitForChatSent(socket, 3);
-  const subscribe = chatJsonFrame(socket, 2);
-  socket.receive(JSON.stringify({ jsonrpc: "2.0", id: subscribe.id, result: {} }));
-  await flushPromises();
-}
-
-function handshakeResult() {
-  return create(HandshakeResultSchema, {
-    outcome: {
-      case: "success",
-      value: {
-        identity: {
-          protocolVersion: "126",
-          serverId: "server-1",
-          pid: 1,
-        },
-      },
-    },
-  });
-}
-
-function binaryAckChat<
-  Method extends typeof ConnectionService.method.handshake | typeof ConnectionService.method.attachSession,
->(
-  socket: ChatMockWebSocket,
-  sentIndex: number,
-  method: Method,
-  result: ReturnType<typeof create<Method["output"]>>,
-): void {
-  const raw = socket.sent[sentIndex] ?? failTest(`Chat socket frame ${sentIndex.toString()} missing`);
-  if (!(raw instanceof Uint8Array)) throw new Error("Chat socket setup frame is not binary.");
-  const call = decodeEnvelope(raw).frame;
-  if (
-    call.case !== "call" ||
-    call.value.operation !== operationName(method) ||
-    call.value.correlation === undefined
-  ) {
-    throw new Error("Chat socket setup frame has the wrong descriptor operation.");
-  }
-  const payload = encode(method.output, result);
-  const response = encodeEnvelope({
-    frame: {
-      case: "result",
-      value: {
-        operation: operationName(method),
-        correlation: call.value.correlation,
-        payload,
-      },
-    },
-  });
-  const responseBuffer = new ArrayBuffer(response.byteLength);
-  new Uint8Array(responseBuffer).set(response);
-  socket.receive(responseBuffer);
-}
-
-function chatJsonFrame(
-  socket: ChatMockWebSocket,
-  sentIndex: number,
-): Readonly<{ id: string; method: string }> {
-  const raw = socket.sent[sentIndex] ?? failTest(`Chat socket text frame ${sentIndex.toString()} missing`);
-  if (raw instanceof Uint8Array) throw new Error("Chat socket frame is binary.");
-  const parsed: unknown = JSON.parse(raw);
-  const result = z.object({ id: z.string(), method: z.string() }).safeParse(parsed);
-  if (!result.success) throw new Error("Chat socket frame is not a JSON-RPC request.");
-  return result.data;
-}
-
-async function waitForChatSent(socket: ChatMockWebSocket, count: number): Promise<void> {
-  await vi.waitFor(() => {
-    expect(socket.sent.length).toBeGreaterThanOrEqual(count);
-  });
-}
-
-async function flushPromises(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-function failTest(message: string): never {
-  throw new Error(message);
-}

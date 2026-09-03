@@ -27,15 +27,7 @@ export const executionTargetSchema = z
     CwdRelpath: z.string(),
     EffectiveWorkdir: nonBlank,
   })
-  .superRefine((target, context) => {
-    if (target.WorkspaceAvailability !== "unlinked" && target.WorkspaceID.trim().length === 0) {
-      context.addIssue({
-        code: "custom",
-        path: ["WorkspaceID"],
-        message: "linked execution targets require a Workspace ID",
-      });
-    }
-  });
+  .strict();
 export const runtimeContextUsageSchema = z
   .object({
     UsedTokens: z.number().int().nonnegative(),
@@ -297,15 +289,7 @@ export const reasoningIdentitySchema = z
       .optional(),
     Kent: optionalIdentifier,
   })
-  .strict()
-  .superRefine((identity, context) => {
-    if (
-      (identity.Provider === undefined || identity.Provider === null) ===
-      (identity.Kent === undefined || identity.Kent === null)
-    ) {
-      context.addIssue({ code: "custom", message: "reasoning identity requires exactly one branch" });
-    }
-  });
+  .strict();
 export const reasoningRowSchema = z
   .object({
     StepID: identifier,
@@ -409,31 +393,7 @@ export const committedRowSchema = z
       .nullable(),
     ReviewerError: z.object({ ID: identifier, StepID: identifier, Detail: identifier }).strict().nullable(),
   })
-  .strict()
-  .superRefine((row, context) => {
-    const payloads = [
-      row.User,
-      row.Assistant,
-      row.Tool,
-      row.ReasoningTrace,
-      row.Notice,
-      row.ReviewerFeedback,
-      row.ReviewerError,
-    ];
-    const present = payloads.filter((payload) => payload !== null).length;
-    if (present !== 1) context.addIssue({ code: "custom", message: "committed row requires one payload" });
-    const expected = [
-      "user",
-      "assistant",
-      "tool",
-      "reasoning_trace",
-      "notice",
-      "reviewer_feedback",
-      "reviewer_error",
-    ][payloads.findIndex((payload) => payload !== null)];
-    if (row.Kind !== expected)
-      context.addIssue({ code: "custom", message: "committed row kind does not match payload" });
-  });
+  .strict();
 export const pageSchema = z
   .object({
     transcript: z

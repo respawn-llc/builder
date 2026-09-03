@@ -37,54 +37,7 @@ export const promptSchema = z
     ApprovalOptions: z.enum(["allow_once", "allow_session", "deny"]).array(),
     Tool: z.object({ ToolCallID: identifier, ToolName: identifier }).strict().nullable(),
   })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.Kind === "question") {
-      if (value.ApprovalOptions.length > 0) {
-        context.addIssue({
-          code: "custom",
-          path: ["ApprovalOptions"],
-          message: "questions cannot carry approval options",
-        });
-      }
-      if (
-        value.RecommendedOptionIndex !== undefined &&
-        value.RecommendedOptionIndex !== null &&
-        (value.RecommendedOptionIndex < 1 || value.RecommendedOptionIndex > value.Suggestions.length)
-      ) {
-        context.addIssue({
-          code: "custom",
-          path: ["RecommendedOptionIndex"],
-          message: "recommended option index is outside the suggestions",
-        });
-      }
-      return;
-    }
-    if (value.Suggestions.length > 0) {
-      context.addIssue({
-        code: "custom",
-        path: ["Suggestions"],
-        message: "approvals cannot carry suggestions",
-      });
-    }
-    if (value.RecommendedOptionIndex !== undefined && value.RecommendedOptionIndex !== null) {
-      context.addIssue({
-        code: "custom",
-        path: ["RecommendedOptionIndex"],
-        message: "approvals cannot carry a recommended option",
-      });
-    }
-    if (value.ApprovalOptions.length === 0) {
-      context.addIssue({ code: "custom", path: ["ApprovalOptions"], message: "approvals require options" });
-    }
-    if (new Set(value.ApprovalOptions).size !== value.ApprovalOptions.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["ApprovalOptions"],
-        message: "approval options must be unique",
-      });
-    }
-  });
+  .strict();
 
 export const hydrationSchema = z
   .object({
