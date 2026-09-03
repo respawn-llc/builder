@@ -89,18 +89,10 @@ func newSessionRemovalServiceFixture(t *testing.T) sessionRemovalServiceFixture 
 	return sessionRemovalServiceFixture{service: service, authority: authority, metadata: metadataStore, session: persisted}
 }
 
-func (f sessionRemovalServiceFixture) archive(ctx context.Context, outputPath string) error {
-	return f.service.Archive(ctx, f.session.Meta().SessionID, outputPath)
-}
-
-func (f sessionRemovalServiceFixture) delete(ctx context.Context) error {
-	return f.service.Delete(ctx, f.session.Meta().SessionID)
-}
-
 func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 	t.Run("successful delete", func(t *testing.T) {
 		fixture := newSessionRemovalServiceFixture(t)
-		if err := fixture.delete(context.Background()); err != nil {
+		if err := fixture.service.Delete(context.Background(), fixture.session.Meta().SessionID); err != nil {
 			t.Fatalf("Delete: %v", err)
 		}
 		if _, err := fixture.metadata.ResolvePersistedSession(t.Context(), fixture.session.Meta().SessionID); !errors.Is(err, session.ErrSessionNotFound) {
@@ -118,7 +110,7 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 		})
 		outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 
-		err := fixture.archive(context.Background(), outputPath)
+		err := fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
 		var removalErr *SessionRemovalFailureError
 		if !errors.As(err, &removalErr) {
 			t.Fatalf("Archive error = %v, want metadata-not-removed state", err)
@@ -149,7 +141,7 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 		t.Cleanup(func() { _ = os.Chmod(fixture.session.Dir(), 0o700) })
 		outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 
-		err := fixture.archive(context.Background(), outputPath)
+		err := fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
 		var removalErr *SessionRemovalFailureError
 		if !errors.As(err, &removalErr) {
 			t.Fatalf("Archive error = %v, want cleanup failure for %q", err, eventsPath)
@@ -230,7 +222,7 @@ func TestArchiveDestinationCreatedAfterPreflightRetainsSession(t *testing.T) {
 		},
 	})
 
-	err := fixture.archive(context.Background(), outputPath)
+	err := fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
 	var exists *session.ArchiveOutputExistsError
 	if !errors.As(err, &exists) {
 		t.Fatalf("Archive error = %v, want ArchiveOutputExistsError", err)
@@ -382,10 +374,10 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 			outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 			go func() {
 				if operation == "archive" {
-					operationDone <- fixture.archive(context.Background(), outputPath)
+					operationDone <- fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
 					return
 				}
-				operationDone <- fixture.delete(context.Background())
+				operationDone <- fixture.service.Delete(context.Background(), fixture.session.Meta().SessionID)
 			}()
 			select {
 			case <-deleteStarted:

@@ -17,8 +17,7 @@ func TestDeleteSessionUsesCurrentRetentionAuthorityAndPreservesHistory(t *testin
 	tests := []struct {
 		name    string
 		setup   func(*testing.T, *sessionDeletionFixture)
-		blocked bool
-		missing bool
+		outcome sessionDeletionExpectedOutcome
 		verify  func(*testing.T, *sessionDeletionFixture)
 	}{
 		{
@@ -27,7 +26,7 @@ func TestDeleteSessionUsesCurrentRetentionAuthorityAndPreservesHistory(t *testin
 				insertTaskCurrentNode(t, fixture.store.db, "task-1", "node-agent", nil)
 				fixture.bindCurrentNodeSession(t, nil)
 			},
-			blocked: true,
+			outcome: sessionDeletionBlocked,
 		},
 		{
 			name: "branch Current Node",
@@ -38,12 +37,12 @@ func TestDeleteSessionUsesCurrentRetentionAuthorityAndPreservesHistory(t *testin
 				insertTaskCurrentNode(t, fixture.store.db, "task-1", "node-agent", branch)
 				fixture.bindCurrentNodeSession(t, branch)
 			},
-			blocked: true,
+			outcome: sessionDeletionBlocked,
 		},
-		{name: "pending Approval source", setup: pendingApprovalSetup(pendingApprovalSource), blocked: true},
-		{name: "pending Approval reused target", setup: pendingApprovalSetup(pendingApprovalReusedTarget), blocked: true},
-		{name: "pending Approval exact active source", setup: pendingApprovalSetup(pendingApprovalActiveSource), blocked: true},
-		{name: "legacy pending Approval snapshot", setup: pendingApprovalSetup(pendingApprovalLegacySnapshot), blocked: true},
+		{name: "pending Approval source", setup: pendingApprovalSetup(pendingApprovalSource), outcome: sessionDeletionBlocked},
+		{name: "pending Approval reused target", setup: pendingApprovalSetup(pendingApprovalReusedTarget), outcome: sessionDeletionBlocked},
+		{name: "pending Approval exact active source", setup: pendingApprovalSetup(pendingApprovalActiveSource), outcome: sessionDeletionBlocked},
+		{name: "legacy pending Approval snapshot", setup: pendingApprovalSetup(pendingApprovalLegacySnapshot), outcome: sessionDeletionBlocked},
 		{
 			name: "dormant association",
 			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
@@ -63,6 +62,7 @@ func TestDeleteSessionUsesCurrentRetentionAuthorityAndPreservesHistory(t *testin
 					t.Fatalf("latest association after deletion = %v, want no match", err)
 				}
 			},
+			outcome: sessionDeletionSucceeded,
 		},
 		{
 			name: "terminal Task and historical provenance",
@@ -128,13 +128,14 @@ WHERE id = 'worktree-1'`).Scan(&originSessionID); err != nil {
 					)
 				}
 			},
+			outcome: sessionDeletionSucceeded,
 		},
 		{
 			name: "missing Session",
 			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
 				fixture.targetSessionID = runtimeids.NewSessionID().String()
 			},
-			missing: true,
+			outcome: sessionDeletionMissing,
 		},
 	}
 
@@ -144,19 +145,22 @@ WHERE id = 'worktree-1'`).Scan(&originSessionID); err != nil {
 			test.setup(t, fixture)
 
 			err := fixture.store.DeleteSession(t.Context(), fixture.targetSessionID)
-			if test.missing {
+			switch test.outcome {
+			case sessionDeletionMissing:
 				if !errors.Is(err, session.ErrSessionNotFound) {
 					t.Fatalf("DeleteSession error = %v, want Session not found", err)
 				}
 				return
-			}
-			if test.blocked {
+			case sessionDeletionBlocked:
 				var inUse *SessionInUseError
 				if !errors.As(err, &inUse) || inUse.SessionID != fixture.targetSessionID {
 					t.Fatalf("DeleteSession error = %v, want SessionInUseError for %q", err, fixture.targetSessionID)
 				}
 				assertMetadataRowCount(t, fixture.store.db, "sessions", "id", fixture.targetSessionID, 1)
 				return
+			case sessionDeletionSucceeded:
+			default:
+				t.Fatalf("unsupported expected Session deletion outcome %d", test.outcome)
 			}
 			if err != nil {
 				t.Fatalf("DeleteSession: %v", err)
@@ -168,6 +172,14 @@ WHERE id = 'worktree-1'`).Scan(&originSessionID); err != nil {
 		})
 	}
 }
+
+type sessionDeletionExpectedOutcome uint8
+
+const (
+	sessionDeletionSucceeded sessionDeletionExpectedOutcome = iota + 1
+	sessionDeletionBlocked
+	sessionDeletionMissing
+)
 
 type pendingApprovalSessionReference uint8
 
@@ -182,17 +194,17 @@ func pendingApprovalSetup(
 	reference pendingApprovalSessionReference,
 ) func(*testing.T, *sessionDeletionFixture) {
 	return func(t *testing.T, fixture *sessionDeletionFixture) {
-		sourceSessionID := ""
-		resolution := ""
+		var sourceSessionID sql.NullString
+		var resolution sql.NullString
 		switch reference {
 		case pendingApprovalSource:
-			sourceSessionID = fixture.targetSessionID
+			sourceSessionID = sql.NullString{String: fixture.targetSessionID, Valid: true}
 		case pendingApprovalReusedTarget:
-			resolution = fmt.Sprintf(`{"target_session":{"kind":"reuse","session_id":%q},"active_source":{"kind":"absent"}}`, fixture.targetSessionID)
+			resolution = sql.NullString{String: fmt.Sprintf(`{"target_session":{"kind":"reuse","session_id":%q},"active_source":{"kind":"absent"}}`, fixture.targetSessionID), Valid: true}
 		case pendingApprovalActiveSource:
-			resolution = fmt.Sprintf(`{"target_session":{"kind":"create"},"active_source":{"kind":"exact","session_id":%q}}`, fixture.targetSessionID)
+			resolution = sql.NullString{String: fmt.Sprintf(`{"target_session":{"kind":"create"},"active_source":{"kind":"exact","session_id":%q}}`, fixture.targetSessionID), Valid: true}
 		case pendingApprovalLegacySnapshot:
-			resolution = fmt.Sprintf(`{"session_id":%q}`, fixture.targetSessionID)
+			resolution = sql.NullString{String: fmt.Sprintf(`{"session_id":%q}`, fixture.targetSessionID), Valid: true}
 		default:
 			t.Fatalf("unsupported pending Approval reference %d", reference)
 		}
@@ -273,22 +285,22 @@ func (fixture *sessionDeletionFixture) insertAssociation(t *testing.T, sessionID
 ) VALUES (?, ?, NULL, ?)`, sessionID, workflowGraphSeedID(t, fixture.store.db, nodeID), associatedAt)
 }
 
-func (fixture *sessionDeletionFixture) insertPendingApproval(t *testing.T, sourceSessionID, contextSourceResolutionJSON string) {
+func (fixture *sessionDeletionFixture) insertPendingApproval(
+	t *testing.T,
+	sourceSessionID sql.NullString,
+	contextSourceResolutionJSON sql.NullString,
+) {
 	t.Helper()
 	insertTaskCurrentNode(t, fixture.store.db, "task-1", "node-agent", nil)
-	var sourceSession any
-	if sourceSessionID != "" {
-		sourceSession = sourceSessionID
-	}
 	execSeed(t, fixture.store.db, "pending Approval", `INSERT INTO task_pending_approvals (
     id, source_task_id, source_node_id, source_transition_branch_key, source_session_id,
     workflow_version, transition_snapshot_json, materialized_values_json, created_at_unix_ms
 ) VALUES ('approval-1', 'task-1', ?, NULL, ?, 1, '{}', '{}', ?)`,
 		workflowGraphSeedID(t, fixture.store.db, "node-agent"),
-		sourceSession,
+		sourceSessionID,
 		fixture.now,
 	)
-	if contextSourceResolutionJSON == "" {
+	if !contextSourceResolutionJSON.Valid {
 		return
 	}
 	execSeed(t, fixture.store.db, "pending Approval branch", `INSERT INTO task_pending_approval_branches (
@@ -299,7 +311,7 @@ func (fixture *sessionDeletionFixture) insertPendingApproval(t *testing.T, sourc
     '{"prior_values":{"transition_parameters":{}}}',
     '{}',
     ?
-)`, contextSourceResolutionJSON)
+)`, contextSourceResolutionJSON.String)
 }
 
 func assertMetadataRowCount(t *testing.T, db *sql.DB, table, column, value string, want int) {
