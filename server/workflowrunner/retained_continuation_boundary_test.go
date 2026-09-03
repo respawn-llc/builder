@@ -31,6 +31,9 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
+	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func mustRetained(t *testing.T, err error, format string) {
@@ -225,33 +228,177 @@ func TestRetainedRunPromptRejectsLockedContractAssertionBeforeDelivery(t *testin
 	}
 }
 
-func TestRetainedContinuationProgressExcludesUnregisteredBackgroundStep(t *testing.T) {
-	continuation, err := workflowexecution.NewWorkflowSessionContinuation("continue", nil)
-	mustRetained(t, err, "new Workflow Session continuation: %v")
+type retainedSameResourceBackgroundClient struct {
+	*compactingScriptedClient
+	mu                                        sync.Mutex
+	requests                                  []llm.Request
+	backgroundCalls                           int
+	backgroundFirst                           chan struct{}
+	backgroundSecond                          chan struct{}
+	backgroundRelease                         chan struct{}
+	backgroundFirstOnce, backgroundSecondOnce sync.Once
+}
+
+func (c *retainedSameResourceBackgroundClient) Generate(
+	_ context.Context, request llm.Request, _ llm.StreamCallbacks,
+) (llm.Response, error) {
+	messages := llm.MessagesFromItems(request.Items)
+	selected := len(messages) > 0 &&
+		messages[len(messages)-1].Content != nil &&
+		*messages[len(messages)-1].Content == "continue"
+	background := !selected && slices.ContainsFunc(messages, func(message llm.Message) bool {
+		return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
+	})
+	c.mu.Lock()
+	c.requests = append(c.requests, request)
+	if background {
+		c.backgroundCalls++
+	}
+	backgroundCall := c.backgroundCalls
+	c.mu.Unlock()
+	if background {
+		switch backgroundCall {
+		case 1:
+			c.backgroundFirstOnce.Do(func() { close(c.backgroundFirst) })
+			return retainedResponse("background progress", llm.ToolCall{
+				ID: "background-shell", Name: string(toolspec.ToolExecCommand),
+				Input: []byte(`{"cmd":"true"}`),
+			}), nil
+		case 2:
+			c.backgroundSecondOnce.Do(func() { close(c.backgroundSecond) })
+			<-c.backgroundRelease
+			return retainedResponse("background progress", llm.ToolCall{
+				ID: "background-shell-again", Name: string(toolspec.ToolExecCommand),
+				Input: []byte(`{"cmd":"true"}`),
+			}), nil
+		default:
+			return llm.Response{}, &llm.ProviderAPIError{
+				ProviderID: "test", StatusCode: 400,
+				Code: llm.UnifiedErrorCodeProviderContract, Err: errors.New("stop background"),
+			}
+		}
+	}
+	if !selected {
+		return llm.Response{}, errors.New("unexpected non-selected provider request")
+	}
+	return retainedResponse("selected progress", llm.ToolCall{
+		ID: "selected-complete", Name: string(toolspec.ToolCompleteNode),
+		Input: []byte(`{"transition":"done","commentary":"selected"}`),
+	}), nil
+}
+
+func (c *retainedSameResourceBackgroundClient) Requests() []llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]llm.Request(nil), c.requests...)
+}
+
+func (c *retainedSameResourceBackgroundClient) ProviderCapabilities(
+	ctx context.Context,
+) (llm.ProviderCapabilities, error) {
+	return c.base.ProviderCapabilities(ctx)
+}
+
+func TestRetainedRunPromptExcludesSameResourceBackgroundProgress(t *testing.T) {
+	client := &retainedSameResourceBackgroundClient{
+		compactingScriptedClient: NewCompactingScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("pre-activation")},
+		),
+		backgroundFirst:   make(chan struct{}),
+		backgroundSecond:  make(chan struct{}),
+		backgroundRelease: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-client.backgroundRelease:
+		default:
+			close(client.backgroundRelease)
+		}
+	})
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	f.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeTool
+	f.starter.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeTool
+	sessionID, reference, _ := prepareRetainedSessionForWorkflow(
+		t, f, createCurrentNodeAgentWorkflow(t, f.store), client,
+	)
+
+	backgroundDone := make(chan error, 1)
+	go func() {
+		err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(
+			ctx context.Context, engine *agentruntime.Engine,
+		) error {
+			return engine.RunBackgroundShellContinuation(ctx, agentruntime.BackgroundShellEvent{
+				Type:       agentruntime.BackgroundShellEventCompleted,
+				ID:         "background",
+				ActivityID: uuid.New(),
+				NoticeText: "background notice",
+			})
+		})
+		backgroundDone <- err
+	}()
+	retainedWait(t, client.backgroundFirst, "background did not reach first provider request")
+
 	var progress []serverapi.RunPromptProgress
-	continuation.SetProgressSink(func(event agentruntime.Event) {
-		runprompt.PublishRunPromptProgress(serverapi.RunPromptProgressFunc(func(value serverapi.RunPromptProgress) {
-			progress = append(progress, value)
-		}), event)
-	})
-	continuation.RegisterStep("selected-step")
-	continuation.PublishEvent(agentruntime.Event{
-		Kind: agentruntime.EventAssistantMessage, StepID: textutil.Value("selected-step"),
-		Message: llm.Message{
-			Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary),
-			Content: textutil.Value("selected progress"),
-		},
-	})
-	continuation.PublishEvent(agentruntime.Event{
-		Kind: agentruntime.EventAssistantMessage, StepID: textutil.Value("background-step"),
-		Message: llm.Message{
-			Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary),
-			Content: textutil.Value("background progress"),
-		},
-	})
-	if len(progress) != 1 || progress[0].AssistantMessage == nil ||
-		progress[0].AssistantMessage.Content != "selected progress" {
-		t.Fatalf("selected continuation progress = %+v, want only selected progress", progress)
+	selectedDone := make(chan error, 1)
+	go func() {
+		_, err := runPromptClientForCurrentNodeFixture(f, f.controller).RunPrompt(
+			context.Background(),
+			serverapi.RunPromptRequest{
+				Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
+				Prompt: "continue",
+			},
+			serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) {
+				progress = append(progress, event)
+			}),
+		)
+		selectedDone <- err
+	}()
+	retainedWait(t, client.backgroundSecond, "background did not reach second provider request")
+
+	deadline := time.After(currentNodeRunnerWait)
+	for {
+		if _, active := f.authority.SessionExecution(sessionID); active {
+			break
+		}
+		select {
+		case <-time.After(time.Millisecond):
+		case <-deadline:
+			t.Fatal("selected retained execution did not become live")
+		}
+	}
+	close(client.backgroundRelease)
+	if err := <-backgroundDone; err == nil {
+		t.Fatal("background unexpectedly succeeded")
+	}
+	if err := <-selectedDone; err != nil {
+		t.Fatalf("selected RunPrompt: %v", err)
+	}
+	f.waitForTaskQuiescence(t, reference.TaskID)
+
+	var selectedRequests, backgroundRequests []llm.Request
+	for _, request := range client.Requests() {
+		messages := llm.MessagesFromItems(request.Items)
+		selected := len(messages) > 0 && messages[len(messages)-1].Content != nil &&
+			*messages[len(messages)-1].Content == "continue"
+		if selected {
+			selectedRequests = append(selectedRequests, request)
+		}
+		if !selected && slices.ContainsFunc(messages, func(message llm.Message) bool {
+			return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
+		}) {
+			backgroundRequests = append(backgroundRequests, request)
+		}
+	}
+	if len(selectedRequests) == 0 || !requestContainsMessage(selectedRequests[0], "continue") {
+		t.Fatalf("selected provider requests = %+v, want selected continuation input", selectedRequests)
+	}
+	if len(backgroundRequests) < 3 {
+		t.Fatalf("background provider requests = %d, want real background Step requests", len(backgroundRequests))
+	}
+	if !hasAssistantProgress(progress, "selected progress") ||
+		hasAssistantProgress(progress, "background progress") {
+		t.Fatalf("RunPrompt progress = %+v, want selected progress without background progress", progress)
 	}
 }
 
