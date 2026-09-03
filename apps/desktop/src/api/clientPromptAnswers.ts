@@ -10,12 +10,17 @@ import { compactJsonObject } from "./json";
 import type { JsonValue } from "./json";
 import type { RpcTransport } from "./transport";
 
+const normalizedToolCallID = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim() === value, "Tool Call ID must not have surrounding whitespace");
+
 const responseSchema = z
   .object({
     results: z.array(
       z
         .object({
-          prompt_id: z.string().trim().min(1),
+          tool_call_id: normalizedToolCallID,
           outcome: z.enum(["resolved", "skipped"]),
         })
         .strict(),
@@ -23,10 +28,7 @@ const responseSchema = z
   })
   .strict()
   .transform((value): PromptAnswerBatchResponse => ({
-    results: value.results.map((result) => ({
-      promptID: result.prompt_id,
-      outcome: result.outcome,
-    })),
+    results: value.results.map(({ tool_call_id: toolCallID, outcome }) => ({ toolCallID, outcome })),
   }));
 
 export async function answerPromptBatch(
@@ -51,7 +53,7 @@ function encodeEntry(entry: PromptAnswerBatchEntryInput): JsonValue {
   switch (entry.kind) {
     case "question":
       return {
-        prompt_id: entry.promptID,
+        tool_call_id: entry.toolCallID,
         question_answer: compactJsonObject({
           selected_option_number: entry.selectedOptionNumber ?? undefined,
           freeform: entry.freeform ?? undefined,
@@ -59,14 +61,14 @@ function encodeEntry(entry: PromptAnswerBatchEntryInput): JsonValue {
       };
     case "approval":
       return {
-        prompt_id: entry.promptID,
+        tool_call_id: entry.toolCallID,
         approval_answer: compactJsonObject({
           decision: entry.decision,
           commentary: entry.commentary ?? undefined,
         }),
       };
     case "declined":
-      return { prompt_id: entry.promptID, declined: {} };
+      return { tool_call_id: entry.toolCallID, declined: {} };
   }
 }
 
@@ -74,25 +76,20 @@ function validateInput(input: PromptAnswerBatchInput): void {
   if (input.sessionID.trim().length === 0 || input.stepID.trim().length === 0 || input.entries.length === 0) {
     throw new Error("prompt answer batch requires Session, Step, and entries");
   }
-  const promptIDs = new Set<string>();
-  for (const entry of input.entries) {
-    if (entry.promptID.trim().length === 0 || promptIDs.has(entry.promptID)) {
-      throw new Error("prompt answer batch prompt identity is invalid or duplicated");
-    }
-    promptIDs.add(entry.promptID);
-  }
 }
 
 function validateResponse(input: PromptAnswerBatchInput, response: PromptAnswerBatchResponse): void {
   if (response.results.length !== input.entries.length) {
     throw new Error("prompt answer batch result count does not match request");
   }
-  const requested = new Set(input.entries.map((entry) => entry.promptID));
   const results = new Set<string>();
   for (const result of response.results) {
-    if (!requested.has(result.promptID) || results.has(result.promptID)) {
+    if (
+      !input.entries.some((entry) => entry.toolCallID === result.toolCallID) ||
+      results.has(result.toolCallID)
+    ) {
       throw new Error("prompt answer batch result identity is foreign or duplicated");
     }
-    results.add(result.promptID);
+    results.add(result.toolCallID);
   }
 }

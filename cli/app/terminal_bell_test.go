@@ -284,7 +284,7 @@ func TestUIAskLifecycleDoesNotDuplicateAttentionNotifications(t *testing.T) {
 	model = next.(*uiModel)
 	next, _ = model.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-2", "Second?")}})
 	model = next.(*uiModel)
-	_, _ = model.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
+	_, _ = model.Update(askEventMsg{event: askEvent{resolvedToolCallID: "ask-1"}})
 
 	if ringer.total() != 0 {
 		t.Fatalf("UI ask lifecycle emitted %d notification events", ringer.total())
@@ -490,7 +490,7 @@ func attentionNotificationID(kind clientui.AttentionNotificationKind, uuid strin
 
 func bellTestPrompt(id, question string) clientui.TranscriptPrompt {
 	prompt := ongoingTranscriptMessage(2, clientui.TranscriptMessagePrompt).Payload().(clientui.TranscriptPrompt)
-	prompt.PromptID = clientui.PromptID(id)
+	prompt.ToolCallID = clientui.ToolCallID(id)
 	prompt.Question = question
 	return prompt
 }

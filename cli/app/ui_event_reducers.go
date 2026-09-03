@@ -103,7 +103,7 @@ func (m *uiModel) activePromptContinuesCtrlC(key transcriptPromptKey) bool {
 	}
 	return activeKey.sessionID == key.sessionID &&
 		activeKey.stepID == key.stepID &&
-		activeKey.promptID != key.promptID
+		activeKey.toolCallID != key.toolCallID
 }
 
 func (m *uiModel) clearPendingPromptCtrlCContinuation(key transcriptPromptKey) {

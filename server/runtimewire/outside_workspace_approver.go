@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
 	"core/server/tools"
+	"core/shared/clientui"
 )
 
 const (
@@ -18,20 +18,15 @@ const (
 
 type OutsideWorkspaceApprover struct {
 	broker         *tools.AskQuestionBroker
-	actionVerb     string
 	mu             sync.Mutex
 	sessionAllowed bool
 }
 
-func NewOutsideWorkspaceApprover(broker *tools.AskQuestionBroker, actionVerb string) *OutsideWorkspaceApprover {
-	verb := strings.TrimSpace(actionVerb)
-	if verb == "" {
-		verb = "accessing"
-	}
-	return &OutsideWorkspaceApprover{broker: broker, actionVerb: verb}
+func NewOutsideWorkspaceApprover(broker *tools.AskQuestionBroker) *OutsideWorkspaceApprover {
+	return &OutsideWorkspaceApprover{broker: broker}
 }
 
-func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 	a.mu.Lock()
 	if a.sessionAllowed {
 		a.mu.Unlock()
@@ -39,18 +34,40 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req tools.FileAc
 	}
 	a.mu.Unlock()
 
+	targets := append([]tools.FileAccessTarget(nil), req.Targets...)
+	if len(targets) == 0 {
+		return tools.FileAccessApproval{}, errors.New("outside-workspace Approval requires at least one target")
+	}
+	identity, err := tools.ExecutionIdentityFromContext(ctx)
+	if err != nil {
+		return tools.FileAccessApproval{}, fmt.Errorf("outside-workspace Approval owner: %w", err)
+	}
+	var consumerOnce sync.Once
+	var consumerErr error
 	request := tools.AskQuestionRequest{
-		Question: fmt.Sprintf("Allow %s %s (outside workspace dir)?", a.actionVerb, req.ResolvedPath),
-		Approval: true,
+		Question:      clientui.FormatFileAccessApprovalMarkdown(targets),
+		Approval:      true,
+		AccessTargets: targets,
+		RunID:         identity.RunID,
+		StepID:        identity.StepID,
+		ToolCallID:    string(identity.ToolCallID),
 		ApprovalOptions: []tools.AskQuestionApprovalOption{
 			{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: OutsideWorkspaceAllowOnceSuggestion},
 			{Decision: tools.AskQuestionApprovalDecisionAllowSession, Label: OutsideWorkspaceAllowSessionSuggestion},
 			{Decision: tools.AskQuestionApprovalDecisionDeny, Label: OutsideWorkspaceDenySuggestion},
 		},
-	}
-	if identity, identityErr := tools.ExecutionIdentityFromContext(ctx); identityErr == nil {
-		request.RunID = identity.RunID
-		request.StepID = identity.StepID
+		ApprovalConsumer: func(answer tools.AskQuestionApproval) error {
+			consumerOnce.Do(func() {
+				approval, err := OutsideWorkspaceApprovalFromResolution(answer)
+				consumerErr = err
+				if err == nil && approval.Kind == tools.FileAccessApprovalAllowSession {
+					a.mu.Lock()
+					a.sessionAllowed = true
+					a.mu.Unlock()
+				}
+			})
+			return consumerErr
+		},
 	}
 	resp, err := a.broker.Ask(ctx, request)
 	if err != nil {
@@ -60,11 +77,6 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req tools.FileAc
 	approval, err := OutsideWorkspaceApprovalFromResolution(resp)
 	if err != nil {
 		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, err
-	}
-	if approval.Kind == tools.FileAccessApprovalAllowSession {
-		a.mu.Lock()
-		a.sessionAllowed = true
-		a.mu.Unlock()
 	}
 	return approval, nil
 }

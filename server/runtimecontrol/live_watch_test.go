@@ -139,7 +139,7 @@ func TestLiveWatchReturnsInitialPendingQuestionWhenNoRunIsActive(t *testing.T) {
 	attention := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionnotify.NewBroker())
 	service.WithLiveWatchPromptSources(
 		liveWatchAskViewStub{asks: []clientui.PendingAsk{{
-			PromptID: "ask-1", SessionID: mustRuntimeControlSessionID(t, sessionID),
+			ToolCallID: "ask-1", SessionID: mustRuntimeControlSessionID(t, sessionID),
 			StepID: mustRuntimeControlStepID(t), Question: "Continue?", CreatedAt: time.Now().UTC(),
 		}}},
 		liveWatchApprovalViewStub{},
@@ -152,7 +152,7 @@ func TestLiveWatchReturnsInitialPendingQuestionWhenNoRunIsActive(t *testing.T) {
 	}
 	if response.Outcome.Kind != serverapi.RuntimeLiveWatchQuestion ||
 		response.Outcome.Question == nil || response.Outcome.Question.Ask == nil ||
-		response.Outcome.Question.Ask.PromptID != "ask-1" {
+		response.Outcome.Question.Ask.ToolCallID != "ask-1" {
 		t.Fatalf("LiveWatch response = %+v", response)
 	}
 }
@@ -226,7 +226,7 @@ func TestLiveWatchPromptWakeWinsWhileRunIsBlocked(t *testing.T) {
 
 	now := time.Now().UTC()
 	askView.set(clientui.PendingAsk{
-		PromptID: "ask-1", SessionID: mustRuntimeControlSessionID(t, store.Meta().SessionID),
+		ToolCallID: "ask-1", SessionID: mustRuntimeControlSessionID(t, store.Meta().SessionID),
 		StepID: mustRuntimeControlStepID(t), Question: "Continue?", CreatedAt: now,
 	})
 	if err := broker.PublishPending(
@@ -259,7 +259,7 @@ func TestLiveWatchPromptWakeWinsWhileRunIsBlocked(t *testing.T) {
 	if response.Outcome.Kind != serverapi.RuntimeLiveWatchQuestion ||
 		response.Outcome.Question == nil ||
 		response.Outcome.Question.Ask == nil ||
-		response.Outcome.Question.Ask.PromptID != "ask-1" {
+		response.Outcome.Question.Ask.ToolCallID != "ask-1" {
 		t.Fatalf("LiveWatch outcome = %+v", response.Outcome)
 	}
 	if err := engine.Interrupt(); err != nil {

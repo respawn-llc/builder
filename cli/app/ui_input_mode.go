@@ -33,7 +33,6 @@ type uiAskState struct {
 	freeformMode             askFreeformMode
 	activeDelivery           *activePromptAnswerDelivery
 	pendingCtrlCContinuation *transcriptPromptKey
-	answerPending            bool
 	editor                   tuiinput.Editor
 	activeProjection         *activeQuestionProjection
 	inFlightProjection       *questionRenderRequest

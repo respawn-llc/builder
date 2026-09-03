@@ -14,20 +14,19 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 // AskQuestionRequest is the internal broker request. It is intentionally not the
 // model-facing tool payload shape because internal approval workflows carry
 // fields that must never be exposed through the ask_question tool contract.
 type AskQuestionRequest struct {
-	ID                     string                                `json:"-"`
 	Question               string                                `json:"-"`
 	Suggestions            []string                              `json:"-"`
 	RecommendedOptionIndex int                                   `json:"-"`
 	Approval               bool                                  `json:"-"`
 	ApprovalOptions        []AskQuestionApprovalOption           `json:"-"`
+	ApprovalConsumer       func(AskQuestionApproval) error       `json:"-"`
+	AccessTargets          []FileAccessTarget                    `json:"-"`
 	Origin                 AskQuestionOrigin                     `json:"-"`
 	RunID                  string                                `json:"-"`
 	StepID                 string                                `json:"-"`
@@ -36,12 +35,27 @@ type AskQuestionRequest struct {
 	AttentionTarget        *clientui.AttentionNotificationTarget `json:"-"`
 }
 
+func (r AskQuestionRequest) AcceptApproval(resolution AskQuestionResolution) error {
+	if err := ValidateAskQuestionResolution(r, resolution); err != nil {
+		return err
+	}
+	approval, ok := resolution.(AskQuestionApproval)
+	if !ok {
+		return ErrAskQuestionApprovalRequiresResponse
+	}
+	if r.ApprovalConsumer != nil {
+		return r.ApprovalConsumer(approval)
+	}
+	return nil
+}
+
 func (r AskQuestionRequest) Clone() AskQuestionRequest {
 	r.Suggestions = append([]string(nil), r.Suggestions...)
 	r.ApprovalOptions = append([]AskQuestionApprovalOption(nil), r.ApprovalOptions...)
+	r.AccessTargets = append([]FileAccessTarget(nil), r.AccessTargets...)
 	if r.QuestionBatch != nil {
 		batch := *r.QuestionBatch
-		batch.BatchPromptIDs = append([]string(nil), batch.BatchPromptIDs...)
+		batch.BatchToolCallIDs = append([]string(nil), batch.BatchToolCallIDs...)
 		r.QuestionBatch = &batch
 	}
 	if r.AttentionTarget != nil {
@@ -137,9 +151,6 @@ func (b *AskQuestionBroker) SetAskHandler(handler func(context.Context, AskQuest
 }
 
 func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
-	if req.ID == "" {
-		req.ID = uuid.NewString()
-	}
 	req.Suggestions = normalizedSuggestions(req.Suggestions)
 	req.RecommendedOptionIndex = normalizedRecommendedOptionIndex(req.RecommendedOptionIndex, len(req.Suggestions))
 	if req.Question == "" {
@@ -147,6 +158,23 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 	}
 	if err := validateRequest(req); err != nil {
 		return nil, err
+	}
+	internalApproval := req.Approval && !req.IsTaskScopedApprovalQuestion()
+	if internalApproval {
+		identity, err := ExecutionIdentityFromContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if string(identity.ToolCallID) != req.ToolCallID {
+			return nil, fmt.Errorf(
+				"Approval Tool Call ID %q does not match executing Tool Call ID %q",
+				req.ToolCallID,
+				identity.ToolCallID,
+			)
+		}
+		if _, err := approvalLifecycleFromContext(ctx); err != nil {
+			return nil, err
+		}
 	}
 	if barrier, ok := EffectBarrierFromContext(ctx); ok {
 		reason, err := effectBarrierReasonForAsk(req)
@@ -159,6 +187,11 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if internalApproval {
+		if err := ConsumeApprovalPresentation(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	h := b.askHandler()
@@ -189,7 +222,7 @@ func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := ValidateAskQuestionResolution(req, resolution); err != nil {
+	if err := req.acceptResolution(resolution); err != nil {
 		return nil, err
 	}
 	return resolution, nil
@@ -203,7 +236,7 @@ func (b *AskQuestionBroker) askQueued(ctx context.Context, req AskQuestionReques
 	b.mu.Lock()
 	b.queue = append(b.queue, p)
 	b.mu.Unlock()
-	defer b.dequeue(req.ID)
+	defer b.dequeue(req.ToolCallID)
 
 	select {
 	case <-ctx.Done():
@@ -217,26 +250,33 @@ func (b *AskQuestionBroker) finishQueuedResponse(req AskQuestionRequest, rr resp
 	if rr.err != nil {
 		return nil, rr.err
 	}
-	if err := ValidateAskQuestionResolution(req, rr.resolution); err != nil {
+	if err := req.acceptResolution(rr.resolution); err != nil {
 		return nil, err
 	}
 	return rr.resolution, nil
 }
 
-func (b *AskQuestionBroker) Submit(requestID string, resolution AskQuestionResolution) error {
+func (r AskQuestionRequest) acceptResolution(resolution AskQuestionResolution) error {
+	if r.Approval {
+		return r.AcceptApproval(resolution)
+	}
+	return ValidateAskQuestionResolution(r, resolution)
+}
+
+func (b *AskQuestionBroker) Submit(toolCallID string, resolution AskQuestionResolution) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, p := range b.queue {
-		if p.req.ID == requestID {
+		if p.req.ToolCallID == toolCallID {
 			return b.deliverPendingResponseLocked(p, responseResult{resolution: resolution})
 		}
 	}
-	return fmt.Errorf("request %s not found", requestID)
+	return fmt.Errorf("tool call %s not found", toolCallID)
 }
 
 func (b *AskQuestionBroker) deliverPendingResponseLocked(p *pending, rr responseResult) error {
 	if p.completed {
-		return fmt.Errorf("request %s already completed", p.req.ID)
+		return fmt.Errorf("request %s already completed", p.req.ToolCallID)
 	}
 	if rr.err == nil {
 		if err := ValidateAskQuestionResolution(p.req, rr.resolution); err != nil {
@@ -249,6 +289,9 @@ func (b *AskQuestionBroker) deliverPendingResponseLocked(p *pending, rr response
 }
 
 func validateRequest(req AskQuestionRequest) error {
+	if err := clientui.ToolCallID(req.ToolCallID).Validate(); err != nil {
+		return fmt.Errorf("invalid tool call identity: %w", err)
+	}
 	if req.Approval {
 		if req.RecommendedOptionIndex != 0 {
 			return ErrAskQuestionApprovalForbidsRecommended
@@ -325,12 +368,12 @@ func (b *AskQuestionBroker) Pending() []AskQuestionRequest {
 	return out
 }
 
-func (b *AskQuestionBroker) dequeue(requestID string) {
+func (b *AskQuestionBroker) dequeue(toolCallID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := make([]*pending, 0, len(b.queue))
 	for _, p := range b.queue {
-		if p.req.ID == requestID {
+		if p.req.ToolCallID == toolCallID {
 			continue
 		}
 		out = append(out, p)
@@ -340,7 +383,7 @@ func (b *AskQuestionBroker) dequeue(requestID string) {
 
 func (r AskQuestionToolRequest) request(callID string) AskQuestionRequest {
 	return AskQuestionRequest{
-		ID:                     callID,
+		ToolCallID:             callID,
 		Question:               r.Question,
 		Suggestions:            r.Suggestions,
 		RecommendedOptionIndex: r.RecommendedOptionIndex,
@@ -390,14 +433,12 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 	req.Origin = AskQuestionOriginModelTool
 	req.RunID = c.RunID
 	req.StepID = c.StepID
-	req.ToolCallID = c.ID
 	if c.AskQuestionBatch != nil {
 		batch := *c.AskQuestionBatch
-		batch.BatchPromptIDs = append([]string(nil), c.AskQuestionBatch.BatchPromptIDs...)
+		batch.BatchToolCallIDs = append([]string(nil), c.AskQuestionBatch.BatchToolCallIDs...)
 		req.Origin = batch.Origin
 		req.RunID = batch.RunID
 		req.StepID = batch.StepID
-		req.ToolCallID = c.ID
 		req.QuestionBatch = &batch
 	}
 	resolution, err := t.broker.Ask(ctx, req)
@@ -443,6 +484,6 @@ func notifyAskQuestionBatchSkipped(c Call) {
 		return
 	}
 	batch := *c.AskQuestionBatch
-	batch.BatchPromptIDs = append([]string(nil), c.AskQuestionBatch.BatchPromptIDs...)
+	batch.BatchToolCallIDs = append([]string(nil), c.AskQuestionBatch.BatchToolCallIDs...)
 	c.OnAskQuestionBatchSkipped(batch)
 }

@@ -135,14 +135,16 @@ type Engine struct {
 	mu               sync.Mutex
 	workflowTerminal WorkflowTerminalState
 
-	lifecycleMu     sync.Mutex
-	lifecycleOnce   sync.Once
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
-	lifecycleWG     sync.WaitGroup
-	lifecycleClosed bool
-	closed          atomic.Bool
-	runtimeFIFO     *runtimeOperationFIFO
+	lifecycleMu          sync.Mutex
+	lifecycleOnce        sync.Once
+	lifecycleCtx         context.Context
+	lifecycleCancel      context.CancelFunc
+	lifecycleWG          sync.WaitGroup
+	lifecycleClosed      bool
+	closed               atomic.Bool
+	runtimeFIFO          *runtimeOperationFIFO
+	approvalCommentaryMu sync.Mutex
+	approvalCommentary   map[string][]runtimeDeferred[struct{}]
 
 	store                       *session.Store
 	eventLog                    session.MaterializedEventLog
@@ -379,6 +381,7 @@ func (e *Engine) Close() error {
 		return nil
 	}
 	e.ensureLifecycle()
+	e.runtimeFIFO.beginClose()
 	interruptErr := e.Interrupt()
 	e.lifecycleMu.Lock()
 	if e.lifecycleClosed {
@@ -387,7 +390,6 @@ func (e *Engine) Close() error {
 	}
 	e.lifecycleClosed = true
 	e.closed.Store(true)
-	e.runtimeFIFO.beginClose()
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {

@@ -98,7 +98,7 @@ func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *tes
 		Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind: serverapi.RuntimeLiveWatchQuestion,
 			Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-				PromptID: "ask-1", SessionID: responseSessionID, StepID: questionCommandStepID(), Question: "Proceed?",
+				ToolCallID: "ask-1", SessionID: responseSessionID, StepID: questionCommandStepID(), Question: "Proceed?",
 				Suggestions: []string{"yes", "no"}, RecommendedOptionIndex: &recommended,
 			}},
 		},
@@ -137,8 +137,10 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 		Outcomes: []serverapi.WorkflowTaskObservationOutcome{
 			{Kind: serverapi.WorkflowTaskObservationDone, SessionID: &sessionID, NodeKey: &nodeKey},
 			{Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &sessionID, NodeKey: &nodeKey,
-				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-					PromptID: "ask", SessionID: typedSessionID, StepID: questionCommandStepID(), Question: "Continue?",
+				Question: &serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
+					ToolCallID: "ask", SessionID: typedSessionID, StepID: questionCommandStepID(), Question: "Approve access?",
+					Options:       []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
+					AccessTargets: []clientui.FileAccessTarget{{RequestedPath: "/alias/file", ResolvedPath: "/real/file"}},
 				}}},
 		},
 	})
@@ -165,8 +167,12 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 		t.Fatalf("question node_key = %#v", decoded.Outcomes[1])
 	}
 	suggestions, ok := decoded.Outcomes[1]["suggestions"].([]any)
-	if !ok || suggestions == nil || len(suggestions) != 0 {
-		t.Fatalf("question suggestions = %#v, want empty array", decoded.Outcomes[1]["suggestions"])
+	if !ok || len(suggestions) != 1 || suggestions[0] != "Allow once" {
+		t.Fatalf("question suggestions = %#v, want Approval option", decoded.Outcomes[1]["suggestions"])
+	}
+	targets, ok := decoded.Outcomes[1]["access_targets"].([]any)
+	if !ok || len(targets) != 1 || targets[0].(map[string]any)["requested_path"] != "/alias/file" || targets[0].(map[string]any)["resolved_path"] != "/real/file" {
+		t.Fatalf("question access_targets = %#v", decoded.Outcomes[1]["access_targets"])
 	}
 }
 

@@ -132,9 +132,9 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		CurrentNode: node,
 	}
 	request := askquestion.AskQuestionRequest{
-		ID:       "ask-exact-scope",
-		StepID:   registryTestStepID,
-		Question: "Continue?",
+		ToolCallID: "ask-exact-scope",
+		StepID:     registryTestStepID,
+		Question:   "Continue?",
 	}
 	workflowID := workflowRef.WorkflowID
 	request.AttentionTarget = &clientui.AttentionNotificationTarget{
@@ -183,10 +183,10 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		event.PrimaryEntityID != string(workflowRef.CurrentNode.TaskID) ||
 		len(event.RelatedIDs) != 2 ||
 		event.RelatedIDs[0] != sessionID.String() ||
-		event.RelatedIDs[1] != request.ID {
+		event.RelatedIDs[1] != request.ToolCallID {
 		t.Fatalf("workflow wake event = %+v", event)
 	}
-	if err := registry.PromptResolvedScope(workflowHandle.Scope(), request.ID); err != nil {
+	if err := registry.PromptResolvedScope(workflowHandle.Scope(), request.ToolCallID); err != nil {
 		t.Fatalf("resolve workflow prompt projection: %v", err)
 	}
 	projected = events.snapshot()
@@ -201,7 +201,7 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		cleared.PrimaryEntityID != string(workflowRef.CurrentNode.TaskID) ||
 		len(cleared.RelatedIDs) != 2 ||
 		cleared.RelatedIDs[0] != sessionID.String() ||
-		cleared.RelatedIDs[1] != request.ID {
+		cleared.RelatedIDs[1] != request.ToolCallID {
 		t.Fatalf("workflow cleared event = %+v", cleared)
 	}
 	stopCtx, cancelStop := context.WithTimeout(context.Background(), 3*time.Second)

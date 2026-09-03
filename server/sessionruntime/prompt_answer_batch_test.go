@@ -54,42 +54,11 @@ func TestAuthorityResolvePromptBatchRejectsMissingInternalUnionVariantBeforeStal
 		runtimeids.NewSessionID(),
 		promptBatchStepID(t),
 		[]PromptAnswerCommand{{
-			PromptID: "prompt-1",
+			ToolCallID: "prompt-1",
 		}},
 	)
 	if err == nil {
 		t.Fatal("invalid internal command union was treated as stale")
-	}
-}
-
-func TestExecutionPromptStoreResolvePromptBatchPreservesOptionalTextInTypedDelivery(t *testing.T) {
-	store, _ := newPromptBatchStore(t)
-	stepID := promptBatchStepID(t)
-	question := promptBatchQuestion("question", stepID, time.Unix(1, 0))
-	approval := promptBatchApproval("approval", stepID, time.Unix(2, 0))
-	installPromptBatchEntries(&store, question, approval)
-	selected := 1
-
-	_, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-		promptQuestionAnswer("question", &selected, nil),
-		promptApprovalAnswer("approval", tools.AskQuestionApprovalDecisionAllowOnce, nil),
-	})
-	if err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", err)
-	}
-	questionResolution, ok := (<-question.response).resolution.(tools.AskQuestionAnswer)
-	if !ok {
-		t.Fatal("Question delivery did not retain its typed resolution")
-	}
-	if questionResolution.Freeform != nil {
-		t.Fatal("absent Question freeform became present during runtime delivery")
-	}
-	approvalResolution, ok := (<-approval.response).resolution.(tools.AskQuestionApproval)
-	if !ok {
-		t.Fatal("Approval delivery did not retain its typed resolution")
-	}
-	if approvalResolution.Commentary != nil {
-		t.Fatal("absent Approval commentary became present during runtime delivery")
 	}
 }
 
@@ -125,13 +94,16 @@ func TestExecutionPromptStoreResolvePromptBatchResolvesMixedEntriesInCanonicalOr
 			store, feed := newPromptBatchStore(t)
 			entries := clonePromptBatchEntries(canonical...)
 			installedOmitted := clonePromptBatchEntries(omitted)[0]
+			entries[1].response, entries[1].approval = make(chan executionPromptResult), newApprovalPromptLifecycle()
 			installPromptBatchEntries(&store, append(entries, installedOmitted)...)
+			accepted := make(chan executionPromptResult, 1)
+			go func() { accepted <- store.acceptApproval(entries[1], <-entries[1].response) }()
 
 			results, err := store.ResolvePromptBatch(context.Background(), stepID, commands)
 			if err != nil {
 				t.Fatalf("ResolvePromptBatch: %v", err)
 			}
-			requirePromptBatchResultSet(t, results, map[clientui.PromptID]PromptAnswerOutcome{
+			requirePromptBatchResultSet(t, results, map[clientui.ToolCallID]PromptAnswerOutcome{
 				"question-a": PromptAnswerOutcomeResolved,
 				"question-b": PromptAnswerOutcomeResolved,
 				"approval":   PromptAnswerOutcomeResolved,
@@ -149,7 +121,7 @@ func TestExecutionPromptStoreResolvePromptBatchResolvesMixedEntriesInCanonicalOr
 				*questionResponse.SelectedOptionNumber != selected {
 				t.Fatalf("question resolution = %+v, error = %v", questionResult.resolution, questionResult.err)
 			}
-			approvalResult := <-entries[1].response
+			approvalResult := <-accepted
 			approvalResponse, ok := approvalResult.resolution.(tools.AskQuestionApproval)
 			if approvalResult.err != nil || !ok ||
 				approvalResponse.Decision != tools.AskQuestionApprovalDecisionAllowOnce {
@@ -160,129 +132,6 @@ func TestExecutionPromptStoreResolvePromptBatchResolvesMixedEntriesInCanonicalOr
 				t.Fatalf("declined response error = %v, want context.Canceled", declinedResult.err)
 			}
 		})
-	}
-}
-
-func TestExecutionPromptStoreResolvePromptBatchTreatsStaleEntriesAsSkipped(t *testing.T) {
-	store, _ := newPromptBatchStore(t)
-	stepID := promptBatchStepID(t)
-	otherStepID := promptBatchOtherStepID(t)
-	pending := promptBatchQuestion("pending", stepID, time.Unix(1, 0))
-	wrongStep := promptBatchQuestion("wrong-step", otherStepID, time.Unix(2, 0))
-	installPromptBatchEntries(&store, pending, wrongStep)
-	selected := 1
-
-	results, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-		promptQuestionAnswer("missing", &selected, nil),
-		promptQuestionAnswer("wrong-step", &selected, nil),
-		promptQuestionAnswer("pending", &selected, nil),
-	})
-	if err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", err)
-	}
-	requirePromptBatchResultSet(t, results, map[clientui.PromptID]PromptAnswerOutcome{
-		"missing":    PromptAnswerOutcomeSkipped,
-		"wrong-step": PromptAnswerOutcomeSkipped,
-		"pending":    PromptAnswerOutcomeResolved,
-	})
-	if !store.hasPendingID("wrong-step") {
-		t.Fatal("prompt owned by another Step was mutated")
-	}
-
-	allStale, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-		promptQuestionAnswer("missing", &selected, nil),
-		promptQuestionAnswer("pending", &selected, nil),
-	})
-	if err != nil {
-		t.Fatalf("all-stale ResolvePromptBatch: %v", err)
-	}
-	requirePromptBatchResultSet(t, allStale, map[clientui.PromptID]PromptAnswerOutcome{
-		"missing": PromptAnswerOutcomeSkipped,
-		"pending": PromptAnswerOutcomeSkipped,
-	})
-}
-
-func TestExecutionPromptStoreResolvePromptBatchFirstResolverWins(t *testing.T) {
-	stepID := promptBatchStepID(t)
-	feed := newPromptBatchBlockingFeed("first")
-	store := newExecutionPromptStoreForTest(t, feed)
-	first := promptBatchQuestion("first", stepID, time.Unix(1, 0))
-	second := promptBatchQuestion("second", stepID, time.Unix(2, 0))
-	installPromptBatchEntries(&store, first, second)
-	selected := 1
-	done := make(chan promptBatchCallResult, 1)
-	go func() {
-		results, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-			promptQuestionAnswer("second", &selected, nil),
-			promptQuestionAnswer("first", &selected, nil),
-		})
-		done <- promptBatchCallResult{results: results, err: err}
-	}()
-	<-feed.blocked
-
-	externalResults, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-		{
-			PromptID: "second",
-			Payload: PromptQuestionAnswerCommand{
-				Answer: testQuestionResolution("external"),
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("external ResolvePromptBatch: %v", err)
-	}
-	if len(externalResults) != 1 || externalResults[0].Outcome != PromptAnswerOutcomeResolved {
-		t.Fatalf("external results = %+v, want resolved", externalResults)
-	}
-	close(feed.release)
-	call := <-done
-	if call.err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", call.err)
-	}
-	requirePromptBatchResultSet(t, call.results, map[clientui.PromptID]PromptAnswerOutcome{
-		"first":  PromptAnswerOutcomeResolved,
-		"second": PromptAnswerOutcomeSkipped,
-	})
-	externalResult := <-second.response
-	if externalResult.err != nil {
-		t.Fatalf("external winner error = %v", externalResult.err)
-	}
-	requireQuestionAnswer(t, externalResult.resolution, "external")
-}
-
-func TestExecutionPromptStoreResolvePromptBatchSkipsReplacedExactEntry(t *testing.T) {
-	stepID := promptBatchStepID(t)
-	feed := newPromptBatchBlockingFeed("first")
-	store := newExecutionPromptStoreForTest(t, feed)
-	first := promptBatchQuestion("first", stepID, time.Unix(1, 0))
-	second := promptBatchQuestion("second", stepID, time.Unix(2, 0))
-	installPromptBatchEntries(&store, first, second)
-	selected := 1
-	done := make(chan promptBatchCallResult, 1)
-	go func() {
-		results, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-			promptQuestionAnswer("first", &selected, nil),
-			promptQuestionAnswer("second", &selected, nil),
-		})
-		done <- promptBatchCallResult{results: results, err: err}
-	}()
-	<-feed.blocked
-
-	replacement := promptBatchQuestion("second", stepID, time.Unix(3, 0))
-	store.mu.Lock()
-	store.pending["second"] = replacement
-	store.mu.Unlock()
-	close(feed.release)
-	call := <-done
-	if call.err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", call.err)
-	}
-	requirePromptBatchResultSet(t, call.results, map[clientui.PromptID]PromptAnswerOutcome{
-		"first":  PromptAnswerOutcomeResolved,
-		"second": PromptAnswerOutcomeSkipped,
-	})
-	if !store.hasPendingID("second") {
-		t.Fatal("replacement prompt was removed by stale prepared entry")
 	}
 }
 
@@ -382,8 +231,8 @@ func TestExecutionPromptStoreResolvePromptBatchDoesNotWaitForPreparedSuccessor(t
 		Origin:              tools.AskQuestionOriginModelTool,
 		RunID:               "run-1",
 		StepID:              stepID.String(),
-		PromptID:            "first",
-		BatchPromptIDs:      []string{"first", "future"},
+		ToolCallID:          "first",
+		BatchToolCallIDs:    []string{"first", "future"},
 		CandidateOrdinal:    0,
 		PreparedPromptCount: 2,
 	}
@@ -396,139 +245,16 @@ func TestExecutionPromptStoreResolvePromptBatchDoesNotWaitForPreparedSuccessor(t
 	if err != nil {
 		t.Fatalf("ResolvePromptBatch: %v", err)
 	}
-	requirePromptBatchResultSet(t, results, map[clientui.PromptID]PromptAnswerOutcome{
+	requirePromptBatchResultSet(t, results, map[clientui.ToolCallID]PromptAnswerOutcome{
 		"first": PromptAnswerOutcomeResolved,
 	})
 }
 
-func TestExecutionPromptStoreResolvePromptBatchDeclinedApprovalHasNoDecisionPayload(t *testing.T) {
-	stepID := promptBatchStepID(t)
-	store, feed := newPromptBatchStore(t)
-	approval := promptBatchApproval("approval", stepID, time.Unix(1, 0))
-	installPromptBatchEntries(&store, approval)
-
-	results, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-		promptDeclined("approval"),
-	})
-	if err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", err)
-	}
-	requirePromptBatchResultSet(t, results, map[clientui.PromptID]PromptAnswerOutcome{
-		"approval": PromptAnswerOutcomeResolved,
-	})
-	if got, want := feed.resolvedIDs(), []string{"approval"}; !equalPromptBatchStrings(got, want) {
-		t.Fatalf("resolved approvals = %v, want %v", got, want)
-	}
-	result := <-approval.response
-	if !errors.Is(result.err, context.Canceled) {
-		t.Fatalf("declined Approval error = %v, want context.Canceled", result.err)
-	}
-	if result.resolution != nil {
-		t.Fatalf("declined Approval delivered resolution: %+v", result.resolution)
-	}
-}
-
-func TestAuthorityResolvePromptBatchWithoutActiveExecutionReturnsAllSkipped(t *testing.T) {
-	authority := NewAuthority(AuthorityOptions{})
-	selected := 1
-	results, err := authority.ResolvePromptBatch(
-		context.Background(),
-		runtimeids.NewSessionID(),
-		promptBatchStepID(t),
-		[]PromptAnswerCommand{
-			promptQuestionAnswer("question", &selected, nil),
-			promptDeclined("approval"),
-		},
-	)
-	if err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", err)
-	}
-	requirePromptBatchResultSet(t, results, map[clientui.PromptID]PromptAnswerOutcome{
-		"question": PromptAnswerOutcomeSkipped,
-		"approval": PromptAnswerOutcomeSkipped,
-	})
-}
-
-func TestAuthorityResolvePromptBatchDoesNotRedirectIntoReplacementExecution(t *testing.T) {
-	authority := NewAuthority(AuthorityOptions{})
-	sessionID := runtimeids.NewSessionID()
-	resourceRef, err := runtimeids.NewSessionResourceRef(sessionID, 1)
-	if err != nil {
-		t.Fatalf("NewSessionResourceRef: %v", err)
-	}
-	stepID := promptBatchStepID(t)
-	feed := newPromptBatchBlockingFeed("first")
-	firstScope := newAgentExecutionScope(runtimeids.NewExecutionScopeID(), 1, resourceRef, nil)
-	firstExecution := &execution{
-		authority: authority,
-		scope:     firstScope,
-		prompts:   newExecutionPromptStore(authority, firstScope, feed),
-	}
-	first := promptBatchQuestion("first", stepID, time.Unix(1, 0))
-	second := promptBatchQuestion("second", stepID, time.Unix(2, 0))
-	installPromptBatchEntries(&firstExecution.prompts, first, second)
-	resource := &agentResource{
-		authority: authority,
-		ref:       resourceRef,
-		changed:   make(chan struct{}),
-		current:   firstExecution,
-	}
-	authority.mu.Lock()
-	authority.resources[sessionID] = resource
-	authority.byScope[firstScope.ID()] = firstExecution
-	authority.mu.Unlock()
-
-	selected := 1
-	done := make(chan promptBatchCallResult, 1)
-	go func() {
-		results, resolveErr := authority.ResolvePromptBatch(
-			context.Background(),
-			sessionID,
-			stepID,
-			[]PromptAnswerCommand{
-				promptQuestionAnswer("second", &selected, nil),
-				promptQuestionAnswer("first", &selected, nil),
-			},
-		)
-		done <- promptBatchCallResult{results: results, err: resolveErr}
-	}()
-	<-feed.blocked
-
-	secondResourceRef, err := runtimeids.NewSessionResourceRef(sessionID, 2)
-	if err != nil {
-		t.Fatalf("replacement NewSessionResourceRef: %v", err)
-	}
-	secondScope := newAgentExecutionScope(runtimeids.NewExecutionScopeID(), 2, secondResourceRef, nil)
-	replacementExecution := &execution{
-		authority: authority,
-		scope:     secondScope,
-		prompts:   newExecutionPromptStore(authority, secondScope, nil),
-	}
-	replacementPrompt := promptBatchQuestion("second", stepID, time.Unix(3, 0))
-	installPromptBatchEntries(&replacementExecution.prompts, replacementPrompt)
-	resource.mu.Lock()
-	resource.ref = secondResourceRef
-	resource.current = replacementExecution
-	resource.mu.Unlock()
-	authority.mu.Lock()
-	authority.byScope[secondScope.ID()] = replacementExecution
-	authority.mu.Unlock()
-
-	close(feed.release)
-	call := <-done
-	if call.err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", call.err)
-	}
-	requirePromptBatchResultSet(t, call.results, map[clientui.PromptID]PromptAnswerOutcome{
-		"first":  PromptAnswerOutcomeResolved,
-		"second": PromptAnswerOutcomeResolved,
-	})
-	if !replacementExecution.prompts.hasPendingID("second") {
-		t.Fatal("batch redirected the remaining answer into replacement execution")
-	}
-	if firstExecution.prompts.hasPendingID("second") {
-		t.Fatal("captured exact execution did not receive remaining answer")
-	}
+func TestAuthorityResolvePromptBatchDelegatesApprovalToExactAction(t *testing.T) {
+	h := newApprovalActionHarness(t, approvalActionHarnessOptions{})
+	results, err := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowOnce, nil))
+	requireApprovalActionOutcome(t, promptBatchCallResult{results: results, err: err}, PromptAnswerOutcomeResolved)
+	requireApproval(t, waitApprovalHandle(t, h) == nil, "delegated Approval action failed")
 }
 
 type promptBatchCallResult struct {
@@ -547,11 +273,11 @@ func (f *promptBatchRecordingFeed) PromptPendingScope(ExecutionScope, tools.AskQ
 	return nil
 }
 
-func (f *promptBatchRecordingFeed) PromptResolvedScope(_ ExecutionScope, promptID string) error {
+func (f *promptBatchRecordingFeed) PromptResolvedScope(_ ExecutionScope, toolCallID string) error {
 	f.mu.Lock()
-	f.resolved = append(f.resolved, promptID)
+	f.resolved = append(f.resolved, toolCallID)
 	f.mu.Unlock()
-	if promptID == f.failAt {
+	if toolCallID == f.failAt {
 		return f.failErr
 	}
 	return nil
@@ -579,12 +305,12 @@ func newPromptBatchBlockingFeed(blockAt string) *promptBatchBlockingFeed {
 	}
 }
 
-func (f *promptBatchBlockingFeed) PromptResolvedScope(scope ExecutionScope, promptID string) error {
-	if promptID == f.blockAt {
+func (f *promptBatchBlockingFeed) PromptResolvedScope(scope ExecutionScope, toolCallID string) error {
+	if toolCallID == f.blockAt {
 		close(f.blocked)
 		<-f.release
 	}
-	return f.promptBatchRecordingFeed.PromptResolvedScope(scope, promptID)
+	return f.promptBatchRecordingFeed.PromptResolvedScope(scope, toolCallID)
 }
 
 type promptBatchCancelingFeed struct {
@@ -592,8 +318,8 @@ type promptBatchCancelingFeed struct {
 	cancel context.CancelCauseFunc
 }
 
-func (f *promptBatchCancelingFeed) PromptResolvedScope(scope ExecutionScope, promptID string) error {
-	err := f.promptBatchRecordingFeed.PromptResolvedScope(scope, promptID)
+func (f *promptBatchCancelingFeed) PromptResolvedScope(scope ExecutionScope, toolCallID string) error {
+	err := f.promptBatchRecordingFeed.PromptResolvedScope(scope, toolCallID)
 	f.cancel(context.Canceled)
 	return err
 }
@@ -606,7 +332,7 @@ func newPromptBatchStore(t *testing.T) (executionPromptStore, *promptBatchRecord
 
 func promptBatchQuestion(id string, stepID runtimeids.StepID, createdAt time.Time) *executionPromptEntry {
 	request := tools.AskQuestionRequest{
-		ID:          id,
+		ToolCallID:  id,
 		StepID:      stepID.String(),
 		Question:    id,
 		Suggestions: []string{"one", "two"},
@@ -616,10 +342,10 @@ func promptBatchQuestion(id string, stepID runtimeids.StepID, createdAt time.Tim
 
 func promptBatchApproval(id string, stepID runtimeids.StepID, createdAt time.Time) *executionPromptEntry {
 	request := tools.AskQuestionRequest{
-		ID:       id,
-		StepID:   stepID.String(),
-		Question: id,
-		Approval: true,
+		ToolCallID: id,
+		StepID:     stepID.String(),
+		Question:   id,
+		Approval:   true,
 		ApprovalOptions: []tools.AskQuestionApprovalOption{
 			{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
 			{Decision: tools.AskQuestionApprovalDecisionDeny, Label: "Deny"},
@@ -645,7 +371,7 @@ func installPromptBatchEntries(store *executionPromptStore, entries ...*executio
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	for _, entry := range entries {
-		store.pending[entry.snapshot.Request.ID] = entry
+		store.pending[entry.snapshot.Request.ToolCallID] = entry
 	}
 }
 
@@ -657,9 +383,9 @@ func clonePromptBatchEntries(entries ...*executionPromptEntry) []*executionPromp
 	return clones
 }
 
-func promptQuestionAnswer(promptID string, selected *int, freeform *string) PromptAnswerCommand {
+func promptQuestionAnswer(toolCallID string, selected *int, freeform *string) PromptAnswerCommand {
 	return PromptAnswerCommand{
-		PromptID: clientui.PromptID(promptID),
+		ToolCallID: clientui.ToolCallID(toolCallID),
 		Payload: PromptQuestionAnswerCommand{
 			Answer: tools.AskQuestionAnswer{
 				SelectedOptionNumber: selected,
@@ -669,9 +395,9 @@ func promptQuestionAnswer(promptID string, selected *int, freeform *string) Prom
 	}
 }
 
-func promptApprovalAnswer(promptID string, decision tools.AskQuestionApprovalDecision, commentary *string) PromptAnswerCommand {
+func promptApprovalAnswer(toolCallID string, decision tools.AskQuestionApprovalDecision, commentary *string) PromptAnswerCommand {
 	return PromptAnswerCommand{
-		PromptID: clientui.PromptID(promptID),
+		ToolCallID: clientui.ToolCallID(toolCallID),
 		Payload: PromptApprovalAnswerCommand{
 			Answer: tools.AskQuestionApproval{
 				Decision:   decision,
@@ -681,30 +407,30 @@ func promptApprovalAnswer(promptID string, decision tools.AskQuestionApprovalDec
 	}
 }
 
-func promptDeclined(promptID string) PromptAnswerCommand {
+func promptDeclined(toolCallID string) PromptAnswerCommand {
 	return PromptAnswerCommand{
-		PromptID: clientui.PromptID(promptID),
-		Payload:  PromptDeclinedCommand{},
+		ToolCallID: clientui.ToolCallID(toolCallID),
+		Payload:    PromptDeclinedCommand{},
 	}
 }
 
 func requirePromptBatchResultSet(
 	t *testing.T,
 	results []PromptAnswerResult,
-	want map[clientui.PromptID]PromptAnswerOutcome,
+	want map[clientui.ToolCallID]PromptAnswerOutcome,
 ) {
 	t.Helper()
 	if len(results) != len(want) {
 		t.Fatalf("result count = %d, want %d: %+v", len(results), len(want), results)
 	}
-	seen := make(map[clientui.PromptID]struct{}, len(results))
+	seen := make(map[clientui.ToolCallID]struct{}, len(results))
 	for _, result := range results {
-		if _, exists := seen[result.PromptID]; exists {
-			t.Fatalf("duplicate result identity %q", result.PromptID)
+		if _, exists := seen[result.ToolCallID]; exists {
+			t.Fatalf("duplicate result identity %q", result.ToolCallID)
 		}
-		seen[result.PromptID] = struct{}{}
-		if result.Outcome != want[result.PromptID] {
-			t.Fatalf("result %q outcome = %q, want %q", result.PromptID, result.Outcome, want[result.PromptID])
+		seen[result.ToolCallID] = struct{}{}
+		if result.Outcome != want[result.ToolCallID] {
+			t.Fatalf("result %q outcome = %q, want %q", result.ToolCallID, result.Outcome, want[result.ToolCallID])
 		}
 	}
 }
@@ -712,15 +438,6 @@ func requirePromptBatchResultSet(
 func promptBatchStepID(t *testing.T) runtimeids.StepID {
 	t.Helper()
 	id, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
-	if err != nil {
-		t.Fatalf("ParseStepID: %v", err)
-	}
-	return id
-}
-
-func promptBatchOtherStepID(t *testing.T) runtimeids.StepID {
-	t.Helper()
-	id, err := runtimeids.ParseStepID("33333333-3333-4333-8333-333333333333")
 	if err != nil {
 		t.Fatalf("ParseStepID: %v", err)
 	}

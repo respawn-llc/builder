@@ -31,11 +31,11 @@ enum FollowUpKind {
 }
 
 message Question {
-  string prompt_id = 1 [
+  string tool_call_id = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
-      id: "kent.prompt.question_prompt_id_canonical"
-      message: "prompt_id must not have surrounding whitespace"
+      id: "kent.prompt.question_tool_call_id_canonical"
+      message: "tool_call_id must not have surrounding whitespace"
       expression: "this == this.trim()"
     }
   ];
@@ -87,12 +87,23 @@ message ApprovalOption {
   reserved "label";
 }
 
+message FileAccessTarget {
+  string requested_path = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+  string resolved_path = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+}
+
 message Approval {
-  string prompt_id = 1 [
+  string tool_call_id = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
-      id: "kent.prompt.approval_prompt_id_canonical"
-      message: "prompt_id must not have surrounding whitespace"
+      id: "kent.prompt.approval_tool_call_id_canonical"
+      message: "tool_call_id must not have surrounding whitespace"
       expression: "this == this.trim()"
     }
   ];
@@ -120,6 +131,7 @@ message Approval {
     (buf.validate.field).required = true,
     (buf.validate.field).timestamp.gt = {seconds: 0}
   ];
+  repeated FileAccessTarget access_targets = 7 [(buf.validate.field).repeated.items.required = true];
 
   option (buf.validate.message).cel = {
     id: "kent.prompt.approval_decisions_unique"
@@ -220,11 +232,11 @@ message ApprovalAnswer {
 message Declined {}
 
 message AnswerBatchEntry {
-  string prompt_id = 1 [
+  string tool_call_id = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
-      id: "kent.prompt.answer_prompt_id_canonical"
-      message: "prompt_id must not have surrounding whitespace"
+      id: "kent.prompt.answer_tool_call_id_canonical"
+      message: "tool_call_id must not have surrounding whitespace"
       expression: "this == this.trim()"
     }
   ];
@@ -251,18 +263,18 @@ message AnswerBatchRequest {
   }];
 
   option (buf.validate.message).cel = {
-    id: "kent.prompt.answer_batch_prompt_ids_unique"
-    message: "answer batch prompt IDs must be unique"
-    expression: "this.entries.map(entry, entry.prompt_id).unique()"
+    id: "kent.prompt.answer_batch_tool_call_ids_unique"
+    message: "answer batch Tool Call IDs must be unique"
+    expression: "this.entries.map(entry, entry.tool_call_id).unique()"
   };
 }
 
 message AnswerBatchEntryResult {
-  string prompt_id = 1 [
+  string tool_call_id = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
-      id: "kent.prompt.answer_result_prompt_id_canonical"
-      message: "prompt_id must not have surrounding whitespace"
+      id: "kent.prompt.answer_result_tool_call_id_canonical"
+      message: "tool_call_id must not have surrounding whitespace"
       expression: "this == this.trim()"
     }
   ];
@@ -279,9 +291,9 @@ message AnswerBatchSuccess {
   }];
 
   option (buf.validate.message).cel = {
-    id: "kent.prompt.answer_result_prompt_ids_unique"
-    message: "answer result prompt IDs must be unique"
-    expression: "this.results.map(result, result.prompt_id).unique()"
+    id: "kent.prompt.answer_result_tool_call_ids_unique"
+    message: "answer result Tool Call IDs must be unique"
+    expression: "this.results.map(result, result.tool_call_id).unique()"
   };
 }
 
@@ -315,11 +327,11 @@ message FollowUpWatchRequest {
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  string prompt_id = 3 [
+  string tool_call_id = 3 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
-      id: "kent.prompt.follow_up_prompt_id_canonical"
-      message: "prompt_id must not have surrounding whitespace"
+      id: "kent.prompt.follow_up_tool_call_id_canonical"
+      message: "tool_call_id must not have surrounding whitespace"
       expression: "this == this.trim()"
     }
   ];

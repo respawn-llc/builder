@@ -37,11 +37,11 @@ describe("Task Detail live refresh", () => {
             if (answerCount === 1) {
               await first.promise;
               attention = staleAttention;
-              return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
+              return { results: [{ tool_call_id: "ask-1", outcome: "resolved" }] };
             }
             await second.promise;
             attention = { items: [], generated_at_unix_ms: 5 };
-            return { results: [{ prompt_id: "ask-2", outcome: "resolved" }] };
+            return { results: [{ tool_call_id: "ask-2", outcome: "resolved" }] };
           },
         },
       ],
@@ -130,7 +130,7 @@ describe("Task Detail live refresh", () => {
           method: "prompt.answerBatch",
           handler: async () => {
             await delivery.promise;
-            return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
+            return { results: [{ tool_call_id: "ask-1", outcome: "resolved" }] };
           },
         },
       ],
@@ -182,7 +182,7 @@ describe("Task Detail live refresh", () => {
           method: "prompt.answerBatch",
           handler: async () => {
             await delivery.promise;
-            return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
+            return { results: [{ tool_call_id: "ask-1", outcome: "resolved" }] };
           },
         },
       ],
@@ -258,7 +258,7 @@ describe("Task Detail live refresh", () => {
           method: "prompt.answerBatch",
           handler: () => {
             attention = taskAttention("ask-2", 2);
-            return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
+            return { results: [{ tool_call_id: "ask-1", outcome: "resolved" }] };
           },
         },
       ],
@@ -274,7 +274,7 @@ describe("Task Detail live refresh", () => {
       entries: [
         {
           kind: "question",
-          promptID: "ask-1",
+          toolCallID: "ask-1",
           selectedOptionNumber: null,
           freeform: "answered",
         },
@@ -337,7 +337,7 @@ function taskAttentionMany(prompts: readonly (readonly [string, number])[]) {
       message: askID,
       question: {
         ...questionAttention.question,
-        prompt_id: askID,
+        tool_call_id: askID,
         suggestions: Array.from({ length: optionCount }, (_, index) => `option-${String(index + 1)}`),
       },
     })),

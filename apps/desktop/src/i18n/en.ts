@@ -373,6 +373,8 @@ export const englishResources = {
       delete: "Delete",
     },
     task: {
+      accessApprovalIntro: "Agent wants to access a batch of files, but {{count}} are outside workspace dir:",
+      accessApprovalQuestion: "Allow this access?",
       sessionStarted: "Session started",
       title: "Task",
       identifier: "ID",

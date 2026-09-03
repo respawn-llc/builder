@@ -348,7 +348,7 @@ func formatPatchToolResult(result Result) string {
 			}
 			message += "."
 			if commentary := strings.TrimSpace(payload.Commentary); commentary != "" {
-				message += "\nUser said: " + commentary
+				message = (DenialCommentaryPresentation{Commentary: &commentary}).Append(message)
 			}
 			return message
 		case "approval_failed":

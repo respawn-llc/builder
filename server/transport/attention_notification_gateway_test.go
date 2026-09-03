@@ -50,7 +50,7 @@ func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndKeepsQuestionsLiveOnly
 		t.Fatalf("desktop cross-project events = %+v then %+v", first, second)
 	}
 
-	beginGatewayPendingPrompt(t, broker, sessionOne.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
+	beginGatewayPendingPrompt(t, broker, sessionOne.Meta().SessionID, askquestion.AskQuestionRequest{ToolCallID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
 	if event, err := desktop.Next(shortGatewayAttentionContext(t)); err == nil {
 		t.Fatalf("desktop received generic session prompt: %+v", event)
 	}
@@ -102,7 +102,7 @@ func TestGatewayRemoteSessionAttentionReceivesAuthorizedGenericPrompt(t *testing
 	if err != nil {
 		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
 	}
-	beginGatewayPendingPrompt(t, broker, sessionStore.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
+	beginGatewayPendingPrompt(t, broker, sessionStore.Meta().SessionID, askquestion.AskQuestionRequest{ToolCallID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
 	pending := nextGatewayAttentionEvent(t, sub)
 	if pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt || pending.Pending.Target.SessionID != sessionStore.Meta().SessionID {
 		t.Fatalf("session prompt pending = %+v", pending)
@@ -146,15 +146,15 @@ func beginGatewayPendingPrompt(t *testing.T, broker *attentionnotify.Broker, ses
 		scope = attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: target.TaskID, SessionID: sessionID}
 	}
 	notification := clientui.AttentionNotification{
-		ID:   clientui.AttentionNotificationID{Kind: kind, UUID: request.ID},
+		ID:   clientui.AttentionNotificationID{Kind: kind, UUID: request.ToolCallID},
 		Kind: kind, OccurredAt: time.Now().UTC(), Revision: 1, Target: target,
 	}
 	if kind == clientui.AttentionNotificationKindApproval {
 		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: request.Question}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{
-			PreparedAskIDs: []string{request.ID}, MaterializedAskIDs: []string{request.ID},
-			CurrentUnresolvedAskIDs: []string{request.ID}, Preview: request.Question,
+			PreparedAskIDs: []string{request.ToolCallID}, MaterializedAskIDs: []string{request.ToolCallID},
+			CurrentUnresolvedAskIDs: []string{request.ToolCallID}, Preview: request.Question,
 			DisplayCount: 1, MaterializedCount: 1,
 		}
 	}
@@ -179,15 +179,15 @@ func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, s
 	currentNodeID := "node-" + taskID
 	workflowID := runtimeids.NewWorkflowID()
 	return askquestion.AskQuestionRequest{
-		ID:       askID,
-		StepID:   gatewayAttentionStepID,
-		Question: "Task question?",
+		ToolCallID: askID,
+		StepID:     gatewayAttentionStepID,
+		Question:   "Task question?",
 		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
 			Origin:              askquestion.AskQuestionOriginModelTool,
 			RunID:               "run-" + taskID,
 			StepID:              gatewayAttentionStepID,
-			PromptID:            askID,
-			BatchPromptIDs:      []string{askID},
+			ToolCallID:          askID,
+			BatchToolCallIDs:    []string{askID},
 			CandidateOrdinal:    0,
 			PreparedPromptCount: 1,
 		},

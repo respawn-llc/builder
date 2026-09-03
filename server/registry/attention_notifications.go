@@ -117,14 +117,14 @@ func (r *RuntimeRegistry) enqueueTaskQuestionBatchSnapshot(sub serverapi.Attenti
 	req := items[0].Request
 	materializedAskIDs := make([]string, 0, len(items))
 	for _, item := range items {
-		materializedAskIDs = append(materializedAskIDs, item.Request.ID)
+		materializedAskIDs = append(materializedAskIDs, item.Request.ToolCallID)
 	}
 	return r.questionBatches.EnqueueSnapshot(subscription, attentionnotify.QuestionBatch{
 		StepID:         questionBatchStepID(*req.QuestionBatch),
 		Route:          attentionScopeForRequest(sessionID, req),
 		Target:         *req.AttentionTarget,
 		Preview:        strings.TrimSpace(req.Question),
-		PreparedAskIDs: append([]string(nil), req.QuestionBatch.BatchPromptIDs...),
+		PreparedAskIDs: append([]string(nil), req.QuestionBatch.BatchToolCallIDs...),
 		OccurredAt:     items[0].CreatedAt,
 	}, materializedAskIDs)
 }
@@ -137,18 +137,18 @@ func (r *RuntimeRegistry) publishAttentionPending(sessionID string, snapshot Pen
 	if req.QuestionBatch != nil && req.AttentionTarget != nil && req.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
 		stepID := questionBatchStepID(*req.QuestionBatch)
 		if err := r.PrepareTaskQuestionBatch(*req.QuestionBatch, sessionID, req.AttentionTarget, strings.TrimSpace(req.Question), snapshot.CreatedAt); err != nil {
-			logAttentionNotificationOperationFailure("prepare task question batch", sessionID, req.ID, err)
+			logAttentionNotificationOperationFailure("prepare task question batch", sessionID, req.ToolCallID, err)
 			return
 		}
-		if err := r.questionBatches.MarkMaterialized(stepID, req.ID); err != nil {
-			logAttentionNotificationOperationFailure("materialize task question batch", sessionID, req.ID, err)
+		if err := r.questionBatches.MarkMaterialized(stepID, req.ToolCallID); err != nil {
+			logAttentionNotificationOperationFailure("materialize task question batch", sessionID, req.ToolCallID, err)
 		}
 		return
 	}
 	event := attentionPendingEventFromPrompt(sessionID, snapshot, clientui.AttentionNotificationSourceLive)
 	if event.Pending != nil {
 		if err := r.attentionBroker.PublishPending(attentionScopeForRequest(sessionID, req), *event.Pending); err != nil {
-			logAttentionNotificationOperationFailure("publish pending prompt", sessionID, req.ID, err)
+			logAttentionNotificationOperationFailure("publish pending prompt", sessionID, req.ToolCallID, err)
 		}
 	}
 }
@@ -167,10 +167,10 @@ func (r *RuntimeRegistry) publishAttentionResolved(sessionID string, snapshot Pe
 	kind := promptNotificationKind(req)
 	id := clientui.AttentionNotificationID{
 		Kind: kind,
-		UUID: strings.TrimSpace(req.ID),
+		UUID: strings.TrimSpace(req.ToolCallID),
 	}
 	if err := r.attentionBroker.PublishResolved(attentionScopeForRequest(sessionID, req), id, kind, time.Now().UTC()); err != nil {
-		logAttentionNotificationOperationFailure("publish resolved prompt", sessionID, req.ID, err)
+		logAttentionNotificationOperationFailure("publish resolved prompt", sessionID, req.ToolCallID, err)
 	}
 }
 
@@ -205,7 +205,7 @@ func (r *RuntimeRegistry) PrepareTaskQuestionBatch(batch askquestion.AskQuestion
 		Route:          attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: target.TaskID, SessionID: sessionID},
 		Target:         *target,
 		Preview:        strings.TrimSpace(preview),
-		PreparedAskIDs: append([]string(nil), batch.BatchPromptIDs...),
+		PreparedAskIDs: append([]string(nil), batch.BatchToolCallIDs...),
 		OccurredAt:     occurredAt,
 	})
 }
@@ -223,8 +223,8 @@ func (r *RuntimeRegistry) MarkTaskQuestionSkipped(batch askquestion.AskQuestionB
 	if r == nil || r.questionBatches == nil {
 		return
 	}
-	if err := r.questionBatches.MarkSkipped(questionBatchStepID(batch), batch.PromptID); err != nil {
-		logAttentionNotificationOperationFailure("mark task question skipped", "", batch.PromptID, err)
+	if err := r.questionBatches.MarkSkipped(questionBatchStepID(batch), batch.ToolCallID); err != nil {
+		logAttentionNotificationOperationFailure("mark task question skipped", "", batch.ToolCallID, err)
 	}
 }
 
@@ -247,7 +247,7 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 	notification := clientui.AttentionNotification{
 		ID: clientui.AttentionNotificationID{
 			Kind: kind,
-			UUID: strings.TrimSpace(snapshot.Request.ID),
+			UUID: strings.TrimSpace(snapshot.Request.ToolCallID),
 		},
 		Kind:       kind,
 		OccurredAt: snapshot.CreatedAt,
@@ -260,9 +260,9 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 		}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{
-			PreparedAskIDs:          []string{snapshot.Request.ID},
-			MaterializedAskIDs:      []string{snapshot.Request.ID},
-			CurrentUnresolvedAskIDs: []string{snapshot.Request.ID},
+			PreparedAskIDs:          []string{snapshot.Request.ToolCallID},
+			MaterializedAskIDs:      []string{snapshot.Request.ToolCallID},
+			CurrentUnresolvedAskIDs: []string{snapshot.Request.ToolCallID},
 			Preview:                 strings.TrimSpace(snapshot.Request.Question),
 			DisplayCount:            1,
 			MaterializedCount:       1,

@@ -388,7 +388,7 @@
 - The Session's current executable Node pauses until the Question is answered.
 - All clients use the same authoritative Question and Approval state. A client marks an interaction resolved only after Kent accepts the answer.
 - A Question belongs to its Session. Workflow attention refers to that Question and does not create a second Task-owned copy.
-- Workflow Question attention carries Session, Step, and prompt identity only in its Question payload. The attention item and its Current Node do not repeat Question Session identity.
+- Workflow Question attention carries Session, Step, and Tool Call ID only in its Question payload. The attention item and its Current Node do not repeat Question Session identity.
 - Live Questions and live Approvals exist only within their Exact Execution Scope. Process death does not restore them, replay answers, or apply a blocked Workflow effect. The affected Current Node follows ordinary lost-execution interruption behavior.
 - The bounded active Session transcript supplies Question content to read surfaces. An unfinished transcript operation without a matching Exact Execution Scope does not create a live Question or `waiting_question` Task status.
 - A pending Workflow Transition Approval belongs to the current Task and survives restart.
@@ -432,8 +432,8 @@
 - Server restart performs no Task Start recovery. Before the cutover, a restart leaves the Task at Start and a later Start retries preparation; after the cutover, the Task is ordinarily started. Runtime launch after the cutover follows normal Current Node execution and failure semantics.
 - Concurrent Task Start requests serialize through the Task lifecycle owner from Start validation through cutover. Losing, canceling, or closing the initiating client connection stops only that client's observation; it never cancels, pauses, retries, or otherwise changes Task Start.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
-- As part of that interruption, Manual Move cancels every pending Question and denies and removes every pending Approval on the Task before applying the move.
-- Human `kent task complete --force` composes Task Interrupt and Manual Move. It explicitly interrupts and waits first, then invokes this same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values; it is not another completion authority.
+- As part of that interruption, Manual Move cancels every pending Question and denies and removes every pending Approval on the Task before applying the move. A direct Manual Move and a concurrent live Approval answer race at the exact live tool call owner. If the Approval is accepted first, Manual Move waits for that acceptance and then continues its interruption and move. If Manual Move closes the Approval first, the answer is Skipped without commentary.
+- Human `kent task complete --force` composes Task Interrupt and Manual Move. It explicitly interrupts and waits first, then invokes this same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values; it is not another completion authority. Its Manual Move phase must not publish an already-closed Approval again, block on it, or apply its commentary.
 - Other conflicting lifecycle operations block Manual Move.
 - If revalidation or movement fails after live work has been interrupted, the origin Current Nodes remain interrupted and Kent surfaces the move failure instead of resuming them.
 

@@ -1296,11 +1296,12 @@ const (
 type WorkflowAttentionQuestionPrompt struct {
 	SessionID              runtimeids.SessionID          `json:"session_id"`
 	StepID                 runtimeids.StepID             `json:"step_id"`
-	PromptID               clientui.PromptID             `json:"prompt_id"`
+	ToolCallID             clientui.ToolCallID           `json:"tool_call_id"`
 	Kind                   WorkflowAttentionQuestionKind `json:"kind"`
 	Suggestions            []string                      `json:"suggestions,omitempty"`
 	RecommendedOptionIndex *int                          `json:"recommended_option_index,omitempty"`
 	ApprovalDecisions      []clientui.ApprovalDecision   `json:"approval_decisions,omitempty"`
+	AccessTargets          []clientui.FileAccessTarget   `json:"access_targets,omitempty"`
 }
 
 type WorkflowTaskCommentAddRequest struct {
@@ -2942,13 +2943,16 @@ func (t WorkflowAttentionApprovalTarget) Validate() error {
 }
 
 func (p WorkflowAttentionQuestionPrompt) Validate() error {
-	if err := validateObservationPromptIdentity(p.PromptID, p.SessionID, p.StepID); err != nil {
+	if err := validateObservationToolCallIdentity(p.ToolCallID, p.SessionID, p.StepID); err != nil {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.identity", err.Error())
 	}
 	switch p.Kind {
 	case WorkflowAttentionQuestionKindOrdinary:
 		if p.ApprovalDecisions != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.approval_decisions", "approval_decisions is not allowed for an ordinary question")
+		}
+		if p.AccessTargets != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.access_targets", "access_targets is not allowed for an ordinary question")
 		}
 		return validateWorkflowAttentionRecommendation(p.Suggestions, p.RecommendedOptionIndex)
 	case WorkflowAttentionQuestionKindApproval:
@@ -2964,6 +2968,11 @@ func (p WorkflowAttentionQuestionPrompt) Validate() error {
 		for _, decision := range p.ApprovalDecisions {
 			if err := validateWorkflowApprovalDecision(decision); err != nil {
 				return err
+			}
+		}
+		for index, target := range p.AccessTargets {
+			if err := target.Validate(); err != nil {
+				return prefixWorkflowProjectionValidationField("question.access_targets", index, err)
 			}
 		}
 		return nil

@@ -899,7 +899,7 @@ message Hydration {
     message: "hydrated prompts must be pending and unique"
     expression:
       "this.pending_prompts.all(prompt, prompt.status == 1) && "
-      "this.pending_prompts.map(prompt, has(prompt.question) ? prompt.question.prompt_id : prompt.approval.prompt_id).unique()"
+      "this.pending_prompts.map(prompt, has(prompt.question) ? prompt.question.tool_call_id : prompt.approval.tool_call_id).unique()"
   };
   option (buf.validate.message).cel = {
     id: "kent.transcript.hydration_backgrounds"

@@ -9,8 +9,6 @@ import (
 	"core/shared/sessioncontract"
 )
 
-type PromptID string
-
 type TranscriptPromptKind string
 
 const (
@@ -25,15 +23,10 @@ const (
 	TranscriptPromptStatusResolved TranscriptPromptStatus = "resolved"
 )
 
-type ToolProvenance struct {
-	ToolCallID ToolCallID
-	ToolName   string
-}
-
 type TranscriptPrompt struct {
 	Kind                   TranscriptPromptKind
 	Status                 TranscriptPromptStatus `json:"State"`
-	PromptID               PromptID
+	ToolCallID             ToolCallID
 	SessionID              runtimeids.SessionID
 	StepID                 runtimeids.StepID
 	Question               string
@@ -41,7 +34,7 @@ type TranscriptPrompt struct {
 	Suggestions            []string
 	RecommendedOptionIndex *int
 	ApprovalOptions        []ApprovalDecision
-	Tool                   *ToolProvenance
+	AccessTargets          []FileAccessTarget
 }
 
 func (p TranscriptPrompt) Validate() error {
@@ -51,7 +44,7 @@ func (p TranscriptPrompt) Validate() error {
 	if err := p.Status.Validate(); err != nil {
 		return err
 	}
-	if err := p.PromptID.Validate(); err != nil {
+	if err := p.ToolCallID.Validate(); err != nil {
 		return err
 	}
 	if p.SessionID.IsZero() {
@@ -65,9 +58,6 @@ func (p TranscriptPrompt) Validate() error {
 	}
 	if p.CreatedAt.IsZero() {
 		return fmt.Errorf("pending prompt creation time is required")
-	}
-	if err := p.Tool.Validate(); err != nil {
-		return err
 	}
 	switch p.Kind {
 	case TranscriptPromptKindQuestion:
@@ -112,6 +102,9 @@ func (p TranscriptPrompt) validateQuestion() error {
 	if len(p.ApprovalOptions) > 0 {
 		return fmt.Errorf("question prompt cannot carry approval options")
 	}
+	if len(p.AccessTargets) > 0 {
+		return fmt.Errorf("question prompt cannot carry access targets")
+	}
 	return nil
 }
 
@@ -135,29 +128,10 @@ func (p TranscriptPrompt) validateApproval() error {
 		}
 		seen[decision] = struct{}{}
 	}
-	return nil
-}
-
-func (p *ToolProvenance) Validate() error {
-	if p == nil {
-		return nil
-	}
-	if err := p.ToolCallID.Validate(); err != nil {
-		return fmt.Errorf("validate pending prompt tool provenance: %w", err)
-	}
-	if strings.TrimSpace(p.ToolName) == "" {
-		return fmt.Errorf("pending prompt tool name is required when tool provenance is present")
-	}
-	return nil
-}
-
-func (id PromptID) Validate() error {
-	raw := string(id)
-	if strings.TrimSpace(raw) == "" {
-		return fmt.Errorf("pending prompt id is required")
-	}
-	if strings.TrimSpace(raw) != raw {
-		return fmt.Errorf("pending prompt id must not have leading or trailing whitespace")
+	for index, target := range p.AccessTargets {
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("pending prompt access target %d: %w", index, err)
+		}
 	}
 	return nil
 }

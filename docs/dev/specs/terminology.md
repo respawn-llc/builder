@@ -368,6 +368,10 @@ The authoritative live status of a Session. It reports whether the Session is un
 
 A typed request accepted by an Active Session Runtime to apply one Session mutation in acceptance order. While an Agent Step executes, a Steering Intent that needs a Step Boundary waits for that boundary. An Idle Runtime may apply it immediately. A Steering Intent carries only its concrete operation and acknowledgement or result. It has no generic request identity, replay, or reconciliation behavior.
 
+### Engine Intent Queue
+
+The process-local internal queue that serializes Engine intents and drains them during the Step Boundary window. It is not Steering or Pending Work, carries no Pending Work identity, and is not exposed to clients.
+
 ### Append Certainty
 
 The result that tells Kent whether a Session change became durable. Kent never shows an uncommitted change as applied; the owning operation determines whether retry is permitted. Kent applies a committed change exactly once and never retries it, even when later notification fails.

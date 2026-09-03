@@ -191,7 +191,7 @@ func validateHydrationTools(tools []TranscriptToolStart) error {
 }
 
 func validateHydrationPrompts(prompts []TranscriptPrompt) error {
-	seen := make(map[PromptID]struct{}, len(prompts))
+	seen := make(map[ToolCallID]struct{}, len(prompts))
 	for index, prompt := range prompts {
 		if err := prompt.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration prompt %d: %w", index, err)
@@ -199,16 +199,16 @@ func validateHydrationPrompts(prompts []TranscriptPrompt) error {
 		if prompt.Status != TranscriptPromptStatusPending {
 			return fmt.Errorf("transcript hydration prompt %d is not pending", index)
 		}
-		if _, exists := seen[prompt.PromptID]; exists {
-			return fmt.Errorf("transcript hydration repeats prompt id %q", prompt.PromptID)
+		if _, exists := seen[prompt.ToolCallID]; exists {
+			return fmt.Errorf("transcript hydration repeats tool call id %q", prompt.ToolCallID)
 		}
-		seen[prompt.PromptID] = struct{}{}
+		seen[prompt.ToolCallID] = struct{}{}
 		if index == 0 {
 			continue
 		}
 		previous := prompts[index-1]
 		if previous.CreatedAt.After(prompt.CreatedAt) ||
-			(previous.CreatedAt.Equal(prompt.CreatedAt) && string(previous.PromptID) > string(prompt.PromptID)) {
+			(previous.CreatedAt.Equal(prompt.CreatedAt) && string(previous.ToolCallID) > string(prompt.ToolCallID)) {
 			return fmt.Errorf("transcript hydration prompts are not ordered by creation time then id")
 		}
 	}

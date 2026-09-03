@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/cli/app"
 	"core/shared/client"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"database/sql"
@@ -34,12 +35,17 @@ func (observationJSONKind) observationOutcome() {}
 
 type observationJSONQuestion struct {
 	observationJSONKind
-	QuestionID             string                      `json:"question_id"`
-	Text                   string                      `json:"text"`
-	Suggestions            []string                    `json:"suggestions"`
-	RecommendedOptionIndex *int                        `json:"recommended_option_index,omitempty"`
-	AnswerTarget           observationJSONAnswerTarget `json:"answer_target"`
-	NodeKey                *string                     `json:"node_key,omitempty"`
+	QuestionID             string                        `json:"question_id"`
+	Text                   string                        `json:"text"`
+	Suggestions            []string                      `json:"suggestions"`
+	AccessTargets          []observationJSONAccessTarget `json:"access_targets,omitempty"`
+	RecommendedOptionIndex *int                          `json:"recommended_option_index,omitempty"`
+	AnswerTarget           observationJSONAnswerTarget   `json:"answer_target"`
+	NodeKey                *string                       `json:"node_key,omitempty"`
+}
+type observationJSONAccessTarget struct {
+	RequestedPath string `json:"requested_path"`
+	ResolvedPath  string `json:"resolved_path"`
 }
 type observationJSONFinalAnswer struct {
 	observationJSONKind
@@ -122,23 +128,34 @@ func observationTargetTask(id string) observationJSONTarget {
 func projectObservationQuestion(question serverapi.ObservationQuestion, answerSessionID string, nodeKey *string) (observationJSONOutcome, error) {
 	var id, text string
 	suggestions := make([]string, 0)
+	var accessTargets []observationJSONAccessTarget
 	var recommendation *int
 	switch {
 	case question.Ask != nil:
-		id, text, suggestions, recommendation = string(question.Ask.PromptID), question.Ask.Question, append(suggestions, question.Ask.Suggestions...), question.Ask.RecommendedOptionIndex
+		id, text, suggestions, recommendation = string(question.Ask.ToolCallID), question.Ask.Question, append(suggestions, question.Ask.Suggestions...), question.Ask.RecommendedOptionIndex
 	case question.Approval != nil:
-		id, text = string(question.Approval.PromptID), question.Approval.Question
+		id, text = string(question.Approval.ToolCallID), question.Approval.Question
 		suggestions = make([]string, 0, len(question.Approval.Options))
 		for _, option := range question.Approval.Options {
 			suggestions = append(suggestions, option.Label)
+		}
+		if len(question.Approval.AccessTargets) > 0 {
+			text = clientui.FormatFileAccessApprovalMarkdown(question.Approval.AccessTargets)
+			accessTargets = make([]observationJSONAccessTarget, 0, len(question.Approval.AccessTargets))
+			for _, target := range question.Approval.AccessTargets {
+				accessTargets = append(accessTargets, observationJSONAccessTarget{
+					RequestedPath: target.RequestedPath,
+					ResolvedPath:  target.ResolvedPath,
+				})
+			}
 		}
 	default:
 		return nil, errors.New("question outcome has no question payload")
 	}
 	return observationJSONQuestion{
 		observationJSONKind: observationJSONKind{Kind: "question"}, QuestionID: id, Text: text, Suggestions: suggestions,
-		RecommendedOptionIndex: recommendation,
-		AnswerTarget:           observationJSONAnswerTarget{SessionID: answerSessionID}, NodeKey: nodeKey,
+		AccessTargets: accessTargets, RecommendedOptionIndex: recommendation,
+		AnswerTarget: observationJSONAnswerTarget{SessionID: answerSessionID}, NodeKey: nodeKey,
 	}, nil
 }
 func projectRunWatchJSON(targetSessionID string, response serverapi.RuntimeLiveWatchResponse) (observationJSONEnvelope, int, error) {

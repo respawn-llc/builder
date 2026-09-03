@@ -38,12 +38,12 @@ func resolveAuthorityQuestionForTest(
 	authority *Authority,
 	sessionID runtimeids.SessionID,
 	stepID runtimeids.StepID,
-	promptID string,
+	toolCallID string,
 	answer tools.AskQuestionAnswer,
 ) error {
 	_, err := authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []PromptAnswerCommand{{
-		PromptID: clientui.PromptID(promptID),
-		Payload:  PromptQuestionAnswerCommand{Answer: answer},
+		ToolCallID: clientui.ToolCallID(toolCallID),
+		Payload:    PromptQuestionAnswerCommand{Answer: answer},
 	}})
 	return err
 }
@@ -51,7 +51,7 @@ func resolveAuthorityQuestionForTest(
 func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *testing.T) {
 	feed := newGatedPromptFeed()
 	store := newExecutionPromptStoreForTest(t, feed)
-	request := tools.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"}
+	request := tools.AskQuestionRequest{ToolCallID: "ask-1", Question: "Proceed?"}
 	awaitDone := make(chan promptAwaitTestResult, 1)
 	go func() {
 		resolution, err := store.Await(context.Background(), request)
@@ -98,6 +98,51 @@ func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *tes
 	}
 }
 
+func TestExecutionPromptStoreCloseFinalizesEveryApprovalOnce(t *testing.T) {
+	feed := make(authorityPromptFeed, 4)
+	store := newExecutionPromptStoreForTest(t, feed)
+	stepID := promptBatchStepID(t)
+	ids := []string{"approval-close-first", "approval-close-second"}
+	waiters := []chan error{make(chan error, 1), make(chan error, 1)}
+	for index, id := range ids {
+		go func() {
+			_, err := store.Await(context.Background(), tools.AskQuestionRequest{ToolCallID: id, StepID: stepID.String(), Question: "Allow access?", Approval: true, ApprovalOptions: []tools.AskQuestionApprovalOption{{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}}})
+			waiters[index] <- err
+		}()
+	}
+	for range ids {
+		if event := <-feed; event.resolved {
+			t.Fatalf("Approval resolved before store close: %+v", event)
+		}
+	}
+	_ = store.Close(context.Canceled)
+	want := map[string]bool{ids[0]: true, ids[1]: true}
+	first, second := <-feed, <-feed
+	if !first.resolved || !second.resolved || first.requestID == second.requestID || !want[first.requestID] || !want[second.requestID] {
+		t.Fatalf("Approval resolution publications = (%+v, %+v), want each once", first, second)
+	}
+	for index, done := range waiters {
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Approval %q close error = %v", ids[index], err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("Approval %q remained blocked after close", ids[index])
+		}
+	}
+	results, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{promptApprovalAnswer(ids[0], tools.AskQuestionApprovalDecisionAllowOnce, nil), promptApprovalAnswer(ids[1], tools.AskQuestionApprovalDecisionAllowOnce, nil)})
+	if err != nil {
+		t.Fatalf("stale Approval submissions: %v", err)
+	}
+	requirePromptBatchResultSet(t, results, map[clientui.ToolCallID]PromptAnswerOutcome{clientui.ToolCallID(ids[0]): PromptAnswerOutcomeSkipped, clientui.ToolCallID(ids[1]): PromptAnswerOutcomeSkipped})
+	select {
+	case event := <-feed:
+		t.Fatalf("duplicate Approval publication: %+v", event)
+	default:
+	}
+}
+
 type failingPromptFeed struct{ err error }
 
 func (f failingPromptFeed) PromptPendingScope(ExecutionScope, tools.AskQuestionRequest, time.Time) error {
@@ -110,7 +155,7 @@ func (failingPromptFeed) PromptResolvedScope(ExecutionScope, string) error {
 
 func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing.T) {
 	store := newExecutionPromptStoreForTest(t, failingPromptFeed{err: errors.New("task wake failed")})
-	_, err := store.Await(context.Background(), tools.AskQuestionRequest{ID: "ask-failed", Question: "Proceed?"})
+	_, err := store.Await(context.Background(), tools.AskQuestionRequest{ToolCallID: "ask-failed", Question: "Proceed?"})
 	if err == nil {
 		t.Fatal("prompt succeeded after pending publication failure")
 	}
@@ -121,17 +166,17 @@ func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing
 
 func batchedPromptRequest(id string, ordinal int) tools.AskQuestionRequest {
 	return tools.AskQuestionRequest{
-		ID:       id,
-		Question: id,
-		Origin:   tools.AskQuestionOriginModelTool,
-		RunID:    "run-1",
-		StepID:   "step-1",
+		ToolCallID: id,
+		Question:   id,
+		Origin:     tools.AskQuestionOriginModelTool,
+		RunID:      "run-1",
+		StepID:     "step-1",
 		QuestionBatch: &tools.AskQuestionBatchMetadata{
 			Origin:              tools.AskQuestionOriginModelTool,
 			RunID:               "run-1",
 			StepID:              "step-1",
-			PromptID:            id,
-			BatchPromptIDs:      []string{"ask-1", "ask-2"},
+			ToolCallID:          id,
+			BatchToolCallIDs:    []string{"ask-1", "ask-2"},
 			CandidateOrdinal:    ordinal,
 			PreparedPromptCount: 2,
 		},

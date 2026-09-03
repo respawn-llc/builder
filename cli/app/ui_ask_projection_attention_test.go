@@ -164,7 +164,7 @@ func TestAskVisibleActivationOwnsNotificationTiming(t *testing.T) {
 	if queuedCommand != nil || ringer.total() != 1 {
 		t.Fatal("queued prompt emitted attention before promotion")
 	}
-	next, promotionCommand := ready.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
+	next, promotionCommand := ready.Update(askEventMsg{event: askEvent{resolvedToolCallID: "ask-1"}})
 	promoted := next.(*uiModel)
 	if promotionCommand == nil || ringer.total() != 1 {
 		t.Fatal("queued prompt promotion did not defer attention until projection")
@@ -175,7 +175,7 @@ func TestAskVisibleActivationOwnsNotificationTiming(t *testing.T) {
 		t.Fatalf("promoted prompt notifications = %d, want 2 total", ringer.total())
 	}
 
-	next, _ = ready.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-2"}})
+	next, _ = ready.Update(askEventMsg{event: askEvent{resolvedToolCallID: "ask-2"}})
 	reopenedBase := next.(*uiModel)
 	next, reopenedCommand := reopenedBase.Update(askEventMsg{event: testQuestionAskEvent("ask-2", "Second?", "yes")})
 	reopened := next.(*uiModel)

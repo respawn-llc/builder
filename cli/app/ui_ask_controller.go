@@ -52,10 +52,10 @@ const askFreeformSelectionOptionText = "Freeform answer"
 func (c uiAskController) acceptEvent(evt askEvent) tea.Cmd {
 	m := c.model
 	if evt.isResolution() {
-		return c.resolvePrompt(evt.promptID())
+		return c.resolvePrompt(evt.toolCallID())
 	}
-	incomingPromptID := strings.TrimSpace(string(evt.prompt.PromptID))
-	if incomingPromptID != "" && m.ask.hasCurrent() && strings.TrimSpace(string(m.ask.current.prompt.PromptID)) == incomingPromptID {
+	incomingToolCallID := strings.TrimSpace(string(evt.prompt.ToolCallID))
+	if incomingToolCallID != "" && m.ask.hasCurrent() && strings.TrimSpace(string(m.ask.current.prompt.ToolCallID)) == incomingToolCallID {
 		m.ask.current.prompt = evt.prompt
 		return m.scheduleCurrentQuestionProjection()
 	}
@@ -71,21 +71,21 @@ func (c uiAskController) acceptEvent(evt askEvent) tea.Cmd {
 	return nil
 }
 
-func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
+func (c uiAskController) resolvePrompt(toolCallID string) tea.Cmd {
 	m := c.model
-	targetID := strings.TrimSpace(promptID)
+	targetID := strings.TrimSpace(toolCallID)
 	if targetID == "" {
 		return nil
 	}
 	filteredQueue := m.ask.queue[:0]
 	for _, queued := range m.ask.queue {
-		if strings.TrimSpace(string(queued.prompt.PromptID)) == targetID {
+		if strings.TrimSpace(string(queued.prompt.ToolCallID)) == targetID {
 			continue
 		}
 		filteredQueue = append(filteredQueue, queued)
 	}
 	m.ask.queue = filteredQueue
-	if !m.ask.hasCurrent() || strings.TrimSpace(string(m.ask.current.prompt.PromptID)) != targetID {
+	if !m.ask.hasCurrent() || strings.TrimSpace(string(m.ask.current.prompt.ToolCallID)) != targetID {
 		return nil
 	}
 	continuationCmd := promptAnswerDeliveryContinuationCmd(m.ask.activeDelivery)
@@ -120,9 +120,6 @@ func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m := c.model
 	if !m.ask.hasCurrent() {
-		return m, nil
-	}
-	if m.ask.answerPending {
 		return m, nil
 	}
 	if msg.Type != tea.KeyEnter && msg.Type != keyTypeShiftEnterCSI {
@@ -189,14 +186,8 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					resp = clientui.PromptAnswer{
-						PromptID: string(req.PromptID),
-						Approval: &clientui.ApprovalPromptAnswer{Decision: decision, Commentary: commentary},
-					}
-					if decision != clientui.ApprovalDecisionDeny {
-						if queueCmd := m.enqueueInjectedInputWithApprovalAnswer(commentary, &resp); queueCmd != nil {
-							m.ask.answerPending = true
-							return m, queueCmd
-						}
+						ToolCallID: req.ToolCallID,
+						Approval:   &clientui.ApprovalPromptAnswer{Decision: decision, Commentary: commentary},
 					}
 					_, hasNext, answerCmd := c.answer(resp, nil)
 					if hasNext {
@@ -413,17 +404,17 @@ func (c uiAskController) answer(resp clientui.PromptAnswer, err error) (bool, bo
 	if !m.ask.hasCurrent() {
 		return false, false, nil
 	}
-	currentPromptID := strings.TrimSpace(string(m.ask.current.prompt.PromptID))
-	answerPromptID := strings.TrimSpace(resp.PromptID)
-	if answerPromptID != "" && answerPromptID != currentPromptID {
+	currentToolCallID := strings.TrimSpace(string(m.ask.current.prompt.ToolCallID))
+	answerToolCallID := strings.TrimSpace(string(resp.ToolCallID))
+	if answerToolCallID != "" && answerToolCallID != currentToolCallID {
 		return false, false, nil
 	}
-	if answerPromptID == "" {
-		resp.PromptID = currentPromptID
+	if answerToolCallID == "" {
+		resp.ToolCallID = clientui.ToolCallID(currentToolCallID)
 	} else {
-		resp.PromptID = answerPromptID
+		resp.ToolCallID = clientui.ToolCallID(answerToolCallID)
 	}
-	if m.promptAnswers == nil || m.ask.current.prompt.SessionID.IsZero() || currentPromptID == "" {
+	if m.promptAnswers == nil || m.ask.current.prompt.SessionID.IsZero() || currentToolCallID == "" {
 		return true, c.finishDeliveredPrompt(), nil
 	}
 	active, cmd, deliveryErr := m.promptAnswers.delivery(m.ask.current.prompt, resp, err)
@@ -456,20 +447,6 @@ func (c uiAskController) finishDeliveredPrompt() bool {
 	return true
 }
 
-func (m *uiModel) answerQueuedApprovalCommentary(resp clientui.PromptAnswer) tea.Cmd {
-	accepted, hasNext, cmd := m.askController().answer(resp, nil)
-	if !accepted {
-		return nil
-	}
-	m.ask.answerPending = false
-	if hasNext {
-		m.activity = uiActivityQuestion
-	} else {
-		m.activity = uiActivityRunning
-	}
-	return cmd
-}
-
 func (c uiAskController) setActiveAsk(evt askEvent) {
 	m := c.model
 	c.cancelActiveDelivery()
@@ -478,7 +455,6 @@ func (c uiAskController) setActiveAsk(evt askEvent) {
 	m.ask.current = &current
 	m.ask.activeProjection = nil
 	m.ask.latestDesiredProjection = nil
-	m.ask.answerPending = false
 	m.ask.cursor = initialAskCursor(current.prompt)
 	m.clearAskInput()
 	m.ask.freeform = askOptionCount(current.prompt) == 0

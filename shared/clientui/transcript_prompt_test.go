@@ -12,17 +12,13 @@ func TestPendingPromptAcceptsQuestionWithBoundedRecommendation(t *testing.T) {
 	prompt := TranscriptPrompt{
 		Kind:                   TranscriptPromptKindQuestion,
 		Status:                 TranscriptPromptStatusPending,
-		PromptID:               PromptID("prompt-1"),
+		ToolCallID:             ToolCallID("prompt-1"),
 		SessionID:              transcriptTestSessionID(t),
 		StepID:                 transcriptTestStepID(t),
 		Question:               "Choose a strategy",
 		CreatedAt:              time.Unix(1_700_000_000, 0),
 		Suggestions:            []string{"First", "Second"},
 		RecommendedOptionIndex: &recommended,
-		Tool: &ToolProvenance{
-			ToolCallID: ToolCallID("call-1"),
-			ToolName:   "ask_question",
-		},
 	}
 	if err := prompt.Validate(); err != nil {
 		t.Fatalf("validate pending question: %v", err)
@@ -31,13 +27,13 @@ func TestPendingPromptAcceptsQuestionWithBoundedRecommendation(t *testing.T) {
 
 func TestPendingPromptRejectsInvalidQuestionOptions(t *testing.T) {
 	base := TranscriptPrompt{
-		Kind:      TranscriptPromptKindQuestion,
-		Status:    TranscriptPromptStatusPending,
-		PromptID:  PromptID("prompt-1"),
-		SessionID: transcriptTestSessionID(t),
-		StepID:    transcriptTestStepID(t),
-		Question:  "Choose a strategy",
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		Kind:       TranscriptPromptKindQuestion,
+		Status:     TranscriptPromptStatusPending,
+		ToolCallID: ToolCallID("prompt-1"),
+		SessionID:  transcriptTestSessionID(t),
+		StepID:     transcriptTestStepID(t),
+		Question:   "Choose a strategy",
+		CreatedAt:  time.Unix(1_700_000_000, 0),
 	}
 	zero := 0
 	outOfBounds := 2
@@ -74,18 +70,22 @@ func TestPendingPromptRejectsInvalidQuestionOptions(t *testing.T) {
 
 func TestPendingPromptAcceptsTypedApprovalWithoutServerLabels(t *testing.T) {
 	prompt := TranscriptPrompt{
-		Kind:      TranscriptPromptKindApproval,
-		Status:    TranscriptPromptStatusPending,
-		PromptID:  PromptID("approval-1"),
-		SessionID: transcriptTestSessionID(t),
-		StepID:    transcriptTestStepID(t),
-		Question:  "Allow this operation?",
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		Kind:       TranscriptPromptKindApproval,
+		Status:     TranscriptPromptStatusPending,
+		ToolCallID: ToolCallID("approval-1"),
+		SessionID:  transcriptTestSessionID(t),
+		StepID:     transcriptTestStepID(t),
+		Question:   "Allow this operation?",
+		CreatedAt:  time.Unix(1_700_000_000, 0),
 		ApprovalOptions: []ApprovalDecision{
 			ApprovalDecisionAllowOnce,
 			ApprovalDecisionAllowSession,
 			ApprovalDecisionDeny,
 		},
+		AccessTargets: []FileAccessTarget{{
+			RequestedPath: "../secrets.txt",
+			ResolvedPath:  "/workspace/secrets.txt",
+		}},
 	}
 	if err := prompt.Validate(); err != nil {
 		t.Fatalf("validate pending approval: %v", err)
@@ -94,13 +94,13 @@ func TestPendingPromptAcceptsTypedApprovalWithoutServerLabels(t *testing.T) {
 
 func TestPendingPromptRejectsInvalidApprovalOptions(t *testing.T) {
 	base := TranscriptPrompt{
-		Kind:      TranscriptPromptKindApproval,
-		Status:    TranscriptPromptStatusPending,
-		PromptID:  PromptID("approval-1"),
-		SessionID: transcriptTestSessionID(t),
-		StepID:    transcriptTestStepID(t),
-		Question:  "Allow this operation?",
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		Kind:       TranscriptPromptKindApproval,
+		Status:     TranscriptPromptStatusPending,
+		ToolCallID: ToolCallID("approval-1"),
+		SessionID:  transcriptTestSessionID(t),
+		StepID:     transcriptTestStepID(t),
+		Question:   "Allow this operation?",
+		CreatedAt:  time.Unix(1_700_000_000, 0),
 	}
 	recommended := 1
 	tests := []TranscriptPrompt{
@@ -130,6 +130,12 @@ func TestPendingPromptRejectsInvalidApprovalOptions(t *testing.T) {
 			prompt.ApprovalOptions = []ApprovalDecision{"unknown"}
 			return prompt
 		}(),
+		func() TranscriptPrompt {
+			prompt := base
+			prompt.ApprovalOptions = []ApprovalDecision{ApprovalDecisionDeny}
+			prompt.AccessTargets = []FileAccessTarget{{ResolvedPath: "/workspace/secrets.txt"}}
+			return prompt
+		}(),
 	}
 	for _, prompt := range tests {
 		if err := prompt.Validate(); err == nil {
@@ -138,20 +144,21 @@ func TestPendingPromptRejectsInvalidApprovalOptions(t *testing.T) {
 	}
 }
 
-func TestPendingPromptRequiresCompleteIdentityAndToolProvenance(t *testing.T) {
+func TestPendingPromptRequiresCompleteIdentity(t *testing.T) {
 	base := TranscriptPrompt{
-		Kind:      TranscriptPromptKindQuestion,
-		Status:    TranscriptPromptStatusResolved,
-		PromptID:  PromptID("prompt-1"),
-		SessionID: transcriptTestSessionID(t),
-		StepID:    transcriptTestStepID(t),
-		Question:  "Choose a strategy",
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		Kind:       TranscriptPromptKindQuestion,
+		Status:     TranscriptPromptStatusResolved,
+		ToolCallID: ToolCallID("prompt-1"),
+		SessionID:  transcriptTestSessionID(t),
+		StepID:     transcriptTestStepID(t),
+		Question:   "Choose a strategy",
+		CreatedAt:  time.Unix(1_700_000_000, 0),
 	}
 	tests := []TranscriptPrompt{
+		func() TranscriptPrompt { prompt := base; prompt.ToolCallID = "prompt-1 "; return prompt }(),
 		func() TranscriptPrompt {
 			prompt := base
-			prompt.PromptID = " "
+			prompt.ToolCallID = " "
 			return prompt
 		}(),
 		func() TranscriptPrompt {
@@ -172,16 +179,6 @@ func TestPendingPromptRequiresCompleteIdentityAndToolProvenance(t *testing.T) {
 		func() TranscriptPrompt {
 			prompt := base
 			prompt.CreatedAt = time.Time{}
-			return prompt
-		}(),
-		func() TranscriptPrompt {
-			prompt := base
-			prompt.Tool = &ToolProvenance{ToolCallID: ToolCallID("call-1")}
-			return prompt
-		}(),
-		func() TranscriptPrompt {
-			prompt := base
-			prompt.Tool = &ToolProvenance{ToolName: "ask_question"}
 			return prompt
 		}(),
 	}

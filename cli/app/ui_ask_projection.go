@@ -8,6 +8,7 @@ import (
 
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
+	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -68,7 +69,11 @@ func (m *uiModel) currentQuestionRenderIdentity() (questionRenderIdentity, bool)
 	if size == nil || size.width < 1 {
 		return questionRenderIdentity{}, false
 	}
-	question := m.ask.current.prompt.Question
+	prompt := m.ask.current.prompt
+	question := prompt.Question
+	if len(prompt.AccessTargets) > 0 {
+		question = clientui.FormatFileAccessApprovalMarkdown(prompt.AccessTargets)
+	}
 	return questionRenderIdentity{
 		questionSource:   question,
 		terminalWidth:    size.width,
@@ -170,13 +175,13 @@ func cloneAskEventForProjection(event askEvent) askEvent {
 }
 
 func (m *uiModel) handleQuestionProjectionError(result questionRenderResultMsg) tea.Cmd {
-	promptID := ""
+	toolCallID := ""
 	if m.ask.current != nil {
-		promptID = string(m.ask.current.prompt.PromptID)
+		toolCallID = string(m.ask.current.prompt.ToolCallID)
 	}
 	m.logf(
-		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_generation=%s err=%q stack=%s",
-		promptID,
+		"ask.question_projection.error tool_call_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_generation=%s err=%q stack=%s",
+		toolCallID,
 		m.ask.currentToken,
 		result.request.operationToken,
 		questionRenderIdentityDiagnosticsFor(m.ask.activeProjection),

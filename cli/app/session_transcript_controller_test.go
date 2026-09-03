@@ -534,13 +534,13 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 		})
 	case clientui.TranscriptMessagePrompt:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptPrompt{
-			Kind:      clientui.TranscriptPromptKindQuestion,
-			Status:    clientui.TranscriptPromptStatusPending,
-			PromptID:  "ask-1",
-			SessionID: ongoingTestSessionID(),
-			StepID:    ongoingTestStepID(),
-			Question:  "Approve command?",
-			CreatedAt: time.Unix(1, 0).UTC(),
+			Kind:       clientui.TranscriptPromptKindQuestion,
+			Status:     clientui.TranscriptPromptStatusPending,
+			ToolCallID: "ask-1",
+			SessionID:  ongoingTestSessionID(),
+			StepID:     ongoingTestStepID(),
+			Question:   "Approve command?",
+			CreatedAt:  time.Unix(1, 0).UTC(),
 		})
 	case clientui.TranscriptMessageContextUsage:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptContextUsage{UsedTokens: 1200, WindowTokens: 2000})

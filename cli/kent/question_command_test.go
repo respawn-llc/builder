@@ -116,7 +116,7 @@ func (r *stubQuestionCommandRemote) AnswerPromptBatch(_ context.Context, req ser
 	if outcome == "" {
 		outcome = serverapi.PromptAnswerBatchOutcomeResolved
 	}
-	return serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{{PromptID: req.Entries[0].PromptID, Outcome: outcome}}}, nil
+	return serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{{ToolCallID: req.Entries[0].ToolCallID, Outcome: outcome}}}, nil
 }
 
 func (r *stubQuestionCommandRemote) ListPendingApprovalsBySession(
@@ -241,7 +241,7 @@ func unsetSessionIDEnvironmentForTest(t *testing.T) {
 
 func pendingAsk(sessionID, askID, question string, suggestions ...string) clientui.PendingAsk {
 	return clientui.PendingAsk{
-		PromptID:    clientui.PromptID(askID),
+		ToolCallID:  clientui.ToolCallID(askID),
 		SessionID:   mustQuestionCommandSessionID(sessionID),
 		StepID:      questionCommandStepID(),
 		Question:    question,
@@ -263,10 +263,10 @@ func taskQuestionAttention(
 		SessionName: &sessionName,
 		Message:     &question,
 		Question: &serverapi.WorkflowAttentionQuestionPrompt{
-			SessionID: mustQuestionCommandSessionID(sessionID),
-			StepID:    questionCommandStepID(),
-			PromptID:  clientui.PromptID(askID),
-			Kind:      serverapi.WorkflowAttentionQuestionKindOrdinary,
+			SessionID:  mustQuestionCommandSessionID(sessionID),
+			StepID:     questionCommandStepID(),
+			ToolCallID: clientui.ToolCallID(askID),
+			Kind:       serverapi.WorkflowAttentionQuestionKindOrdinary,
 		},
 		OccurredAtUnixMs: occurredAt,
 	}
@@ -384,13 +384,13 @@ func TestQuestionAnswerSubmitsThenReconcilesWithoutWorkflowDeadline(t *testing.T
 	}
 	request := remote.answerRequests[0]
 	entry := requireQuestionBatchEntry(t, request)
-	if request.SessionID.String() != sessionID || request.StepID != questionCommandStepID() || entry.PromptID != "ask-1" {
+	if request.SessionID.String() != sessionID || request.StepID != questionCommandStepID() || entry.ToolCallID != "ask-1" {
 		t.Fatalf("answer target = %+v", request)
 	}
 	if len(remote.watchRequests) != 1 ||
 		remote.watchRequests[0].SessionID != request.SessionID ||
 		remote.watchRequests[0].StepID != request.StepID ||
-		remote.watchRequests[0].PromptID != entry.PromptID {
+		remote.watchRequests[0].ToolCallID != entry.ToolCallID {
 		t.Fatalf("watch request = %+v, answer request = %+v", remote.watchRequests, request)
 	}
 	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != 2 {
@@ -614,7 +614,7 @@ func TestQuestionAnswerByTaskSelectsUniqueSession(t *testing.T) {
 	entry := requireQuestionBatchEntry(t, request)
 	if request.SessionID.String() != sessionID ||
 		request.StepID != questionCommandStepID() ||
-		entry.PromptID != "ask-1" ||
+		entry.ToolCallID != "ask-1" ||
 		entry.QuestionAnswer.Freeform == nil ||
 		*entry.QuestionAnswer.Freeform != "Proceed" {
 		t.Fatalf("answer request = %+v", request)
@@ -629,16 +629,21 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	taskID := "task-1"
 	sessionID := uuid.NewString()
-	approvalID := "approval-1"
+	toolCallID := "approval-1"
 	successorQuestion := "Next?"
 	approvalLabel := "Grant this workspace once"
-	attention := taskQuestionAttention(taskID, sessionID, "Implementer", approvalID, "Allow access?", 1)
+	attention := taskQuestionAttention(taskID, sessionID, "Implementer", toolCallID, "Allow access?", 1)
 	attention.Question.Kind = serverapi.WorkflowAttentionQuestionKindApproval
 	attention.Question.ApprovalDecisions = []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce}
 	approval := clientui.PendingApproval{
-		PromptID: clientui.PromptID(approvalID), SessionID: mustQuestionCommandSessionID(sessionID),
+		ToolCallID: clientui.ToolCallID(toolCallID), SessionID: mustQuestionCommandSessionID(sessionID),
 		StepID: questionCommandStepID(), Question: "Allow access?",
 		Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: approvalLabel}},
+		AccessTargets: []clientui.FileAccessTarget{
+			{RequestedPath: "/alias/a", ResolvedPath: "/real/file"},
+			{RequestedPath: "/alias/b", ResolvedPath: "/real/file"},
+			{RequestedPath: "/real/other", ResolvedPath: "/real/other"},
+		},
 	}
 	remote := &stubQuestionTaskRemote{
 		stubQuestionCommandRemote: &stubQuestionCommandRemote{
@@ -668,8 +673,17 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	if exitCode := command.showResolvedTaskQuestion(selector, remote, taskID, &stdout, &stderr); exitCode != 0 ||
-		stderr.Len() != 0 || !strings.Contains(stdout.String(), approvalLabel) {
+		stderr.Len() != 0 {
 		t.Fatalf("show exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	output := stdout.String()
+	previous := -1
+	for _, text := range []string{"/alias/a → /real/file", "/alias/b → /real/file", "/real/other", approvalLabel} {
+		index := strings.Index(output, text)
+		if index <= previous {
+			t.Fatalf("access targets are missing or out of order at %q:\n%s", text, output)
+		}
+		previous = index
 	}
 	stdout.Reset()
 	option := 1
@@ -695,7 +709,6 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 	}
 	entry := request.Entries[0]
 	if request.SessionID.String() != sessionID || request.StepID != questionCommandStepID() ||
-		entry.PromptID != clientui.PromptID(approvalID) ||
 		entry.ApprovalAnswer.Decision != clientui.ApprovalDecisionAllowOnce ||
 		entry.ApprovalAnswer.Commentary != nil {
 		t.Fatalf("approval request = %+v", request)
@@ -824,8 +837,8 @@ func TestQuestionByTaskUsesOldestQuestionInSelectedSession(t *testing.T) {
 	if exitCode != 0 || len(remote.answerRequests) != 1 {
 		t.Fatalf("exit=%d answer requests=%+v", exitCode, remote.answerRequests)
 	}
-	if entry := requireQuestionBatchEntry(t, remote.answerRequests[0]); entry.PromptID != "ask-old" {
-		t.Fatalf("answered ask = %q, want oldest", entry.PromptID)
+	if entry := requireQuestionBatchEntry(t, remote.answerRequests[0]); entry.ToolCallID != "ask-old" {
+		t.Fatalf("answered ask = %q, want oldest", entry.ToolCallID)
 	}
 }
 

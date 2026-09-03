@@ -43,11 +43,11 @@ func TestPrepareExecutorToolCallsAssignsQuestionBatchOutsideWorkflow(t *testing.
 		}
 		if call.askQuestionBatch.CandidateOrdinal != index ||
 			call.askQuestionBatch.PreparedPromptCount != 2 ||
-			len(call.askQuestionBatch.BatchPromptIDs) != 2 {
+			len(call.askQuestionBatch.BatchToolCallIDs) != 2 {
 			t.Fatalf("prepared call %d batch = %+v", index, call.askQuestionBatch)
 		}
-		if call.askQuestionBatch.BatchPromptIDs[index] != call.call.ID {
-			t.Fatalf("prepared call %d prompt order = %v", index, call.askQuestionBatch.BatchPromptIDs)
+		if call.askQuestionBatch.BatchToolCallIDs[index] != call.call.ID {
+			t.Fatalf("prepared call %d prompt order = %v", index, call.askQuestionBatch.BatchToolCallIDs)
 		}
 	}
 }

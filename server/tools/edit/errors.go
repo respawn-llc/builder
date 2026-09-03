@@ -60,10 +60,8 @@ func editFileAccessFailure(outcome tools.FileAccessOutcome) error {
 	case tools.FileAccessDeniedOutsideWorkspace:
 		return failf("no file edit permission for %s. edit target outside workspace", path)
 	case tools.FileAccessDeniedByUser:
-		if outcome.Commentary == nil {
-			return failf("user denied the edit for %s.", path)
-		}
-		return failf("user denied the edit for %s.\nUser said: %s", path, strings.TrimSpace(*outcome.Commentary))
+		message := fmt.Sprintf("user denied the edit for %s.", path)
+		return failf("%s", (tools.DenialCommentaryPresentation{Commentary: outcome.Commentary}).Append(message))
 	case tools.FileAccessApprovalFailed:
 		if outcome.Cause == nil {
 			return failf("file edit approval failed for %s.", path)

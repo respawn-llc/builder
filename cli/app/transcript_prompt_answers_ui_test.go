@@ -36,47 +36,6 @@ type scriptedAskPromptControl struct {
 	askRequests []serverapi.PromptAnswerBatchRequest
 }
 
-type deadlineThenSuccessApprovalControl struct {
-	singlePromptOnlyControl
-	mu               sync.Mutex
-	approvalRequests []serverapi.PromptAnswerBatchRequest
-	firstStarted     chan struct{}
-	firstRelease     chan struct{}
-}
-
-func newDeadlineThenSuccessApprovalControl() *deadlineThenSuccessApprovalControl {
-	return &deadlineThenSuccessApprovalControl{
-		firstStarted: make(chan struct{}),
-		firstRelease: make(chan struct{}),
-	}
-}
-
-func (c *deadlineThenSuccessApprovalControl) AnswerPromptBatch(
-	ctx context.Context,
-	request serverapi.PromptAnswerBatchRequest,
-) (serverapi.PromptAnswerBatchResponse, error) {
-	c.mu.Lock()
-	call := len(c.approvalRequests)
-	c.approvalRequests = append(c.approvalRequests, request)
-	c.mu.Unlock()
-	if call != 0 {
-		return resolvedPromptBatchResponse(request), nil
-	}
-	close(c.firstStarted)
-	select {
-	case <-ctx.Done():
-		return serverapi.PromptAnswerBatchResponse{}, ctx.Err()
-	case <-c.firstRelease:
-		return serverapi.PromptAnswerBatchResponse{}, context.DeadlineExceeded
-	}
-}
-
-func (c *deadlineThenSuccessApprovalControl) requests() []serverapi.PromptAnswerBatchRequest {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]serverapi.PromptAnswerBatchRequest(nil), c.approvalRequests...)
-}
-
 func (c *scriptedAskPromptControl) AnswerPromptBatch(
 	_ context.Context,
 	request serverapi.PromptAnswerBatchRequest,
@@ -202,7 +161,7 @@ func TestAskDeadlineKeepsEditedRetryDraftActionableUntilCanonicalResolution(t *t
 	}
 	successor := testQuestionPrompt("ask-successor", "Next?", "Continue", "Stop")
 	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(successor)})
-	if active := testActiveAsk(model); active == nil || active.prompt.PromptID != successor.PromptID {
+	if active := testActiveAsk(model); active == nil || active.prompt.ToolCallID != successor.ToolCallID {
 		t.Fatalf("later authoritative successor = %+v", active)
 	}
 
@@ -409,9 +368,9 @@ func TestPromptCtrlCContinuationDoesNotAffectReplacementExecution(t *testing.T) 
 		t.Fatalf("parse replacement step id: %v", err)
 	}
 	continuation := promptCtrlCContinuationMsg{key: transcriptPromptKey{
-		sessionID: ongoingTestSessionID(),
-		stepID:    ongoingTestStepID(),
-		promptID:  "ask-replaced",
+		sessionID:  ongoingTestSessionID(),
+		stepID:     ongoingTestStepID(),
+		toolCallID: "ask-replaced",
 	}}
 	tests := []struct {
 		name      string
@@ -469,9 +428,9 @@ func TestPromptCtrlCContinuationUsesGlobalExitWhenOriginIsIdle(t *testing.T) {
 	model.setRuntimeActivityBusyForTest(false)
 
 	next, command := model.Update(promptCtrlCContinuationMsg{key: transcriptPromptKey{
-		sessionID: ongoingTestSessionID(),
-		stepID:    ongoingTestStepID(),
-		promptID:  "ask-idle",
+		sessionID:  ongoingTestSessionID(),
+		stepID:     ongoingTestStepID(),
+		toolCallID: "ask-idle",
 	}})
 	model = next.(*uiModel)
 	if command == nil || model.exitAction != UIActionExit {
@@ -490,9 +449,9 @@ func TestPromptCtrlCContinuationWaitsForPromptActivityToClear(t *testing.T) {
 		t.Fatalf("apply awaiting-prompt runtime activity: %v", err)
 	}
 	continuation := promptCtrlCContinuationMsg{key: transcriptPromptKey{
-		sessionID: ongoingTestSessionID(),
-		stepID:    ongoingTestStepID(),
-		promptID:  "ask-awaiting-runtime",
+		sessionID:  ongoingTestSessionID(),
+		stepID:     ongoingTestStepID(),
+		toolCallID: "ask-awaiting-runtime",
 	}}
 
 	next, command := model.Update(continuation)
@@ -619,9 +578,9 @@ func TestPromptCtrlCContinuationCancelsSuccessorInstalledByHydration(t *testing.
 		t.Fatalf("apply awaiting-prompt runtime activity: %v", err)
 	}
 	originKey := transcriptPromptKey{
-		sessionID: ongoingTestSessionID(),
-		stepID:    ongoingTestStepID(),
-		promptID:  "ask-hydration-origin",
+		sessionID:  ongoingTestSessionID(),
+		stepID:     ongoingTestStepID(),
+		toolCallID: "ask-hydration-origin",
 	}
 	model = updateUIModel(t, model, promptCtrlCContinuationMsg{key: originKey})
 
@@ -653,8 +612,8 @@ func TestPromptCtrlCContinuationCancelsSuccessorInstalledByHydration(t *testing.
 		t.Fatal("pending Ctrl+C continuation did not cancel the hydrated successor")
 	}
 	result := successorCancellation().(promptAnswerDeliveryResultMsg)
-	if result.key.promptID != successor.PromptID {
-		t.Fatalf("canceled prompt = %q, want hydrated successor %q", result.key.promptID, successor.PromptID)
+	if result.key.toolCallID != successor.ToolCallID {
+		t.Fatalf("canceled prompt = %q, want hydrated successor %q", result.key.toolCallID, successor.ToolCallID)
 	}
 }
 
@@ -684,14 +643,14 @@ func TestStalePromptCtrlCContinuationDoesNotClearNewerPendingContinuation(t *tes
 		t.Fatalf("apply newer awaiting-prompt activity: %v", err)
 	}
 	newer := promptCtrlCContinuationMsg{key: transcriptPromptKey{
-		sessionID: ongoingTestSessionID(),
-		stepID:    newerStepID,
-		promptID:  "ask-newer",
+		sessionID:  ongoingTestSessionID(),
+		stepID:     newerStepID,
+		toolCallID: "ask-newer",
 	}}
 	stale := promptCtrlCContinuationMsg{key: transcriptPromptKey{
-		sessionID: ongoingTestSessionID(),
-		stepID:    ongoingTestStepID(),
-		promptID:  "ask-stale",
+		sessionID:  ongoingTestSessionID(),
+		stepID:     ongoingTestStepID(),
+		toolCallID: "ask-stale",
 	}}
 
 	model = updateUIModel(t, model, newer)
@@ -902,7 +861,7 @@ func TestAskSessionReplacementRunsQueuedProjectionBeforeReplacementPrompt(t *tes
 	next, _ = model.Update(projectionCmd())
 	model = next.(*uiModel)
 	if model.ask.current == nil ||
-		model.ask.current.prompt.PromptID != "ask-new-session" ||
+		model.ask.current.prompt.ToolCallID != "ask-new-session" ||
 		!model.askReadyForInteraction() {
 		t.Fatal("replacement-session prompt did not become visible")
 	}
@@ -942,259 +901,46 @@ func TestAskResolutionBeforeDeliveryCommandRunsDoesNotCallPromptControl(t *testi
 	}
 }
 
-func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *testing.T) {
-	disableTransientStatusClearForTest(t)
-	control := newDeadlineThenSuccessApprovalControl()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	model := newProjectedStaticUIModel()
-	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testApprovalPrompt(
-			"deny-commentary-deadline",
-			"Allow access?",
-			clientui.ApprovalDecisionAllowOnce,
-			clientui.ApprovalDecisionDeny,
-		),
-	)})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("original denial")})
-
-	next, firstDelivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	if firstDelivery == nil || len(model.injectedQueue) != 0 {
-		t.Fatalf("deny submission = command %v queued %+v, want direct delivery without queued commentary", firstDelivery, model.injectedQueue)
-	}
-	firstResult := make(chan tea.Msg, 1)
-	go func() {
-		firstResult <- firstDelivery()
-	}()
-	<-control.firstStarted
-
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" edited")})
-	if testAskInput(model) != "original denial edited" {
-		t.Fatalf("retry commentary = %q, want edited draft", testAskInput(model))
-	}
-	close(control.firstRelease)
-	model = updateUIModel(t, model, <-firstResult)
-	if testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
-		t.Fatal("denial deadline did not restore the unresolved prompt")
-	}
-	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
-		t.Fatalf("denial deadline notice = kind %d text %q, want visible error", model.transientStatusKind, model.transientStatus)
-	}
-
-	next, secondDelivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = runPromptDeliveryCommand(t, next.(*uiModel), secondDelivery)
-	requests := control.requests()
-	if len(requests) != 2 {
-		t.Fatalf("denial requests = %d, want deadline plus user resubmission", len(requests))
-	}
-	firstAnswer := requireApprovalAnswerEntry(t, requests[0]).ApprovalAnswer
-	secondAnswer := requireApprovalAnswerEntry(t, requests[1]).ApprovalAnswer
-	if firstAnswer.Decision != clientui.ApprovalDecisionDeny ||
-		secondAnswer.Decision != clientui.ApprovalDecisionDeny {
-		t.Fatalf("denial answers = %+v then %+v, want deny", firstAnswer, secondAnswer)
-	}
-	if approvalCommentary(firstAnswer) != "original denial" || approvalCommentary(secondAnswer) != "original denial edited" {
-		t.Fatalf("denial commentary = %q then %q, want immutable submission then edited retry", approvalCommentary(firstAnswer), approvalCommentary(secondAnswer))
-	}
-	if len(model.injectedQueue) != 0 {
-		t.Fatalf("denial commentary created a queued copy: %+v", model.injectedQueue)
-	}
-	if testPromptAnswerDeliveryActive(model) || testActiveAsk(model) != nil {
-		t.Fatal("successful denial delivery did not immediately finish the prompt")
-	}
-}
-
-func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.T) {
-	control := newDeadlineThenSuccessApprovalControl()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runtimeClient := &runtimeControlFakeClient{submitQueuedID: "allow-commentary-queue"}
-	model := newProjectedTestUIModel(runtimeClient)
-	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
-	model.setRuntimeActivityBusyForTest(true)
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testApprovalPrompt(
-			"allow-commentary-cancel",
-			"Allow access?",
-			clientui.ApprovalDecisionAllowOnce,
-			clientui.ApprovalDecisionDeny,
-		),
-	)})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("safe operation")})
-
-	next, queueCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	if queueCommand == nil || !model.ask.answerPending {
-		t.Fatal("allow commentary did not enter the locked queue stage")
-	}
-	next, deliveryCommand := model.Update(queueCommand())
-	model = next.(*uiModel)
-	if deliveryCommand == nil || model.ask.answerPending {
-		t.Fatal("completed queue stage did not unlock the prompt before approval delivery")
-	}
-
-	firstResult := make(chan tea.Msg, 1)
-	go func() {
-		firstResult <- deliveryCommand()
-	}()
-	<-control.firstStarted
-
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" edited")})
-	if testAskInput(model) != "safe operation edited" {
-		t.Fatalf("approval retry draft = %q, want responsive editing during delivery", testAskInput(model))
-	}
-	next, cancelDelivery := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	model = next.(*uiModel)
-	if cancelDelivery == nil || !testPromptAnswerDeliveryActive(model) {
-		t.Fatal("Esc did not replace the active approval delivery with a cancellation delivery")
-	}
-	model = updateUIModel(t, model, <-firstResult)
-	model = runPromptDeliveryCommand(t, model, cancelDelivery)
-
-	requests := control.requests()
-	if len(requests) != 2 {
-		t.Fatalf("approval requests = %d, want original allow plus cancellation", len(requests))
-	}
-	firstAnswer := requireApprovalAnswerEntry(t, requests[0]).ApprovalAnswer
-	if firstAnswer.Decision != clientui.ApprovalDecisionAllowOnce || approvalCommentary(firstAnswer) != "safe operation" {
-		t.Fatalf("original immutable approval request = %+v", requests[0])
-	}
-	if len(requests[1].Entries) != 1 || requests[1].Entries[0].Declined == nil {
-		t.Fatalf("replacement approval request = %+v, want Declined", requests[1])
-	}
-	if testActiveAsk(model) != nil {
-		t.Fatal("successful Declined batch did not immediately remove the Approval")
-	}
-}
-
-func TestStaleQueuedApprovalCommentaryDoesNotUnlockCurrentPrompt(t *testing.T) {
-	model, _ := newProjectedPromptTestUIModel(t)
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testApprovalPrompt(
-			"approval-current",
-			"Allow current operation?",
-			clientui.ApprovalDecisionAllowOnce,
-			clientui.ApprovalDecisionDeny,
-		),
-	)})
-	model.ask.answerPending = true
-
-	command := model.answerQueuedApprovalCommentary(clientui.PromptAnswer{
-		PromptID: "approval-stale",
-		Approval: &clientui.ApprovalPromptAnswer{
-			Decision:   clientui.ApprovalDecisionAllowOnce,
-			Commentary: "stale commentary",
-		},
-	})
-
-	if command != nil {
-		t.Fatal("stale queued approval commentary created a delivery command")
-	}
-	if !model.ask.answerPending {
-		t.Fatal("stale queued approval commentary unlocked the current prompt queue stage")
-	}
-	if testPromptAnswerDeliveryActive(model) {
-		t.Fatal("stale queued approval commentary created active delivery ownership")
-	}
-}
-
-func TestInterruptRestorationDeliversQueuedApprovalCommentary(t *testing.T) {
-	model, control := newProjectedPromptTestUIModel(t)
-	model.engine = &runtimeControlFakeClient{}
-	prompt := testApprovalPrompt(
-		"approval-interrupted-commentary",
-		"Allow operation?",
+func TestApprovalCommentaryRetriesAreDeliberateAndKeepToolCallIdentity(t *testing.T) {
+	for _, decision := range []clientui.ApprovalDecision{
 		clientui.ApprovalDecisionAllowOnce,
 		clientui.ApprovalDecisionDeny,
-	)
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(prompt)})
-	answer := clientui.PromptAnswer{
-		PromptID: string(prompt.PromptID),
-		Approval: &clientui.ApprovalPromptAnswer{
-			Decision:   clientui.ApprovalDecisionAllowOnce,
-			Commentary: "interrupted commentary",
-		},
-	}
-	_ = model.enqueueInjectedInputWithApprovalAnswer("interrupted commentary", &answer)
-	model.setPendingInterrupt(true)
+	} {
+		t.Run(string(decision), func(t *testing.T) {
+			control := &scriptedAskPromptControl{results: []error{context.DeadlineExceeded, io.ErrUnexpectedEOF}}
+			model := newProjectedStaticUIModel()
+			model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+			model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+				testApprovalPrompt("stable-tool-call", "Allow access?", clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny),
+			)})
+			if decision == clientui.ApprovalDecisionDeny {
+				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+			}
+			model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
 
-	for _, msg := range collectCmdMessages(t, model.acknowledgePendingInterrupt()) {
-		model = updateUIModel(t, model, msg)
-	}
+			wantCommentary := []string{"first", "first second", "first second third"}
+			for _, appended := range []string{"first", " second", " third"} {
+				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(appended)})
+				next, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				model = runPromptDeliveryCommand(t, next.(*uiModel), command)
+				if len(model.injectedQueue) != 0 {
+					t.Fatalf("attempt created Approval Queue state: %+v", model.injectedQueue)
+				}
+			}
 
-	request := requirePromptAnswerBatchRequest(t, control)
-	approvalAnswer := requireApprovalAnswerEntry(t, request).ApprovalAnswer
-	if approvalAnswer.Decision != clientui.ApprovalDecisionAllowOnce ||
-		approvalCommentary(approvalAnswer) != "interrupted commentary" {
-		t.Fatalf("approval request = %+v, want queued interrupted commentary", request)
-	}
-}
-
-func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t *testing.T) {
-	disableTransientStatusClearForTest(t)
-	control := newDeadlineThenSuccessApprovalControl()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runtimeClient := &runtimeControlFakeClient{submitQueuedID: "allow-commentary-queue"}
-	model := newProjectedTestUIModel(runtimeClient)
-	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
-	model.setRuntimeActivityBusyForTest(true)
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testApprovalPrompt(
-			"allow-commentary-deadline",
-			"Allow access?",
-			clientui.ApprovalDecisionAllowOnce,
-			clientui.ApprovalDecisionDeny,
-		),
-	)})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("original allow")})
-
-	next, firstQueueCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	next, firstDelivery := model.Update(firstQueueCommand())
-	model = next.(*uiModel)
-	firstResult := make(chan tea.Msg, 1)
-	go func() {
-		firstResult <- firstDelivery()
-	}()
-	<-control.firstStarted
-
-	close(control.firstRelease)
-	model = updateUIModel(t, model, <-firstResult)
-	if testPromptAnswerDeliveryActive(model) || model.ask.answerPending || testActiveAsk(model) == nil {
-		t.Fatal("allow answer deadline did not restore the unresolved prompt")
-	}
-	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
-		t.Fatalf("allow deadline notice = kind %d text %q, want visible error", model.transientStatusKind, model.transientStatus)
-	}
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" edited")})
-
-	next, secondQueueCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	next, secondDelivery := model.Update(secondQueueCommand())
-	model = runPromptDeliveryCommand(t, next.(*uiModel), secondDelivery)
-
-	requests := control.requests()
-	if len(requests) != 2 {
-		t.Fatalf("allow requests = %d, want deadline plus user resubmission", len(requests))
-	}
-	firstAnswer := requireApprovalAnswerEntry(t, requests[0]).ApprovalAnswer
-	secondAnswer := requireApprovalAnswerEntry(t, requests[1]).ApprovalAnswer
-	if approvalCommentary(firstAnswer) != "original allow" || approvalCommentary(secondAnswer) != "original allow edited" {
-		t.Fatalf("allow commentary = %q then %q, want original then edited resubmission", approvalCommentary(firstAnswer), approvalCommentary(secondAnswer))
-	}
-	if runtimeClient.submitCalls != 2 {
-		t.Fatalf("allow commentary submit calls = %d, want one per user submission", runtimeClient.submitCalls)
-	}
-	if testPromptAnswerDeliveryActive(model) || model.ask.answerPending || testActiveAsk(model) != nil {
-		t.Fatal("successful allow resubmission did not immediately finish the prompt")
+			requests := control.requests()
+			if len(requests) != len(wantCommentary) || testActiveAsk(model) != nil {
+				t.Fatalf("requests = %d active=%t, want three completed deliberate submissions", len(requests), testActiveAsk(model) != nil)
+			}
+			for i, request := range requests {
+				entry := requireApprovalAnswerEntry(t, request)
+				if entry.ToolCallID != "stable-tool-call" ||
+					entry.ApprovalAnswer.Decision != decision ||
+					approvalCommentary(entry.ApprovalAnswer) != wantCommentary[i] {
+					t.Fatalf("attempt %d = %+v, want immutable %q commentary for %q", i+1, request, wantCommentary[i], decision)
+				}
+			}
+		})
 	}
 }
 

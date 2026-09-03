@@ -6,7 +6,6 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/toolspec"
 )
 
 type pendingPromptEventType uint8
@@ -22,7 +21,7 @@ func publishPendingPrompt(
 	snapshot PendingPromptSnapshot,
 	eventType pendingPromptEventType,
 ) {
-	if feed == nil || strings.TrimSpace(snapshot.Request.ID) == "" {
+	if feed == nil || strings.TrimSpace(snapshot.Request.ToolCallID) == "" {
 		return
 	}
 	prompt := transcriptPendingPromptFromSnapshot(sessionID, snapshot, eventType)
@@ -43,14 +42,15 @@ func transcriptPendingPromptFromSnapshot(
 		kind = clientui.TranscriptPromptKindApproval
 	}
 	prompt := clientui.TranscriptPrompt{
-		Kind:        kind,
-		Status:      state,
-		PromptID:    clientui.PromptID(strings.TrimSpace(snapshot.Request.ID)),
-		SessionID:   mustPromptSessionID(sessionID),
-		StepID:      mustPromptStepID(snapshot.Request.StepID),
-		Question:    snapshot.Request.Question,
-		CreatedAt:   snapshot.CreatedAt,
-		Suggestions: append([]string(nil), snapshot.Request.Suggestions...),
+		Kind:          kind,
+		Status:        state,
+		ToolCallID:    clientui.ToolCallID(strings.TrimSpace(snapshot.Request.ToolCallID)),
+		SessionID:     mustPromptSessionID(sessionID),
+		StepID:        mustPromptStepID(snapshot.Request.StepID),
+		Question:      snapshot.Request.Question,
+		CreatedAt:     snapshot.CreatedAt,
+		Suggestions:   append([]string(nil), snapshot.Request.Suggestions...),
+		AccessTargets: append([]clientui.FileAccessTarget(nil), snapshot.Request.AccessTargets...),
 	}
 	if snapshot.Request.RecommendedOptionIndex > 0 {
 		recommended := snapshot.Request.RecommendedOptionIndex
@@ -60,12 +60,6 @@ func transcriptPendingPromptFromSnapshot(
 		prompt.ApprovalOptions = make([]clientui.ApprovalDecision, 0, len(snapshot.Request.ApprovalOptions))
 		for _, option := range snapshot.Request.ApprovalOptions {
 			prompt.ApprovalOptions = append(prompt.ApprovalOptions, clientui.ApprovalDecision(option.Decision))
-		}
-	}
-	if toolCallID := strings.TrimSpace(snapshot.Request.ToolCallID); toolCallID != "" {
-		prompt.Tool = &clientui.ToolProvenance{
-			ToolCallID: clientui.ToolCallID(toolCallID),
-			ToolName:   string(toolspec.ToolAskQuestion),
 		}
 	}
 	return prompt

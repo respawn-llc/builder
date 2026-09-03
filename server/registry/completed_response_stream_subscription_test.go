@@ -348,14 +348,14 @@ func (c *blockingToolCall) releaseCall() {
 	close(c.release)
 }
 
-func waitForPendingPrompt(t *testing.T, registry *RuntimeRegistry, sessionID string, promptID string) {
+func waitForPendingPrompt(t *testing.T, registry *RuntimeRegistry, sessionID string, toolCallID string) {
 	t.Helper()
 	var prompts []PendingPromptSnapshot
 	if testsetup.Until(time.Now().Add(time.Second), 10*time.Millisecond, func() bool {
 		prompts = registry.ListPendingPrompts(sessionID)
-		return len(prompts) == 1 && prompts[0].Request.ID == promptID
+		return len(prompts) == 1 && prompts[0].Request.ToolCallID == toolCallID
 	}) {
 		return
 	}
-	t.Fatalf("pending prompt %q was not registered: %+v", promptID, prompts)
+	t.Fatalf("pending prompt %q was not registered: %+v", toolCallID, prompts)
 }

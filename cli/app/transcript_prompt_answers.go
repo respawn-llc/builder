@@ -26,9 +26,9 @@ type promptBatchAnswerer interface {
 }
 
 type transcriptPromptKey struct {
-	sessionID runtimeids.SessionID
-	stepID    runtimeids.StepID
-	promptID  clientui.PromptID
+	sessionID  runtimeids.SessionID
+	stepID     runtimeids.StepID
+	toolCallID clientui.ToolCallID
 }
 
 type promptAnswerDeliveryContinuation uint8
@@ -140,7 +140,7 @@ func (a *transcriptPromptAnswerer) submitter(
 			Freeform:             textutil.OptionalExactString(answer.FreeformAnswer),
 		})
 	}
-	entry, err := serverapi.PromptAnswerBatchEntryFrom(prompt.PromptID, answerPayload)
+	entry, err := serverapi.PromptAnswerBatchEntryFrom(prompt.ToolCallID, answerPayload)
 	if err != nil {
 		return nil, fmt.Errorf("convert prompt answer: %w", err)
 	}
@@ -162,14 +162,14 @@ func newTranscriptPromptKey(prompt clientui.TranscriptPrompt) (transcriptPromptK
 	if prompt.StepID.IsZero() {
 		return transcriptPromptKey{}, errors.New("prompt answer step id is required")
 	}
-	rawPromptID := string(prompt.PromptID)
-	if strings.TrimSpace(rawPromptID) == "" || strings.TrimSpace(rawPromptID) != rawPromptID {
-		return transcriptPromptKey{}, errors.New("prompt answer prompt id is required without surrounding whitespace")
+	rawToolCallID := string(prompt.ToolCallID)
+	if strings.TrimSpace(rawToolCallID) == "" || strings.TrimSpace(rawToolCallID) != rawToolCallID {
+		return transcriptPromptKey{}, errors.New("prompt answer tool call id is required without surrounding whitespace")
 	}
 	return transcriptPromptKey{
-		sessionID: prompt.SessionID,
-		stepID:    prompt.StepID,
-		promptID:  prompt.PromptID,
+		sessionID:  prompt.SessionID,
+		stepID:     prompt.StepID,
+		toolCallID: prompt.ToolCallID,
 	}, nil
 }
 
@@ -178,7 +178,7 @@ func newActivePromptAnswerDelivery(
 	generation uint64,
 	cancel context.CancelFunc,
 ) (*activePromptAnswerDelivery, error) {
-	if key.sessionID.IsZero() || strings.TrimSpace(string(key.promptID)) == "" {
+	if key.sessionID.IsZero() || strings.TrimSpace(string(key.toolCallID)) == "" {
 		return nil, errors.New("prompt answer delivery key is required")
 	}
 	if key.stepID.IsZero() {
@@ -218,13 +218,10 @@ func clonePromptAnswer(answer clientui.PromptAnswer) clientui.PromptAnswer {
 func cloneTranscriptPromptForAsk(prompt clientui.TranscriptPrompt) clientui.TranscriptPrompt {
 	prompt.Suggestions = append([]string(nil), prompt.Suggestions...)
 	prompt.ApprovalOptions = append([]clientui.ApprovalDecision(nil), prompt.ApprovalOptions...)
+	prompt.AccessTargets = append([]clientui.FileAccessTarget(nil), prompt.AccessTargets...)
 	if prompt.RecommendedOptionIndex != nil {
 		recommended := *prompt.RecommendedOptionIndex
 		prompt.RecommendedOptionIndex = &recommended
-	}
-	if prompt.Tool != nil {
-		tool := *prompt.Tool
-		prompt.Tool = &tool
 	}
 	return prompt
 }

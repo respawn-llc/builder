@@ -103,8 +103,8 @@ function focusedAttentionItemID(
   if (initialFocus.kind === "question") {
     const itemIDByAskID = new Map<string, string>();
     for (const item of attentionItems) {
-      if (item.kind === "question" && !itemIDByAskID.has(item.question.promptID)) {
-        itemIDByAskID.set(item.question.promptID, item.id);
+      if (item.kind === "question" && !itemIDByAskID.has(item.question.toolCallID)) {
+        itemIDByAskID.set(item.question.toolCallID, item.id);
       }
     }
     return initialFocus.askIDs

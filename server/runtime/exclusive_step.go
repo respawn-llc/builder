@@ -182,6 +182,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 			!errors.Is(drainErr, ErrEngineClosed) {
 			err = errors.Join(err, fmt.Errorf("drain Runtime operations at agent Step Boundary: %w", drainErr))
 		}
+		err = errors.Join(err, s.engine.takeApprovalCommentaryError(stepID))
 	}
 	s.closeActiveStepQueue(stepID)
 	if fatal, ok := resultGroupFatalFromError(err); ok {
@@ -787,7 +788,14 @@ func (s *defaultExclusiveStepLifecycle) activeAgentStepID() *string {
 }
 
 func (s *defaultExclusiveStepLifecycle) drainAgentStepBoundary(ctx context.Context) error {
+	stepID := s.activeAgentStepID()
+	if stepID == nil {
+		return nil
+	}
 	if err := s.engine.drainRuntimeOperations(ctx); err != nil {
+		return err
+	}
+	if err := s.engine.takeApprovalCommentaryError(*stepID); err != nil {
 		return err
 	}
 	return s.drainBoundaryReservations(ctx)
@@ -826,7 +834,8 @@ func (s *defaultExclusiveStepLifecycle) drainBoundaryReservations(ctx context.Co
 }
 
 func (s *defaultExclusiveStepLifecycle) BeginAgentStepBoundary(ctx context.Context) error {
-	if s.activeAgentStepID() == nil {
+	stepID := s.activeAgentStepID()
+	if stepID == nil {
 		return nil
 	}
 	for {
@@ -844,6 +853,9 @@ func (s *defaultExclusiveStepLifecycle) BeginAgentStepBoundary(ctx context.Conte
 		if pausedThrough == drainedThrough {
 			break
 		}
+	}
+	if err := s.engine.takeApprovalCommentaryError(*stepID); err != nil {
+		return err
 	}
 	s.EndAgentStepBoundary()
 	return nil

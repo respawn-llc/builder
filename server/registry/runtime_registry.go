@@ -708,7 +708,7 @@ func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, 
 		logAttentionNotificationOperationFailure(
 			"publish workflow prompt resolution event",
 			sessionID,
-			snapshot.Request.ID,
+			snapshot.Request.ToolCallID,
 			err,
 		)
 	}

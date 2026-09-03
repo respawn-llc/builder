@@ -9,42 +9,31 @@ import (
 	"core/shared/clientui"
 )
 
-func TestResolvedPromptProjectionRemainsIdentityOnlyForQuestionAndApproval(t *testing.T) {
-	createdAt := time.Unix(100, 0).UTC()
-	tests := []askquestion.AskQuestionRequest{
-		{
-			ID:          "question-1",
-			StepID:      registryTestStepID,
-			Question:    "Question?",
-			Suggestions: []string{"One"},
+func TestPromptProjectionPreservesOrderedFileAccessAliases(t *testing.T) {
+	request := askquestion.AskQuestionRequest{
+		ToolCallID: "approval-1",
+		StepID:     registryTestStepID,
+		Question:   "Approve?",
+		Approval:   true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
+			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
 		},
-		{
-			ID:       "approval-1",
-			StepID:   registryTestStepID,
-			Question: "Approve?",
-			Approval: true,
-			ApprovalOptions: []askquestion.AskQuestionApprovalOption{
-				{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
-			},
+		AccessTargets: []askquestion.FileAccessTarget{
+			{RequestedPath: "alias/first", ResolvedPath: "/outside/target"},
+			{RequestedPath: "alias/second", ResolvedPath: "/outside/target"},
 		},
 	}
-	for _, request := range tests {
-		resolved := transcriptPendingPromptFromSnapshot("session-1", PendingPromptSnapshot{
+	want := []clientui.FileAccessTarget{
+		{RequestedPath: "alias/first", ResolvedPath: "/outside/target"},
+		{RequestedPath: "alias/second", ResolvedPath: "/outside/target"},
+	}
+	for _, eventType := range []pendingPromptEventType{pendingPromptEventPending, pendingPromptEventResolved} {
+		prompt := transcriptPendingPromptFromSnapshot("session-1", PendingPromptSnapshot{
 			Request:   request,
-			CreatedAt: createdAt,
-		}, pendingPromptEventResolved)
-		if resolved.Status != clientui.TranscriptPromptStatusResolved ||
-			resolved.PromptID != clientui.PromptID(request.ID) ||
-			resolved.StepID.String() != request.StepID ||
-			!resolved.CreatedAt.Equal(createdAt) {
-			t.Fatalf("resolved prompt projection = %+v", resolved)
-		}
-	}
-
-	promptType := reflect.TypeOf(clientui.TranscriptPrompt{})
-	for _, forbidden := range []string{"Answer", "Decision", "Declined", "Commentary", "Freeform"} {
-		if _, exists := promptType.FieldByName(forbidden); exists {
-			t.Fatalf("resolved prompt projection exposes %s", forbidden)
+			CreatedAt: time.Unix(100, 0).UTC(),
+		}, eventType)
+		if !reflect.DeepEqual(prompt.AccessTargets, want) {
+			t.Fatalf("%v prompt access targets = %+v, want ordered aliases %+v", eventType, prompt.AccessTargets, want)
 		}
 	}
 }

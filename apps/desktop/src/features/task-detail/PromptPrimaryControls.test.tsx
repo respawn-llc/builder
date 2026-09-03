@@ -17,7 +17,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("Task Detail prompt primary controls", () => {
   it("replaces and unregisters exact-key controls without fallback", () => {
     const registry = new PromptPrimaryControlRegistry();
-    const key: PromptAnswerKey = { sessionID: "session-1", stepID: "step-1", promptID: "prompt-1" };
+    const key: PromptAnswerKey = { sessionID: "session-1", stepID: "step-1", toolCallID: "prompt-1" };
     const [first, second] = [vi.fn(), vi.fn()];
     const unregisterFirst = registry.register(key, { focusPrimary: first });
     const unregisterSecond = registry.register({ ...key }, { focusPrimary: second });
@@ -68,5 +68,10 @@ const ordinaryAttention = (suggestions: readonly string[]): QuestionAttentionIte
 });
 const approvalAttention = (): QuestionAttentionItem => ({
   ...baseQuestion,
-  question: { ...baseQuestion.question, approvalDecisions: ["deny", "allow_once"], kind: "approval" },
+  question: {
+    ...baseQuestion.question,
+    accessTargets: [],
+    approvalDecisions: ["deny", "allow_once"],
+    kind: "approval",
+  },
 });

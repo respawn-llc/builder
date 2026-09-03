@@ -90,10 +90,7 @@ func (f *failure) message() string {
 			message += " for " + path
 		}
 		message += "."
-		if f.Commentary != nil {
-			message += "\nUser said: " + strings.TrimSpace(*f.Commentary)
-		}
-		return message
+		return (tools.DenialCommentaryPresentation{Commentary: f.Commentary}).Append(message)
 	case failureKindApprovalFailed:
 		if path == "" {
 			return withReason("Patch failed: file edit approval failed.")

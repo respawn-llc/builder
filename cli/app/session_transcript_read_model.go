@@ -18,7 +18,7 @@ type ongoingTranscriptReadModel struct {
 	pendingTools     []ongoingPendingTool
 	pendingToolIndex map[string]int
 	pendingWork      []ongoingLiveInput
-	pendingPrompts   keyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPrompt]
+	pendingPrompts   keyedOngoingLiveItems[ongoingToolCallID, clientui.TranscriptPrompt]
 }
 
 type ongoingPendingTool struct {
@@ -33,13 +33,13 @@ type keyedOngoingLiveItems[K comparable, T any] struct {
 
 type ongoingLiveItemID string
 
-type ongoingPromptID string
+type ongoingToolCallID string
 
 func newOngoingTranscriptReadModel() ongoingTranscriptReadModel {
 	return ongoingTranscriptReadModel{
 		sections:         map[ongoing.FrameSectionKind]ongoing.FrameSection{},
 		pendingToolIndex: map[string]int{},
-		pendingPrompts:   newKeyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPrompt](),
+		pendingPrompts:   newKeyedOngoingLiveItems[ongoingToolCallID, clientui.TranscriptPrompt](),
 	}
 }
 
@@ -145,7 +145,7 @@ func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.Transcr
 	if prompt == nil {
 		return
 	}
-	id := parseOngoingPromptID(prompt.PromptID)
+	id := parseOngoingToolCallID(prompt.ToolCallID)
 	if prompt.Status != clientui.TranscriptPromptStatusPending {
 		m.pendingPrompts.remove(id)
 		m.refreshPendingPromptSection(80)
@@ -194,12 +194,12 @@ func (items keyedOngoingLiveItems[K, T]) values() []T {
 	return out
 }
 
-func parseOngoingPromptID(raw clientui.PromptID) ongoingPromptID {
+func parseOngoingToolCallID(raw clientui.ToolCallID) ongoingToolCallID {
 	id := strings.TrimSpace(string(raw))
 	if id == "" {
-		panicOngoingTranscriptReadModelDeveloperError("pending_prompt_id", "missing id", nil)
+		panicOngoingTranscriptReadModelDeveloperError("pending_tool_call_id", "missing id", nil)
 	}
-	return ongoingPromptID(id)
+	return ongoingToolCallID(id)
 }
 
 func panicOngoingTranscriptReadModelDeveloperError(operation, reason string, facts map[string]any) {

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"core/server/tools"
@@ -175,6 +174,32 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 }
 
 func (t *Tool) resolvePath(ctx context.Context, path string, accessCall *tools.FileAccessCall) (string, error) {
+	real, err := t.resolvePathTarget(path)
+	if err != nil {
+		return "", err
+	}
+	prepared := accessCall.Prepare(ctx, []tools.FileAccessTarget{{
+		RequestedPath: path,
+		ResolvedPath:  real,
+	}})
+	if !prepared.IsAllowed() {
+		return "", readImageFileAccessFailure(prepared)
+	}
+	current, err := t.resolvePathTarget(path)
+	if err != nil {
+		return "", err
+	}
+	outcome := accessCall.Authorize(ctx, path, current)
+	if !outcome.IsAllowed() {
+		return "", readImageFileAccessFailure(outcome)
+	}
+	if prepared.Reason != tools.FileAccessReasonTrustedRoot {
+		t.logOutsideWorkspaceApproval(prepared)
+	}
+	return current, nil
+}
+
+func (t *Tool) resolvePathTarget(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("path is required")
 	}
@@ -193,14 +218,6 @@ func (t *Tool) resolvePath(ctx context.Context, path string, accessCall *tools.F
 		return "", fmt.Errorf("resolve path %q: %w", path, err)
 	}
 	real = filepath.Clean(real)
-
-	outcome := accessCall.Authorize(ctx, path, real)
-	if !outcome.IsAllowed() {
-		return "", readImageFileAccessFailure(outcome)
-	}
-	if outcome.Reason != tools.FileAccessReasonTrustedRoot {
-		t.logOutsideWorkspaceApproval(outcome)
-	}
 	return real, nil
 }
 
@@ -293,19 +310,16 @@ func readImageOutsideWorkspaceUserDenied(req tools.FileAccessRequest, commentary
 		builder.WriteString(path)
 	}
 	builder.WriteString(".")
+	builder.WriteString(" User rejected the approval request for this tool call.")
+	message := (tools.DenialCommentaryPresentation{Commentary: commentary}).AppendQuoted(builder.String())
 	if commentary != nil {
-		builder.WriteString(" User rejected the approval request for this tool call, and said: ")
-		builder.WriteString(strconv.Quote(strings.TrimSpace(*commentary)))
-		builder.WriteString(".")
-	} else {
-		builder.WriteString(" User rejected the approval request for this tool call.")
+		message += "."
 	}
-	builder.WriteString(" Do not attempt to circumvent, hack around, or re-execute the same path. Treat this rejection as authoritative.")
+	message += " Do not attempt to circumvent, hack around, or re-execute the same path. Treat this rejection as authoritative."
 	if instruction := strings.TrimSpace(outsideWorkspaceRejectionInstruction); instruction != "" {
-		builder.WriteString(" ")
-		builder.WriteString(instruction)
+		message += " " + instruction
 	}
-	return errors.New(builder.String())
+	return errors.New(message)
 }
 
 func readImageOutsideWorkspacePath(req tools.FileAccessRequest) string {
