@@ -438,7 +438,7 @@ func archiveRemovalFailureOutcome(
 			sessionID,
 			"request_failed",
 			fmt.Sprintf(
-				"Archive %s exists, but Session %s was retained. Resolve the blocker, then run kent session delete %s --confirm.",
+				"Archive %s exists, but Session %s was retained. Resolve the blocker, then run kent session delete %s.",
 				outputPath,
 				sessionID,
 				sessionID,

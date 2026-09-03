@@ -294,7 +294,7 @@ func (archive *preparedSessionArchive) publish() error {
 func (archive *preparedSessionArchive) cleanup() error {
 	if err := os.Remove(archive.tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return &ArchivePathError{
-			Path:  archive.outputPath,
+			Path:  archive.tempPath,
 			Phase: ArchivePathPhaseCleanup,
 			Err:   err,
 		}

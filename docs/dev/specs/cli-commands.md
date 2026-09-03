@@ -132,7 +132,7 @@
 - A failure before publication retains the Session and cleans Kent's temporary archive artifact.
 - Archive leaves destination parent directories it created in place after a later failure.
 - A Session removal failure is `session_removal_failure` with exactly one typed state: `metadata_not_removed` or `metadata_removed_cleanup_failed {remaining_path}`.
-- After publication, a removal failure before Session metadata commits reports `metadata_not_removed`. The valid artifact and Session both remain, and the failure directs the operator to resolve the blocker with `kent session delete <session-id> --confirm`.
+- After publication, a removal failure before Session metadata commits reports `metadata_not_removed`. The valid artifact and Session both remain, and the failure directs the operator to resolve the blocker with `kent session delete <session-id>`.
 - After Session metadata commits, an owned-artifact cleanup failure reports `metadata_removed_cleanup_failed` with the exact remaining path. The Session remains absent from Kent, any archive artifact survives, and the failure directs the operator to remove that path manually.
 - Archive does not overwrite or rename a published artifact on retry.
 - Archive requires no confirmation flag.
