@@ -266,6 +266,8 @@ func topologyBranch(entry *worktreepb.TopologyEntry) *string {
 	switch {
 	case entry == nil:
 		return nil
+	case entry.GetMainWorkspace() != nil:
+		return entry.GetMainWorkspace().GetGit().BranchName
 	case entry.GetRegistered() != nil:
 		return entry.GetRegistered().GetGit().BranchName
 	case entry.GetExternal() != nil:

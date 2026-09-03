@@ -143,14 +143,20 @@ func DeleteCanAutoDeleteBranch(item Item) bool {
 	return item.Managed && item.CreatedBranch && item.BranchName != nil
 }
 
+func CanDelete(item Item) bool {
+	return item.Entry != nil &&
+		item.Entry.Projection != nil &&
+		item.Entry.Projection.DeletePreview != nil
+}
+
 func ValidateDeletionTarget(item Item) error {
-	if item.Entry == nil || item.Entry.Projection == nil {
-		return errors.New("worktree deletion projection is required")
+	if CanDelete(item) {
+		return nil
 	}
-	if item.Entry.Projection.DeletePreview == nil {
+	if item.Entry != nil && item.Entry.Topology != nil && item.Entry.Topology.GetMainWorkspace() != nil {
 		return ErrMainWorkspaceNotDeletable
 	}
-	return nil
+	return worktreecontract.ErrWorktreeBlocked
 }
 
 func ResolveCurrentDeletionTarget(entries []Item) (Item, error) {

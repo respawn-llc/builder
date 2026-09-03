@@ -17,7 +17,7 @@ func TestProjectItemPreservesServerSelectorAndTopologyFacts(t *testing.T) {
 }
 
 func TestResolveCurrentDeletionTargetRejectsMainWorkspace(t *testing.T) {
-	item := testWorktreeItem(t, "wt-main", "main", "/repo", "main", true, true)
+	item := testMainWorkspaceItem(t, "/repo", "main", true)
 	_, err := ResolveCurrentDeletionTarget([]Item{item})
 	if err == nil || !errors.Is(err, ErrMainWorkspaceNotDeletable) {
 		t.Fatalf("expected main workspace rejection, got %v", err)
@@ -77,6 +77,10 @@ func TestProjectItemKeepsMainWorkspacePresentationSeparateFromGitMainMarker(t *t
 	if got := DeleteActions(items[1]); len(got) != 1 || got[0] != DeleteActionCancel {
 		t.Fatalf("Git main delete actions = %+v, want cancel only", got)
 	}
+	if err := ValidateDeletionTarget(items[1]); !errors.Is(err, worktreecontract.ErrWorktreeBlocked) ||
+		errors.Is(err, ErrMainWorkspaceNotDeletable) {
+		t.Fatalf("Git main deletion validation = %v, want generic blocked outcome", err)
+	}
 }
 
 func TestResolveCurrentDeletionTargetFallsBackToNotFound(t *testing.T) {
@@ -127,6 +131,32 @@ func testWorktreeItem(t *testing.T, id, name, root, branch string, main, current
 		},
 	}
 	item, err := ProjectItem(entry)
+	if err != nil {
+		t.Fatalf("ProjectItem: %v", err)
+	}
+	return item
+}
+
+func testMainWorkspaceItem(t *testing.T, root, branch string, current bool) Item {
+	t.Helper()
+	branchValue := branch
+	item, err := ProjectItem(&worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_MainWorkspace{
+				MainWorkspace: &worktreepb.MainWorkspaceFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot: root,
+						HeadObject:    "deadbeef",
+						BranchName:    &branchValue,
+						PathAvailable: true,
+					},
+				},
+			},
+		},
+		Projection: &worktreepb.ListProjection{
+			Selector: branch, IsCurrent: current,
+		},
+	})
 	if err != nil {
 		t.Fatalf("ProjectItem: %v", err)
 	}

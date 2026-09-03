@@ -119,6 +119,16 @@ func TestLinkedMainWorkspaceKeepsGitMainDeletionBlockedAndSwitchable(t *testing.
 		list[2].GetProjection().GetDeletePreview() == nil {
 		t.Fatalf("registered projection = %+v, want switch and delete preview", list[2].GetProjection())
 	}
+	if list[0].GetProjection().GetSelector() != "workspace" {
+		t.Fatalf("Main Workspace selector = %q, want live branch selector", list[0].GetProjection().GetSelector())
+	}
+	branchMatch, err := resolveTopologySelector(topology, "workspace")
+	if err != nil {
+		t.Fatalf("resolve Main Workspace branch selector: %v", err)
+	}
+	if branchMatch.index != 0 {
+		t.Fatalf("Main Workspace branch selector matched topology index %d, want 0", branchMatch.index)
+	}
 	if _, err := deletionSelector(topology[0]); !errors.Is(err, worktreecontract.ErrWorktreeBlocked) {
 		t.Fatalf("Main Workspace deletion = %v, want blocked", err)
 	}

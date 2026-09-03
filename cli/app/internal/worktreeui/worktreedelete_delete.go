@@ -24,7 +24,7 @@ type PreviewLine struct {
 }
 
 func DeleteActions(target Item) []DeleteAction {
-	if target.Entry == nil || target.Entry.Projection == nil || target.Entry.Projection.DeletePreview == nil {
+	if !CanDelete(target) {
 		return []DeleteAction{DeleteActionCancel}
 	}
 	actions := []DeleteAction{DeleteActionCancel, DeleteActionDelete}

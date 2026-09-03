@@ -150,6 +150,43 @@ func TestWorktreeListControllerDeleteKeysSetIntent(t *testing.T) {
 	}
 }
 
+func TestWorktreeListControllerGitMainRowHasNoDeleteActions(t *testing.T) {
+	listResponse := testLinkedWorktreeListResponse()
+	gitMain := &worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_External{
+				External: &worktreepb.ExternalFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot:  "/repo/git-main",
+						HeadObject:     "deadbeef",
+						BranchName:     appStringPointer("main"),
+						IsMainWorktree: true,
+						PathAvailable:  true,
+					},
+				},
+			},
+		},
+		Projection: &worktreepb.ListProjection{
+			Selector: "main",
+			Switch: &worktreepb.SwitchOperation{
+				Kind:     worktreepb.SwitchOperationKind_WORKTREE_SWITCH_OPERATION_ENTER,
+				Selector: appStringPointer("main"),
+			},
+		},
+	}
+	listResponse.Worktrees = append(listResponse.Worktrees, gitMain)
+	fixture := newWorktreeListFixture(t, nil)
+	fixture.model.worktrees.entries = make([]worktreeui.Item, 0, len(listResponse.Worktrees))
+	for _, entry := range listResponse.Worktrees {
+		fixture.model.worktrees.entries = append(fixture.model.worktrees.entries, mustProjectWorktreeItem(t, entry))
+	}
+	fixture.model.worktrees.selection = len(fixture.model.worktrees.entries)
+	target, ok := fixture.model.selectedWorktreeRow()
+	if !ok || worktreeDeleteActionsAvailableForSelection(fixture.model) {
+		t.Fatalf("selected Git main row = %+v, want no projected delete action", target)
+	}
+}
+
 func TestWorktreeListDeleteIntentSurvivesSelectorChangeDuringRefresh(t *testing.T) {
 	fixture := newWorktreeListFixture(t, nil)
 	fixture.model.worktrees.selection = 1
