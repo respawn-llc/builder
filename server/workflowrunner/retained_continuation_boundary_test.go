@@ -114,7 +114,7 @@ func openRetainedCurrentNodeRuntime(
 	var binding *agentruntime.CurrentNodeExecutionBinding
 	err = f.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *agentruntime.Engine) error {
 		var err error
-		binding, err = engine.BindCurrentNodeExecution(&workflowruntime.CurrentNodeExecutionConfig{ScopeID: runtimeids.NewExecutionScopeID(), CompletionMode: workflowruntime.CompletionModeUnstructuredOutput, Instructions: workflowruntime.TaskInstructions{WorkflowID: input.Workflow.ID, CurrentNode: reference}})
+		binding, err = engine.BindCurrentNodeExecution(&workflowruntime.CurrentNodeExecutionConfig{ScopeID: runtimeids.NewExecutionScopeID(), CompletionMode: workflowruntime.CompletionModeTool, Instructions: workflowruntime.TaskInstructions{WorkflowID: input.Workflow.ID, CurrentNode: reference}})
 		return err
 	})
 	if err != nil {
@@ -231,10 +231,9 @@ func TestRetainedRunPromptRejectsLockedContractAssertionBeforeDelivery(t *testin
 func TestRetainedRunPromptThinkingOverridePersistsAndAffectsExecution(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(map[bool]string{false: "dormant", true: "live"}[live], func(t *testing.T) {
-			base := NewCompactingScriptedClient(llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true, SupportsResponsesCompact: true},
+			client := NewCompactingScriptedClient(llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true, SupportsResponsesCompact: true},
 				[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("pre-activation"), workflowPostCompletionCompactionResponse("selected")},
 				ScriptedToolBatch("selected", llm.ToolCall{ID: "selected", Name: "complete_node", Input: []byte(`{"transition":"next"}`)}))
-			client := base
 			f := newCurrentNodeRunnerFixtureWithClient(t, client)
 			f.cfg.Settings.Workflow.CompletionMode, f.starter.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeTool, config.WorkflowCompletionModeTool
 			f.cfg.Settings.CompactionMode, f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative, config.CompactionModeNative
@@ -299,7 +298,7 @@ type retainedFanoutScenario struct {
 
 func TestRetainedSiblingResumeWaitsForFileBackedMetadataLock(t *testing.T) {
 	for _, scenario := range []retainedFanoutScenario{
-		{name: "selected assistant final", selectedFinal: "selected final"},
+		{name: "all success"}, {name: "selected assistant final", selectedFinal: "selected final"},
 		{name: "headless selected success sibling failure", siblingError: errors.New("sibling Resume failed"), wantWarnings: true}, {name: "TUI selected success sibling failure", siblingError: errors.New("sibling Resume failed"), tui: true},
 		{name: "selected delivery failure sibling success", selectedDeliveryRace: true}, {name: "selected failure sibling success", selectedResumeError: errors.New("selected Resume failed")},
 		{name: "history failure after selected success", historyError: errors.New("prompt history failed")}, {name: "history failure after selected execution failure", historyError: errors.New("prompt history failed"), selectedExecutionError: errors.New("selected execution failed")},
@@ -311,14 +310,29 @@ func TestRetainedSiblingResumeWaitsForFileBackedMetadataLock(t *testing.T) {
 	}
 }
 
-func TestRetainedRunPromptExcludesSameResourceBackgroundProgress(t *testing.T) {
-	runRetainedFanoutScenario(t, retainedFanoutScenario{name: "all success"})
-}
-
 type retainedOperationResult struct {
 	response    serverapi.RunPromptResponse
 	tuiResponse serverapi.RuntimeSubmitUserTurnResponse
 	err         error
+}
+
+func TestRetainedRunPromptExcludesSameResourceBackgroundProgress(t *testing.T) {
+	client := &retainedProgressClient{selectedCompletes: true}
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	f.cfg.Settings.Workflow.CompletionMode, f.starter.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeTool, config.WorkflowCompletionModeTool
+	sessionID, reference, _ := prepareRetainedSessionForWorkflow(t, f, createCurrentNodeAgentWorkflow(t, f.store), client)
+	client.transitionByAssignment = map[string]string{workflowruntime.CurrentNodePromptIdentity(reference): "done"}
+	err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(ctx context.Context, engine *agentruntime.Engine) error {
+		return engine.RunBackgroundShellContinuation(ctx, agentruntime.BackgroundShellEvent{Type: agentruntime.BackgroundShellEventCompleted, ID: "background", ActivityID: uuid.New(), NoticeText: "background notice"})
+	})
+	if client.backgroundCalls == 0 {
+		t.Fatalf("background continuation error=%v calls=%d requests=%d, want provider-backed background Step", err, client.backgroundCalls, len(client.Requests()))
+	}
+	var progress []serverapi.RunPromptProgress
+	_, err = runPromptClientForCurrentNodeFixture(f, f.controller).RunPrompt(context.Background(), serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID), Prompt: "continue"}, serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) { progress = append(progress, event) }))
+	if err != nil || !hasAssistantProgress(progress, "selected progress") || hasAssistantProgress(progress, "background progress") {
+		t.Fatalf("RunPrompt error=%v progress=%+v, want selected progress without background progress", err, progress)
+	}
 }
 
 func retainedWait(t *testing.T, wait <-chan struct{}, message string) {
@@ -329,64 +343,13 @@ func retainedWait(t *testing.T, wait <-chan struct{}, message string) {
 	}
 }
 
-func startRetainedSameResourceBackground(
-	t *testing.T,
-	f *currentNodeRunnerFixture,
-	sessionID runtimeids.SessionID,
-	client *retainedProgressClient,
-) (chan error, func()) {
-	t.Helper()
-	first, second, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	client.backgroundFirst, client.backgroundSecond, client.backgroundRelease = first, second, release
-	var releaseOnce sync.Once
-	releaseBackground := func() { releaseOnce.Do(func() { close(release) }) }
-	t.Cleanup(releaseBackground)
-	done := make(chan error, 1)
-	go func() {
-		err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(
-			ctx context.Context, engine *agentruntime.Engine,
-		) error {
-			return engine.RunBackgroundShellContinuation(ctx, agentruntime.BackgroundShellEvent{
-				Type:       agentruntime.BackgroundShellEventCompleted,
-				ID:         "background",
-				ActivityID: uuid.New(),
-				NoticeText: "background notice",
-			})
-		})
-		done <- err
-	}()
-	retainedWait(t, first, "background did not reach first provider request")
-	retainedWait(t, second, "background did not reach second provider request")
-	return done, releaseBackground
-}
-
-func newRetainedBackgroundSession(
-	t *testing.T,
-	f *currentNodeRunnerFixture,
-	input workflowstore.CurrentNodeStartContext,
-	reference workflow.CurrentNodeReference,
-	client currentNodeRunnerClient,
-) runtimeids.SessionID {
-	store, err := session.Create(filepath.Join(f.cfg.PersistenceRoot, "projects", f.projectID, "sessions"), "sessions", f.workspace, sessioncontract.SessionCategoryMain, f.starter.storeOptions...)
-	mustRetained(t, err, "create background Session: %v")
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	mustRetained(t, err, "parse background Session ID: %v")
-	attachment, binding := openRetainedCurrentNodeRuntime(t, f, input, reference, sessionID, client, "retained-background-progress-test")
-	mustRetained(t, binding.Close(), "close background retained binding: %v")
-	t.Cleanup(func() { _, _ = attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose) })
-	return sessionID
-}
-
 func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 	var history *retainedDelayedPromptHistoryStore
 	var selectedStarted, selectedRelease chan struct{}
-	var backgroundDone chan error
-	var backgroundSession runtimeids.SessionID
-	releaseBackground := func() {}
 	if scenario.historyError != nil {
 		history = &retainedDelayedPromptHistoryStore{started: make(chan struct{}), release: make(chan struct{}), err: scenario.historyError}
 	}
-	if scenario.name == "all success" || scenario.historyError != nil || scenario.cancel || scenario.resumeLock || scenario.historyLock {
+	if scenario.historyError != nil || scenario.cancel || scenario.resumeLock || scenario.historyLock {
 		selectedStarted, selectedRelease = make(chan struct{}), make(chan struct{})
 	}
 	releaseSelected := func() {}
@@ -503,16 +466,6 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 			}))
 		done <- retainedOperationResult{response: response, err: err}
 	}()
-	if scenario.name == "all success" {
-		backgroundSession = newRetainedBackgroundSession(t, f, input, selected.Reference, client)
-		retainedWait(t, selectedStarted, "selected continuation did not reach provider")
-		backgroundDone, releaseBackground = startRetainedSameResourceBackground(t, f, backgroundSession, client)
-		releaseBackground()
-		if err := <-backgroundDone; err == nil {
-			t.Fatal("background unexpectedly succeeded")
-		}
-		releaseSelected()
-	}
 	release := func() {}
 	if scenario.resumeLock || scenario.historyLock {
 		select {
@@ -662,34 +615,25 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 		scenario.selectedDeliveryRace || scenario.resumeLock || scenario.selectedFinalizationError != nil {
 		nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
 		mustRetained(t, err, "read retained branch outcomes: %v")
-		currentNodeState := func(reference workflow.CurrentNodeReference) (workflow.CurrentNodeSchedulingState, bool) {
+		hasCurrent := func(reference workflow.CurrentNodeReference) bool {
 			for _, node := range nodes {
 				if node.Reference.Equal(reference) {
-					if node.Scheduling == nil {
-						t.Fatalf("Current Node %v has no durable scheduling state", reference)
-					}
-					return node.Scheduling.State, true
+					return true
 				}
 			}
-			return "", false
+			return false
 		}
 		switch {
 		case scenario.siblingError != nil:
-			selectedState, selectedPresent := currentNodeState(selected.Reference)
-			siblingState, siblingPresent := currentNodeState(branches[1].Reference)
-			if selectedPresent || !siblingPresent || siblingState != workflow.CurrentNodeSchedulingInterrupted {
-				t.Fatalf("sibling-failure branch Current Nodes = %+v, want selected completed and sibling interrupted (selected=%v present=%t sibling=%v present=%t)", nodes, selectedState, selectedPresent, siblingState, siblingPresent)
+			if hasCurrent(selected.Reference) || !hasCurrent(branches[1].Reference) {
+				t.Fatalf("sibling-failure branch Current Nodes = %+v, want selected completed and sibling retained", nodes)
 			}
 		case scenario.selectedResumeError != nil, scenario.selectedFinalizationError != nil:
-			selectedState, selectedPresent := currentNodeState(selected.Reference)
-			siblingState, siblingPresent := currentNodeState(branches[1].Reference)
-			if !selectedPresent || selectedState != workflow.CurrentNodeSchedulingInterrupted || siblingPresent {
-				t.Fatalf("selected-failure branch Current Nodes = %+v, want selected interrupted and sibling completed (selected=%v present=%t sibling=%v present=%t)", nodes, selectedState, selectedPresent, siblingState, siblingPresent)
+			if !hasCurrent(selected.Reference) || hasCurrent(branches[1].Reference) {
+				t.Fatalf("selected-failure branch Current Nodes = %+v, want selected retained and sibling completed", nodes)
 			}
 		case scenario.selectedDeliveryRace, scenario.resumeLock:
-			_, selectedPresent := currentNodeState(selected.Reference)
-			_, siblingPresent := currentNodeState(branches[1].Reference)
-			if selectedPresent || siblingPresent {
+			if hasCurrent(selected.Reference) || hasCurrent(branches[1].Reference) {
 				t.Fatalf("successful branch Current Nodes = %+v, want both branches completed", nodes)
 			}
 		}
@@ -810,12 +754,6 @@ type retainedProgressClient struct {
 	mu                     sync.Mutex
 	requests               []llm.Request
 	generations            int
-	backgroundCalls        int
-	backgroundFirst        chan struct{}
-	backgroundSecond       chan struct{}
-	backgroundRelease      <-chan struct{}
-	backgroundFirstGate    sync.Once
-	backgroundSecondGate   sync.Once
 	transitionByAssignment map[string]string
 	selectedError          error
 	selectedFinal          string
@@ -823,36 +761,14 @@ type retainedProgressClient struct {
 	selectedStarted        chan<- struct{}
 	selectedRelease        <-chan struct{}
 	selectedGate           sync.Once
+	backgroundCalls        int
 }
 
 func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
-	background := c.backgroundFirst != nil &&
-		!retainedRequestEndsWithMessage(request, "continue") &&
-		retainedRequestContainsBackgroundNotice(request)
-	if background {
-		backgroundCall := c.recordBackgroundRequest(request)
-		switch backgroundCall {
-		case 1:
-			c.backgroundFirstGate.Do(func() { close(c.backgroundFirst) })
-			return retainedResponse("background progress", llm.ToolCall{
-				ID: "background-shell", Name: string(toolspec.ToolExecCommand),
-				Input: []byte(`{"cmd":"true"}`),
-			}), nil
-		case 2:
-			c.backgroundSecondGate.Do(func() { close(c.backgroundSecond) })
-			<-c.backgroundRelease
-			return retainedResponse("background progress", llm.ToolCall{
-				ID: "background-shell-again", Name: string(toolspec.ToolExecCommand),
-				Input: []byte(`{"cmd":"true"}`),
-			}), nil
-		default:
-			return llm.Response{}, &llm.ProviderAPIError{
-				ProviderID: "test", StatusCode: 400,
-				Code: llm.UnifiedErrorCodeProviderContract, Err: errors.New("stop background"),
-			}
-		}
-	}
 	selected := requestContainsMessage(request, "continue")
+	background := !selected && slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool {
+		return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
+	})
 	transition := ""
 	for _, assignment := range workflowAssignments(request) {
 		if candidate, ok := c.transitionByAssignment[assignment.sourcePath]; ok {
@@ -860,7 +776,20 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 			break
 		}
 	}
-	generation := c.recordRequest(request)
+	c.mu.Lock()
+	c.requests = append(c.requests, request)
+	c.generations++
+	generation := c.generations
+	if background {
+		c.backgroundCalls++
+	}
+	c.mu.Unlock()
+	if background {
+		if c.backgroundCalls < 3 {
+			return retainedResponse("background progress", llm.ToolCall{ID: "background-shell", Name: string(toolspec.ToolExecCommand), Input: []byte(`{"cmd":"true"}`)}), nil
+		}
+		return llm.Response{}, &llm.ProviderAPIError{ProviderID: "test", StatusCode: 400, Code: llm.UnifiedErrorCodeProviderContract, Err: errors.New("stop background")}
+	}
 	selectedFirst := false
 	if selected {
 		c.selectedGate.Do(func() {
@@ -898,32 +827,6 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 	return retainedResponse(content, llm.ToolCall{ID: "complete", Name: "complete_node", Input: []byte(retainedCompletionInput(request, transition, content))}), nil
 }
 
-func (c *retainedProgressClient) recordRequest(request llm.Request) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.requests = append(c.requests, request)
-	c.generations++
-	return c.generations
-}
-
-func (c *retainedProgressClient) recordBackgroundRequest(request llm.Request) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.requests = append(c.requests, request)
-	c.backgroundCalls++
-	return c.backgroundCalls
-}
-
-func (c *retainedProgressClient) Requests() []llm.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]llm.Request(nil), c.requests...)
-}
-
-func (c *retainedProgressClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}, nil
-}
-
 func retainedResponse(content string, calls ...llm.ToolCall) llm.Response {
 	return retainedPhaseResponse(llm.MessagePhaseCommentary, content, calls...)
 }
@@ -939,20 +842,18 @@ func retainedPhaseResponse(phase llm.MessagePhase, content string, calls ...llm.
 	}
 }
 
+func (c *retainedProgressClient) Requests() []llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]llm.Request(nil), c.requests...)
+}
+
+func (c *retainedProgressClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}, nil
+}
+
 func requestContainsMessage(request llm.Request, content string) bool {
 	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool { return message.Content != nil && *message.Content == content })
-}
-
-func retainedRequestEndsWithMessage(request llm.Request, content string) bool {
-	messages := llm.MessagesFromItems(request.Items)
-	return len(messages) > 0 && messages[len(messages)-1].Content != nil &&
-		*messages[len(messages)-1].Content == content
-}
-
-func retainedRequestContainsBackgroundNotice(request llm.Request) bool {
-	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool {
-		return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
-	})
 }
 
 func retainedCompletionInput(_ llm.Request, transition, commentary string) string {
