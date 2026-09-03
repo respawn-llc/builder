@@ -33,3 +33,11 @@
 - [x] Add locked-contract assertion rejection with zero provider calls and zero prompt history, plus observable background-progress exclusion.
 - [x] Replace forbidden substring guidance matching with an exact client-owned expected rendering.
 - [x] Record the user's September 3, 2026 approval to retain the historical 15-test-file diff because the two-file reduction would require contradictory tests or a compatibility seam.
+
+## Second follow-up review remediation (September 3, 2026)
+
+- [x] Wait for retained setup compaction's existing idle boundary before capturing the post-setup compaction baseline.
+- [x] Restore scenario-specific durable Current Node scheduling-state assertions for retained branch failures.
+- [x] Add a public selected-continuation progress case proving an unregistered background Step is excluded from user-visible progress.
+- [x] Configure authorization-denial Run Prompt coverage with the metadata-backed history owner and assert zero selected-session history.
+- [x] Keep the ordinary history timeout regression's technical persistence wait separate from its fresh selected-result wait.

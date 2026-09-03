@@ -87,7 +87,12 @@ func prepareRetainedSessionForWorkflow(
 		_ = binding.Close()
 		_, _ = attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose)
 	})
-	mustRetained(t, f.authority.WithCurrentRuntime(context.Background(), sessionID, func(ctx context.Context, engine *agentruntime.Engine) error { return engine.CompactContext(ctx, "") }), "compact retained Session: %v")
+	mustRetained(t, f.authority.WithCurrentRuntime(context.Background(), sessionID, func(ctx context.Context, engine *agentruntime.Engine) error {
+		if err := engine.CompactContext(ctx, ""); err != nil {
+			return err
+		}
+		return engine.RunWhenIdle(ctx, agentruntime.ActiveKindRuntimeMaintenance, func() error { return nil })
+	}), "compact retained Session: %v")
 	mustRetained(t, binding.Close(), "close dormant Workflow binding: %v")
 	return sessionID, reference, attachment
 }
@@ -220,15 +225,46 @@ func TestRetainedRunPromptRejectsLockedContractAssertionBeforeDelivery(t *testin
 	}
 }
 
+func TestRetainedContinuationProgressExcludesUnregisteredBackgroundStep(t *testing.T) {
+	continuation, err := workflowexecution.NewWorkflowSessionContinuation("continue", nil)
+	mustRetained(t, err, "new Workflow Session continuation: %v")
+	var progress []serverapi.RunPromptProgress
+	continuation.SetProgressSink(func(event agentruntime.Event) {
+		runprompt.PublishRunPromptProgress(serverapi.RunPromptProgressFunc(func(value serverapi.RunPromptProgress) {
+			progress = append(progress, value)
+		}), event)
+	})
+	continuation.RegisterStep("selected-step")
+	continuation.PublishEvent(agentruntime.Event{
+		Kind: agentruntime.EventAssistantMessage, StepID: textutil.Value("selected-step"),
+		Message: llm.Message{
+			Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary),
+			Content: textutil.Value("selected progress"),
+		},
+	})
+	continuation.PublishEvent(agentruntime.Event{
+		Kind: agentruntime.EventAssistantMessage, StepID: textutil.Value("background-step"),
+		Message: llm.Message{
+			Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary),
+			Content: textutil.Value("background progress"),
+		},
+	})
+	if len(progress) != 1 || progress[0].AssistantMessage == nil ||
+		progress[0].AssistantMessage.Content != "selected progress" {
+		t.Fatalf("selected continuation progress = %+v, want only selected progress", progress)
+	}
+}
+
 func TestRetainedRunPromptThinkingOverridePersistsAndAffectsExecution(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(map[bool]string{false: "dormant", true: "live"}[live], func(t *testing.T) {
-			client := NewCompactingScriptedClient(llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true, SupportsResponsesCompact: true},
+			base := NewCompactingScriptedClient(llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true, SupportsResponsesCompact: true},
 				[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("pre-activation"), workflowPostCompletionCompactionResponse("selected")},
 				ScriptedToolBatch("selected", llm.ToolCall{ID: "selected", Name: "complete_node", Input: []byte(`{"transition":"next"}`)}))
+			client := base
 			f := newCurrentNodeRunnerFixtureWithClient(t, client)
 			f.cfg.Settings.Workflow.CompletionMode, f.starter.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeTool, config.WorkflowCompletionModeTool
-			f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+			f.cfg.Settings.CompactionMode, f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative, config.CompactionModeNative
 			threshold := 1
 			f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
 			f.cfg.Settings.ProviderOverride, f.starter.cfg.Settings.ProviderOverride = "openai", "openai"
@@ -286,13 +322,11 @@ type retainedFanoutScenario struct {
 	selectedResumeError, siblingError, historyError, selectedExecutionError, selectedFinalizationError error
 	selectedFinal                                                                                      string
 	cancel, cancelBeforeResume, selectedDeliveryRace, tui, wantWarnings, resumeLock, historyLock       bool
-	backgroundProgress                                                                                 bool
 }
 
 func TestRetainedSiblingResumeWaitsForFileBackedMetadataLock(t *testing.T) {
 	for _, scenario := range []retainedFanoutScenario{
 		{name: "all success"}, {name: "selected assistant final", selectedFinal: "selected final"},
-		{name: "all success excludes background progress", backgroundProgress: true},
 		{name: "headless selected success sibling failure", siblingError: errors.New("sibling Resume failed"), wantWarnings: true}, {name: "TUI selected success sibling failure", siblingError: errors.New("sibling Resume failed"), tui: true},
 		{name: "selected delivery failure sibling success", selectedDeliveryRace: true}, {name: "selected failure sibling success", selectedResumeError: errors.New("selected Resume failed")},
 		{name: "history failure after selected success", historyError: errors.New("prompt history failed")}, {name: "history failure after selected execution failure", historyError: errors.New("prompt history failed"), selectedExecutionError: errors.New("selected execution failed")},
@@ -324,7 +358,7 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 	if scenario.historyError != nil {
 		history = &retainedDelayedPromptHistoryStore{started: make(chan struct{}), release: make(chan struct{}), err: scenario.historyError}
 	}
-	if scenario.historyError != nil || scenario.cancel || scenario.resumeLock || scenario.historyLock || scenario.backgroundProgress {
+	if scenario.historyError != nil || scenario.cancel || scenario.resumeLock || scenario.historyLock {
 		selectedStarted, selectedRelease = make(chan struct{}), make(chan struct{})
 	}
 	releaseSelected := func() {}
@@ -413,26 +447,6 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 		_, err := engine.QueueUserMessageForAutoDrain(ctx, "older pending input")
 		return err
 	}), "queue older selected input: %v")
-	var backgroundTask workflowstore.TaskRecord
-	var backgroundStarted chan struct{}
-	if scenario.backgroundProgress {
-		backgroundStarted = make(chan struct{})
-		client.backgroundStarted = backgroundStarted
-		backgroundWorkflowID := createCurrentNodeAgentWorkflow(t, f.store)
-		backgroundTask = f.createTask(t, backgroundWorkflowID)
-		definition, _, err := f.store.GetDefinition(context.Background(), backgroundWorkflowID)
-		mustRetained(t, err, "resolve background Workflow definition: %v")
-		var backgroundNodeID workflow.NodeID
-		for _, node := range definition.Nodes {
-			if node.Kind() == workflow.NodeKindAgent {
-				backgroundNodeID = workflow.NodeIDOf(node)
-				break
-			}
-		}
-		backgroundReference, err := workflow.NewCurrentNodeReference(backgroundTask.ID, backgroundNodeID, nil)
-		mustRetained(t, err, "create background Current Node reference: %v")
-		client.backgroundAssignment = workflowruntime.CurrentNodePromptIdentity(backgroundReference)
-	}
 	requestCountBeforeSubmit := len(client.Requests())
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -461,11 +475,6 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 			}))
 		done <- retainedOperationResult{response: response, err: err}
 	}()
-	if scenario.backgroundProgress {
-		f.startTask(t, backgroundTask)
-		retainedWait(t, backgroundStarted, "background execution did not reach provider")
-		f.waitForTaskQuiescence(t, backgroundTask.ID)
-	}
 	release := func() {}
 	if scenario.resumeLock || scenario.historyLock {
 		select {
@@ -539,8 +548,6 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 			t.Fatalf("continuation returned before selected result release: %+v", result)
 		case <-time.After(100 * time.Millisecond):
 		}
-		releaseSelected()
-	} else if scenario.backgroundProgress {
 		releaseSelected()
 	} else {
 		release()
@@ -617,30 +624,39 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 		scenario.selectedDeliveryRace || scenario.resumeLock || scenario.selectedFinalizationError != nil {
 		nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
 		mustRetained(t, err, "read retained branch outcomes: %v")
-		hasCurrent := func(reference workflow.CurrentNodeReference) bool {
+		currentNodeState := func(reference workflow.CurrentNodeReference) (workflow.CurrentNodeSchedulingState, bool) {
 			for _, node := range nodes {
 				if node.Reference.Equal(reference) {
-					return true
+					if node.Scheduling == nil {
+						t.Fatalf("Current Node %v has no durable scheduling state", reference)
+					}
+					return node.Scheduling.State, true
 				}
 			}
-			return false
+			return "", false
 		}
 		switch {
 		case scenario.siblingError != nil:
-			if hasCurrent(selected.Reference) || !hasCurrent(branches[1].Reference) {
-				t.Fatalf("sibling-failure branch Current Nodes = %+v, want selected completed and sibling retained", nodes)
+			selectedState, selectedPresent := currentNodeState(selected.Reference)
+			siblingState, siblingPresent := currentNodeState(branches[1].Reference)
+			if selectedPresent || !siblingPresent || siblingState != workflow.CurrentNodeSchedulingInterrupted {
+				t.Fatalf("sibling-failure branch Current Nodes = %+v, want selected completed and sibling interrupted (selected=%v present=%t sibling=%v present=%t)", nodes, selectedState, selectedPresent, siblingState, siblingPresent)
 			}
 		case scenario.selectedResumeError != nil, scenario.selectedFinalizationError != nil:
-			if !hasCurrent(selected.Reference) || hasCurrent(branches[1].Reference) {
-				t.Fatalf("selected-failure branch Current Nodes = %+v, want selected retained and sibling completed", nodes)
+			selectedState, selectedPresent := currentNodeState(selected.Reference)
+			siblingState, siblingPresent := currentNodeState(branches[1].Reference)
+			if !selectedPresent || selectedState != workflow.CurrentNodeSchedulingInterrupted || siblingPresent {
+				t.Fatalf("selected-failure branch Current Nodes = %+v, want selected interrupted and sibling completed (selected=%v present=%t sibling=%v present=%t)", nodes, selectedState, selectedPresent, siblingState, siblingPresent)
 			}
 		case scenario.selectedDeliveryRace, scenario.resumeLock:
-			if hasCurrent(selected.Reference) || hasCurrent(branches[1].Reference) {
+			_, selectedPresent := currentNodeState(selected.Reference)
+			_, siblingPresent := currentNodeState(branches[1].Reference)
+			if selectedPresent || siblingPresent {
 				t.Fatalf("successful branch Current Nodes = %+v, want both branches completed", nodes)
 			}
 		}
 	}
-	if scenario.name == "all success" || scenario.backgroundProgress {
+	if scenario.name == "all success" {
 		if !hasAssistantProgress(progress, "selected progress") ||
 			hasAssistantProgress(progress, "sibling progress") || hasAssistantProgress(progress, "older progress") ||
 			hasAssistantProgress(progress, "background progress") {
@@ -763,17 +779,10 @@ type retainedProgressClient struct {
 	selectedStarted        chan<- struct{}
 	selectedRelease        <-chan struct{}
 	selectedGate           sync.Once
-	backgroundAssignment   string
-	backgroundStarted      chan<- struct{}
-	backgroundGate         sync.Once
 }
 
 func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
 	selected := requestContainsMessage(request, "continue")
-	background := !selected && c.backgroundAssignment != "" &&
-		slices.ContainsFunc(workflowAssignments(request), func(assignment indexedWorkflowAssignment) bool {
-			return assignment.sourcePath == c.backgroundAssignment
-		})
 	transition := ""
 	for _, assignment := range workflowAssignments(request) {
 		if candidate, ok := c.transitionByAssignment[assignment.sourcePath]; ok {
@@ -786,16 +795,6 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 	c.generations++
 	generation := c.generations
 	c.mu.Unlock()
-	if background {
-		c.backgroundGate.Do(func() {
-			if c.backgroundStarted != nil {
-				close(c.backgroundStarted)
-			}
-		})
-		return retainedResponse("background progress", llm.ToolCall{
-			ID: "background-complete", Name: "complete_node", Input: []byte(`{"transition":"done"}`),
-		}), nil
-	}
 	selectedFirst := false
 	if selected {
 		c.selectedGate.Do(func() {
