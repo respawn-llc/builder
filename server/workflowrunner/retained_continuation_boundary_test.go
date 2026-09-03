@@ -31,6 +31,9 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
+	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func mustRetained(t *testing.T, err error, format string) {
@@ -296,7 +299,7 @@ type retainedFanoutScenario struct {
 
 func TestRetainedSiblingResumeWaitsForFileBackedMetadataLock(t *testing.T) {
 	for _, scenario := range []retainedFanoutScenario{
-		{name: "all success"}, {name: "selected assistant final", selectedFinal: "selected final"},
+		{name: "selected assistant final", selectedFinal: "selected final"},
 		{name: "headless selected success sibling failure", siblingError: errors.New("sibling Resume failed"), wantWarnings: true}, {name: "TUI selected success sibling failure", siblingError: errors.New("sibling Resume failed"), tui: true},
 		{name: "selected delivery failure sibling success", selectedDeliveryRace: true}, {name: "selected failure sibling success", selectedResumeError: errors.New("selected Resume failed")},
 		{name: "history failure after selected success", historyError: errors.New("prompt history failed")}, {name: "history failure after selected execution failure", historyError: errors.New("prompt history failed"), selectedExecutionError: errors.New("selected execution failed")},
@@ -306,6 +309,10 @@ func TestRetainedSiblingResumeWaitsForFileBackedMetadataLock(t *testing.T) {
 	} {
 		t.Run(scenario.name, func(t *testing.T) { runRetainedFanoutScenario(t, scenario) })
 	}
+}
+
+func TestRetainedRunPromptExcludesSameResourceBackgroundProgress(t *testing.T) {
+	runRetainedFanoutScenario(t, retainedFanoutScenario{name: "all success"})
 }
 
 type retainedOperationResult struct {
@@ -322,16 +329,64 @@ func retainedWait(t *testing.T, wait <-chan struct{}, message string) {
 	}
 }
 
+func startRetainedSameResourceBackground(
+	t *testing.T,
+	f *currentNodeRunnerFixture,
+	sessionID runtimeids.SessionID,
+	client *retainedProgressClient,
+) (chan error, func()) {
+	t.Helper()
+	first, second, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	client.backgroundFirst, client.backgroundSecond, client.backgroundRelease = first, second, release
+	var releaseOnce sync.Once
+	releaseBackground := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseBackground)
+	done := make(chan error, 1)
+	go func() {
+		err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(
+			ctx context.Context, engine *agentruntime.Engine,
+		) error {
+			return engine.RunBackgroundShellContinuation(ctx, agentruntime.BackgroundShellEvent{
+				Type:       agentruntime.BackgroundShellEventCompleted,
+				ID:         "background",
+				ActivityID: uuid.New(),
+				NoticeText: "background notice",
+			})
+		})
+		done <- err
+	}()
+	retainedWait(t, first, "background did not reach first provider request")
+	retainedWait(t, second, "background did not reach second provider request")
+	return done, releaseBackground
+}
+
+func newRetainedBackgroundSession(
+	t *testing.T,
+	f *currentNodeRunnerFixture,
+	input workflowstore.CurrentNodeStartContext,
+	reference workflow.CurrentNodeReference,
+	client currentNodeRunnerClient,
+) runtimeids.SessionID {
+	store, err := session.Create(filepath.Join(f.cfg.PersistenceRoot, "projects", f.projectID, "sessions"), "sessions", f.workspace, sessioncontract.SessionCategoryMain, f.starter.storeOptions...)
+	mustRetained(t, err, "create background Session: %v")
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	mustRetained(t, err, "parse background Session ID: %v")
+	attachment, binding := openRetainedCurrentNodeRuntime(t, f, input, reference, sessionID, client, "retained-background-progress-test")
+	mustRetained(t, binding.Close(), "close background retained binding: %v")
+	t.Cleanup(func() { _, _ = attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose) })
+	return sessionID
+}
+
 func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
-	if scenario.name == "all success" {
-		runRetainedSameResourceBackgroundProgress(t)
-	}
 	var history *retainedDelayedPromptHistoryStore
 	var selectedStarted, selectedRelease chan struct{}
+	var backgroundDone chan error
+	var backgroundSession runtimeids.SessionID
+	releaseBackground := func() {}
 	if scenario.historyError != nil {
 		history = &retainedDelayedPromptHistoryStore{started: make(chan struct{}), release: make(chan struct{}), err: scenario.historyError}
 	}
-	if scenario.historyError != nil || scenario.cancel || scenario.resumeLock || scenario.historyLock {
+	if scenario.name == "all success" || scenario.historyError != nil || scenario.cancel || scenario.resumeLock || scenario.historyLock {
 		selectedStarted, selectedRelease = make(chan struct{}), make(chan struct{})
 	}
 	releaseSelected := func() {}
@@ -448,6 +503,16 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 			}))
 		done <- retainedOperationResult{response: response, err: err}
 	}()
+	if scenario.name == "all success" {
+		backgroundSession = newRetainedBackgroundSession(t, f, input, selected.Reference, client)
+		retainedWait(t, selectedStarted, "selected continuation did not reach provider")
+		backgroundDone, releaseBackground = startRetainedSameResourceBackground(t, f, backgroundSession, client)
+		releaseBackground()
+		if err := <-backgroundDone; err == nil {
+			t.Fatal("background unexpectedly succeeded")
+		}
+		releaseSelected()
+	}
 	release := func() {}
 	if scenario.resumeLock || scenario.historyLock {
 		select {
@@ -745,6 +810,12 @@ type retainedProgressClient struct {
 	mu                     sync.Mutex
 	requests               []llm.Request
 	generations            int
+	backgroundCalls        int
+	backgroundFirst        chan struct{}
+	backgroundSecond       chan struct{}
+	backgroundRelease      <-chan struct{}
+	backgroundFirstGate    sync.Once
+	backgroundSecondGate   sync.Once
 	transitionByAssignment map[string]string
 	selectedError          error
 	selectedFinal          string
@@ -755,6 +826,32 @@ type retainedProgressClient struct {
 }
 
 func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request, _ llm.StreamCallbacks) (llm.Response, error) {
+	background := c.backgroundFirst != nil &&
+		!retainedRequestEndsWithMessage(request, "continue") &&
+		retainedRequestContainsBackgroundNotice(request)
+	if background {
+		backgroundCall := c.recordBackgroundRequest(request)
+		switch backgroundCall {
+		case 1:
+			c.backgroundFirstGate.Do(func() { close(c.backgroundFirst) })
+			return retainedResponse("background progress", llm.ToolCall{
+				ID: "background-shell", Name: string(toolspec.ToolExecCommand),
+				Input: []byte(`{"cmd":"true"}`),
+			}), nil
+		case 2:
+			c.backgroundSecondGate.Do(func() { close(c.backgroundSecond) })
+			<-c.backgroundRelease
+			return retainedResponse("background progress", llm.ToolCall{
+				ID: "background-shell-again", Name: string(toolspec.ToolExecCommand),
+				Input: []byte(`{"cmd":"true"}`),
+			}), nil
+		default:
+			return llm.Response{}, &llm.ProviderAPIError{
+				ProviderID: "test", StatusCode: 400,
+				Code: llm.UnifiedErrorCodeProviderContract, Err: errors.New("stop background"),
+			}
+		}
+	}
 	selected := requestContainsMessage(request, "continue")
 	transition := ""
 	for _, assignment := range workflowAssignments(request) {
@@ -809,6 +906,14 @@ func (c *retainedProgressClient) recordRequest(request llm.Request) int {
 	return c.generations
 }
 
+func (c *retainedProgressClient) recordBackgroundRequest(request llm.Request) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests = append(c.requests, request)
+	c.backgroundCalls++
+	return c.backgroundCalls
+}
+
 func (c *retainedProgressClient) Requests() []llm.Request {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -836,6 +941,18 @@ func retainedPhaseResponse(phase llm.MessagePhase, content string, calls ...llm.
 
 func requestContainsMessage(request llm.Request, content string) bool {
 	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool { return message.Content != nil && *message.Content == content })
+}
+
+func retainedRequestEndsWithMessage(request llm.Request, content string) bool {
+	messages := llm.MessagesFromItems(request.Items)
+	return len(messages) > 0 && messages[len(messages)-1].Content != nil &&
+		*messages[len(messages)-1].Content == content
+}
+
+func retainedRequestContainsBackgroundNotice(request llm.Request) bool {
+	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool {
+		return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
+	})
 }
 
 func retainedCompletionInput(_ llm.Request, transition, commentary string) string {
