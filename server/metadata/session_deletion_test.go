@@ -18,6 +18,7 @@ func TestDeleteSessionUsesCurrentRetentionAuthorityAndPreservesHistory(t *testin
 		name    string
 		setup   func(*testing.T, *sessionDeletionFixture)
 		blocked bool
+		missing bool
 		verify  func(*testing.T, *sessionDeletionFixture)
 	}{
 		{
@@ -39,52 +40,10 @@ func TestDeleteSessionUsesCurrentRetentionAuthorityAndPreservesHistory(t *testin
 			},
 			blocked: true,
 		},
-		{
-			name: "pending Approval source",
-			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
-				fixture.insertPendingApproval(t, fixture.targetSessionID, "")
-			},
-			blocked: true,
-		},
-		{
-			name: "pending Approval reused target",
-			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
-				fixture.insertPendingApproval(
-					t,
-					"",
-					fmt.Sprintf(
-						`{"target_session":{"kind":"reuse","session_id":%q},"active_source":{"kind":"absent"}}`,
-						fixture.targetSessionID,
-					),
-				)
-			},
-			blocked: true,
-		},
-		{
-			name: "pending Approval exact active source",
-			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
-				fixture.insertPendingApproval(
-					t,
-					"",
-					fmt.Sprintf(
-						`{"target_session":{"kind":"create"},"active_source":{"kind":"exact","session_id":%q}}`,
-						fixture.targetSessionID,
-					),
-				)
-			},
-			blocked: true,
-		},
-		{
-			name: "legacy pending Approval snapshot",
-			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
-				fixture.insertPendingApproval(
-					t,
-					"",
-					fmt.Sprintf(`{"session_id":%q}`, fixture.targetSessionID),
-				)
-			},
-			blocked: true,
-		},
+		{name: "pending Approval source", setup: pendingApprovalSetup(pendingApprovalSource), blocked: true},
+		{name: "pending Approval reused target", setup: pendingApprovalSetup(pendingApprovalReusedTarget), blocked: true},
+		{name: "pending Approval exact active source", setup: pendingApprovalSetup(pendingApprovalActiveSource), blocked: true},
+		{name: "legacy pending Approval snapshot", setup: pendingApprovalSetup(pendingApprovalLegacySnapshot), blocked: true},
 		{
 			name: "dormant association",
 			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
@@ -175,9 +134,7 @@ WHERE id = 'worktree-1'`).Scan(&originSessionID); err != nil {
 			setup: func(t *testing.T, fixture *sessionDeletionFixture) {
 				fixture.targetSessionID = runtimeids.NewSessionID().String()
 			},
-			verify: func(t *testing.T, fixture *sessionDeletionFixture) {
-				t.Helper()
-			},
+			missing: true,
 		},
 	}
 
@@ -187,7 +144,7 @@ WHERE id = 'worktree-1'`).Scan(&originSessionID); err != nil {
 			test.setup(t, fixture)
 
 			err := fixture.store.DeleteSession(t.Context(), fixture.targetSessionID)
-			if test.name == "missing Session" {
+			if test.missing {
 				if !errors.Is(err, session.ErrSessionNotFound) {
 					t.Fatalf("DeleteSession error = %v, want Session not found", err)
 				}
@@ -209,6 +166,37 @@ WHERE id = 'worktree-1'`).Scan(&originSessionID); err != nil {
 				test.verify(t, fixture)
 			}
 		})
+	}
+}
+
+type pendingApprovalSessionReference uint8
+
+const (
+	pendingApprovalSource pendingApprovalSessionReference = iota + 1
+	pendingApprovalReusedTarget
+	pendingApprovalActiveSource
+	pendingApprovalLegacySnapshot
+)
+
+func pendingApprovalSetup(
+	reference pendingApprovalSessionReference,
+) func(*testing.T, *sessionDeletionFixture) {
+	return func(t *testing.T, fixture *sessionDeletionFixture) {
+		sourceSessionID := ""
+		resolution := ""
+		switch reference {
+		case pendingApprovalSource:
+			sourceSessionID = fixture.targetSessionID
+		case pendingApprovalReusedTarget:
+			resolution = fmt.Sprintf(`{"target_session":{"kind":"reuse","session_id":%q},"active_source":{"kind":"absent"}}`, fixture.targetSessionID)
+		case pendingApprovalActiveSource:
+			resolution = fmt.Sprintf(`{"target_session":{"kind":"create"},"active_source":{"kind":"exact","session_id":%q}}`, fixture.targetSessionID)
+		case pendingApprovalLegacySnapshot:
+			resolution = fmt.Sprintf(`{"session_id":%q}`, fixture.targetSessionID)
+		default:
+			t.Fatalf("unsupported pending Approval reference %d", reference)
+		}
+		fixture.insertPendingApproval(t, sourceSessionID, resolution)
 	}
 }
 

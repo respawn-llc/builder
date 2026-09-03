@@ -18,7 +18,7 @@
 - A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; Kent does not fabricate a target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
 - Active Session Runtime mutation and model-loop ownership follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification. Dormant Session mutations and long-running operations remain with their concrete domain owners.
-- Transport may correlate one request with one response, sequence connection setup, bound concurrent handling on one connection, apply socket backpressure, and stop connection-bound waiting and delivery when that connection closes. Transport teardown never cancels or drains the underlying server operation. Transport correlation is not a product identity, replay key, domain order, or server-work owner.
+- Transport may correlate one request with one response, sequence connection setup, bound concurrent handling on one connection, apply socket backpressure, and stop connection-bound waiting and delivery when that connection closes. Transport teardown never cancels or drains the underlying server operation except under the detached Session archive lifetime defined by the [CLI Commands](cli-commands.md) specification. Transport correlation is not a product identity, replay key, domain order, or server-work owner.
 
 ## Skills And Generated Assets
 

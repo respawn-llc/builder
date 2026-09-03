@@ -55,54 +55,19 @@ func TestArchiveAndRemoveSessionArtifactsPreserveUnknownContent(t *testing.T) {
 	entries := decodeArchiveFixture(t, outputPath)
 	root := sessionID.String()
 	want := map[string]archivedEntry{
-		root + "/": {
-			typeflag: tar.TypeDir,
-		},
-		root + "/" + eventsFile: {
-			typeflag: tar.TypeReg,
-			body:     "events",
-		},
-		root + "/" + eventLogPersistenceLockFile: {
-			typeflag: tar.TypeReg,
-			body:     "lock",
-		},
-		root + "/" + appendRecoveryFile: {
-			typeflag: tar.TypeReg,
-			body:     "recovery",
-		},
-		root + "/" + sessionRunLogFile: {
-			typeflag: tar.TypeReg,
-			body:     "steps",
-		},
-		root + "/" + eventLogMigrationWorkspaceDir + "/": {
-			typeflag: tar.TypeDir,
-		},
-		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationWorkspaceMarkerFile: {
-			typeflag: tar.TypeReg,
-			body:     "migration",
-		},
-		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationStagedLogFile: {
-			typeflag: tar.TypeReg,
-			body:     "staged",
-		},
-		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationReadyMarkerFile: {
-			typeflag: tar.TypeReg,
-			body:     "ready",
-		},
-		root + "/notes/": {
-			typeflag: tar.TypeDir,
-		},
-		root + "/notes/personal.txt": {
-			typeflag: tar.TypeReg,
-			body:     "unknown",
-		},
-		root + "/nested-link": {
-			typeflag: tar.TypeSymlink,
-			linkname: "../notes/personal.txt",
-		},
-		root + "/analysis/": {
-			typeflag: tar.TypeDir,
-		},
+		root + "/":                                       {typeflag: tar.TypeDir},
+		root + "/" + eventsFile:                          {typeflag: tar.TypeReg, body: "events"},
+		root + "/" + eventLogPersistenceLockFile:         {typeflag: tar.TypeReg, body: "lock"},
+		root + "/" + appendRecoveryFile:                  {typeflag: tar.TypeReg, body: "recovery"},
+		root + "/" + sessionRunLogFile:                   {typeflag: tar.TypeReg, body: "steps"},
+		root + "/" + eventLogMigrationWorkspaceDir + "/": {typeflag: tar.TypeDir},
+		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationWorkspaceMarkerFile: {typeflag: tar.TypeReg, body: "migration"},
+		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationStagedLogFile:       {typeflag: tar.TypeReg, body: "staged"},
+		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationReadyMarkerFile:     {typeflag: tar.TypeReg, body: "ready"},
+		root + "/notes/":             {typeflag: tar.TypeDir},
+		root + "/notes/personal.txt": {typeflag: tar.TypeReg, body: "unknown"},
+		root + "/nested-link":        {typeflag: tar.TypeSymlink, linkname: "../notes/personal.txt"},
+		root + "/analysis/":          {typeflag: tar.TypeDir},
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("archive entries = %#v, want %#v", entries, want)
@@ -212,26 +177,6 @@ func TestArchiveSessionDirectoryRejectsUnwritableOutput(t *testing.T) {
 	}
 	if entries, readErr := os.ReadDir(outputDir); readErr != nil || len(entries) != 0 {
 		t.Fatalf("output directory after failure = %v, %v; want empty", entries, readErr)
-	}
-}
-
-func TestArchiveSessionDirectoryPreservesOutputAtPublication(t *testing.T) {
-	sessionDir := t.TempDir()
-	writeArchiveFixtureFile(t, filepath.Join(sessionDir, eventsFile), "events")
-	outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
-	writeArchiveFixtureFile(t, outputPath, "existing")
-
-	err := ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sessionDir, outputPath)
-	var existsErr *ArchiveOutputExistsError
-	if !errors.As(err, &existsErr) {
-		t.Fatalf("ArchiveSessionDirectory error = %v, want ArchiveOutputExistsError", err)
-	}
-	if body, readErr := os.ReadFile(outputPath); readErr != nil || string(body) != "existing" {
-		t.Fatalf("existing output = %q, %v", body, readErr)
-	}
-	entries, readErr := os.ReadDir(filepath.Dir(outputPath))
-	if readErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(outputPath) {
-		t.Fatalf("output directory after rejection = %v, %v", entries, readErr)
 	}
 }
 

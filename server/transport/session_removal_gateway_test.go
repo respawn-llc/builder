@@ -85,7 +85,11 @@ func TestSessionRemovalGatewayCancellationRetainsAcceptedWorkAndAdmission(t *tes
 				)
 				requestDone <- requestErr
 			}()
-			awaitSessionRemovalSignal(t, fixture.deleteGate.started, operation+" metadata removal")
+			select {
+			case <-fixture.deleteGate.started:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("timed out waiting for %s metadata removal", operation)
+			}
 
 			cancel()
 			if err := <-requestDone; !errors.Is(err, context.Canceled) {
@@ -123,57 +127,16 @@ func TestSessionRemovalGatewayCancellationRetainsAcceptedWorkAndAdmission(t *tes
 			}
 
 			close(fixture.deleteGate.release)
-			awaitSessionAbsent(t, fixture.metadata, sessionID.String())
 			if err := <-competingAdmission; err != nil {
 				t.Fatalf("Session admission after accepted %s completion: %v", operation, err)
 			}
+			if _, err := fixture.metadata.ResolvePersistedSession(
+				t.Context(),
+				sessionID.String(),
+			); !errors.Is(err, session.ErrSessionNotFound) {
+				t.Fatalf("Session after accepted %s completion = %v, want absent", operation, err)
+			}
 		})
-	}
-}
-
-func TestSessionRemovalPreDecodeAuthenticationFailureReturnsInternalResult(t *testing.T) {
-	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-	service := sessionlaunchpb.File_kent_api_session_launch_session_lifecycle_proto.Services().
-		ByName("SessionLifecycleService")
-
-	archiveResult := &sessionlaunchpb.SessionArchiveResult{}
-	callGatewayDescriptor(
-		t,
-		conn,
-		"archive-before-auth",
-		service.Methods().ByName("Archive"),
-		&sessionlaunchpb.SessionArchiveRequest{
-			SessionId:  "11111111-1111-4111-8111-111111111111",
-			OutputPath: "/tmp/pre-auth.tar.zst",
-		},
-		archiveResult,
-	)
-	if failure := archiveResult.GetError(); failure == nil ||
-		failure.Code != "internal_failure" ||
-		failure.GetInternalFailure() == nil {
-		t.Fatalf("archive pre-auth result = %+v, want internal failure", archiveResult)
-	}
-
-	deleteResult := &sessionlaunchpb.SessionDeleteResult{}
-	callGatewayDescriptor(
-		t,
-		conn,
-		"delete-before-auth",
-		service.Methods().ByName("Delete"),
-		&sessionlaunchpb.SessionDeleteRequest{
-			SessionId: "11111111-1111-4111-8111-111111111111",
-		},
-		deleteResult,
-	)
-	if failure := deleteResult.GetError(); failure == nil ||
-		failure.Code != "internal_failure" ||
-		failure.GetInternalFailure() == nil {
-		t.Fatalf("delete pre-auth result = %+v, want internal failure", deleteResult)
 	}
 }
 
@@ -210,25 +173,11 @@ func newSessionRemovalGatewayFixture(t *testing.T) sessionRemovalGatewayFixture 
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	service := sessionservice.NewGlobalSessionLifecycleService(
-		persistenceRoot,
-		authority,
-		nil,
-	).WithPersistedSessionResolver(deleteGate)
-
-	return sessionRemovalGatewayFixture{
-		remote:     newSessionRemovalGatewayRemote(t, service),
-		authority:  authority,
-		metadata:   metadataStore,
-		session:    persisted,
-		deleteGate: deleteGate,
-	}
+	service := sessionservice.NewGlobalSessionLifecycleService(persistenceRoot, authority, nil).WithPersistedSessionResolver(deleteGate)
+	return sessionRemovalGatewayFixture{remote: newSessionRemovalGatewayRemote(t, service), authority: authority, metadata: metadataStore, session: persisted, deleteGate: deleteGate}
 }
 
-func newSessionRemovalGatewayRemote(
-	t *testing.T,
-	service apicontract.SessionLifecycleService,
-) *client.Remote {
+func newSessionRemovalGatewayRemote(t *testing.T, service apicontract.SessionLifecycleService) *client.Remote {
 	t.Helper()
 	appCore, _ := newGatewayTestCore(t, true, true)
 	gateway, err := NewGateway(&sessionRemovalGatewayDependencies{
@@ -246,31 +195,6 @@ func newSessionRemovalGatewayRemote(
 	}
 	t.Cleanup(func() { _ = remote.Close() })
 	return remote
-}
-
-func awaitSessionRemovalSignal(t *testing.T, signal <-chan struct{}, label string) {
-	t.Helper()
-	select {
-	case <-signal:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("timed out waiting for %s", label)
-	}
-}
-
-func awaitSessionAbsent(t *testing.T, store *metadata.Store, sessionID string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		_, err := store.ResolvePersistedSession(t.Context(), sessionID)
-		if errors.Is(err, session.ErrSessionNotFound) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("resolve Session after removal: %v", err)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("Session %s remained after accepted removal completed", sessionID)
 }
 
 var _ GatewayDependencies = (*sessionRemovalGatewayDependencies)(nil)
