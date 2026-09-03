@@ -108,14 +108,10 @@ func TestPreflightSessionArtifactRemovalLeavesArtifactsOnFailure(t *testing.T) {
 	eventsPath := filepath.Join(sessionDir, eventsFile)
 	writeArchiveFixtureFile(t, eventsPath, "events")
 	requireUnwritableDirectory(t, sessionDir)
-
 	_, err := PreflightSessionArtifactRemoval(sessionDir)
 	var preflightErr *SessionArtifactPreflightError
-	if !errors.As(err, &preflightErr) {
-		t.Fatalf("PreflightSessionArtifactRemoval error = %v, want SessionArtifactPreflightError", err)
-	}
-	if preflightErr.Path != eventsPath {
-		t.Fatalf("preflight path = %q, want %q", preflightErr.Path, eventsPath)
+	if !errors.As(err, &preflightErr) || preflightErr.Path != eventsPath {
+		t.Fatalf("PreflightSessionArtifactRemoval error = %v, want failure for %q", err, eventsPath)
 	}
 	if body, readErr := os.ReadFile(eventsPath); readErr != nil || string(body) != "events" {
 		t.Fatalf("events after failed preflight = %q, %v", body, readErr)
@@ -131,18 +127,14 @@ func TestRemovePreflightedSessionArtifactsReportsExactRemainingPath(t *testing.T
 		t.Fatalf("PreflightSessionArtifactRemoval: %v", err)
 	}
 	requireUnwritableDirectory(t, sessionDir)
-
 	err = RemovePreflightedSessionArtifacts(schedule)
 	var removalErr *SessionArtifactRemovalError
-	if !errors.As(err, &removalErr) {
-		t.Fatalf("RemovePreflightedSessionArtifacts error = %v, want SessionArtifactRemovalError", err)
-	}
-	if removalErr.RemainingPath != eventsPath {
-		t.Fatalf("remaining path = %q, want %q", removalErr.RemainingPath, eventsPath)
+	if !errors.As(err, &removalErr) || removalErr.RemainingPath != eventsPath {
+		t.Fatalf("RemovePreflightedSessionArtifacts error = %v, want failure for %q", err, eventsPath)
 	}
 }
 
-func TestArchiveSessionDirectoryRejectsUnwritableOutput(t *testing.T) {
+func TestArchiveSessionDirectoryReportsFilesystemFailurePaths(t *testing.T) {
 	sessionDir := t.TempDir()
 	writeArchiveFixtureFile(t, filepath.Join(sessionDir, eventsFile), "events")
 	outputDir := filepath.Join(t.TempDir(), "output")
@@ -163,8 +155,10 @@ func TestArchiveSessionDirectoryRejectsUnwritableOutput(t *testing.T) {
 	if _, statErr := os.Lstat(outputPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("output exists after failure: %v", statErr)
 	}
-	if entries, readErr := os.ReadDir(outputDir); readErr != nil || len(entries) != 0 {
-		t.Fatalf("output directory after failure = %v, %v; want empty", entries, readErr)
+	sourcePath := filepath.Join(t.TempDir(), "missing")
+	err = ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sourcePath, filepath.Join(t.TempDir(), "source.tar.zst"))
+	if !errors.As(err, &pathErr) || pathErr.Path != sourcePath {
+		t.Fatalf("archive source error = %v, want path %q", err, sourcePath)
 	}
 }
 

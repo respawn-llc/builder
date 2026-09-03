@@ -88,8 +88,6 @@ func ArchiveSessionDirectory(
 	if !filepath.IsAbs(sessionDir) {
 		return errors.New("Session directory must be absolute")
 	}
-	// Publication is the authority for destinations that appear after the
-	// lifecycle preflight, so archive preparation must not repeat its existence check.
 	if err := validateSessionArchiveDestinationPath(outputPath); err != nil {
 		return err
 	}
@@ -159,13 +157,11 @@ func prepareSessionArchive(
 			Err:   err,
 		}
 	}
-	tempPath := temp.Name()
-	prepared := &preparedSessionArchive{outputPath: outputPath, tempPath: tempPath}
+	prepared := &preparedSessionArchive{outputPath: outputPath, tempPath: temp.Name()}
 	defer func() {
-		if resultErr == nil {
-			return
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, prepared.cleanup())
 		}
-		resultErr = errors.Join(resultErr, prepared.cleanup())
 	}()
 
 	tempInfo, err := temp.Stat()
@@ -192,11 +188,17 @@ func prepareSessionArchive(
 	}
 	tarWriter := tar.NewWriter(encoder)
 	resolvedRoot, err := filepath.EvalSymlinks(sessionDir)
-	if err == nil {
+	if err != nil {
+		err = &ArchivePathError{Path: sessionDir, Phase: ArchivePathPhaseWrite, Err: err}
+	} else {
 		err = writeSessionArchive(ctx, tarWriter, sessionID, resolvedRoot, tempInfo)
 	}
 	err = errors.Join(err, tarWriter.Close(), encoder.Close(), temp.Close())
 	if err != nil {
+		var sourceFailure *ArchivePathError
+		if errors.As(err, &sourceFailure) {
+			return nil, err
+		}
 		return nil, &ArchivePathError{
 			Path:  outputPath,
 			Phase: ArchivePathPhaseWrite,
@@ -215,14 +217,14 @@ func writeSessionArchive(
 ) error {
 	return filepath.WalkDir(resolvedRoot, func(entryPath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return &ArchivePathError{Path: entryPath, Phase: ArchivePathPhaseWrite, Err: walkErr}
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return err
+			return &ArchivePathError{Path: entryPath, Phase: ArchivePathPhaseWrite, Err: err}
 		}
 		if info.Mode().IsRegular() && os.SameFile(info, tempInfo) {
 			return nil
@@ -231,7 +233,7 @@ func writeSessionArchive(
 		if info.Mode()&os.ModeSymlink != 0 {
 			linkTarget, err = os.Readlink(entryPath)
 			if err != nil {
-				return err
+				return &ArchivePathError{Path: entryPath, Phase: ArchivePathPhaseWrite, Err: err}
 			}
 		}
 		header, err := tar.FileInfoHeader(info, linkTarget)
@@ -257,9 +259,9 @@ func writeSessionArchive(
 		}
 		file, err := os.Open(entryPath)
 		if err != nil {
-			return err
+			return &ArchivePathError{Path: entryPath, Phase: ArchivePathPhaseWrite, Err: err}
 		}
-		_, copyErr := io.Copy(writer, contextReader{ctx: ctx, reader: file})
+		_, copyErr := io.Copy(writer, contextReader{ctx: ctx, reader: file, sourcePath: entryPath})
 		closeErr := file.Close()
 		return errors.Join(copyErr, closeErr)
 	})
@@ -301,13 +303,18 @@ func (archive *preparedSessionArchive) cleanup() error {
 }
 
 type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
+	ctx        context.Context
+	reader     io.Reader
+	sourcePath string
 }
 
 func (r contextReader) Read(buffer []byte) (int, error) {
 	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
-	return r.reader.Read(buffer)
+	count, err := r.reader.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = &ArchivePathError{Path: r.sourcePath, Phase: ArchivePathPhaseWrite, Err: err}
+	}
+	return count, err
 }
