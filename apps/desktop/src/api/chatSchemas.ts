@@ -456,10 +456,3 @@ export const runtimeReadModelUpdateSchema = z
     Activity: runtimeActivitySchema,
   })
   .strict();
-export type ChatCommittedRowWire = z.output<typeof committedRowSchema>;
-export type ChatDiagnosticWire = z.output<typeof diagnosticSchema>;
-export type ChatReasoningIdentityWire = z.output<typeof reasoningIdentitySchema>;
-export type ChatRuntimeReadModelUpdateWire = z.output<typeof runtimeReadModelUpdateSchema>;
-export type ChatSessionIdentityWire = z.output<typeof sessionIdentitySchema>;
-export type ChatSessionStatusWire = z.output<typeof sessionStatusSchema>;
-export type ChatToolMetaWire = z.output<typeof toolMetaSchema>;

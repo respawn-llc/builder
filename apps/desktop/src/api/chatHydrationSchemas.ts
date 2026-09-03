@@ -57,7 +57,3 @@ export const hydrationSchema = z
     GoalStatus: goalStatusSchema.nullable(),
   })
   .strict();
-
-export type ChatHydrationWire = z.output<typeof hydrationSchema>;
-export type ChatBackgroundActivityWire = ChatHydrationWire["BackgroundActivities"][number];
-export type ChatPromptWire = ChatHydrationWire["PendingPrompts"][number];
