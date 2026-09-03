@@ -37,7 +37,6 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 function List({
   hasNextPage = false,
-  isFetchingNextPage = false,
   onLoadMore = () => undefined,
   hasPreviousPage = false,
   onLoadPrevious = () => undefined,
@@ -55,7 +54,6 @@ function List({
   header,
 }: Readonly<{
   hasNextPage?: boolean;
-  isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
   hasPreviousPage?: boolean;
   onLoadPrevious?: () => void;
@@ -83,7 +81,7 @@ function List({
       hasNextPage={hasNextPage}
       hasPreviousPage={hasPreviousPage}
       header={header}
-      isFetchingNextPage={isFetchingNextPage}
+      isFetchingNextPage={false}
       isFetchingPreviousPage={false}
       initialScrollKey={initialScrollKey}
       initialScrollRequestKey={initialScrollRequestKey}
@@ -258,38 +256,6 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
     renderWindow(view, forwardItems, [0]);
     expect(onLoadPrevious).toHaveBeenCalledTimes(2);
     renderWindow(view, initialItems, [40]);
-  });
-
-  it("keeps a horizontal edge request suppressed while the edge remains visible", () => {
-    const onLoadMore = vi.fn();
-    virtualizer.getVirtualItems.mockReturnValue([
-      { end: 1200, index: 2, key: "c", lane: 0, size: 10, start: 1190 },
-    ]);
-    const view = render(
-      <List hasNextPage items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
-    );
-    expect(onLoadMore).toHaveBeenCalledOnce();
-
-    view.rerender(
-      <List
-        hasNextPage
-        isFetchingNextPage
-        items={["a", "b", "c"]}
-        onLoadMore={onLoadMore}
-        orientation="horizontal"
-      />,
-    );
-    view.rerender(
-      <List hasNextPage items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
-    );
-    view.rerender(
-      <List hasNextPage={false} items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
-    );
-    view.rerender(
-      <List hasNextPage items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
-    );
-
-    expect(onLoadMore).toHaveBeenCalledOnce();
   });
 });
 

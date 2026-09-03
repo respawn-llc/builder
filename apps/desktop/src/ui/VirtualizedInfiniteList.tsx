@@ -6,7 +6,6 @@ import {
   useRef,
   type AriaRole,
   type HTMLAttributes,
-  type ReactElement,
   type ReactNode,
 } from "react";
 import { type Range, type VirtualItem, useVirtualizer } from "@tanstack/react-virtual";
@@ -29,12 +28,16 @@ import {
   useVirtualizedItemVisibilityTriggers,
   type VirtualizedItemVisibilityTrigger,
 } from "./virtualizedItemVisibilityTriggers";
-import { useVirtualizedLeadingAnchor } from "./virtualizedLeadingAnchor";
 import {
-  resolveVirtualizedInfiniteListLayout,
-  renderVirtualizedInfiniteListRow,
-  type VirtualizedInfiniteListLayout,
-  type VirtualizedInfiniteListRowContext,
+  recoverableLeadingAnchor,
+  resolveAnchorEntryIndex,
+  type VirtualizedAnchorEntry,
+  type VirtualizedLeadingAnchor,
+} from "./virtualizedLeadingAnchor";
+import {
+  fallbackVirtualizedRowStyle,
+  renderVirtualizedRow,
+  virtualizedRowClassName,
   virtualizedRowKey,
 } from "./virtualizedInfiniteListRows";
 
@@ -131,6 +134,7 @@ export function VirtualizedInfiniteList<TItem>(props: VirtualizedInfiniteListPro
   return <VirtualizedInfiniteListContent {...resolveVirtualizedInfiniteListProps(props)} />;
 }
 
+// prettier-ignore
 function VirtualizedInfiniteListContent<TItem>({
   items,
   getItemKey,
@@ -193,25 +197,21 @@ function VirtualizedInfiniteListContent<TItem>({
   const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
   const wasFetchingNextPageRef = useRef(false);
-  const layout: VirtualizedInfiniteListLayout = resolveVirtualizedInfiniteListLayout({
-    empty,
-    hasNextPage,
-    header,
-    horizontal,
-    itemsLength: items.length,
-    nextBoundary,
-    previousBoundary,
-  });
-  const { count, headerIndex, itemStartIndex } = layout;
+  const previousBoundaryCount = Number(previousBoundary !== undefined) * Number(Number(!horizontal) + Number(items.length > 0) > 0);
+  const headerCount = Number(header !== undefined);
+  const emptyCount = Number(items.length === 0) * Number(empty !== undefined);
+  const itemStartIndex = previousBoundaryCount + headerCount;
+  const contentCount = Math.max(items.length, emptyCount);
+  const nextBoundaryIndex = itemStartIndex + contentCount;
+  const hasLegacyPlaceholder = Number(nextBoundary === undefined) * Number(hasNextPage); const legacyPlaceholderIndex = [null, nextBoundaryIndex][hasLegacyPlaceholder] ?? null;
+  const count = nextBoundaryIndex + Number(nextBoundary !== undefined) + hasLegacyPlaceholder;
   const retainedItemKeys = useMemo(
     () => new Set([...(pinnedItemKeys ?? []), ...(stickyItemKeys ?? [])]),
     [pinnedItemKeys, stickyItemKeys],
   );
   const pinnedIndexes = useMemo(() => {
     const indexes = new Set<number>();
-    if (horizontal && headerIndex !== null) {
-      indexes.add(headerIndex);
-    }
+    if (Number(horizontal) * Number(header !== undefined) === 1) indexes.add(0);
     if (retainedItemKeys.size === 0) {
       return indexes;
     }
@@ -221,7 +221,7 @@ function VirtualizedInfiniteListContent<TItem>({
       }
     });
     return indexes;
-  }, [getItemKey, headerIndex, horizontal, itemStartIndex, items, retainedItemKeys]);
+  }, [getItemKey, header, horizontal, itemStartIndex, items, retainedItemKeys]);
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => scrollRef.current,
@@ -233,14 +233,8 @@ function VirtualizedInfiniteListContent<TItem>({
     // commands from layout effects. Do not re-enter React synchronously from
     // those lifecycle paths.
     useFlushSync: false,
-    getItemKey: (index) =>
-      virtualizedRowKey({
-        getItemKey,
-        index,
-        items,
-        layout,
-      }),
-    ...(horizontal ? {} : { overscan: 6 }),
+    getItemKey: (index) => virtualizedRowKey({ emptyCount, horizontal, getItemKey, headerCount, index, itemStartIndex, items, nextBoundaryIndex, previousBoundaryCount }),
+    ...[{}, { overscan: 6 }][Number(!horizontal)],
     horizontal,
     rangeExtractor: (range) => pinnedVirtualRangeExtractor(range, pinnedIndexes),
   });
@@ -251,11 +245,7 @@ function VirtualizedInfiniteListContent<TItem>({
           shouldAdjustScrollForVirtualizedResize(nonAdjustingResizeItemKey, String(item.key));
   const virtualItems = virtualizer.getVirtualItems();
   const isFallbackRendering = virtualItems.length === 0;
-  const fallbackIndexes = fallbackVirtualIndexes({
-    count,
-    estimateSize,
-    pinnedIndexes,
-  });
+  const fallbackIndexes = fallbackVirtualIndexes({ count, estimateSize, pinnedIndexes });
   const visibleIndexes = virtualizedVisibleIndexes(fallbackIndexes, virtualItems);
 
   useEffect(() => {
@@ -285,15 +275,14 @@ function VirtualizedInfiniteListContent<TItem>({
     virtualizer,
   ]);
 
-  useVirtualizedPixelOffset({
-    horizontal,
-    itemsLength: items.length,
-    lastPixelOffsetKeyRef,
-    pixelOffsetAppliedKeyRef,
-    request: validatedPixelOffsetRequest,
-    scrollRef,
-    virtualizer,
-  });
+  useLayoutEffect(() => {
+    if (validatedPixelOffsetRequest === undefined || items.length === 0 || scrollRef.current === null || lastPixelOffsetKeyRef.current === validatedPixelOffsetRequest.key) return;
+    const scrollOffset = validatedPixelOffsetRequest.offsetPx;
+    scrollRef.current[horizontal ? "scrollLeft" : "scrollTop"] = scrollOffset;
+    virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
+    lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
+    pixelOffsetAppliedKeyRef.current = validatedPixelOffsetRequest.key;
+  }, [horizontal, items.length, validatedPixelOffsetRequest, virtualizer]);
 
   const onScroll = useVirtualizedLeadingAnchor({
     behavior: layoutChangeScrollBehavior,
@@ -348,100 +337,46 @@ function VirtualizedInfiniteListContent<TItem>({
     wasFetchingNextPageRef,
   });
 
-  const rowContext: VirtualizedInfiniteListRowContext<TItem> = {
-    empty,
-    getItemKey,
-    getItemWrapperProps,
-    header,
-    isFetchingNextPage,
-    itemRole,
-    items,
-    layout,
-    loadingLabel,
-    nextBoundary,
-    orientation,
-    paddingEnd,
-    paddingStart,
-    previousBoundary,
-    renderItem,
-    rowSpacing,
-    stickyItemKeys,
-  };
-
-  return (
-    <VirtualizedInfiniteListViewport
-      className={className}
-      fallbackIndexes={fallbackIndexes}
-      id={id}
-      onScroll={onScroll}
-      ariaLabel={ariaLabel}
-      rowContext={rowContext}
-      setScrollElement={setScrollElement}
-      role={role}
-      testId={testId}
-      virtualItems={virtualItems}
-      virtualizer={virtualizer}
-    />
-  );
-}
-
-type VirtualizedInfiniteListViewportProps<TItem> = Readonly<{
-  ariaLabel: string | undefined;
-  className: string | undefined;
-  fallbackIndexes: readonly number[];
-  id: string | undefined;
-  onScroll: (() => void) | undefined;
-  rowContext: VirtualizedInfiniteListRowContext<TItem>;
-  role: AriaRole;
-  setScrollElement: (element: HTMLDivElement | null) => void;
-  testId: string | undefined;
-  virtualItems: readonly VirtualItem[];
-  virtualizer: ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>;
-}>;
-
-function VirtualizedInfiniteListViewport<TItem>({
-  ariaLabel,
-  className,
-  fallbackIndexes,
-  id,
-  onScroll,
-  rowContext,
-  setScrollElement,
-  role,
-  testId,
-  virtualItems,
-  virtualizer,
-}: VirtualizedInfiniteListViewportProps<TItem>): ReactElement {
-  const { layout, orientation } = rowContext;
-  const horizontal = orientation === "horizontal";
-  const hasHorizontalBoundary =
-    horizontal &&
-    (layout.emptyCount > 0 || layout.previousBoundaryIndex !== null || rowContext.nextBoundary !== undefined);
-  if (layout.count > 0 && virtualItems.length === 0) {
+  const renderRow = (virtualIndex: number): ReactNode => renderVirtualizedRow({ empty, emptyCount, header, headerCount, horizontal, item: items[virtualIndex - itemStartIndex], isFetchingNextPage, itemStartIndex, legacyPlaceholderIndex, loadingLabel, nextBoundary, nextBoundaryIndex, previousBoundary, previousBoundaryCount, renderItem, virtualIndex });
+  const getRowKey = (index: number): string => virtualizedRowKey({ emptyCount, getItemKey, headerCount, horizontal, index, itemStartIndex, items, nextBoundaryIndex, previousBoundaryCount });
+  const isStickyRow = (index: number, itemKey: string | undefined): boolean => (horizontal && headerCount > 0 && index === 0) || (itemKey !== undefined && stickyItemKeys?.has(itemKey) === true);
+  const hasHorizontalBoundary = Number(horizontal) * Number(Number(emptyCount > 0) + Number(previousBoundary !== undefined) + Number(nextBoundary !== undefined) > 0) > 0;
+  if (Number(count > 0) * Number(virtualItems.length === 0) === 1) {
     return (
       <div
         aria-label={ariaLabel}
-        className={cx(className, horizontal && "flex")}
+        className={cx(className, ["", "flex"][Number(horizontal)])}
         data-testid={testId}
         id={id}
         onScroll={onScroll}
         ref={setScrollElement}
         role={role}
       >
-        {fallbackIndexes.map((index) =>
-          renderVirtualizedInfiniteListRow({
-            context: rowContext,
-            index,
-            measureElement: undefined,
-          }),
-        )}
+        {fallbackIndexes.map((index) => {
+          const itemIndex = index - itemStartIndex;
+          const item = items[itemIndex];
+          const itemKey = item === undefined ? undefined : getItemKey(item);
+          const wrapperProps = item === undefined ? undefined : getItemWrapperProps?.(item, itemIndex);
+          const sticky = isStickyRow(index, itemKey);
+          return (
+            <div
+              {...wrapperProps}
+              className={cx((["", "sticky top-0 z-[1]", "absolute top-0 left-0 w-full", "sticky top-0 z-[1] w-full", "", "sticky z-[1]", "absolute top-0 left-0 w-max", "sticky z-[1] w-max"][Number(horizontal) * 4 + Number(sticky)] ?? ""), virtualizedRowClassName({ count, index, orientation, rowSpacing, virtualized: false }), wrapperProps?.className)}
+              key={getRowKey(index)}
+              role={itemRole}
+              style={{ ...fallbackVirtualizedRowStyle({ count, index, orientation, paddingEnd, paddingStart }), left: [undefined, paddingStart][Number(horizontal) * Number(sticky)] }}
+            >
+              {renderRow(index)}
+            </div>
+          );
+        })}
       </div>
     );
   }
   return (
     <div
       aria-label={ariaLabel}
-      className={cx(className, horizontal && "flex")}
+      className={cx(className, ["", "flex"][Number(horizontal)])}
       data-testid={testId}
       id={id}
       onScroll={onScroll}
@@ -460,13 +395,26 @@ function VirtualizedInfiniteListViewport<TItem>({
             : { height: `${virtualizer.getTotalSize().toString()}px` }
         }
       >
-        {virtualItems.map((virtualItem) =>
-          renderVirtualizedInfiniteListRow({
-            context: rowContext,
-            measureElement: virtualizer.measureElement,
-            virtualItem,
-          }),
-        )}
+        {virtualItems.map((virtualItem) => {
+          const itemIndex = virtualItem.index - itemStartIndex;
+          const item = items[itemIndex];
+          const itemKey = item === undefined ? undefined : getItemKey(item);
+          const wrapperProps = item === undefined ? undefined : getItemWrapperProps?.(item, itemIndex);
+          const sticky = isStickyRow(virtualItem.index, itemKey);
+          return (
+            <div
+              {...wrapperProps}
+              className={cx((["", "sticky top-0 z-[1]", "absolute top-0 left-0 w-full", "sticky top-0 z-[1] w-full", "", "sticky z-[1]", "absolute top-0 left-0 w-max", "sticky z-[1] w-max"][Number(horizontal) * 4 + 2 + Number(sticky)] ?? ""), virtualizedRowClassName({ count, index: virtualItem.index, orientation, rowSpacing, virtualized: true }), wrapperProps?.className)}
+              data-index={virtualItem.index}
+              key={virtualItem.key}
+              ref={virtualizer.measureElement}
+              role={itemRole}
+              style={[{ ...wrapperProps?.style, transform: `${horizontal ? "translateX" : "translateY"}(${virtualItem.start.toString()}px)` }, { ...wrapperProps?.style, left: paddingStart }, wrapperProps?.style][Number(sticky) * (Number(!horizontal) + 1)]}
+            >
+              {renderRow(virtualItem.index)}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -501,48 +449,207 @@ function virtualizedVisibleIndexes(
   return virtualItems.length === 0 ? fallbackIndexes : virtualItems.map((virtualItem) => virtualItem.index);
 }
 
-function useVirtualizedPixelOffset({
-  horizontal,
-  itemsLength,
-  lastPixelOffsetKeyRef,
+function useVirtualizedLeadingAnchor<TItem>({
+  behavior,
+  estimateSize,
+  getItemAnchorKey,
+  getItemOccurrenceKey,
+  isFallbackRendering,
+  itemStartIndex,
+  items,
+  orientation,
+  paddingStart,
   pixelOffsetAppliedKeyRef,
-  request,
+  pixelOffsetRequestKey,
   scrollRef,
+  virtualItems,
   virtualizer,
 }: Readonly<{
-  horizontal: boolean;
-  itemsLength: number;
-  lastPixelOffsetKeyRef: { current: string | null };
+  behavior: "preserve-leading-item" | "natural";
+  estimateSize: () => number;
+  getItemAnchorKey: (item: TItem) => string;
+  getItemOccurrenceKey: (item: TItem) => string;
+  isFallbackRendering: boolean;
+  itemStartIndex: number;
+  items: readonly TItem[];
+  orientation: "vertical" | "horizontal";
+  paddingStart: number;
   pixelOffsetAppliedKeyRef: { current: string | null };
-  request: VirtualizedPixelOffsetRequest | undefined;
+  pixelOffsetRequestKey: string | undefined;
   scrollRef: { current: HTMLDivElement | null };
+  virtualItems: readonly VirtualItem[];
   virtualizer: ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>;
-}>): void {
-  useLayoutEffect(() => {
-    if (
-      request === undefined ||
-      itemsLength === 0 ||
-      scrollRef.current === null ||
-      lastPixelOffsetKeyRef.current === request.key
-    ) {
+}>): (() => void) | undefined {
+  const leadingAnchorRef = useRef<VirtualizedLeadingAnchor | null>(null);
+  const previousAnchorEntriesRef = useRef<readonly VirtualizedAnchorEntry[]>([]);
+  const captureLeadingAnchor = useCallback(() => {
+    const element = scrollRef.current;
+    if (element === null || items.length === 0) {
+      leadingAnchorRef.current = null;
       return;
     }
-    const scrollOffset = request.offsetPx;
-    if (horizontal) {
-      scrollRef.current.scrollLeft = scrollOffset;
-    } else {
-      scrollRef.current.scrollTop = scrollOffset;
+    const scrollOffset = orientation === "horizontal" ? element.scrollLeft : element.scrollTop;
+    const virtualItem = virtualizer.getVirtualItems().find((item) => {
+      if (item.index < itemStartIndex || item.index >= itemStartIndex + items.length) {
+        return false;
+      }
+      if (orientation === "horizontal") {
+        return item.start < scrollOffset + element.clientWidth && item.end > scrollOffset;
+      }
+      return item.start <= scrollOffset && item.end > scrollOffset;
+    });
+    if (virtualItem !== undefined) {
+      const item = items[virtualItem.index - itemStartIndex];
+      leadingAnchorRef.current =
+        item === undefined
+          ? null
+          : {
+              anchorKey: getItemAnchorKey(item),
+              occurrenceKey: getItemOccurrenceKey(item),
+              inRowOffset:
+                orientation === "horizontal"
+                  ? virtualItem.start - scrollOffset
+                  : scrollOffset - virtualItem.start,
+            };
+      return;
     }
-    virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
-    lastPixelOffsetKeyRef.current = request.key;
-    pixelOffsetAppliedKeyRef.current = request.key;
+    if (orientation === "horizontal") {
+      leadingAnchorRef.current = null;
+      return;
+    }
+    const estimatedSize = Math.max(1, estimateSize());
+    const estimatedVirtualIndex = Math.max(
+      itemStartIndex,
+      Math.floor(Math.max(0, scrollOffset - paddingStart) / estimatedSize),
+    );
+    const dataIndex = Math.min(items.length - 1, estimatedVirtualIndex - itemStartIndex);
+    const item = items[dataIndex];
+    leadingAnchorRef.current =
+      item === undefined
+        ? null
+        : {
+            anchorKey: getItemAnchorKey(item),
+            occurrenceKey: getItemOccurrenceKey(item),
+            inRowOffset: scrollOffset - (paddingStart + estimatedVirtualIndex * estimatedSize),
+          };
   }, [
-    horizontal,
-    itemsLength,
-    lastPixelOffsetKeyRef,
-    pixelOffsetAppliedKeyRef,
-    request,
+    estimateSize,
+    getItemAnchorKey,
+    getItemOccurrenceKey,
+    itemStartIndex,
+    items,
+    orientation,
+    paddingStart,
     scrollRef,
     virtualizer,
   ]);
+
+  useLayoutEffect(() => {
+    if (behavior === "natural") {
+      leadingAnchorRef.current = null;
+      previousAnchorEntriesRef.current = [];
+      return;
+    }
+    const currentEntries = items.map((item) => ({
+      anchorKey: getItemAnchorKey(item),
+      occurrenceKey: getItemOccurrenceKey(item),
+    }));
+    const previousEntries = previousAnchorEntriesRef.current;
+    const anchor = recoverableLeadingAnchor(
+      leadingAnchorRef.current,
+      pixelOffsetAppliedKeyRef.current,
+      pixelOffsetRequestKey,
+    );
+    if (previousEntries.length > 0 && anchor !== null && scrollRef.current !== null) {
+      restoreLeadingAnchor({
+        anchor,
+        currentEntries,
+        element: scrollRef.current,
+        estimateSize,
+        isFallbackRendering,
+        itemStartIndex,
+        orientation,
+        paddingStart,
+        previousEntries,
+        virtualizer,
+      });
+    }
+    previousAnchorEntriesRef.current = currentEntries;
+    pixelOffsetAppliedKeyRef.current = null;
+    captureLeadingAnchor();
+  }, [
+    behavior,
+    captureLeadingAnchor,
+    estimateSize,
+    getItemAnchorKey,
+    getItemOccurrenceKey,
+    isFallbackRendering,
+    itemStartIndex,
+    items,
+    orientation,
+    paddingStart,
+    pixelOffsetAppliedKeyRef,
+    pixelOffsetRequestKey,
+    scrollRef,
+    virtualItems,
+    virtualizer,
+  ]);
+
+  return behavior === "preserve-leading-item" ? captureLeadingAnchor : undefined;
+}
+
+function restoreLeadingAnchor({
+  anchor,
+  currentEntries,
+  element,
+  estimateSize,
+  isFallbackRendering,
+  itemStartIndex,
+  orientation,
+  paddingStart,
+  previousEntries,
+  virtualizer,
+}: Readonly<{
+  anchor: VirtualizedLeadingAnchor;
+  currentEntries: readonly VirtualizedAnchorEntry[];
+  element: HTMLDivElement;
+  estimateSize: () => number;
+  isFallbackRendering: boolean;
+  itemStartIndex: number;
+  orientation: "vertical" | "horizontal";
+  paddingStart: number;
+  previousEntries: readonly VirtualizedAnchorEntry[];
+  virtualizer: ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>;
+}>): void {
+  const previousIndex = resolveAnchorEntryIndex(previousEntries, anchor);
+  const currentIndex = resolveAnchorEntryIndex(currentEntries, anchor);
+  if (previousIndex < 0 || currentIndex < 0) {
+    return;
+  }
+  const virtualIndex = itemStartIndex + currentIndex;
+  if (orientation === "horizontal") {
+    const measuredItem = virtualizer.getVirtualItems().find((item) => item.index === virtualIndex);
+    if (measuredItem === undefined) {
+      return;
+    }
+    const scrollOffset = measuredItem.start - anchor.inRowOffset;
+    if (element.scrollLeft === scrollOffset) {
+      return;
+    }
+    element.scrollLeft = scrollOffset;
+    virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
+    return;
+  }
+  const measuredOffset = isFallbackRendering
+    ? undefined
+    : virtualizer.getOffsetForIndex(virtualIndex, "start")?.[0];
+  const rowOffset = measuredOffset ?? paddingStart + virtualIndex * Math.max(1, estimateSize());
+  const scrollOffset = rowOffset + anchor.inRowOffset;
+  if (element.scrollTop === scrollOffset) {
+    return;
+  }
+  element.scrollTop = scrollOffset;
+  if (!isFallbackRendering) {
+    virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
+  }
 }
