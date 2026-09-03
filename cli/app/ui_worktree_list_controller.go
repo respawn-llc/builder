@@ -174,15 +174,11 @@ func (c uiInputController) startSelectedWorktreeDelete(preferDeleteBranch bool) 
 	if !ok {
 		return m, c.model.sendTransientStatusWithNoticeID("Select a worktree to delete", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if !worktreeui.CanDelete(target) {
-		return m, nil
-	}
 	if err := worktreeui.ValidateDeletionTarget(target); err != nil {
 		if errors.Is(err, worktreeui.ErrMainWorkspaceNotDeletable) {
 			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		status := runtimeattach.FormatSubmissionError(err)
-		return m, c.model.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		return m, nil
 	}
 	identity, err := worktreeui.SelectionIdentityForItem(target)
 	if err != nil {

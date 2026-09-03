@@ -199,6 +199,30 @@ func TestWorktreeListControllerGitMainRowHasNoDeleteActions(t *testing.T) {
 	}
 }
 
+func TestWorktreeListControllerMainWorkspaceDeleteKeysShowNotice(t *testing.T) {
+	listResponse := testMainWorktreeListResponse()
+	fixture := newWorktreeListFixture(t, nil)
+	fixture.model.worktrees.entries = []worktreeui.Item{
+		mustProjectWorktreeItem(t, listResponse.Worktrees[0]),
+	}
+	fixture.model.worktrees.selection = 1
+
+	for _, key := range []rune{'d', 'x'} {
+		fixture.model.transientStatus = ""
+		fixture.model.transientStatusKind = uiStatusNoticeInfo
+		fixture.model.worktrees.intent = uiWorktreeOpenIntent{}
+
+		cmd := fixture.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if fixture.model.worktrees.intent.OpenDelete ||
+			fixture.model.worktrees.phase != uiWorktreeOverlayPhaseList ||
+			fixture.model.transientStatus == "" ||
+			fixture.model.transientStatusKind != uiStatusNoticeError {
+			t.Fatalf("Main Workspace key %q did not show deletion error: cmd=%v intent=%+v phase=%q status=%q kind=%v",
+				key, cmd, fixture.model.worktrees.intent, fixture.model.worktrees.phase, fixture.model.transientStatus, fixture.model.transientStatusKind)
+		}
+	}
+}
+
 func TestWorktreeListDeleteIntentSurvivesSelectorChangeDuringRefresh(t *testing.T) {
 	fixture := newWorktreeListFixture(t, nil)
 	fixture.model.worktrees.selection = 1
