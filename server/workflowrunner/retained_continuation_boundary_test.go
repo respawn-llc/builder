@@ -31,9 +31,6 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
-	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 func mustRetained(t *testing.T, err error, format string) {
@@ -228,180 +225,6 @@ func TestRetainedRunPromptRejectsLockedContractAssertionBeforeDelivery(t *testin
 	}
 }
 
-type retainedSameResourceBackgroundClient struct {
-	*compactingScriptedClient
-	mu                                        sync.Mutex
-	requests                                  []llm.Request
-	backgroundCalls                           int
-	backgroundFirst                           chan struct{}
-	backgroundSecond                          chan struct{}
-	backgroundRelease                         chan struct{}
-	backgroundFirstOnce, backgroundSecondOnce sync.Once
-}
-
-func (c *retainedSameResourceBackgroundClient) Generate(
-	_ context.Context, request llm.Request, _ llm.StreamCallbacks,
-) (llm.Response, error) {
-	messages := llm.MessagesFromItems(request.Items)
-	selected := len(messages) > 0 &&
-		messages[len(messages)-1].Content != nil &&
-		*messages[len(messages)-1].Content == "continue"
-	background := !selected && slices.ContainsFunc(messages, func(message llm.Message) bool {
-		return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
-	})
-	c.mu.Lock()
-	c.requests = append(c.requests, request)
-	if background {
-		c.backgroundCalls++
-	}
-	backgroundCall := c.backgroundCalls
-	c.mu.Unlock()
-	if background {
-		switch backgroundCall {
-		case 1:
-			c.backgroundFirstOnce.Do(func() { close(c.backgroundFirst) })
-			return retainedResponse("background progress", llm.ToolCall{
-				ID: "background-shell", Name: string(toolspec.ToolExecCommand),
-				Input: []byte(`{"cmd":"true"}`),
-			}), nil
-		case 2:
-			c.backgroundSecondOnce.Do(func() { close(c.backgroundSecond) })
-			<-c.backgroundRelease
-			return retainedResponse("background progress", llm.ToolCall{
-				ID: "background-shell-again", Name: string(toolspec.ToolExecCommand),
-				Input: []byte(`{"cmd":"true"}`),
-			}), nil
-		default:
-			return llm.Response{}, &llm.ProviderAPIError{
-				ProviderID: "test", StatusCode: 400,
-				Code: llm.UnifiedErrorCodeProviderContract, Err: errors.New("stop background"),
-			}
-		}
-	}
-	if !selected {
-		return llm.Response{}, errors.New("unexpected non-selected provider request")
-	}
-	return retainedResponse("selected progress", llm.ToolCall{
-		ID: "selected-complete", Name: string(toolspec.ToolCompleteNode),
-		Input: []byte(`{"transition":"done","commentary":"selected"}`),
-	}), nil
-}
-
-func (c *retainedSameResourceBackgroundClient) Requests() []llm.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]llm.Request(nil), c.requests...)
-}
-
-func (c *retainedSameResourceBackgroundClient) ProviderCapabilities(
-	ctx context.Context,
-) (llm.ProviderCapabilities, error) {
-	return c.base.ProviderCapabilities(ctx)
-}
-
-func TestRetainedRunPromptExcludesSameResourceBackgroundProgress(t *testing.T) {
-	client := &retainedSameResourceBackgroundClient{
-		compactingScriptedClient: NewCompactingScriptedClient(
-			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
-			[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("pre-activation")},
-		),
-		backgroundFirst:   make(chan struct{}),
-		backgroundSecond:  make(chan struct{}),
-		backgroundRelease: make(chan struct{}),
-	}
-	t.Cleanup(func() {
-		select {
-		case <-client.backgroundRelease:
-		default:
-			close(client.backgroundRelease)
-		}
-	})
-	f := newCurrentNodeRunnerFixtureWithClient(t, client)
-	f.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeTool
-	f.starter.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeTool
-	sessionID, reference, _ := prepareRetainedSessionForWorkflow(
-		t, f, createCurrentNodeAgentWorkflow(t, f.store), client,
-	)
-
-	backgroundDone := make(chan error, 1)
-	go func() {
-		err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(
-			ctx context.Context, engine *agentruntime.Engine,
-		) error {
-			return engine.RunBackgroundShellContinuation(ctx, agentruntime.BackgroundShellEvent{
-				Type:       agentruntime.BackgroundShellEventCompleted,
-				ID:         "background",
-				ActivityID: uuid.New(),
-				NoticeText: "background notice",
-			})
-		})
-		backgroundDone <- err
-	}()
-	retainedWait(t, client.backgroundFirst, "background did not reach first provider request")
-
-	var progress []serverapi.RunPromptProgress
-	selectedDone := make(chan error, 1)
-	go func() {
-		_, err := runPromptClientForCurrentNodeFixture(f, f.controller).RunPrompt(
-			context.Background(),
-			serverapi.RunPromptRequest{
-				Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
-				Prompt: "continue",
-			},
-			serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) {
-				progress = append(progress, event)
-			}),
-		)
-		selectedDone <- err
-	}()
-	retainedWait(t, client.backgroundSecond, "background did not reach second provider request")
-
-	deadline := time.After(currentNodeRunnerWait)
-	for {
-		if _, active := f.authority.SessionExecution(sessionID); active {
-			break
-		}
-		select {
-		case <-time.After(time.Millisecond):
-		case <-deadline:
-			t.Fatal("selected retained execution did not become live")
-		}
-	}
-	close(client.backgroundRelease)
-	if err := <-backgroundDone; err == nil {
-		t.Fatal("background unexpectedly succeeded")
-	}
-	if err := <-selectedDone; err != nil {
-		t.Fatalf("selected RunPrompt: %v", err)
-	}
-	f.waitForTaskQuiescence(t, reference.TaskID)
-
-	var selectedRequests, backgroundRequests []llm.Request
-	for _, request := range client.Requests() {
-		messages := llm.MessagesFromItems(request.Items)
-		selected := len(messages) > 0 && messages[len(messages)-1].Content != nil &&
-			*messages[len(messages)-1].Content == "continue"
-		if selected {
-			selectedRequests = append(selectedRequests, request)
-		}
-		if !selected && slices.ContainsFunc(messages, func(message llm.Message) bool {
-			return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
-		}) {
-			backgroundRequests = append(backgroundRequests, request)
-		}
-	}
-	if len(selectedRequests) == 0 || !requestContainsMessage(selectedRequests[0], "continue") {
-		t.Fatalf("selected provider requests = %+v, want selected continuation input", selectedRequests)
-	}
-	if len(backgroundRequests) < 3 {
-		t.Fatalf("background provider requests = %d, want real background Step requests", len(backgroundRequests))
-	}
-	if !hasAssistantProgress(progress, "selected progress") ||
-		hasAssistantProgress(progress, "background progress") {
-		t.Fatalf("RunPrompt progress = %+v, want selected progress without background progress", progress)
-	}
-}
-
 func TestRetainedRunPromptThinkingOverridePersistsAndAffectsExecution(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(map[bool]string{false: "dormant", true: "live"}[live], func(t *testing.T) {
@@ -500,6 +323,9 @@ func retainedWait(t *testing.T, wait <-chan struct{}, message string) {
 }
 
 func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
+	if scenario.name == "all success" {
+		runRetainedSameResourceBackgroundProgress(t)
+	}
 	var history *retainedDelayedPromptHistoryStore
 	var selectedStarted, selectedRelease chan struct{}
 	if scenario.historyError != nil {
@@ -937,11 +763,7 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 			break
 		}
 	}
-	c.mu.Lock()
-	c.requests = append(c.requests, request)
-	c.generations++
-	generation := c.generations
-	c.mu.Unlock()
+	generation := c.recordRequest(request)
 	selectedFirst := false
 	if selected {
 		c.selectedGate.Do(func() {
@@ -979,6 +801,24 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 	return retainedResponse(content, llm.ToolCall{ID: "complete", Name: "complete_node", Input: []byte(retainedCompletionInput(request, transition, content))}), nil
 }
 
+func (c *retainedProgressClient) recordRequest(request llm.Request) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests = append(c.requests, request)
+	c.generations++
+	return c.generations
+}
+
+func (c *retainedProgressClient) Requests() []llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]llm.Request(nil), c.requests...)
+}
+
+func (c *retainedProgressClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}, nil
+}
+
 func retainedResponse(content string, calls ...llm.ToolCall) llm.Response {
 	return retainedPhaseResponse(llm.MessagePhaseCommentary, content, calls...)
 }
@@ -992,16 +832,6 @@ func retainedPhaseResponse(phase llm.MessagePhase, content string, calls ...llm.
 		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(phase), Content: textutil.Value(content)},
 		ToolCalls: calls, Usage: llm.Usage{InputTokens: 200_000, WindowTokens: 200_000},
 	}
-}
-
-func (c *retainedProgressClient) Requests() []llm.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]llm.Request(nil), c.requests...)
-}
-
-func (c *retainedProgressClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}, nil
 }
 
 func requestContainsMessage(request llm.Request, content string) bool {
