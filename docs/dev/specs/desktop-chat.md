@@ -29,7 +29,7 @@
 - `New Session` opens the outstanding lazy Chat draft for the Project default workspace, or a new empty Chat when none exists. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list and resumes that workspace's outstanding lazy draft when present.
 - Each Project workspace has at most one outstanding lazy Chat draft. Materializing its Session consumes that draft into the new Session; Desktop adds no Drafts destination or orphaned-draft list.
 - New Session creation does not select a worktree. Worktree control is available after Chat opens.
-- New Chat has no setup form for name, model, provider, Agent, worktree, or prompt. It starts with an empty composer; rename and settings remain available after Chat opens.
+- New Chat has no setup form for name, model, provider, Agent, worktree, or prompt. It starts with an empty composer; settings remain available after Chat opens.
 - Opening and abandoning untouched new Chat creates neither a durable Session nor a session-browser row. The first nonblank user message, or another action that enters the agent loop, creates the Session.
 
 ## Transcript
@@ -183,7 +183,7 @@
 ## Composer And Pending Work
 
 - Send starts a user turn while idle and Steers the active turn while work is running. A Steer takes effect at the next safe step boundary. Queue is a separate action that starts after active work completes; when idle, queued work starts immediately.
-- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
+- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation.
 - `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
 - `/compact` enters Pending Work in accepted Session mutation order.
 - Pending Work shows canonical `/compact` followed by normalized guidance when guidance is present.
@@ -195,8 +195,6 @@
 - Queue has no visible button. While work is running and an empty composer can queue work, its placeholder is `Ctrl+Enter to queue`.
 - While work runs, an icon-only Stop action is visible beside Send/Steer. Stop clears all Queue and Steer items.
 - The composer grows to one-third of available Chat height, then scrolls internally. Up and Down recall prompt history only at whole-buffer boundaries; returning below the newest history item restores the pre-history draft, and editing recalled text detaches it from history.
-- `@` path suggestions search the Session effective working directory. They include files, derived directories, and hidden paths; exclude `.git`; preserve server fuzzy order; and never scan the desktop filesystem or transfer the whole repository.
-- At most seven path suggestions are visible. Up and Down select them; Enter, Tab, or pointer activation inserts the exact `@`-prefixed repository-relative path, with `/` for a directory, without sending. Escape hides suggestions until the query changes.
 - Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in Queue order, then Steer items in server acceptance order across human messages, manual compaction, and Worktree transitions. Each item shows no more than two lines and has an accessible Discard action.
 - Normal human-message, manual-compaction, and Active-Runtime Worktree-transition admission rejects with a typed capacity failure when the server independently observes at least 100 combined pending Queue and Steer items. Rejection changes no Pending Work membership and leaves the initiating input unchanged.
 - Concurrent normal admissions may pass below the limit and temporarily exceed 100 items. Restoring definitely uncommitted human input may also exceed 100 items. Kent never evicts accepted work to enforce the limit, and later normal admission rejects while the independently observed total remains at least 100.
@@ -519,4 +517,4 @@
 - Desktop replaces terminal interaction mechanics with desktop controls without removing the capability they exposed.
 - Desktop Chat provides no screen-reader transcript model, streaming announcements, ARIA-specific interaction architecture, or blind-user interaction flow.
 - Shared UI-kit components keep their ordinary incidental semantics. Keyboard shortcuts, functional focus transitions, Copy/select behavior, resizable-window layouts, and explicitly specified reduced-motion behavior remain product mechanics rather than a separate accessibility program.
-- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment. `@` workspace references are paths, not attachments.
+- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment.
