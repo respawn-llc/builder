@@ -15,6 +15,7 @@ export function resolveLoadMore({
   isFetchingNextPage,
   lastLoadMoreKey,
   loadMoreKey,
+  orientation,
   wasFetchingNextPage,
 }: Readonly<{
   atBottom: boolean;
@@ -22,9 +23,18 @@ export function resolveLoadMore({
   isFetchingNextPage: boolean;
   lastLoadMoreKey: string | null;
   loadMoreKey: string;
+  orientation: "vertical" | "horizontal";
   wasFetchingNextPage: boolean;
 }>): LoadMoreDecision {
-  if (wasFetchingNextPage && !isFetchingNextPage && lastLoadMoreKey === loadMoreKey) {
+  if (orientation === "horizontal" && !atBottom && lastLoadMoreKey !== null) {
+    return { shouldLoad: false, lastLoadMoreKey: null };
+  }
+  if (
+    orientation === "vertical" &&
+    wasFetchingNextPage &&
+    !isFetchingNextPage &&
+    lastLoadMoreKey === loadMoreKey
+  ) {
     return { shouldLoad: false, lastLoadMoreKey: null };
   }
   if (atBottom && hasNextPage && !isFetchingNextPage && lastLoadMoreKey !== loadMoreKey) {
@@ -76,6 +86,7 @@ export function useVirtualizedLoadMore({
   lastLoadMoreKeyRef,
   loadMoreKey,
   onLoadMore,
+  orientation,
   wasFetchingNextPageRef,
 }: Readonly<{
   atEdge: boolean;
@@ -84,6 +95,7 @@ export function useVirtualizedLoadMore({
   lastLoadMoreKeyRef: { current: string | null };
   loadMoreKey: string;
   onLoadMore: (() => void) | undefined;
+  orientation: "vertical" | "horizontal";
   wasFetchingNextPageRef: { current: boolean };
 }>): void {
   useEffect(() => {
@@ -96,6 +108,7 @@ export function useVirtualizedLoadMore({
       isFetchingNextPage,
       lastLoadMoreKey: lastLoadMoreKeyRef.current,
       loadMoreKey,
+      orientation,
       wasFetchingNextPage: wasFetchingNextPageRef.current,
     });
     wasFetchingNextPageRef.current = isFetchingNextPage;
@@ -110,6 +123,7 @@ export function useVirtualizedLoadMore({
     lastLoadMoreKeyRef,
     loadMoreKey,
     onLoadMore,
+    orientation,
     wasFetchingNextPageRef,
   ]);
 }

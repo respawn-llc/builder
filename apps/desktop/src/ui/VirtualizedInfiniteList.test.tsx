@@ -37,6 +37,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 function List({
   hasNextPage = false,
+  isFetchingNextPage = false,
   onLoadMore = () => undefined,
   hasPreviousPage = false,
   onLoadPrevious = () => undefined,
@@ -50,8 +51,11 @@ function List({
   initialScrollRequestKey,
   layoutChangeScrollBehavior,
   onScrollElementChange,
+  orientation,
+  header,
 }: Readonly<{
   hasNextPage?: boolean;
+  isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
   hasPreviousPage?: boolean;
   onLoadPrevious?: () => void;
@@ -69,6 +73,8 @@ function List({
   initialScrollRequestKey?: string | undefined;
   layoutChangeScrollBehavior?: "preserve-leading-item" | "natural";
   onScrollElementChange?: (element: HTMLDivElement | null) => void;
+  orientation?: "vertical" | "horizontal";
+  header?: React.ReactNode;
 }>) {
   return (
     <VirtualizedInfiniteList
@@ -76,7 +82,8 @@ function List({
       getItemKey={testGetItemKey}
       hasNextPage={hasNextPage}
       hasPreviousPage={hasPreviousPage}
-      isFetchingNextPage={false}
+      header={header}
+      isFetchingNextPage={isFetchingNextPage}
       isFetchingPreviousPage={false}
       initialScrollKey={initialScrollKey}
       initialScrollRequestKey={initialScrollRequestKey}
@@ -87,6 +94,7 @@ function List({
       onLoadMore={onLoadMore}
       onLoadPrevious={onLoadPrevious}
       onScrollElementChange={onScrollElementChange}
+      orientation={orientation}
       previousBoundary={previousBoundary}
       previousLoadItemKey={previousLoadItemKey}
       pixelOffsetRequest={ready ? request : undefined}
@@ -94,6 +102,196 @@ function List({
     />
   );
 }
+
+describe("VirtualizedInfiniteList horizontal paging", () => {
+  beforeEach(() => {
+    virtualizer.getVirtualItems.mockReset();
+    virtualizer.getOffsetForIndex.mockReset();
+  });
+
+  it("preserves a measured Workflow anchor across forward and backward window rotation", () => {
+    const firstPage = Array.from({ length: 40 }, (_value, index) => `workflow-${index.toString()}`);
+    const secondPage = Array.from({ length: 80 }, (_value, index) => `workflow-${index.toString()}`);
+    const thirdPage = Array.from({ length: 120 }, (_value, index) => `workflow-${index.toString()}`);
+    const forwardItems = thirdPage.slice(40).concat("workflow-120");
+    const onLoadMore = vi.fn();
+    const onLoadPrevious = vi.fn();
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
+      { end: 760, index: 71, key: "workflow-70", lane: 0, size: 60, start: 700 },
+      { end: 5100, index: 120, key: "workflow-119", lane: 0, size: 100, start: 5000 },
+    ]);
+    const view = render(
+      <List
+        header={<div>controls</div>}
+        items={firstPage}
+        onLoadMore={onLoadMore}
+        orientation="horizontal"
+      />,
+    );
+    const list = screen.getByRole("list");
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 100 });
+
+    view.rerender(<List header={<div>controls</div>} items={secondPage} orientation="horizontal" />);
+    view.rerender(<List header={<div>controls</div>} items={thirdPage} orientation="horizontal" />);
+    list.scrollLeft = 720;
+    fireEvent.scroll(list);
+
+    view.rerender(
+      <List
+        hasNextPage
+        header={<div>controls</div>}
+        items={thirdPage}
+        onLoadMore={onLoadMore}
+        orientation="horizontal"
+      />,
+    );
+    expect(onLoadMore).toHaveBeenCalledOnce();
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
+      { end: 370, index: 31, key: "workflow-70", lane: 0, size: 60, start: 310 },
+    ]);
+    view.rerender(
+      <List
+        header={<div>controls</div>}
+        items={forwardItems}
+        onLoadMore={onLoadMore}
+        orientation="horizontal"
+      />,
+    );
+    expect(list.scrollLeft).toBe(330);
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
+      { end: 100, index: 1, key: "workflow-40", lane: 0, size: 60, start: 40 },
+    ]);
+    list.scrollLeft = 1;
+    fireEvent.scroll(list);
+    view.rerender(
+      <List
+        hasPreviousPage
+        header={<div>controls</div>}
+        items={forwardItems}
+        onLoadPrevious={onLoadPrevious}
+        orientation="horizontal"
+        previousLoadItemKey="workflow-40"
+      />,
+    );
+    expect(onLoadPrevious).toHaveBeenCalledOnce();
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
+      { end: 460, index: 41, key: "workflow-40", lane: 0, size: 60, start: 400 },
+    ]);
+    view.rerender(
+      <List
+        header={<div>controls</div>}
+        items={thirdPage}
+        onLoadMore={onLoadMore}
+        orientation="horizontal"
+      />,
+    );
+    expect(list.scrollLeft).toBe(361);
+  });
+
+  it("rearms both horizontal edge requests after each retained window leaves that edge", () => {
+    const windowItems = (start: number, count: number) =>
+      Array.from({ length: count }, (_value, index) => `workflow-${(start + index).toString()}`);
+    const onLoadMore = vi.fn();
+    const onLoadPrevious = vi.fn();
+    const renderWindow = (
+      view: ReturnType<typeof render>,
+      items: readonly string[],
+      visibleIndexes: readonly number[],
+    ) => {
+      virtualizer.getVirtualItems.mockReturnValue(
+        visibleIndexes.map((index) => ({
+          end: index * 10 + 10,
+          index,
+          key: items[index] ?? `workflow-${index.toString()}`,
+          lane: 0,
+          size: 10,
+          start: index * 10,
+        })),
+      );
+      view.rerender(
+        <List
+          hasNextPage
+          hasPreviousPage
+          items={items}
+          onLoadMore={onLoadMore}
+          onLoadPrevious={onLoadPrevious}
+          orientation="horizontal"
+          {...(items[0] === undefined ? {} : { previousLoadItemKey: items[0] })}
+        />,
+      );
+    };
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 1200, index: 119, key: "workflow-119", lane: 0, size: 10, start: 1190 },
+    ]);
+    const view = render(
+      <List
+        hasNextPage
+        hasPreviousPage
+        items={windowItems(0, 120)}
+        onLoadMore={onLoadMore}
+        onLoadPrevious={onLoadPrevious}
+        orientation="horizontal"
+        previousLoadItemKey="workflow-0"
+      />,
+    );
+    expect(onLoadMore).toHaveBeenCalledOnce();
+
+    const forwardItems = windowItems(40, 81);
+    renderWindow(view, forwardItems, [40]);
+    const initialItems = windowItems(0, 120);
+    renderWindow(view, initialItems, [0]);
+    expect(onLoadPrevious).toHaveBeenCalledOnce();
+
+    renderWindow(view, initialItems, [40]);
+    renderWindow(view, initialItems, [119]);
+    expect(onLoadMore).toHaveBeenCalledTimes(2);
+
+    renderWindow(view, forwardItems, [40]);
+    renderWindow(view, forwardItems, [0]);
+    expect(onLoadPrevious).toHaveBeenCalledTimes(2);
+    renderWindow(view, initialItems, [40]);
+  });
+
+  it("keeps a horizontal edge request suppressed while the edge remains visible", () => {
+    const onLoadMore = vi.fn();
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 1200, index: 2, key: "c", lane: 0, size: 10, start: 1190 },
+    ]);
+    const view = render(
+      <List hasNextPage items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
+    );
+    expect(onLoadMore).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <List
+        hasNextPage
+        isFetchingNextPage
+        items={["a", "b", "c"]}
+        onLoadMore={onLoadMore}
+        orientation="horizontal"
+      />,
+    );
+    view.rerender(
+      <List hasNextPage items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
+    );
+    view.rerender(
+      <List hasNextPage={false} items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
+    );
+    view.rerender(
+      <List hasNextPage items={["a", "b", "c"]} onLoadMore={onLoadMore} orientation="horizontal" />,
+    );
+
+    expect(onLoadMore).toHaveBeenCalledOnce();
+  });
+});
 
 describe("VirtualizedInfiniteList pixel restoration", () => {
   beforeEach(() => {
