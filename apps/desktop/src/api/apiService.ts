@@ -94,6 +94,7 @@ import type {
   PendingWorkIdentity,
   PendingWorkRestoration,
 } from "./pendingWork";
+import type { ChatApi } from "./chat";
 
 export type ApiConnectionSource = Readonly<{
   snapshot(): ConnectionSnapshot;
@@ -106,6 +107,7 @@ export type ApiSubscription = Readonly<{
 
 export interface ApiService {
   readonly connection: ApiConnectionSource;
+  readonly chat: ChatApi;
 
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string | null): Promise<ProjectPage>;

@@ -420,7 +420,7 @@ The user-facing TUI action that injects a message to take effect after the curre
 
 Every client attached to a Session has the same control capabilities over the shared Active Session Runtime. Kent has no controller client, limited-control client, read-only attachment, or client lease.
 
-Client connection state is not server-work state. A client connection, disconnection, request cancellation, request closure, navigation, or UI closure never starts, stops, pauses, cancels, closes, retries, replays, restores, duplicates, authorizes, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, Worktree operation, Workflow operation, or other accepted server command. Only the server-owned operation lifecycle changes server work. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
+The client and Runtime boundary for this attach is defined in [Core Runtime And Tools](core-runtime-tools.md).
 
 ### Goal
 
