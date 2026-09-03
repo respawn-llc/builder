@@ -107,12 +107,7 @@ func TestPreflightSessionArtifactRemovalLeavesArtifactsOnFailure(t *testing.T) {
 	sessionDir := t.TempDir()
 	eventsPath := filepath.Join(sessionDir, eventsFile)
 	writeArchiveFixtureFile(t, eventsPath, "events")
-	if err := os.Chmod(sessionDir, 0o500); err != nil {
-		t.Fatalf("make Session directory unwritable: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(sessionDir, 0o700)
-	})
+	requireUnwritableDirectory(t, sessionDir)
 
 	_, err := PreflightSessionArtifactRemoval(sessionDir)
 	var preflightErr *SessionArtifactPreflightError
@@ -135,12 +130,7 @@ func TestRemovePreflightedSessionArtifactsReportsExactRemainingPath(t *testing.T
 	if err != nil {
 		t.Fatalf("PreflightSessionArtifactRemoval: %v", err)
 	}
-	if err := os.Chmod(sessionDir, 0o500); err != nil {
-		t.Fatalf("make Session directory unwritable: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(sessionDir, 0o700)
-	})
+	requireUnwritableDirectory(t, sessionDir)
 
 	err = RemovePreflightedSessionArtifacts(schedule)
 	var removalErr *SessionArtifactRemovalError
@@ -159,9 +149,7 @@ func TestArchiveSessionDirectoryRejectsUnwritableOutput(t *testing.T) {
 	if err := os.Mkdir(outputDir, 0o500); err != nil {
 		t.Fatalf("create unwritable output directory: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = os.Chmod(outputDir, 0o700)
-	})
+	requireUnwritableDirectory(t, outputDir)
 	outputPath := filepath.Join(outputDir, "session.tar.zst")
 
 	err := ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sessionDir, outputPath)
@@ -177,6 +165,19 @@ func TestArchiveSessionDirectoryRejectsUnwritableOutput(t *testing.T) {
 	}
 	if entries, readErr := os.ReadDir(outputDir); readErr != nil || len(entries) != 0 {
 		t.Fatalf("output directory after failure = %v, %v; want empty", entries, readErr)
+	}
+}
+
+func requireUnwritableDirectory(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Chmod(path, 0o500); err != nil {
+		t.Fatalf("make directory unwritable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o700) })
+	probePath := filepath.Join(path, "write-probe")
+	if err := os.WriteFile(probePath, nil, 0o600); err == nil {
+		_ = os.Remove(probePath)
+		t.Skip("directory modes are not enforced")
 	}
 }
 

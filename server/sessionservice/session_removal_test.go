@@ -135,10 +135,15 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 				if err := fixture.metadata.DeleteSession(ctx, sessionID); err != nil {
 					return err
 				}
-				return os.Chmod(fixture.session.Dir(), 0o500)
+				if err := os.Remove(eventsPath); err != nil {
+					return err
+				}
+				if err := os.Mkdir(eventsPath, 0o700); err != nil {
+					return err
+				}
+				return os.WriteFile(filepath.Join(eventsPath, "remaining"), nil, 0o600)
 			},
 		})
-		t.Cleanup(func() { _ = os.Chmod(fixture.session.Dir(), 0o700) })
 		outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 
 		err := fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
