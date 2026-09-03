@@ -10,6 +10,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -468,7 +469,7 @@ func TestBellHooksCompactionCompletionPolicy(t *testing.T) {
 func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKind, body string) clientui.AttentionNotificationEvent {
 	notification := clientui.AttentionNotification{ID: attentionNotificationID(kind, id), Kind: kind}
 	if kind == clientui.AttentionNotificationKindApproval {
-		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: body}
+		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: textutil.Value(body)}
 	} else if kind == clientui.AttentionNotificationKindInterruptedCurrentNode {
 		notification.InterruptedCurrentNode = &clientui.AttentionNotificationInterruptedCurrentNodeState{Message: body}
 	} else {

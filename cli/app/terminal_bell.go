@@ -250,7 +250,10 @@ func attentionNotificationQuestionPreview(notification clientui.AttentionNotific
 
 func attentionNotificationApprovalMessage(notification clientui.AttentionNotification) string {
 	if notification.Approval != nil {
-		return notification.Approval.Message
+		if notification.Approval.Message != nil {
+			return *notification.Approval.Message
+		}
+		return clientui.FormatFileAccessApprovalMarkdown(notification.Approval.AccessTargets)
 	}
 	if notification.WorkflowApproval != nil {
 		return notification.WorkflowApproval.Message

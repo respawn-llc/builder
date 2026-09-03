@@ -64,8 +64,11 @@ func TestRuntimeRegistryPublishesGenericApprovalToSessionAttention(t *testing.T)
 	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{
 		ToolCallID: "approval-1",
 		StepID:     registryTestStepID,
-		Question:   "Approve protected path?",
 		Approval:   true,
+		AccessTargets: []askquestion.FileAccessTarget{{
+			RequestedPath: "../outside.txt",
+			ResolvedPath:  "/outside.txt",
+		}},
 		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
 			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
 			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
@@ -81,8 +84,24 @@ func TestRuntimeRegistryPublishesGenericApprovalToSessionAttention(t *testing.T)
 		pending.Pending.Kind != clientui.AttentionNotificationKindApproval ||
 		pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt ||
 		pending.Pending.Approval == nil ||
-		pending.Pending.Approval.Message != "Approve protected path?" {
+		len(pending.Pending.Approval.AccessTargets) != 1 ||
+		pending.Pending.Approval.AccessTargets[0].RequestedPath != "../outside.txt" {
 		t.Fatalf("generic approval attention = %+v", pending)
+	}
+	snapshotSub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{
+		SessionID: "session-1", IncludePendingPromptSnapshot: true,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications snapshot: %v", err)
+	}
+	snapshot := nextRegistryAttentionEvent(t, snapshotSub)
+	if snapshot.Source != clientui.AttentionNotificationSourceSnapshot ||
+		snapshot.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindApproval, "approval-1") ||
+		len(snapshot.Pending.Approval.AccessTargets) != 1 {
+		t.Fatalf("generic approval snapshot = %+v", snapshot)
+	}
+	if complete := nextRegistryAttentionEvent(t, snapshotSub); complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
+		t.Fatalf("generic approval snapshot completion = %+v", complete)
 	}
 }
 
@@ -219,28 +238,6 @@ func TestRuntimeRegistrySkippedFirstTaskQuestionPreparesBatchBeforeMaterializati
 	resolved := nextRegistryAttentionEvent(t, desktopSub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, registryTestStepID)) {
 		t.Fatalf("resolved event = %+v", resolved)
-	}
-}
-
-func TestRuntimeRegistrySessionAttentionSnapshotUsesPendingPromptStore(t *testing.T) {
-	broker := attentionnotify.NewBroker()
-	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ToolCallID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
-
-	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
-	if err != nil {
-		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
-	}
-	pending := nextRegistryAttentionEvent(t, sub)
-	if pending.Source != clientui.AttentionNotificationSourceSnapshot || pending.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindQuestion, "ask-1") {
-		t.Fatalf("snapshot pending = %+v", pending)
-	}
-	complete := nextRegistryAttentionEvent(t, sub)
-	if complete.Type != clientui.AttentionNotificationEventSnapshotComplete || complete.SessionID != "session-1" {
-		t.Fatalf("snapshot complete = %+v", complete)
 	}
 }
 

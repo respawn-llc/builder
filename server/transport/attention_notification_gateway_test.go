@@ -16,6 +16,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndKeepsQuestionsLiveOnly(t *testing.T) {
@@ -150,7 +151,7 @@ func beginGatewayPendingPrompt(t *testing.T, broker *attentionnotify.Broker, ses
 		Kind: kind, OccurredAt: time.Now().UTC(), Revision: 1, Target: target,
 	}
 	if kind == clientui.AttentionNotificationKindApproval {
-		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: request.Question}
+		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: textutil.Value(request.Question)}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{
 			PreparedAskIDs: []string{request.ToolCallID}, MaterializedAskIDs: []string{request.ToolCallID},

@@ -1,6 +1,9 @@
 package app
 
-import "core/shared/clientui"
+import (
+	"core/shared/clientui"
+	"core/shared/textutil"
+)
 
 type promptAttentionSink interface {
 	onAttentionNotification(clientui.AttentionNotificationEvent, *string)
@@ -45,7 +48,7 @@ func notifyTranscriptPromptActivation(hook promptAttentionSink, prompt clientui.
 		},
 	}
 	if prompt.Kind == clientui.TranscriptPromptKindApproval {
-		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: projectedPreview}
+		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: textutil.Value(projectedPreview)}
 	} else {
 		toolCallID := string(prompt.ToolCallID)
 		notification.Question = &clientui.AttentionNotificationQuestionState{

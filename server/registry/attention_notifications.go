@@ -256,7 +256,10 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 	}
 	if snapshot.Request.Approval && !snapshot.Request.IsTaskScopedApprovalQuestion() {
 		notification.Approval = &clientui.AttentionNotificationApprovalState{
-			Message: strings.TrimSpace(snapshot.Request.Question),
+			AccessTargets: append([]clientui.FileAccessTarget(nil), snapshot.Request.AccessTargets...),
+		}
+		if message := strings.TrimSpace(snapshot.Request.Question); message != "" {
+			notification.Approval.Message = &message
 		}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{

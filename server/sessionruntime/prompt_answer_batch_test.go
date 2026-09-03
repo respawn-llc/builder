@@ -252,8 +252,7 @@ func TestExecutionPromptStoreResolvePromptBatchDoesNotWaitForPreparedSuccessor(t
 
 func TestAuthorityResolvePromptBatchDelegatesApprovalToExactAction(t *testing.T) {
 	h := newApprovalActionHarness(t, approvalActionHarnessOptions{})
-	results, err := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowOnce, nil))
-	requireApprovalActionOutcome(t, promptBatchCallResult{results: results, err: err}, PromptAnswerOutcomeResolved)
+	requireApprovalActionOutcome(t, h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowOnce, nil)), PromptAnswerOutcomeResolved)
 	requireApproval(t, waitApprovalHandle(t, h) == nil, "delegated Approval action failed")
 }
 

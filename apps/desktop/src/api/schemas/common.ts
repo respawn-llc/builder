@@ -22,6 +22,7 @@ import type {
 import type {
   ApprovalQuestionPrompt,
   AttentionQuestionPrompt,
+  FileAccessTarget,
   OrdinaryQuestionPrompt,
 } from "../promptModels";
 import type {
@@ -42,6 +43,16 @@ const canonicalToolCallID = z
   .min(1)
   .refine((value) => value.trim() === value);
 const verbatimNonBlankString = z.string().refine((value) => value.trim().length > 0);
+export const fileAccessTargetSchema = z
+  .object({
+    requested_path: verbatimNonBlankString,
+    resolved_path: verbatimNonBlankString,
+  })
+  .strict()
+  .transform(({ requested_path: requestedPath, resolved_path: resolvedPath }): FileAccessTarget => ({
+    requestedPath,
+    resolvedPath,
+  }));
 export const nullableGraphEntityIDSchema = z
   .string()
   .refine((value) => value.trim().length > 0)
@@ -92,17 +103,7 @@ const approvalQuestionPromptSchema = z
     step_id: nonBlankString,
     kind: z.literal("approval"),
     approval_decisions: z.array(approvalDecisionSchema).min(1),
-    access_targets: z
-      .array(
-        z
-          .object({
-            requested_path: verbatimNonBlankString,
-            resolved_path: verbatimNonBlankString,
-          })
-          .strict(),
-      )
-      .optional()
-      .default([]),
+    access_targets: z.array(fileAccessTargetSchema).optional().default([]),
   })
   .strict();
 
@@ -126,12 +127,7 @@ export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
           stepID: value.step_id,
           kind: "approval",
           approvalDecisions: value.approval_decisions,
-          accessTargets: value.access_targets.map(
-            ({ requested_path: requestedPath, resolved_path: resolvedPath }) => ({
-              requestedPath,
-              resolvedPath,
-            }),
-          ),
+          accessTargets: value.access_targets,
         } satisfies ApprovalQuestionPrompt;
     }
   });

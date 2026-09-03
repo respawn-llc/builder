@@ -201,20 +201,18 @@ func (h *approvalActionHarness) release() {
 	releaseApprovalActionGate(h.feed.resolvedGate, &h.feed.resolvedOnce)
 	h.releaseOnce.Do(func() { close(h.releaseConsumer) })
 }
-func (h *approvalActionHarness) resolve(ctx context.Context, payload PromptAnswerPayload) ([]PromptAnswerResult, error) {
-	return h.authority.ResolvePromptBatch(ctx, h.sessionID, h.pending.stepID, []PromptAnswerCommand{{
+func (h *approvalActionHarness) resolve(ctx context.Context, payload PromptAnswerPayload) promptBatchCallResult {
+	results, err := h.authority.ResolvePromptBatch(ctx, h.sessionID, h.pending.stepID, []PromptAnswerCommand{{
 		ToolCallID: clientui.ToolCallID(h.pending.requestID), Payload: payload,
 	}})
+	return promptBatchCallResult{results: results, err: err}
 }
 func approvalActionAnswer(decision tools.AskQuestionApprovalDecision, commentary *string) PromptAnswerPayload {
 	return PromptApprovalAnswerCommand{Answer: tools.AskQuestionApproval{Decision: decision, Commentary: commentary}}
 }
 func beginApprovalAction(h *approvalActionHarness, ctx context.Context, payload PromptAnswerPayload) <-chan promptBatchCallResult {
 	done := make(chan promptBatchCallResult, 1)
-	go func() {
-		results, err := h.resolve(ctx, payload)
-		done <- promptBatchCallResult{results: results, err: err}
-	}()
+	go func() { done <- h.resolve(ctx, payload) }()
 	return done
 }
 
@@ -292,9 +290,9 @@ func approvalActionRows(t *testing.T, h *approvalActionHarness, commentary strin
 }
 func requireApprovalActionTerminal(t *testing.T, h *approvalActionHarness, payload PromptAnswerPayload) {
 	t.Helper()
-	results, err := h.resolve(context.Background(), payload)
-	requireApproval(t, err == nil && len(results) == 1 && results[0].Outcome == PromptAnswerOutcomeSkipped,
-		"stale Approval retry = (%+v, %v), want Skipped", results, err)
+	result := h.resolve(context.Background(), payload)
+	requireApproval(t, result.err == nil && len(result.results) == 1 && result.results[0].Outcome == PromptAnswerOutcomeSkipped,
+		"stale Approval retry = (%+v, %v), want Skipped", result.results, result.err)
 }
 func requireApprovalEffects(t *testing.T, h *approvalActionHarness, commentary string, allowed bool) {
 	t.Helper()
@@ -390,13 +388,12 @@ func TestApprovalActionEditedRetryAfterTwoPreclaimFailures(t *testing.T) {
 			for _, draft := range []string{"first draft", "second draft"} {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
-				_, err := h.resolve(ctx, approvalActionAnswer(test.decision, &draft))
-				requireApproval(t, errors.Is(err, context.Canceled), "preclaim failure = %v, want cancellation", err)
+				result := h.resolve(ctx, approvalActionAnswer(test.decision, &draft))
+				requireApproval(t, errors.Is(result.err, context.Canceled), "preclaim failure = %v, want cancellation", result.err)
 			}
 			edited := "edited same-ID retry"
-			results, err := h.resolve(context.Background(), approvalActionAnswer(test.decision, &edited))
-			requireApprovalActionOutcome(t, promptBatchCallResult{results: results, err: err}, PromptAnswerOutcomeResolved)
-			err = waitApprovalHandle(t, h)
+			requireApprovalActionOutcome(t, h.resolve(context.Background(), approvalActionAnswer(test.decision, &edited)), PromptAnswerOutcomeResolved)
+			err := waitApprovalHandle(t, h)
 			requireApproval(t, err == nil, "edited retry: %v", err)
 			requireApprovalEffects(t, h, edited, test.allow)
 		})
@@ -429,16 +426,6 @@ func TestApprovalActionConcurrentWinnerOrders(t *testing.T) {
 		})
 	}
 }
-func TestApprovalActionDenyResponseLoss(t *testing.T) {
-	commentary := "deny survives lost response"
-	h := newApprovalActionHarness(t, approvalActionHarnessOptions{})
-	results, err := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionDeny, &commentary))
-	requireApprovalActionOutcome(t, promptBatchCallResult{results: results, err: err}, PromptAnswerOutcomeResolved)
-	err = waitApprovalHandle(t, h)
-	requireApproval(t, err == nil, "Deny after response loss: %v", err)
-	requireApprovalActionTerminal(t, h, approvalActionAnswer(tools.AskQuestionApprovalDecisionDeny, &commentary))
-	requireApprovalEffects(t, h, commentary, false)
-}
 func TestApprovalActionCommentaryFIFOAtStepBoundary(t *testing.T) {
 	commentary := "FIFO commentary"
 	h := newApprovalActionHarness(t, approvalActionHarnessOptions{blockConsumer: true})
@@ -469,8 +456,8 @@ func TestApprovalActionAcceptedFailureBoundaries(t *testing.T) {
 		cause := errors.New("ApprovalConsumer failed")
 		commentary := "accepted before ApprovalConsumer"
 		h := newApprovalActionHarness(t, approvalActionHarnessOptions{consumerErr: cause})
-		results, err := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowOnce, &commentary))
-		requireApproval(t, errors.Is(err, cause) && len(results) == 0, "ApprovalConsumer = %+v/%v", results, err)
+		result := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowOnce, &commentary))
+		requireApproval(t, errors.Is(result.err, cause) && len(result.results) == 0, "ApprovalConsumer = %+v/%v", result.results, result.err)
 		requireApproval(t, waitApprovalHandle(t, h) == nil, "execution after ApprovalConsumer failure")
 		users, rows := approvalActionRows(t, h, commentary)
 		requireApproval(t, users == 1 && len(rows) == 1 && rows[0].IsError, "ApprovalConsumer effects = commentary:%d tools:%+v", users, rows)
@@ -491,8 +478,7 @@ func TestApprovalActionAcceptedFailureBoundaries(t *testing.T) {
 			},
 		})
 		commentary := "accepted commentary"
-		results, err := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowOnce, &commentary))
-		requireApprovalActionOutcome(t, promptBatchCallResult{results: results, err: err}, PromptAnswerOutcomeResolved)
+		requireApprovalActionOutcome(t, h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowOnce, &commentary)), PromptAnswerOutcomeResolved)
 		runErr := waitApprovalHandle(t, h)
 		requireApproval(t, errors.Is(runErr, cause), "application error = %v, want %v", runErr, cause)
 		users, _ := approvalActionRows(t, h, commentary)
@@ -502,8 +488,8 @@ func TestApprovalActionAcceptedFailureBoundaries(t *testing.T) {
 		cause := errors.New("PromptResolvedScope failed")
 		commentary := "accepted before publication failure"
 		h := newApprovalActionHarness(t, approvalActionHarnessOptions{resolvedErr: cause, secondPatch: true})
-		results, err := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowSession, &commentary))
-		requireApproval(t, errors.Is(err, cause) && len(results) == 0, "publication failure = %+v/%v", results, err)
+		result := h.resolve(context.Background(), approvalActionAnswer(tools.AskQuestionApprovalDecisionAllowSession, &commentary))
+		requireApproval(t, errors.Is(result.err, cause) && len(result.results) == 0, "publication failure = %+v/%v", result.results, result.err)
 		requireApproval(t, h.consumerAccepted.Load() == 1, "accepted consumer effects = %d, want 1", h.consumerAccepted.Load())
 		requireApproval(t, waitApprovalHandle(t, h) == nil, "execution after publication failure")
 		users, rows := approvalActionRows(t, h, commentary)
@@ -548,22 +534,23 @@ func TestApprovalActionResponseLossAndSessionGrant(t *testing.T) {
 		options    approvalActionHarnessOptions
 		decision   tools.AskQuestionApprovalDecision
 		commentary *string
+		allowed    bool
 	}{
-		{"multi-target Allow response loss", approvalActionHarnessOptions{multiTarget: true}, tools.AskQuestionApprovalDecisionAllowOnce, &commentary},
-		{"later call observes session grant", approvalActionHarnessOptions{secondPatch: true}, tools.AskQuestionApprovalDecisionAllowSession, nil},
+		{"multi-target Allow response loss", approvalActionHarnessOptions{multiTarget: true}, tools.AskQuestionApprovalDecisionAllowOnce, &commentary, true},
+		{"later call observes session grant", approvalActionHarnessOptions{secondPatch: true}, tools.AskQuestionApprovalDecisionAllowSession, nil, true},
+		{"Deny response loss", approvalActionHarnessOptions{}, tools.AskQuestionApprovalDecisionDeny, &commentary, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			h := newApprovalActionHarness(t, test.options)
 			payload := approvalActionAnswer(test.decision, test.commentary)
-			results, err := h.resolve(context.Background(), payload)
-			requireApprovalActionOutcome(t, promptBatchCallResult{results: results, err: err}, PromptAnswerOutcomeResolved)
-			err = waitApprovalHandle(t, h)
+			requireApprovalActionOutcome(t, h.resolve(context.Background(), payload), PromptAnswerOutcomeResolved)
+			err := waitApprovalHandle(t, h)
 			requireApproval(t, err == nil, "accepted Approval: %v", err)
 			requireApprovalActionEffects := ""
 			if test.commentary != nil {
 				requireApprovalActionEffects = *test.commentary
 			}
-			requireApprovalEffects(t, h, requireApprovalActionEffects, true)
+			requireApprovalEffects(t, h, requireApprovalActionEffects, test.allowed)
 			requireApprovalActionTerminal(t, h, payload)
 			requireApproval(t, h.feed.resolved.Load() == 1, "Approval publications = %d, want 1", h.feed.resolved.Load())
 		})
