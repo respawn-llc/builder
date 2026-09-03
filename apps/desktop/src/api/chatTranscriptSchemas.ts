@@ -68,15 +68,15 @@ function transcriptMessageVariant<Kind extends string, Output, Input>(
 ) {
   return z
     .object({
-      Sequence: z.number().int(),
-      Kind: z.literal(kind),
-      Payload: payloadSchema,
+      sequence: z.number().int(),
+      kind: z.literal(kind),
+      payload: payloadSchema,
     })
     .strict()
     .transform((value) => ({
-      sequence: value.Sequence,
-      kind: value.Kind,
-      payload: value.Payload,
+      sequence: value.sequence,
+      kind: value.kind,
+      payload: value.payload,
     }));
 }
 
@@ -231,7 +231,7 @@ export type ChatTranscriptMessageByKind = {
 }[ChatTranscriptKind];
 export type ChatTranscriptMessage = ChatTranscriptMessageByKind;
 
-export const transcriptMessageSchema = z.discriminatedUnion("Kind", transcriptMessageVariants);
+export const transcriptMessageSchema = z.discriminatedUnion("kind", transcriptMessageVariants);
 
 export const transcriptEventSchema = z
   .object({

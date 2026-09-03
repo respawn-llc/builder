@@ -437,13 +437,13 @@ describe("Desktop Chat read client", () => {
     });
 
     transport.emit("session.transcript", {
-      message: { Sequence: 1, Kind: "hydration", Payload: transcriptHydrationPayload() },
+      message: { sequence: 1, kind: "hydration", payload: transcriptHydrationPayload() },
     });
     transport.emit("session.transcript", {
       message: {
-        Sequence: 2,
-        Kind: "session_identity",
-        Payload: {
+        sequence: 2,
+        kind: "session_identity",
+        payload: {
           SessionID: "223e4567-e89b-42d3-a456-426614174000",
           SessionName: null,
           ConversationFreshness: 0,
@@ -453,9 +453,9 @@ describe("Desktop Chat read client", () => {
     });
     transport.emit("session.transcript", {
       message: {
-        Sequence: 3,
-        Kind: "session_identity",
-        Payload: { SessionID: sessionID, SessionName: null, ConversationFreshness: 0, ExecutionTarget: null },
+        sequence: 3,
+        kind: "session_identity",
+        payload: { SessionID: sessionID, SessionName: null, ConversationFreshness: 0, ExecutionTarget: null },
       },
     });
     transport.complete("session.subscribeTranscript", 17, "subscriber overflow", "subscriber_overflow");
