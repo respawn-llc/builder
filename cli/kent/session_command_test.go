@@ -156,30 +156,33 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 	metadataNotRemoved := &sessionlaunchpb.SessionArchiveError_SessionRemovalFailure{SessionRemovalFailure: &sessionlaunchpb.SessionRemovalFailureDetails{State: &sessionlaunchpb.SessionRemovalFailureDetails_MetadataNotRemoved{MetadataNotRemoved: &sessionlaunchpb.SessionRemovalMetadataNotRemoved{}}}}
 	cleanupFailed := &sessionlaunchpb.SessionDeleteError_SessionRemovalFailure{SessionRemovalFailure: &sessionlaunchpb.SessionRemovalFailureDetails{State: &sessionlaunchpb.SessionRemovalFailureDetails_MetadataRemovedCleanupFailed{MetadataRemovedCleanupFailed: &sessionlaunchpb.SessionRemovalMetadataRemovedCleanupFailed{RemainingPath: remainingPath}}}}
 	tests := []struct {
-		name     string
-		err      error
-		archive  bool
-		wantCode string
-		wantPath *string
+		name      string
+		err       error
+		operation sessionRemovalOperation
+		wantCode  string
+		wantPath  *string
 	}{
-		{name: "session not found", err: archiveWireFailure("session_not_found", notFound), archive: true, wantCode: "session_not_found"},
-		{name: "session in use", err: deleteWireFailure("session_in_use", inUse), wantCode: "session_in_use"},
-		{name: "invalid output path", err: archiveWireFailure("invalid_output_path", invalidPath), archive: true, wantCode: "invalid_output_path", wantPath: &outputPath},
-		{name: "output exists", err: archiveWireFailure("output_exists", outputExists), archive: true, wantCode: "output_exists", wantPath: &outputPath},
-		{name: "archive path failure", err: archiveWireFailure("archive_path_failure", pathFailure), archive: true, wantCode: "request_failed", wantPath: &outputPath},
-		{name: "internal failure", err: archiveWireFailure("internal_failure", internalFailure), archive: true, wantCode: "request_failed"},
-		{name: "metadata not removed", err: archiveWireFailure("session_removal_failure", metadataNotRemoved), archive: true, wantCode: "request_failed", wantPath: &outputPath},
-		{name: "metadata removed cleanup failed", err: deleteWireFailure("session_removal_failure", cleanupFailed), wantCode: "request_failed", wantPath: &remainingPath},
-		{name: "transport", err: errors.New("connection closed"), archive: true, wantCode: "request_failed"},
-		{name: "unknown future wire error", err: archiveWireFailure("future_server_failure", nil), archive: true, wantCode: "request_failed"},
+		{name: "session not found", err: archiveWireFailure("session_not_found", notFound), operation: sessionArchiveOperation, wantCode: "session_not_found"},
+		{name: "session in use", err: deleteWireFailure("session_in_use", inUse), operation: sessionDeleteOperation, wantCode: "session_in_use"},
+		{name: "invalid output path", err: archiveWireFailure("invalid_output_path", invalidPath), operation: sessionArchiveOperation, wantCode: "invalid_output_path", wantPath: &outputPath},
+		{name: "output exists", err: archiveWireFailure("output_exists", outputExists), operation: sessionArchiveOperation, wantCode: "output_exists", wantPath: &outputPath},
+		{name: "archive path failure", err: archiveWireFailure("archive_path_failure", pathFailure), operation: sessionArchiveOperation, wantCode: "request_failed", wantPath: &outputPath},
+		{name: "internal failure", err: archiveWireFailure("internal_failure", internalFailure), operation: sessionArchiveOperation, wantCode: "request_failed"},
+		{name: "metadata not removed", err: archiveWireFailure("session_removal_failure", metadataNotRemoved), operation: sessionArchiveOperation, wantCode: "request_failed", wantPath: &outputPath},
+		{name: "metadata removed cleanup failed", err: deleteWireFailure("session_removal_failure", cleanupFailed), operation: sessionDeleteOperation, wantCode: "request_failed", wantPath: &remainingPath},
+		{name: "transport", err: errors.New("connection closed"), operation: sessionArchiveOperation, wantCode: "request_failed"},
+		{name: "unknown future wire error", err: archiveWireFailure("future_server_failure", nil), operation: sessionArchiveOperation, wantCode: "request_failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var outcome sessionRemovalOutcome
-			if test.archive {
+			switch test.operation {
+			case sessionArchiveOperation:
 				outcome = sessionArchiveFailure(sessionID, outputPath, test.err)
-			} else {
+			case sessionDeleteOperation:
 				outcome = sessionDeleteFailure(sessionID, test.err)
+			default:
+				t.Fatalf("unsupported Session removal operation %d", test.operation)
 			}
 			if outcome.Error == nil ||
 				outcome.Error.Code != test.wantCode ||

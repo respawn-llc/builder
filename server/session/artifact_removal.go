@@ -9,9 +9,16 @@ import (
 	"syscall"
 )
 
+type scheduledSessionArtifactKind uint8
+
+const (
+	scheduledSessionFile scheduledSessionArtifactKind = iota + 1
+	scheduledSessionDirectory
+)
+
 type scheduledSessionArtifact struct {
-	path      string
-	directory bool
+	path string
+	kind scheduledSessionArtifactKind
 }
 
 type SessionArtifactRemovalSchedule struct {
@@ -55,15 +62,15 @@ func PreflightSessionArtifactRemoval(sessionDir string) (SessionArtifactRemovalS
 	migrationDir := filepath.Join(sessionDir, eventLogMigrationWorkspaceDir)
 	schedule := SessionArtifactRemovalSchedule{
 		artifacts: []scheduledSessionArtifact{
-			{path: filepath.Join(sessionDir, eventsFile)},
-			{path: filepath.Join(sessionDir, eventLogPersistenceLockFile)},
-			{path: filepath.Join(sessionDir, appendRecoveryFile)},
-			{path: RunLogPath(sessionDir)},
-			{path: filepath.Join(migrationDir, eventLogMigrationWorkspaceMarkerFile)},
-			{path: filepath.Join(migrationDir, eventLogMigrationStagedLogFile)},
-			{path: filepath.Join(migrationDir, eventLogMigrationReadyMarkerFile)},
-			{path: migrationDir, directory: true},
-			{path: sessionDir, directory: true},
+			{path: filepath.Join(sessionDir, eventsFile), kind: scheduledSessionFile},
+			{path: filepath.Join(sessionDir, eventLogPersistenceLockFile), kind: scheduledSessionFile},
+			{path: filepath.Join(sessionDir, appendRecoveryFile), kind: scheduledSessionFile},
+			{path: RunLogPath(sessionDir), kind: scheduledSessionFile},
+			{path: filepath.Join(migrationDir, eventLogMigrationWorkspaceMarkerFile), kind: scheduledSessionFile},
+			{path: filepath.Join(migrationDir, eventLogMigrationStagedLogFile), kind: scheduledSessionFile},
+			{path: filepath.Join(migrationDir, eventLogMigrationReadyMarkerFile), kind: scheduledSessionFile},
+			{path: migrationDir, kind: scheduledSessionDirectory},
+			{path: sessionDir, kind: scheduledSessionDirectory},
 		},
 	}
 	for _, artifact := range schedule.artifacts {
@@ -85,7 +92,7 @@ func preflightScheduledSessionArtifact(artifact scheduledSessionArtifact) error 
 	if err != nil {
 		return err
 	}
-	if !artifact.directory && info.IsDir() {
+	if artifact.kind == scheduledSessionFile && info.IsDir() {
 		return syscall.EISDIR
 	}
 	return preflightDirectoryMutation(filepath.Dir(artifact.path))
@@ -97,7 +104,7 @@ func RemovePreflightedSessionArtifacts(schedule SessionArtifactRemovalSchedule) 
 	}
 	for _, artifact := range schedule.artifacts {
 		var err error
-		if artifact.directory {
+		if artifact.kind == scheduledSessionDirectory {
 			err = removeKnownSessionDirectoryIfEmpty(artifact.path)
 		} else {
 			err = os.Remove(artifact.path)

@@ -57,8 +57,22 @@ type sessionRemovalGatewayFixture struct {
 }
 
 func TestSessionRemovalGatewayCancellationRetainsAcceptedWorkAndAdmission(t *testing.T) {
-	for _, operation := range []string{"archive", "delete"} {
-		t.Run(operation, func(t *testing.T) {
+	tests := []struct {
+		name              string
+		request           func(context.Context, *client.Remote, string, string) error
+		afterCancellation func(*client.Remote, string) error
+	}{
+		{name: "archive", request: func(ctx context.Context, remote *client.Remote, sessionID, outputPath string) error {
+			_, err := remote.ArchiveSession(ctx, &sessionlaunchpb.SessionArchiveRequest{SessionId: sessionID, OutputPath: outputPath})
+			return err
+		}, afterCancellation: func(_ *client.Remote, outputPath string) error { _, err := os.Stat(outputPath); return err }},
+		{name: "delete", request: func(ctx context.Context, remote *client.Remote, sessionID, _ string) error {
+			_, err := remote.DeleteSession(ctx, &sessionlaunchpb.SessionDeleteRequest{SessionId: sessionID})
+			return err
+		}, afterCancellation: func(remote *client.Remote, _ string) error { return remote.Close() }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			fixture := newSessionRemovalGatewayFixture(t)
 			sessionID, err := runtimeids.ParseSessionID(fixture.session.Meta().SessionID)
 			if err != nil {
@@ -68,48 +82,26 @@ func TestSessionRemovalGatewayCancellationRetainsAcceptedWorkAndAdmission(t *tes
 			ctx, cancel := context.WithCancel(t.Context())
 			requestDone := make(chan error, 1)
 			go func() {
-				if operation == "archive" {
-					_, requestErr := fixture.remote.ArchiveSession(
-						ctx,
-						&sessionlaunchpb.SessionArchiveRequest{
-							SessionId:  sessionID.String(),
-							OutputPath: outputPath,
-						},
-					)
-					requestDone <- requestErr
-					return
-				}
-				_, requestErr := fixture.remote.DeleteSession(
-					ctx,
-					&sessionlaunchpb.SessionDeleteRequest{SessionId: sessionID.String()},
-				)
-				requestDone <- requestErr
+				requestDone <- test.request(ctx, fixture.remote, sessionID.String(), outputPath)
 			}()
 			select {
 			case <-fixture.deleteGate.started:
 			case <-time.After(5 * time.Second):
-				t.Fatalf("timed out waiting for %s metadata removal", operation)
+				t.Fatalf("timed out waiting for %s metadata removal", test.name)
 			}
 
 			cancel()
 			if err := <-requestDone; !errors.Is(err, context.Canceled) {
-				t.Fatalf("%s request error = %v, want context canceled", operation, err)
+				t.Fatalf("%s request error = %v, want context canceled", test.name, err)
 			}
-			if operation == "delete" {
-				if err := fixture.remote.Close(); err != nil {
-					t.Fatalf("close delete Remote: %v", err)
-				}
+			if err := test.afterCancellation(fixture.remote, outputPath); err != nil {
+				t.Fatalf("%s post-cancellation behavior: %v", test.name, err)
 			}
 			if _, err := fixture.metadata.ResolvePersistedSession(
 				t.Context(),
 				sessionID.String(),
 			); err != nil {
-				t.Fatalf("Session changed before accepted %s completed: %v", operation, err)
-			}
-			if operation == "archive" {
-				if _, err := os.Stat(outputPath); err != nil {
-					t.Fatalf("published archive before metadata removal: %v", err)
-				}
+				t.Fatalf("Session changed before accepted %s completed: %v", test.name, err)
 			}
 
 			competingAdmission := make(chan error, 1)
@@ -122,19 +114,19 @@ func TestSessionRemovalGatewayCancellationRetainsAcceptedWorkAndAdmission(t *tes
 			}()
 			select {
 			case err := <-competingAdmission:
-				t.Fatalf("Session admission released before accepted %s completed: %v", operation, err)
+				t.Fatalf("Session admission released before accepted %s completed: %v", test.name, err)
 			case <-time.After(20 * time.Millisecond):
 			}
 
 			close(fixture.deleteGate.release)
 			if err := <-competingAdmission; err != nil {
-				t.Fatalf("Session admission after accepted %s completion: %v", operation, err)
+				t.Fatalf("Session admission after accepted %s completion: %v", test.name, err)
 			}
 			if _, err := fixture.metadata.ResolvePersistedSession(
 				t.Context(),
 				sessionID.String(),
 			); !errors.Is(err, session.ErrSessionNotFound) {
-				t.Fatalf("Session after accepted %s completion = %v, want absent", operation, err)
+				t.Fatalf("Session after accepted %s completion = %v, want absent", test.name, err)
 			}
 		})
 	}

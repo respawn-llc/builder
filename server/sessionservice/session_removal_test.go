@@ -358,8 +358,20 @@ func runDetachedArchiveGraceExpiryCase(t *testing.T, debug bool) {
 }
 
 func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
-	for _, operation := range []string{"archive", "delete"} {
-		t.Run(operation, func(t *testing.T) {
+	tests := []struct {
+		name         string
+		run          func(sessionRemovalServiceFixture, string) error
+		verifyOutput func(string) error
+	}{
+		{name: "archive", run: func(f sessionRemovalServiceFixture, outputPath string) error {
+			return f.service.Archive(context.Background(), f.session.Meta().SessionID, outputPath)
+		}, verifyOutput: func(outputPath string) error { _, err := os.Stat(outputPath); return err }},
+		{name: "delete", run: func(f sessionRemovalServiceFixture, _ string) error {
+			return f.service.Delete(context.Background(), f.session.Meta().SessionID)
+		}, verifyOutput: func(string) error { return nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			fixture := newSessionRemovalServiceFixture(t)
 			deleteStarted := make(chan struct{})
 			fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
@@ -373,16 +385,12 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 			operationDone := make(chan error, 1)
 			outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 			go func() {
-				if operation == "archive" {
-					operationDone <- fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
-					return
-				}
-				operationDone <- fixture.service.Delete(context.Background(), fixture.session.Meta().SessionID)
+				operationDone <- test.run(fixture, outputPath)
 			}()
 			select {
 			case <-deleteStarted:
 			case <-time.After(5 * time.Second):
-				t.Fatalf("%s did not reach metadata removal", operation)
+				t.Fatalf("%s did not reach metadata removal", test.name)
 			}
 
 			sessionID, err := runtimeids.ParseSessionID(fixture.session.Meta().SessionID)
@@ -399,7 +407,7 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 			}()
 			select {
 			case err := <-competingAdmission:
-				t.Fatalf("Session admission released before %s completed: %v", operation, err)
+				t.Fatalf("Session admission released before %s completed: %v", test.name, err)
 			case <-time.After(20 * time.Millisecond):
 			}
 
@@ -407,7 +415,7 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 				t.Fatalf("close Authority: %v", err)
 			}
 			if err := <-operationDone; !errors.Is(err, context.Canceled) {
-				t.Fatalf("%s result = %v, want cancellation", operation, err)
+				t.Fatalf("%s result = %v, want cancellation", test.name, err)
 			}
 			if err := <-competingAdmission; !errors.Is(err, sessionruntime.ErrAuthorityClosed) {
 				t.Fatalf("competing admission after shutdown = %v, want Authority closed", err)
@@ -416,12 +424,10 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 				t.Context(),
 				fixture.session.Meta().SessionID,
 			); err != nil {
-				t.Fatalf("Session metadata after canceled %s: %v", operation, err)
+				t.Fatalf("Session metadata after canceled %s: %v", test.name, err)
 			}
-			if operation == "archive" {
-				if _, err := os.Stat(outputPath); err != nil {
-					t.Fatalf("published archive after shutdown cancellation: %v", err)
-				}
+			if err := test.verifyOutput(outputPath); err != nil {
+				t.Fatalf("%s output after shutdown cancellation: %v", test.name, err)
 			}
 		})
 	}

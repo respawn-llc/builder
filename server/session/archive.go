@@ -160,18 +160,12 @@ func prepareSessionArchive(
 		}
 	}
 	tempPath := temp.Name()
-	cleanup := true
+	prepared := &preparedSessionArchive{outputPath: outputPath, tempPath: tempPath}
 	defer func() {
-		if !cleanup {
+		if resultErr == nil {
 			return
 		}
-		if cleanupErr := os.Remove(tempPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
-			resultErr = errors.Join(resultErr, &ArchivePathError{
-				Path:  outputPath,
-				Phase: ArchivePathPhaseCleanup,
-				Err:   cleanupErr,
-			})
-		}
+		resultErr = errors.Join(resultErr, prepared.cleanup())
 	}()
 
 	tempInfo, err := temp.Stat()
@@ -209,11 +203,7 @@ func prepareSessionArchive(
 			Err:   err,
 		}
 	}
-	cleanup = false
-	return &preparedSessionArchive{
-		outputPath: outputPath,
-		tempPath:   tempPath,
-	}, nil
+	return prepared, nil
 }
 
 func writeSessionArchive(
@@ -300,12 +290,7 @@ func (archive *preparedSessionArchive) publish() error {
 }
 
 func (archive *preparedSessionArchive) cleanup() error {
-	if archive.tempPath == "" {
-		return nil
-	}
-	tempPath := archive.tempPath
-	archive.tempPath = ""
-	if err := os.Remove(tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(archive.tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return &ArchivePathError{
 			Path:  archive.outputPath,
 			Phase: ArchivePathPhaseCleanup,
