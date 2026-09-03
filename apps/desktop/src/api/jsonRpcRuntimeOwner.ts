@@ -36,12 +36,11 @@ export class JsonRpcRuntimeOwner {
     options: RuntimeOwnerOptions,
     run: (context: RuntimeOwnerContext) => Promise<Result>,
   ): Promise<Result> {
-    const requestedSessionID = sessionID.trim();
-    if (requestedSessionID.length === 0) {
+    if (sessionID.length === 0) {
       throw new TransportError("Session attachment requires a Session ID.");
     }
     let owner = this.#owner;
-    if (owner !== null && owner.attachment.sessionID !== requestedSessionID)
+    if (owner !== null && owner.attachment.sessionID !== sessionID)
       throw new TransportError("Runtime owner connection is bound to another Session.");
     if (owner === null) {
       if (!options.createIfMissing) {
@@ -52,7 +51,7 @@ export class JsonRpcRuntimeOwner {
         const attachment = await setupSocket(socket, {
           timeoutMilliseconds: rpcRequestTimeoutMs,
           expectedRootId: this.#expectedRootId,
-          sessionID: requestedSessionID,
+          sessionID,
         });
         if (attachment === null || !("sessionID" in attachment)) {
           throw new TransportError("Session attachment was not established.");

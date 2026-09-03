@@ -11,15 +11,22 @@ import {
   optionalIdentifier,
   optionalNullable,
   optionalText,
-  reasoningIdentitySchema,
   runtimeReadModelUpdateSchema,
   sessionIdentitySchema,
   sessionStatusSchema,
   text,
   timestamp,
-  toolMetaSchema,
 } from "./chatSchemas";
 import { hydrationSchema, promptSchema } from "./chatHydrationSchemas";
+import {
+  assistantPhaseSchema,
+  backgroundActivitySchema,
+  compactionStatusSchema,
+  inFlightToolSchema,
+  reasoningTraceSchema,
+  stepStateSchema,
+  thinkingStatusSchema,
+} from "./chatTranscriptFactSchemas";
 
 const selectorErrorKindSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 const topologyVariantSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
@@ -89,7 +96,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         StepID: identifier,
         StreamID: identifier,
         Delta: nonEmptyText,
-        Phase: z.enum(["commentary", "final_answer"]),
+        Phase: assistantPhaseSchema,
       })
       .strict(),
     assistant_stream_abort: z
@@ -100,24 +107,10 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         Diagnostic: optionalNullable(diagnosticSchema),
       })
       .strict(),
-    thinking_status_update: z.object({ StepID: identifier, Text: text }).strict(),
-    reasoning_trace_update: z
-      .object({
-        StepID: identifier,
-        Identity: reasoningIdentitySchema,
-        CompactText: text,
-        Text: text,
-      })
-      .strict(),
+    thinking_status_update: thinkingStatusSchema,
+    reasoning_trace_update: reasoningTraceSchema,
     reasoning_trace_reset: z.object({ StepID: identifier }).strict(),
-    tool_start: z
-      .object({
-        StepID: identifier,
-        ToolCallID: identifier,
-        ToolName: identifier,
-        Presentation: optionalNullable(toolMetaSchema),
-      })
-      .strict(),
+    tool_start: inFlightToolSchema,
     tool_abort: z
       .object({
         StepID: identifier,
@@ -160,28 +153,11 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         Items: z.array(z.object({ QueueItemID: identifier, Text: text }).strict()),
       })
       .strict(),
-    step_state: z
-      .object({
-        RunID: identifier,
-        StepID: identifier,
-        Lifecycle: z.enum(["started", "finished"]),
-        ActiveKind: identifier,
-        Status: z.enum(["running", "completed", "interrupted", "failed"]),
-      })
-      .strict(),
+    step_state: stepStateSchema,
     runtime_read_model_update: runtimeReadModelUpdateSchema,
     session_status: sessionStatusSchema,
     session_identity: sessionIdentitySchema,
-    compaction_status: z
-      .object({
-        StepID: identifier,
-        RequestID: optionalIdentifier,
-        State: z.enum(["started", "completed", "failed"]),
-        Mode: z.enum(["auto", "handoff", "manual", "workflow_post_completion"]),
-        Count: z.number().int().nonnegative(),
-        Diagnostic: optionalNullable(diagnosticSchema),
-      })
-      .strict(),
+    compaction_status: compactionStatusSchema,
     context_usage: z
       .object({
         UsedTokens: z.number().int().nonnegative(),
@@ -195,23 +171,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
         Availability: z.enum(["available", "agent_capability_missing"]).nullable(),
       })
       .strict(),
-    background_activity: z
-      .object({
-        ActivityID: identifier,
-        ProcessID: identifier,
-        OwnerRunID: identifier,
-        OwnerStepID: identifier,
-        Lifecycle: z.enum(["backgrounded", "completed", "killed"]),
-        Command: text,
-        Workdir: identifier,
-        LogPath: optionalText,
-        Preview: optionalText,
-        ExitCode: optionalNullable(z.number().int()),
-        UserRequestedKill: z.boolean(),
-        NoticeSuppressed: z.boolean(),
-        Diagnostic: optionalNullable(diagnosticSchema),
-      })
-      .strict(),
+    background_activity: backgroundActivitySchema,
     prompt: promptSchema,
     worktree_transition_outcome: z
       .object({

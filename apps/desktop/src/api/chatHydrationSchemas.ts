@@ -2,20 +2,24 @@ import { z } from "zod";
 
 import {
   committedRowSchema,
-  diagnosticSchema,
   goalSchema,
   identifier,
-  optionalIdentifier,
   optionalNullable,
-  optionalText,
-  reasoningIdentitySchema,
   runtimeReadModelUpdateSchema,
   sessionIdentitySchema,
   sessionStatusSchema,
   text,
   timestamp,
-  toolMetaSchema,
 } from "./chatSchemas";
+import {
+  assistantPhaseSchema,
+  backgroundActivitySchema,
+  compactionStatusSchema,
+  inFlightToolSchema,
+  reasoningTraceSchema,
+  stepStateSchema,
+  thinkingStatusSchema,
+} from "./chatTranscriptFactSchemas";
 
 export const promptSchema = z
   .object({
@@ -91,72 +95,17 @@ export const hydrationSchema = z
         StepID: identifier,
         StreamID: identifier,
         Text: text,
-        Phase: z.enum(["commentary", "final_answer"]),
+        Phase: assistantPhaseSchema,
       })
       .strict()
       .nullable(),
-    ActiveThinkingStatus: z.object({ StepID: identifier, Text: text }).strict().nullable(),
-    ActiveReasoningTraces: z.array(
-      z
-        .object({
-          StepID: identifier,
-          Identity: reasoningIdentitySchema,
-          CompactText: text,
-          Text: text,
-        })
-        .strict(),
-    ),
-    ActiveStep: z
-      .object({
-        RunID: identifier,
-        StepID: identifier,
-        ActiveKind: identifier,
-        Lifecycle: z.string(),
-        Status: z.string(),
-      })
-      .strict()
-      .nullable(),
-    ActiveCompaction: z
-      .object({
-        StepID: identifier,
-        RequestID: optionalIdentifier,
-        State: z.string(),
-        Mode: z.string(),
-        Count: z.number().int(),
-        Diagnostic: optionalNullable(diagnosticSchema),
-      })
-      .strict()
-      .nullable(),
-    InFlightTools: z.array(
-      z
-        .object({
-          StepID: identifier,
-          ToolCallID: identifier,
-          ToolName: identifier,
-          Presentation: optionalNullable(toolMetaSchema),
-        })
-        .strict(),
-    ),
+    ActiveThinkingStatus: thinkingStatusSchema.nullable(),
+    ActiveReasoningTraces: z.array(reasoningTraceSchema),
+    ActiveStep: stepStateSchema.nullable(),
+    ActiveCompaction: compactionStatusSchema.nullable(),
+    InFlightTools: z.array(inFlightToolSchema),
     PendingPrompts: z.array(promptSchema),
-    BackgroundActivities: z.array(
-      z
-        .object({
-          ActivityID: identifier,
-          ProcessID: identifier,
-          OwnerRunID: identifier,
-          OwnerStepID: identifier,
-          Lifecycle: z.enum(["backgrounded", "completed", "killed"]),
-          Command: text,
-          Workdir: identifier,
-          LogPath: optionalText,
-          Preview: optionalText,
-          ExitCode: optionalNullable(z.number().int()),
-          UserRequestedKill: z.boolean(),
-          NoticeSuppressed: z.boolean(),
-          Diagnostic: optionalNullable(diagnosticSchema),
-        })
-        .strict(),
-    ),
+    BackgroundActivities: z.array(backgroundActivitySchema),
     ContextUsage: z
       .object({
         UsedTokens: z.number().int().nonnegative(),

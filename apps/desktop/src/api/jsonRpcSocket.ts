@@ -278,7 +278,6 @@ export async function setupSocket(
     }>;
   }>,
 ): Promise<ProjectAttachment | SessionAttachment | null> {
-  const requestedSessionID = options.sessionID?.trim();
   const requestOptions =
     options.signal === undefined
       ? { timeoutMilliseconds: options.timeoutMilliseconds }
@@ -309,16 +308,16 @@ export async function setupSocket(
     );
     attachment = requireProjectAttachment(projectAttachmentFromResult(result), options.projectSelector);
   }
-  if (requestedSessionID !== undefined) {
+  if (options.sessionID !== undefined) {
     const attachment = await sendSocketDescriptorRequest(
       socket,
       ConnectionService.method.attachSession,
-      create(ConnectionService.method.attachSession.input, { sessionId: requestedSessionID }),
+      create(ConnectionService.method.attachSession.input, { sessionId: options.sessionID }),
       requestOptions,
     );
     requireDescriptorSuccess(ConnectionService.method.attachSession, attachment);
     const attached = attachSessionFromResult(attachment);
-    if (requestedSessionID !== attached.sessionID) {
+    if (options.sessionID !== attached.sessionID) {
       throw new TransportError("Session attachment does not match its requested Session.");
     }
     return attached;
@@ -371,11 +370,10 @@ export function requireSessionAttachment(
   attachment: ProjectAttachment | SessionAttachment | null,
   target: Readonly<{ projectID?: string; sessionID: string }>,
 ): SessionAttachment {
-  const requestedSessionID = target.sessionID.trim();
   if (attachment === null || !("sessionID" in attachment)) {
     throw new ContractError("Session attachment was not established.");
   }
-  if (attachment.sessionID !== requestedSessionID) {
+  if (attachment.sessionID !== target.sessionID) {
     throw new ContractError("Session attachment does not match the requested Session.");
   }
   if (target.projectID !== undefined && attachment.projectID !== target.projectID) {

@@ -60,20 +60,22 @@ function projectTarget(target: ChatProjectTarget): void {
     "workspaceID" in target.workspace ? target.workspace.workspaceID : target.workspace.workspaceRoot;
   if (!nonBlank.safeParse(selector).success) throw new TypeError("Workspace selector is required.");
 }
-function contextTarget(target: ChatContextTarget): void {
+const exactSessionID = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim() === value);
+
+function contextTarget(target: ChatContextTarget): string | undefined {
   projectTarget(target);
-  if (target.sessionID !== undefined && !nonBlank.safeParse(target.sessionID).success) {
+  if (target.sessionID !== undefined && !exactSessionID.safeParse(target.sessionID).success) {
     throw new TypeError("Session ID is required.");
   }
+  return target.sessionID;
 }
-function sessionTarget(target: ChatSessionTarget): void {
+function sessionTarget(target: ChatSessionTarget): string {
   projectTarget(target);
-  if (!nonBlank.safeParse(target.sessionID).success) throw new TypeError("Session ID is required.");
-}
-function canonicalSessionID(sessionID: string): string {
-  const canonical = sessionID.trim();
-  if (canonical.length === 0) throw new TypeError("Session ID is required.");
-  return canonical;
+  if (!exactSessionID.safeParse(target.sessionID).success) throw new TypeError("Session ID is required.");
+  return target.sessionID;
 }
 class RecoverableTranscriptEventError extends Error {
   constructor(readonly contractError: ContractError) {
@@ -81,16 +83,15 @@ class RecoverableTranscriptEventError extends Error {
   }
 }
 function transcriptMessageFromTarget(input: ChatTranscriptMessage, sessionID: string): ChatTranscriptMessage {
-  const requestedSessionID = canonicalSessionID(sessionID);
   if (input.kind === "session_identity") {
-    if (input.payload.SessionID !== requestedSessionID) {
+    if (input.payload.SessionID !== sessionID) {
       throw new RecoverableTranscriptEventError(
         new ContractError("Transcript event Session identity does not match the requested Session."),
       );
     }
   }
   if (input.kind === "hydration") {
-    if (input.payload.SessionIdentity.SessionID !== requestedSessionID) {
+    if (input.payload.SessionIdentity.SessionID !== sessionID) {
       throw new RecoverableTranscriptEventError(
         new ContractError("Transcript hydration Session identity does not match the requested Session."),
       );
@@ -218,15 +219,14 @@ function validateSettingsTarget(input: z.output<typeof settingsSchema>, target: 
   }
   if (input.session === undefined)
     throw new ContractError("Chat Settings response target kind does not match the request.");
-  if (input.session.session_id !== canonicalSessionID(target.sessionID))
+  if (input.session.session_id !== target.sessionID)
     throw new ContractError("Chat Settings response Session does not match the request.");
 }
 
 export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
   return {
     async getMainView(target) {
-      sessionTarget(target);
-      const requestedSessionID = canonicalSessionID(target.sessionID);
+      const requestedSessionID = sessionTarget(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -252,9 +252,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
     },
     async getContext(target) {
-      contextTarget(target);
-      const requestedSessionID =
-        target.sessionID === undefined ? undefined : canonicalSessionID(target.sessionID);
+      const requestedSessionID = contextTarget(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -303,7 +301,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
             return {
               target: {
                 kind: "session",
-                session_id: canonicalSessionID(target.sessionID),
+                session_id: sessionTarget(target),
               },
             };
           },
@@ -313,8 +311,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       return settingsFromWire(parseRpcResponse("chat.settings.read", settingsSchema, call.result), target);
     },
     async getTranscriptPage(target, cursor) {
-      sessionTarget(target);
-      const requestedSessionID = canonicalSessionID(target.sessionID);
+      const requestedSessionID = sessionTarget(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -350,8 +347,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
     },
     async activateRuntime(target) {
-      sessionTarget(target);
-      const requestedSessionID = canonicalSessionID(target.sessionID);
+      const requestedSessionID = sessionTarget(target);
       return transport.runRuntimeOwner(requestedSessionID, { createIfMissing: true }, async (owner) => {
         requireSessionAttachment(owner.attachment, {
           projectID: target.projectID,
@@ -362,12 +358,12 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
     },
     async releaseRuntime(attachment) {
       if (
-        !nonBlank.safeParse(attachment.sessionID).success ||
+        !exactSessionID.safeParse(attachment.sessionID).success ||
         !Number.isInteger(attachment.generation) ||
         attachment.generation <= 0
       )
         throw new TypeError("Runtime attachment is invalid.");
-      const requestedSessionID = canonicalSessionID(attachment.sessionID);
+      const requestedSessionID = attachment.sessionID;
       return transport.runRuntimeOwner(
         requestedSessionID,
         { createIfMissing: false, closeAfter: true },
@@ -387,8 +383,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       );
     },
     subscribeTranscript(target, handler) {
-      sessionTarget(target);
-      const requestedSessionID = canonicalSessionID(target.sessionID);
+      const requestedSessionID = sessionTarget(target);
       const rpcHandler: RpcEventHandler = {
         ...(handler.onOpen === undefined ? {} : { onOpen: handler.onOpen }),
         onEvent(method, params) {

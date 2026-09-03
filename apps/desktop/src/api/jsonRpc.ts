@@ -150,14 +150,13 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     params: JsonValue,
     options?: RpcDedicatedCallOptions,
   ): Promise<unknown> {
-    const attachedSessionID = sessionID.trim();
-    if (attachedSessionID.length === 0) {
+    if (sessionID.trim().length === 0) {
       throw new TransportError("Session attachment requires a Session ID.");
     }
     return this.#withDedicatedSocket(
       options,
       async (socket, requestOptions) => sendSocketRequest(socket, method, params, requestOptions),
-      { sessionID: attachedSessionID },
+      { sessionID },
     );
   }
 
