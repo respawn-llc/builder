@@ -4,6 +4,11 @@ import { renderedPatchSchema } from "./chatPatchSchemas";
 
 export const nonBlank = z.string().refine((value) => value.trim().length > 0);
 export const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
+export const nullableArray = <T extends z.ZodType>(schema: T) =>
+  z
+    .array(schema)
+    .nullable()
+    .transform((value) => value ?? []);
 export const timestamp = z.iso.datetime({ offset: true });
 export const identifier = nonBlank;
 export const optionalIdentifier = optionalNullable(identifier);
@@ -259,7 +264,7 @@ export const toolMetaSchema = z
         .strict(),
     ),
     Question: z.string(),
-    Suggestions: z.array(z.string()),
+    Suggestions: nullableArray(z.string()),
     RecommendedOptionIndex: z.number().int(),
     OmitSuccessfulResult: z.boolean(),
     RawOutputRequested: z.boolean(),
