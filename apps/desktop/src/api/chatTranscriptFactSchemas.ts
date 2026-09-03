@@ -2,7 +2,9 @@ import { z } from "zod";
 
 import {
   diagnosticSchema,
+  goalSchema,
   identifier,
+  nonEmptyText,
   optionalIdentifier,
   optionalNullable,
   optionalText,
@@ -12,6 +14,30 @@ import {
 } from "./chatSchemas";
 
 export const assistantPhaseSchema = z.enum(["commentary", "final_answer"]);
+
+export const assistantStreamFactsSchema = z
+  .object({
+    StepID: identifier,
+    StreamID: identifier,
+    Phase: assistantPhaseSchema,
+  })
+  .strict();
+export const assistantStreamContentSchema = nonEmptyText;
+
+export const transcriptContextUsageSchema = z
+  .object({
+    UsedTokens: z.number().int().nonnegative(),
+    WindowTokens: z.number().int().positive(),
+    CacheHitPercent: optionalNullable(z.number().int().nonnegative()),
+  })
+  .strict();
+
+export const goalStatusSchema = z
+  .object({
+    Goal: goalSchema.extend({ Suspended: z.boolean() }).strict().nullable(),
+    Availability: z.enum(["available", "agent_capability_missing"]).nullable(),
+  })
+  .strict();
 
 export const thinkingStatusSchema = z
   .object({

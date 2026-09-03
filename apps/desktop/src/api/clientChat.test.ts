@@ -217,7 +217,12 @@ function transcriptHydrationPayload() {
       },
     },
     CommittedRows: [],
-    ActiveAssistant: null,
+    ActiveAssistant: {
+      StepID: sessionID,
+      StreamID: sessionID,
+      Text: " ",
+      Phase: "commentary",
+    },
     ActiveThinkingStatus: null,
     ActiveReasoningTraces: [],
     ActiveStep: null,

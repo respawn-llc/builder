@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import {
   committedRowSchema,
-  goalSchema,
   identifier,
   optionalNullable,
   runtimeReadModelUpdateSchema,
@@ -12,12 +11,15 @@ import {
   timestamp,
 } from "./chatSchemas";
 import {
-  assistantPhaseSchema,
+  assistantStreamContentSchema,
+  assistantStreamFactsSchema,
   backgroundActivitySchema,
   compactionStatusSchema,
+  goalStatusSchema,
   inFlightToolSchema,
   reasoningTraceSchema,
   stepStateSchema,
+  transcriptContextUsageSchema,
   thinkingStatusSchema,
 } from "./chatTranscriptFactSchemas";
 
@@ -90,15 +92,7 @@ export const hydrationSchema = z
     SessionStatus: sessionStatusSchema,
     RuntimeReadModelUpdate: runtimeReadModelUpdateSchema,
     CommittedRows: z.array(committedRowSchema),
-    ActiveAssistant: z
-      .object({
-        StepID: identifier,
-        StreamID: identifier,
-        Text: text,
-        Phase: assistantPhaseSchema,
-      })
-      .strict()
-      .nullable(),
+    ActiveAssistant: assistantStreamFactsSchema.extend({ Text: assistantStreamContentSchema }).nullable(),
     ActiveThinkingStatus: thinkingStatusSchema.nullable(),
     ActiveReasoningTraces: z.array(reasoningTraceSchema),
     ActiveStep: stepStateSchema.nullable(),
@@ -106,24 +100,8 @@ export const hydrationSchema = z
     InFlightTools: z.array(inFlightToolSchema),
     PendingPrompts: z.array(promptSchema),
     BackgroundActivities: z.array(backgroundActivitySchema),
-    ContextUsage: z
-      .object({
-        UsedTokens: z.number().int().nonnegative(),
-        WindowTokens: z.number().int().positive(),
-        CacheHitPercent: optionalNullable(z.number().int().nonnegative()),
-      })
-      .strict()
-      .nullable(),
-    GoalStatus: z
-      .object({
-        Goal: z
-          .object({ ...goalSchema.shape, Suspended: z.boolean() })
-          .strict()
-          .nullable(),
-        Availability: z.enum(["available", "agent_capability_missing"]).nullable(),
-      })
-      .strict()
-      .nullable(),
+    ContextUsage: transcriptContextUsageSchema.nullable(),
+    GoalStatus: goalStatusSchema.nullable(),
   })
   .strict();
 

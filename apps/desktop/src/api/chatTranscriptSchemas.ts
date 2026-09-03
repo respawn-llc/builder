@@ -4,9 +4,7 @@ import type { ChatTranscriptKind, ChatTranscriptPayloadByKind } from "./chatType
 import {
   committedRowSchema,
   diagnosticSchema,
-  goalSchema,
   identifier,
-  nonEmptyText,
   nonBlank,
   optionalIdentifier,
   optionalNullable,
@@ -19,12 +17,15 @@ import {
 } from "./chatSchemas";
 import { hydrationSchema, promptSchema } from "./chatHydrationSchemas";
 import {
-  assistantPhaseSchema,
+  assistantStreamContentSchema,
+  assistantStreamFactsSchema,
   backgroundActivitySchema,
   compactionStatusSchema,
+  goalStatusSchema,
   inFlightToolSchema,
   reasoningTraceSchema,
   stepStateSchema,
+  transcriptContextUsageSchema,
   thinkingStatusSchema,
 } from "./chatTranscriptFactSchemas";
 
@@ -91,14 +92,7 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
   const schemas: { [Key in ChatTranscriptKind]: z.ZodType<ChatTranscriptPayloadByKind[Key]> } = {
     hydration: hydrationSchema,
     committed_row: committedRowSchema,
-    assistant_delta: z
-      .object({
-        StepID: identifier,
-        StreamID: identifier,
-        Delta: nonEmptyText,
-        Phase: assistantPhaseSchema,
-      })
-      .strict(),
+    assistant_delta: assistantStreamFactsSchema.extend({ Delta: assistantStreamContentSchema }),
     assistant_stream_abort: z
       .object({
         StepID: identifier,
@@ -158,19 +152,8 @@ export function transcriptPayloadSchema<Kind extends ChatTranscriptKind>(
     session_status: sessionStatusSchema,
     session_identity: sessionIdentitySchema,
     compaction_status: compactionStatusSchema,
-    context_usage: z
-      .object({
-        UsedTokens: z.number().int().nonnegative(),
-        WindowTokens: z.number().int().positive(),
-        CacheHitPercent: optionalNullable(z.number().int().nonnegative()),
-      })
-      .strict(),
-    goal_status: z
-      .object({
-        Goal: goalSchema.extend({ Suspended: z.boolean() }).nullable(),
-        Availability: z.enum(["available", "agent_capability_missing"]).nullable(),
-      })
-      .strict(),
+    context_usage: transcriptContextUsageSchema,
+    goal_status: goalStatusSchema,
     background_activity: backgroundActivitySchema,
     prompt: promptSchema,
     worktree_transition_outcome: z
