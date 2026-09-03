@@ -143,7 +143,6 @@ func TestArchiveSessionDirectoryReportsFilesystemFailurePaths(t *testing.T) {
 	}
 	requireUnwritableDirectory(t, outputDir)
 	outputPath := filepath.Join(outputDir, "session.tar.zst")
-
 	err := ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sessionDir, outputPath)
 	var pathErr *ArchivePathError
 	if !errors.As(err, &pathErr) || pathErr.Path != outputPath || pathErr.Phase != ArchivePathPhaseTemp {

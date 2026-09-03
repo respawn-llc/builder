@@ -10,7 +10,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 
 	"core/shared/runtimeids"
 	"github.com/klauspost/compress/zstd"
@@ -131,7 +130,7 @@ func validateSessionArchiveDestinationPath(outputPath string) error {
 			Reason: InvalidArchiveOutputPathReasonAbsolute,
 		}
 	}
-	if !strings.HasSuffix(outputPath, ".tar.zst") {
+	if compressionExtension := filepath.Ext(outputPath); compressionExtension != ".zst" || filepath.Ext(outputPath[:len(outputPath)-len(compressionExtension)]) != ".tar" {
 		return &InvalidArchiveOutputPathError{
 			Path:   outputPath,
 			Reason: InvalidArchiveOutputPathReasonSuffix,
@@ -262,8 +261,10 @@ func writeSessionArchive(
 			return &ArchivePathError{Path: entryPath, Phase: ArchivePathPhaseWrite, Err: err}
 		}
 		_, copyErr := io.Copy(writer, contextReader{ctx: ctx, reader: file, sourcePath: entryPath})
-		closeErr := file.Close()
-		return errors.Join(copyErr, closeErr)
+		if closeErr := file.Close(); closeErr != nil {
+			return errors.Join(copyErr, &ArchivePathError{Path: entryPath, Phase: ArchivePathPhaseWrite, Err: closeErr})
+		}
+		return copyErr
 	})
 }
 
