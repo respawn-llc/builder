@@ -8,9 +8,8 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import { type Range, type VirtualItem, useVirtualizer } from "@tanstack/react-virtual";
+import { type VirtualItem, useVirtualizer } from "@tanstack/react-virtual";
 
-import { cx } from "./classes";
 import type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
 import {
@@ -35,9 +34,18 @@ import {
   type VirtualizedLeadingAnchor,
 } from "./virtualizedLeadingAnchor";
 import {
-  fallbackVirtualizedRowStyle,
+  renderVirtualizedInfiniteListRow,
+  renderVirtualizedInfiniteListRows,
+  fallbackVirtualIndexes,
+  resolveVirtualizedInfiniteListLayout,
+  resolveHorizontalBoundary,
+  resolveVirtualizedContainerClassName,
+  resolveVirtualizedInnerClassName,
+  resolveVirtualizedInnerStyle,
   renderVirtualizedRow,
-  virtualizedRowClassName,
+  type VirtualizedInfiniteListLayout,
+  virtualizedScrollOffsetProperty,
+  virtualizedVisibleIndexes,
   virtualizedRowKey,
 } from "./virtualizedInfiniteListRows";
 
@@ -134,7 +142,6 @@ export function VirtualizedInfiniteList<TItem>(props: VirtualizedInfiniteListPro
   return <VirtualizedInfiniteListContent {...resolveVirtualizedInfiniteListProps(props)} />;
 }
 
-// prettier-ignore
 function VirtualizedInfiniteListContent<TItem>({
   items,
   getItemKey,
@@ -197,21 +204,25 @@ function VirtualizedInfiniteListContent<TItem>({
   const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
   const wasFetchingNextPageRef = useRef(false);
-  const previousBoundaryCount = Number(previousBoundary !== undefined) * Number(Number(!horizontal) + Number(items.length > 0) > 0);
-  const headerCount = Number(header !== undefined);
-  const emptyCount = Number(items.length === 0) * Number(empty !== undefined);
-  const itemStartIndex = previousBoundaryCount + headerCount;
-  const contentCount = Math.max(items.length, emptyCount);
-  const nextBoundaryIndex = itemStartIndex + contentCount;
-  const hasLegacyPlaceholder = Number(nextBoundary === undefined) * Number(hasNextPage); const legacyPlaceholderIndex = [null, nextBoundaryIndex][hasLegacyPlaceholder] ?? null;
-  const count = nextBoundaryIndex + Number(nextBoundary !== undefined) + hasLegacyPlaceholder;
+  const layout: VirtualizedInfiniteListLayout = resolveVirtualizedInfiniteListLayout({
+    empty,
+    hasNextPage,
+    header,
+    horizontal,
+    itemsLength: items.length,
+    nextBoundary,
+    previousBoundary,
+  });
+  const { count, itemStartIndex } = layout;
   const retainedItemKeys = useMemo(
     () => new Set([...(pinnedItemKeys ?? []), ...(stickyItemKeys ?? [])]),
     [pinnedItemKeys, stickyItemKeys],
   );
   const pinnedIndexes = useMemo(() => {
     const indexes = new Set<number>();
-    if (Number(horizontal) * Number(header !== undefined) === 1) indexes.add(0);
+    if (horizontal && layout.headerIndex !== null) {
+      indexes.add(layout.headerIndex);
+    }
     if (retainedItemKeys.size === 0) {
       return indexes;
     }
@@ -221,7 +232,7 @@ function VirtualizedInfiniteListContent<TItem>({
       }
     });
     return indexes;
-  }, [getItemKey, header, horizontal, itemStartIndex, items, retainedItemKeys]);
+  }, [getItemKey, horizontal, itemStartIndex, items, layout.headerIndex, retainedItemKeys]);
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => scrollRef.current,
@@ -233,8 +244,14 @@ function VirtualizedInfiniteListContent<TItem>({
     // commands from layout effects. Do not re-enter React synchronously from
     // those lifecycle paths.
     useFlushSync: false,
-    getItemKey: (index) => virtualizedRowKey({ emptyCount, horizontal, getItemKey, headerCount, index, itemStartIndex, items, nextBoundaryIndex, previousBoundaryCount }),
-    ...[{}, { overscan: 6 }][Number(!horizontal)],
+    getItemKey: (index) =>
+      virtualizedRowKey({
+        getItemKey,
+        index,
+        items,
+        layout,
+      }),
+    ...(horizontal ? {} : { overscan: 6 }),
     horizontal,
     rangeExtractor: (range) => pinnedVirtualRangeExtractor(range, pinnedIndexes),
   });
@@ -276,9 +293,15 @@ function VirtualizedInfiniteListContent<TItem>({
   ]);
 
   useLayoutEffect(() => {
-    if (validatedPixelOffsetRequest === undefined || items.length === 0 || scrollRef.current === null || lastPixelOffsetKeyRef.current === validatedPixelOffsetRequest.key) return;
+    if (
+      validatedPixelOffsetRequest === undefined ||
+      items.length === 0 ||
+      scrollRef.current === null ||
+      lastPixelOffsetKeyRef.current === validatedPixelOffsetRequest.key
+    )
+      return;
     const scrollOffset = validatedPixelOffsetRequest.offsetPx;
-    scrollRef.current[horizontal ? "scrollLeft" : "scrollTop"] = scrollOffset;
+    scrollRef.current[virtualizedScrollOffsetProperty(horizontal)] = scrollOffset;
     virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
     lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
     pixelOffsetAppliedKeyRef.current = validatedPixelOffsetRequest.key;
@@ -337,46 +360,61 @@ function VirtualizedInfiniteListContent<TItem>({
     wasFetchingNextPageRef,
   });
 
-  const renderRow = (virtualIndex: number): ReactNode => renderVirtualizedRow({ empty, emptyCount, header, headerCount, horizontal, item: items[virtualIndex - itemStartIndex], isFetchingNextPage, itemStartIndex, legacyPlaceholderIndex, loadingLabel, nextBoundary, nextBoundaryIndex, previousBoundary, previousBoundaryCount, renderItem, virtualIndex });
-  const getRowKey = (index: number): string => virtualizedRowKey({ emptyCount, getItemKey, headerCount, horizontal, index, itemStartIndex, items, nextBoundaryIndex, previousBoundaryCount });
-  const isStickyRow = (index: number, itemKey: string | undefined): boolean => (horizontal && headerCount > 0 && index === 0) || (itemKey !== undefined && stickyItemKeys?.has(itemKey) === true);
-  const hasHorizontalBoundary = Number(horizontal) * Number(Number(emptyCount > 0) + Number(previousBoundary !== undefined) + Number(nextBoundary !== undefined) > 0) > 0;
-  if (Number(count > 0) * Number(virtualItems.length === 0) === 1) {
+  const renderContent = (item: TItem | undefined, virtualIndex: number): ReactNode =>
+    renderVirtualizedRow({
+      empty,
+      header,
+      isFetchingNextPage,
+      item,
+      layout,
+      loadingLabel,
+      nextBoundary,
+      previousBoundary,
+      renderItem,
+      virtualIndex,
+    });
+  const renderedRows = renderVirtualizedInfiniteListRows(
+    fallbackIndexes,
+    virtualItems,
+    (fallbackIndex, virtualItem): ReactNode =>
+      renderVirtualizedInfiniteListRow({
+        fallbackIndex,
+        getItemKey,
+        getItemWrapperProps,
+        itemRole,
+        items,
+        layout,
+        measureElement: virtualizer.measureElement,
+        orientation,
+        paddingEnd,
+        paddingStart,
+        renderContent,
+        rowSpacing,
+        stickyItemKeys,
+        virtualItem,
+      }),
+  );
+  const hasHorizontalBoundary = resolveHorizontalBoundary(horizontal, layout, nextBoundary);
+  const containerClassName = resolveVirtualizedContainerClassName(className, horizontal);
+  if (count > 0 && virtualItems.length === 0) {
     return (
       <div
         aria-label={ariaLabel}
-        className={cx(className, ["", "flex"][Number(horizontal)])}
+        className={containerClassName}
         data-testid={testId}
         id={id}
         onScroll={onScroll}
         ref={setScrollElement}
         role={role}
       >
-        {fallbackIndexes.map((index) => {
-          const itemIndex = index - itemStartIndex;
-          const item = items[itemIndex];
-          const itemKey = item === undefined ? undefined : getItemKey(item);
-          const wrapperProps = item === undefined ? undefined : getItemWrapperProps?.(item, itemIndex);
-          const sticky = isStickyRow(index, itemKey);
-          return (
-            <div
-              {...wrapperProps}
-              className={cx((["", "sticky top-0 z-[1]", "absolute top-0 left-0 w-full", "sticky top-0 z-[1] w-full", "", "sticky z-[1]", "absolute top-0 left-0 w-max", "sticky z-[1] w-max"][Number(horizontal) * 4 + Number(sticky)] ?? ""), virtualizedRowClassName({ count, index, orientation, rowSpacing, virtualized: false }), wrapperProps?.className)}
-              key={getRowKey(index)}
-              role={itemRole}
-              style={{ ...fallbackVirtualizedRowStyle({ count, index, orientation, paddingEnd, paddingStart }), left: [undefined, paddingStart][Number(horizontal) * Number(sticky)] }}
-            >
-              {renderRow(index)}
-            </div>
-          );
-        })}
+        {renderedRows}
       </div>
     );
   }
   return (
     <div
       aria-label={ariaLabel}
-      className={cx(className, ["", "flex"][Number(horizontal)])}
+      className={containerClassName}
       data-testid={testId}
       id={id}
       onScroll={onScroll}
@@ -384,69 +422,13 @@ function VirtualizedInfiniteListContent<TItem>({
       role={role}
     >
       <div
-        className={
-          horizontal
-            ? cx("relative w-max shrink-0", hasHorizontalBoundary ? "min-h-12" : "min-h-7")
-            : "relative w-full"
-        }
-        style={
-          horizontal
-            ? { width: `${virtualizer.getTotalSize().toString()}px` }
-            : { height: `${virtualizer.getTotalSize().toString()}px` }
-        }
+        className={resolveVirtualizedInnerClassName(horizontal, hasHorizontalBoundary)}
+        style={resolveVirtualizedInnerStyle(horizontal, virtualizer.getTotalSize())}
       >
-        {virtualItems.map((virtualItem) => {
-          const itemIndex = virtualItem.index - itemStartIndex;
-          const item = items[itemIndex];
-          const itemKey = item === undefined ? undefined : getItemKey(item);
-          const wrapperProps = item === undefined ? undefined : getItemWrapperProps?.(item, itemIndex);
-          const sticky = isStickyRow(virtualItem.index, itemKey);
-          return (
-            <div
-              {...wrapperProps}
-              className={cx((["", "sticky top-0 z-[1]", "absolute top-0 left-0 w-full", "sticky top-0 z-[1] w-full", "", "sticky z-[1]", "absolute top-0 left-0 w-max", "sticky z-[1] w-max"][Number(horizontal) * 4 + 2 + Number(sticky)] ?? ""), virtualizedRowClassName({ count, index: virtualItem.index, orientation, rowSpacing, virtualized: true }), wrapperProps?.className)}
-              data-index={virtualItem.index}
-              key={virtualItem.key}
-              ref={virtualizer.measureElement}
-              role={itemRole}
-              style={[{ ...wrapperProps?.style, transform: `${horizontal ? "translateX" : "translateY"}(${virtualItem.start.toString()}px)` }, { ...wrapperProps?.style, left: paddingStart }, wrapperProps?.style][Number(sticky) * (Number(!horizontal) + 1)]}
-            >
-              {renderRow(virtualItem.index)}
-            </div>
-          );
-        })}
+        {renderedRows}
       </div>
     </div>
   );
-}
-
-function fallbackVirtualIndexes({
-  count,
-  estimateSize,
-  pinnedIndexes,
-}: Readonly<{
-  count: number;
-  estimateSize: () => number;
-  pinnedIndexes: ReadonlySet<number>;
-}>): number[] {
-  if (count === 0) {
-    return [];
-  }
-  const visibleCount = Math.max(1, Math.ceil(600 / Math.max(1, estimateSize())));
-  const range: Range = {
-    count,
-    startIndex: 0,
-    endIndex: Math.min(count - 1, visibleCount - 1),
-    overscan: 6,
-  };
-  return pinnedVirtualRangeExtractor(range, pinnedIndexes);
-}
-
-function virtualizedVisibleIndexes(
-  fallbackIndexes: readonly number[],
-  virtualItems: readonly VirtualItem[],
-): readonly number[] {
-  return virtualItems.length === 0 ? fallbackIndexes : virtualItems.map((virtualItem) => virtualItem.index);
 }
 
 function useVirtualizedLeadingAnchor<TItem>({
