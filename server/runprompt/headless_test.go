@@ -50,11 +50,18 @@ func (s *recordingPromptHistoryStore) RecordPromptHistoryEntry(_ context.Context
 	return metadata.PromptHistoryRecord{}, nil
 }
 
-type blockingPromptHistoryStore struct{}
+type blockingPromptHistoryStore struct {
+	started chan<- struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
 
 func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
+	if s.started != nil {
+		s.once.Do(func() { close(s.started) })
+	}
 	select {
-	case <-time.After(1500 * time.Millisecond):
+	case <-s.release:
 		return metadata.PromptHistoryRecord{}, nil
 	case <-ctx.Done():
 		return metadata.PromptHistoryRecord{}, ctx.Err()
@@ -1202,20 +1209,61 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 	t.Run("prompt history", func(t *testing.T) {
 		providerCalls := 0
+		historyStarted := make(chan struct{})
+		historyRelease := make(chan struct{})
+		providerStarted := make(chan struct{})
+		providerRelease := make(chan struct{})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			providerCalls++
-			modelstub.WriteCompletedResponseStream(w, "unexpected", 1, 1)
+			close(providerStarted)
+			select {
+			case <-providerRelease:
+				modelstub.WriteCompletedResponseStream(w, "unexpected", 1, 1)
+			case <-r.Context().Done():
+			}
 		}))
 		defer server.Close()
 
-		fixture := newSelectedRunPromptFixture(t, server.URL, &blockingPromptHistoryStore{})
-		_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-			Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
-			Prompt:  "hello",
-			Timeout: time.Second,
-		}, nil)
-		if err != nil {
-			t.Fatalf("RunPrompt error = %v, want success after history", err)
+		history := &blockingPromptHistoryStore{started: historyStarted, release: historyRelease}
+		fixture := newSelectedRunPromptFixture(t, server.URL, history)
+		type result struct {
+			response serverapi.RunPromptResponse
+			err      error
+		}
+		done := make(chan result, 1)
+		go func() {
+			response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+				Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+				Prompt:  "hello",
+				Timeout: time.Second,
+			}, nil)
+			done <- result{response: response, err: err}
+		}()
+		select {
+		case <-historyStarted:
+		case <-time.After(time.Second):
+			t.Fatal("prompt history did not start")
+		}
+		select {
+		case got := <-done:
+			t.Fatalf("RunPrompt returned while history was pending: %+v", got)
+		case <-time.After(1200 * time.Millisecond):
+		}
+		close(historyRelease)
+		select {
+		case <-providerStarted:
+		case <-time.After(time.Second):
+			t.Fatal("provider request did not start after history release")
+		}
+		select {
+		case got := <-done:
+			t.Fatalf("RunPrompt returned before selected result release: %+v", got)
+		case <-time.After(50 * time.Millisecond):
+		}
+		close(providerRelease)
+		got := <-done
+		if got.err != nil {
+			t.Fatalf("RunPrompt error = %v, want success after history", got.err)
 		}
 		sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
 		_, active := fixture.authority.SessionExecution(sessionID)

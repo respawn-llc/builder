@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
+	"core/cli/clienterrors"
 	"core/shared/llmerrors"
 	"core/shared/serverapi"
 )
@@ -42,9 +42,13 @@ func TestFormatSubmissionErrorRendersWorkflowResumeConflictGuidance(t *testing.T
 		err := errors.Join(serverapi.ErrRuntimeCommandNotAccepted, &serverapi.WorkflowTaskResumeConflictError{
 			TaskID: "KNT-123", State: state,
 		})
+		want, ok := clienterrors.WorkflowTaskResumeConflictMessage(err)
+		if !ok {
+			t.Fatalf("WorkflowTaskResumeConflictMessage(%s) did not recognize conflict", state)
+		}
 		got := FormatSubmissionError(err)
-		if got == "" || got == err.Error() || !strings.Contains(got, "KNT-123") {
-			t.Fatalf("FormatSubmissionError(%s) = %q, want state-specific guidance", state, got)
+		if got != want {
+			t.Fatalf("FormatSubmissionError(%s) = %q, want %q", state, got, want)
 		}
 	}
 }

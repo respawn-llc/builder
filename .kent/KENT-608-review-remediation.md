@@ -23,3 +23,13 @@
 - [x] Make public conflict coverage table-driven across lifecycle states and protocol error-frame decode.
 - [x] Cover retained Run Prompt Thinking mutation/effective execution for dormant and live Sessions.
 - [x] Keep added test lines at or below 900 by removing redundant coverage while preserving the required boundary matrix.
+
+## Follow-up review remediation (September 3, 2026)
+
+- [x] Synchronize retained Thinking setup compaction and compare selected compaction against the captured post-setup baseline.
+- [x] Derive fan-out completion transitions from exact branch-scoped Workflow assignment identities and verify selected/sibling durable branch outcomes.
+- [x] Scope exact-finalization failure injection to the selected retained Session and verify successful sibling completion is unaffected.
+- [x] Restore a controllable ordinary prompt-history gate and prove a fresh full result-wait interval after history release.
+- [x] Add locked-contract assertion rejection with zero provider calls and zero prompt history, plus observable background-progress exclusion.
+- [x] Replace forbidden substring guidance matching with an exact client-owned expected rendering.
+- [x] Record the user's September 3, 2026 approval to retain the historical 15-test-file diff because the two-file reduction would require contradictory tests or a compatibility seam.

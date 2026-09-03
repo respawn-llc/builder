@@ -56,10 +56,11 @@ type currentNodeRunnerFixture struct {
 	persistenceGate *sessiontest.PersistenceGate
 	controllerClose error
 
-	stepLifecycleFailure *error
-	mu                   sync.Mutex
-	clientRequests       []runtimewire.RuntimeClientRequest
-	clientErr            error
+	stepLifecycleFailure        *error
+	stepLifecycleFailureSession *runtimeids.SessionID
+	mu                          sync.Mutex
+	clientRequests              []runtimewire.RuntimeClientRequest
+	clientErr                   error
 }
 
 type currentNodeRunnerClient interface {
@@ -159,8 +160,9 @@ func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResp
 }
 
 type currentNodeRunnerStepLifecycle struct {
-	runtimes *registry.RuntimeRegistry
-	failure  *error
+	runtimes       *registry.RuntimeRegistry
+	failure        *error
+	failureSession func() *runtimeids.SessionID
 }
 
 func (s currentNodeRunnerStepLifecycle) StepBegan(
@@ -183,7 +185,12 @@ func (s currentNodeRunnerStepLifecycle) StepEnded(
 		resource.Ref.SessionID().String(),
 		s.runtimes,
 	).StepEnded(ctx, snapshot)
-	if s.failure != nil && *s.failure != nil {
+	targetSession := (*runtimeids.SessionID)(nil)
+	if s.failureSession != nil {
+		targetSession = s.failureSession()
+	}
+	if s.failure != nil && *s.failure != nil &&
+		(targetSession == nil || resource.Ref.SessionID() == *targetSession) {
 		return errors.Join(err, *s.failure)
 	}
 	return err
@@ -311,7 +318,12 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			fixture.runtimes.PublishAuthorityRuntimeEvent(resource, event)
 		},
 		ResourceLifecycle: fixture.runtimes,
-		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes, failure: &stepLifecycleFailure},
+		StepLifecycle: currentNodeRunnerStepLifecycle{
+			runtimes: fixture.runtimes, failure: &stepLifecycleFailure,
+			failureSession: func() *runtimeids.SessionID {
+				return fixture.stepLifecycleFailureSession
+			},
+		},
 	})
 	t.Cleanup(func() {
 		if fixture.controller != nil {
