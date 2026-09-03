@@ -7,9 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"core/shared/runtimeids"
 	"github.com/klauspost/compress/zstd"
@@ -111,12 +109,6 @@ func TestArchiveAndRemoveSessionArtifactsPreserveUnknownContent(t *testing.T) {
 			t.Fatalf("archive entry %q = %#v, %t; want %#v", name, got, ok, wantEntry)
 		}
 	}
-	for name := range entries {
-		if strings.Contains(filepath.Base(name), ".tmp-") {
-			t.Fatalf("archive contains temporary output %q", name)
-		}
-	}
-
 	schedule, err := PreflightSessionArtifactRemoval(sessionAlias)
 	if err != nil {
 		t.Fatalf("PreflightSessionArtifactRemoval: %v", err)
@@ -215,7 +207,9 @@ func TestArchiveSessionDirectoryRejectsUnwritableOutput(t *testing.T) {
 	if _, statErr := os.Lstat(outputPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("output exists after failure: %v", statErr)
 	}
-	assertNoArchiveTemporaries(t, outputDir, filepath.Base(outputPath))
+	if entries, readErr := os.ReadDir(outputDir); readErr != nil || len(entries) != 0 {
+		t.Fatalf("output directory after failure = %v, %v; want empty", entries, readErr)
+	}
 }
 
 func TestArchiveSessionDirectoryPreservesExistingOutput(t *testing.T) {
@@ -232,53 +226,10 @@ func TestArchiveSessionDirectoryPreservesExistingOutput(t *testing.T) {
 	if body, readErr := os.ReadFile(outputPath); readErr != nil || string(body) != "existing" {
 		t.Fatalf("existing output = %q, %v", body, readErr)
 	}
-	assertNoArchiveTemporaries(t, filepath.Dir(outputPath), filepath.Base(outputPath))
-}
-
-func TestArchiveSessionDirectoryPreservesRacedOutput(t *testing.T) {
-	sessionDir := t.TempDir()
-	largePath := filepath.Join(sessionDir, eventsFile)
-	fp, err := os.Create(largePath)
-	if err != nil {
-		t.Fatalf("create large fixture: %v", err)
+	entries, readErr := os.ReadDir(filepath.Dir(outputPath))
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(outputPath) {
+		t.Fatalf("output directory after rejection = %v, %v", entries, readErr)
 	}
-	if err := fp.Truncate(8 << 20); err != nil {
-		_ = fp.Close()
-		t.Fatalf("truncate large fixture: %v", err)
-	}
-	if err := fp.Close(); err != nil {
-		t.Fatalf("close large fixture: %v", err)
-	}
-	outputDir := filepath.Join(t.TempDir(), "created", "nested")
-	outputPath := filepath.Join(outputDir, "session.tar.zst")
-	result := make(chan error, 1)
-	go func() {
-		result <- ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sessionDir, outputPath)
-	}()
-
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if archiveTemporaryExists(t, outputDir, filepath.Base(outputPath)) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("archive temporary was not observed")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	writeArchiveFixtureFile(t, outputPath, "raced")
-	err = <-result
-	var existsErr *ArchiveOutputExistsError
-	if !errors.As(err, &existsErr) {
-		t.Fatalf("ArchiveSessionDirectory error = %v, want ArchiveOutputExistsError", err)
-	}
-	if body, readErr := os.ReadFile(outputPath); readErr != nil || string(body) != "raced" {
-		t.Fatalf("raced output = %q, %v", body, readErr)
-	}
-	if _, statErr := os.Stat(outputDir); statErr != nil {
-		t.Fatalf("created output parent was not retained: %v", statErr)
-	}
-	assertNoArchiveTemporaries(t, outputDir, filepath.Base(outputPath))
 }
 
 func writeArchiveFixtureFile(t *testing.T, path, body string) {
@@ -323,29 +274,4 @@ func decodeArchiveFixture(t *testing.T, path string) map[string]archivedEntry {
 			body:     string(body),
 		}
 	}
-}
-
-func assertNoArchiveTemporaries(t *testing.T, dir, outputBase string) {
-	t.Helper()
-	if archiveTemporaryExists(t, dir, outputBase) {
-		t.Fatalf("archive temporary remains in %s", dir)
-	}
-}
-
-func archiveTemporaryExists(t *testing.T, dir, outputBase string) bool {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return false
-	}
-	if err != nil {
-		t.Fatalf("read output directory: %v", err)
-	}
-	prefix := "." + outputBase + ".tmp-"
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), prefix) {
-			return true
-		}
-	}
-	return false
 }

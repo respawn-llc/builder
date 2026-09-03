@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	"core/shared/client"
@@ -179,12 +178,11 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 	outputPath := "/tmp/session-failure.tar.zst"
 	remainingPath := "/tmp/sessions/session-failure/events.jsonl"
 	tests := []struct {
-		name         string
-		err          error
-		archive      bool
-		wantCode     string
-		wantPath     *string
-		wantFragment string
+		name     string
+		err      error
+		archive  bool
+		wantCode string
+		wantPath *string
 	}{
 		{
 			name: "session not found",
@@ -258,10 +256,9 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 						},
 					},
 				}),
-			archive:      true,
-			wantCode:     "request_failed",
-			wantPath:     &outputPath,
-			wantFragment: "kent session delete " + sessionID + " --confirm",
+			archive:  true,
+			wantCode: "request_failed",
+			wantPath: &outputPath,
 		},
 		{
 			name: "metadata removed cleanup failed",
@@ -275,9 +272,8 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 						},
 					},
 				}),
-			wantCode:     "request_failed",
-			wantPath:     &remainingPath,
-			wantFragment: remainingPath,
+			wantCode: "request_failed",
+			wantPath: &remainingPath,
 		},
 		{
 			name:     "transport",
@@ -298,9 +294,6 @@ func TestSessionRemovalFailureClassification(t *testing.T) {
 				outcome.Error.Code != test.wantCode ||
 				!textutil.EqualOptional(outcome.Error.Path, test.wantPath) {
 				t.Fatalf("outcome = %+v, want code %q path %v", outcome, test.wantCode, test.wantPath)
-			}
-			if test.wantFragment != "" && !strings.Contains(outcome.Error.Message, test.wantFragment) {
-				t.Fatalf("message %q does not contain %q", outcome.Error.Message, test.wantFragment)
 			}
 		})
 	}

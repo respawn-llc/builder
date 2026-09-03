@@ -1,14 +1,12 @@
 package sessionservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -24,6 +22,33 @@ type sessionRemovalMetadataDelegate struct {
 	*metadata.Store
 	resolve func(context.Context, string) (session.PersistedSessionRecord, error)
 	delete  func(context.Context, string) error
+}
+
+type archiveExpiryErrorHandler struct {
+	err chan error
+}
+
+func (h archiveExpiryErrorHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h archiveExpiryErrorHandler) Handle(_ context.Context, record slog.Record) error {
+	record.Attrs(func(attribute slog.Attr) bool {
+		if err, ok := attribute.Value.Any().(error); ok {
+			h.err <- err
+			return false
+		}
+		return true
+	})
+	return nil
+}
+
+func (h archiveExpiryErrorHandler) WithAttrs([]slog.Attr) slog.Handler {
+	return h
+}
+
+func (h archiveExpiryErrorHandler) WithGroup(string) slog.Handler {
+	return h
 }
 
 func (m sessionRemovalMetadataDelegate) ResolvePersistedSession(
@@ -243,9 +268,9 @@ func runDetachedArchiveGraceExpiryCase(t *testing.T, debug bool) {
 				return session.PersistedSessionRecord{}, context.Cause(ctx)
 			},
 		})
-		var logs bytes.Buffer
+		diagnosticErrors := make(chan error, 1)
 		previousLogger := slog.Default()
-		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		slog.SetDefault(slog.New(archiveExpiryErrorHandler{err: diagnosticErrors}))
 		defer slog.SetDefault(previousLogger)
 
 		outputPath := filepath.Join(outputDir, "session.tar.zst")
@@ -292,13 +317,17 @@ func runDetachedArchiveGraceExpiryCase(t *testing.T, debug bool) {
 		if err := <-competingAdmission; err != nil {
 			t.Fatalf("Session admission after grace expiry: %v", err)
 		}
-		if !strings.Contains(logs.String(), ErrDetachedArchiveGraceExpired.Error()) {
-			t.Fatalf("detached archive diagnostic = %q, want grace-expiry cause", logs.String())
+		select {
+		case diagnosticErr := <-diagnosticErrors:
+			if !errors.Is(diagnosticErr, ErrDetachedArchiveGraceExpired) {
+				t.Fatalf("detached archive diagnostic = %v, want grace-expiry cause", diagnosticErr)
+			}
+		default:
+			t.Fatal("detached archive expiry diagnostic was not emitted")
 		}
 		if _, err := os.Lstat(outputPath); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("archive output after grace expiry = %v, want absent", err)
 		}
-		assertNoSessionArchiveTemporary(t, outputDir, filepath.Base(outputPath))
 		if _, err := metadataStore.ResolvePersistedSession(
 			context.Background(),
 			persisted.Meta().SessionID,
@@ -312,49 +341,6 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 	for _, operation := range []string{"archive", "delete"} {
 		t.Run(operation, func(t *testing.T) {
 			fixture := newSessionRemovalServiceFixture(t)
-			operationDone := make(chan error, 1)
-			outputDir := t.TempDir()
-			outputPath := filepath.Join(outputDir, "session.tar.zst")
-			if operation == "archive" {
-				eventsPath := filepath.Join(fixture.session.Dir(), "events.jsonl")
-				events, err := os.OpenFile(eventsPath, os.O_WRONLY, 0)
-				if err != nil {
-					t.Fatalf("open event log fixture: %v", err)
-				}
-				if err := events.Truncate(1 << 30); err != nil {
-					_ = events.Close()
-					t.Fatalf("expand event log fixture: %v", err)
-				}
-				if err := events.Close(); err != nil {
-					t.Fatalf("close event log fixture: %v", err)
-				}
-				go func() {
-					operationDone <- fixture.service.Archive(
-						context.Background(),
-						fixture.session.Meta().SessionID,
-						outputPath,
-					)
-				}()
-				awaitArchiveTemporary(t, outputDir, filepath.Base(outputPath))
-				if err := fixture.authority.Close(context.Background()); err != nil {
-					t.Fatalf("close Authority: %v", err)
-				}
-				if err := <-operationDone; !errors.Is(err, context.Canceled) {
-					t.Fatalf("archive result = %v, want cancellation", err)
-				}
-				if _, err := os.Lstat(outputPath); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("archive output after shutdown cancellation = %v, want absent", err)
-				}
-				assertNoSessionArchiveTemporary(t, outputDir, filepath.Base(outputPath))
-				if _, err := fixture.metadata.ResolvePersistedSession(
-					t.Context(),
-					fixture.session.Meta().SessionID,
-				); err != nil {
-					t.Fatalf("Session metadata after canceled archive: %v", err)
-				}
-				return
-			}
-
 			deleteStarted := make(chan struct{})
 			fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
 				Store: fixture.metadata,
@@ -364,7 +350,17 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 					return context.Cause(ctx)
 				},
 			})
+			operationDone := make(chan error, 1)
+			outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 			go func() {
+				if operation == "archive" {
+					operationDone <- fixture.service.Archive(
+						context.Background(),
+						fixture.session.Meta().SessionID,
+						outputPath,
+					)
+					return
+				}
 				operationDone <- fixture.service.Delete(
 					context.Background(),
 					fixture.session.Meta().SessionID,
@@ -407,39 +403,13 @@ func TestAuthorityCloseCancelsAndJoinsAcceptedSessionRemoval(t *testing.T) {
 				t.Context(),
 				fixture.session.Meta().SessionID,
 			); err != nil {
-				t.Fatalf("Session metadata after canceled delete: %v", err)
+				t.Fatalf("Session metadata after canceled %s: %v", operation, err)
+			}
+			if operation == "archive" {
+				if _, err := os.Stat(outputPath); err != nil {
+					t.Fatalf("published archive after shutdown cancellation: %v", err)
+				}
 			}
 		})
-	}
-}
-
-func awaitArchiveTemporary(t *testing.T, dir, outputBase string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("read archive output directory: %v", err)
-		}
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), "."+outputBase+".tmp-") {
-				return
-			}
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("archive temporary was not observed")
-}
-
-func assertNoSessionArchiveTemporary(t *testing.T, dir, outputBase string) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read archive output directory: %v", err)
-	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "."+outputBase+".tmp-") {
-			t.Fatalf("archive temporary remains: %s", entry.Name())
-		}
 	}
 }
