@@ -250,30 +250,6 @@ func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	}
 }
 
-func TestProjectTopologyRejectsBlankRootsBeforeCanonicalization(t *testing.T) {
-	root := t.TempDir()
-	tests := []struct {
-		name    string
-		git     []GitWorktree
-		records []metadata.WorktreeRecord
-	}{
-		{name: "workspace", git: nil, records: nil},
-		{name: "git", git: []GitWorktree{{Root: "  "}}},
-		{name: "Kent", records: []metadata.WorktreeRecord{{ID: "blank", CanonicalRoot: "  "}}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			workspaceRoot := root
-			if test.name == "workspace" {
-				workspaceRoot = "  "
-			}
-			if _, err := projectTopologyEntries(workspaceRoot, test.git, test.records); err == nil {
-				t.Fatal("projectTopologyEntries succeeded, want blank-root error")
-			}
-		})
-	}
-}
-
 func TestPreviewWorktreeDeleteResolvesCleanNonCurrentRegisteredTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-preview-clean")

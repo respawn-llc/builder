@@ -123,7 +123,7 @@ func TestParseGitWorktreeListPorcelainIdentifiesGitMainOnlyFromRecordZero(t *tes
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			entries, err := parseGitWorktreeListPorcelain(test.body, filepath.Join(t.TempDir(), "workspace"))
+			entries, err := parseGitWorktreeListPorcelain(test.body)
 			if err != nil {
 				t.Fatalf("parseGitWorktreeListPorcelain: %v", err)
 			}
@@ -234,7 +234,7 @@ func markGitRepository(t *testing.T, workspaceRoot string) {
 
 func TestParseGitWorktreeListPorcelainRejectsUnsupportedKeys(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	_, err := parseGitWorktreeListPorcelain("worktree "+workspaceRoot+"\nHEAD aaa111\nunsupported nope\n", workspaceRoot)
+	_, err := parseGitWorktreeListPorcelain("worktree " + workspaceRoot + "\nHEAD aaa111\nunsupported nope\n")
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -247,7 +247,7 @@ func TestParseGitWorktreeListPorcelainRejectsNamedDetachedHead(t *testing.T) {
 		"detached_then_branch": "worktree " + workspaceRoot + "\nHEAD aaa111\ndetached\nbranch refs/heads/main\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := parseGitWorktreeListPorcelain(body, workspaceRoot); err == nil {
+			if _, err := parseGitWorktreeListPorcelain(body); err == nil {
 				t.Fatal("parseGitWorktreeListPorcelain accepted named detached head")
 			}
 		})

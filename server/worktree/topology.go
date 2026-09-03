@@ -9,7 +9,6 @@ import (
 
 	"core/server/metadata"
 	"core/shared/clientui"
-	"core/shared/config"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 )
@@ -30,25 +29,9 @@ func (s *Service) projectTopology(ctx context.Context, workspaceID string, works
 }
 
 func projectTopologyEntries(workspaceRoot string, gitEntries []GitWorktree, records []metadata.WorktreeRecord) ([]*worktreepb.TopologyEntry, error) {
-	workspaceRoot = strings.TrimSpace(workspaceRoot)
-	if workspaceRoot == "" {
-		return nil, errors.New("workspace root must not be blank")
-	}
-	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
 	byRoot := make(map[string]metadata.WorktreeRecord, len(records))
 	for _, record := range records {
-		rawRoot := strings.TrimSpace(record.CanonicalRoot)
-		if rawRoot == "" {
-			return nil, fmt.Errorf("Kent worktree %q has no canonical root", strings.TrimSpace(record.ID))
-		}
-		root, err := config.CanonicalWorkspaceRoot(rawRoot)
-		if err != nil {
-			return nil, err
-		}
-		record.CanonicalRoot = root
+		root := record.CanonicalRoot
 		if _, exists := byRoot[root]; exists {
 			return nil, fmt.Errorf("duplicate Kent worktree root %q", root)
 		}
@@ -57,23 +40,15 @@ func projectTopologyEntries(workspaceRoot string, gitEntries []GitWorktree, reco
 	out := make([]*worktreepb.TopologyEntry, 0, len(gitEntries)+len(records))
 	gitRoots := make(map[string]struct{}, len(gitEntries))
 	for _, gitEntry := range gitEntries {
-		rawRoot := strings.TrimSpace(gitEntry.Root)
-		if rawRoot == "" {
-			return nil, errors.New("Git worktree has no canonical root")
-		}
-		root, err := config.CanonicalWorkspaceRoot(rawRoot)
-		if err != nil {
-			return nil, err
-		}
+		root := gitEntry.Root
 		if _, exists := gitRoots[root]; exists {
 			return nil, fmt.Errorf("duplicate Git worktree root %q", root)
 		}
-		gitEntry.Root = root
 		gitRoots[root] = struct{}{}
 		record, registered := byRoot[root]
 		delete(byRoot, root)
 		gitFacts := gitFactsFromEntry(gitEntry)
-		if root == canonicalWorkspaceRoot {
+		if root == workspaceRoot {
 			out = append(out, &worktreepb.TopologyEntry{Topology: &worktreepb.TopologyEntry_MainWorkspace{
 				MainWorkspace: &worktreepb.MainWorkspaceFacts{Git: gitFacts},
 			}})
@@ -88,7 +63,7 @@ func projectTopologyEntries(workspaceRoot string, gitEntries []GitWorktree, reco
 		}})
 	}
 	for _, record := range records {
-		if _, missing := byRoot[strings.TrimSpace(record.CanonicalRoot)]; !missing {
+		if _, missing := byRoot[record.CanonicalRoot]; !missing {
 			continue
 		}
 		out = append(out, &worktreepb.TopologyEntry{Topology: &worktreepb.TopologyEntry_Missing{

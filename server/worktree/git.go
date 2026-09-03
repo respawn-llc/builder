@@ -811,7 +811,7 @@ func (i *GitInspector) List(ctx context.Context, workspaceRoot string) ([]GitWor
 			Cause: cause,
 		}
 	}
-	return parseGitWorktreeListPorcelain(string(output), canonicalRoot)
+	return parseGitWorktreeListPorcelain(string(output))
 }
 
 func (i *GitInspector) BranchExists(ctx context.Context, workspaceRoot string, branchName string) (bool, error) {
@@ -1249,10 +1249,7 @@ func formatGitRunError(exitCode int, err error, output []byte, args ...string) e
 	return fmt.Errorf("git %s: %s", strings.Join(args, " "), trimmed)
 }
 
-func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWorktree, error) {
-	if _, err := config.CanonicalWorkspaceRoot(workspaceRoot); err != nil {
-		return nil, err
-	}
+func parseGitWorktreeListPorcelain(body string) ([]GitWorktree, error) {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 	entries := make([]GitWorktree, 0, 4)
 	current := GitWorktree{}

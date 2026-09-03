@@ -39,16 +39,6 @@ INSERT INTO sessions (
     '{"workspace_root":"`+workspaceRoot+`","workspace_container":"Project","worktree_reminder":{"kind":"enter","worktree_id":"worktree-same-root","worktree_path":"`+workspaceRoot+`"}}',
     ?, ?
 )`, now, now)
-	execSeed(t, db, "orphaned Session reminder", `
-INSERT INTO sessions (
-    id, project_id, workspace_id, worktree_id, artifact_relpath, cwd_relpath,
-    metadata_json, created_at_unix_ms, updated_at_unix_ms
-) VALUES (
-    'session-orphaned-reminder', 'project-main-cutover', 'workspace-main-cutover',
-    NULL, 'sessions/session-orphaned-reminder', '.',
-    '{"workspace_root":"`+workspaceRoot+`","workspace_container":"Project","worktree_reminder":{"kind":"enter","worktree_path":"`+workspaceRoot+`"}}',
-    ?, ?
-)`, now, now)
 	seedWorkflowGraph(t, db, "project-main-cutover", now)
 	execSeed(t, db, "task", workflowSeedTaskSQL,
 		"task-main-cutover", "link-1", 1, "CUT-1", now, now)
@@ -107,16 +97,6 @@ WHERE id = 'session-main-cutover'`).Scan(&reminderType); err != nil {
 	}
 	if reminderType.Valid {
 		t.Fatalf("converted Session reminder type = %q, want absent", reminderType.String)
-	}
-
-	if err := store.DB().QueryRowContext(t.Context(), `
-SELECT json_type(metadata_json, '$.worktree_reminder')
-FROM sessions
-WHERE id = 'session-orphaned-reminder'`).Scan(&reminderType); err != nil {
-		t.Fatalf("read orphaned Session reminder: %v", err)
-	}
-	if reminderType.Valid {
-		t.Fatalf("orphaned Session reminder type = %q, want absent", reminderType.String)
 	}
 
 	var managedID, mode, requestedRef, resolvedRef, commitOID, provenance sql.NullString

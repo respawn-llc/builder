@@ -9,11 +9,7 @@ WHERE EXISTS (
     FROM worktrees wt
     JOIN workspaces ws ON ws.id = wt.workspace_id
     WHERE wt.canonical_root_path = ws.canonical_root_path
-      AND (
-          sessions.worktree_id = wt.id
-          OR json_extract(sessions.metadata_json, '$.worktree_reminder.worktree_path') =
-             wt.canonical_root_path
-      )
+      AND sessions.worktree_id = wt.id
 );
 
 UPDATE tasks
