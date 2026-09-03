@@ -240,6 +240,9 @@
 - A target change takes effect before the next model work begins and becomes part of the model's worktree context.
 - Worktree changes do not append synthetic transcript notes.
 - Git determines worktree topology. Kent adds the associations needed for Projects and Sessions.
+- Main Workspace and Git main worktree are independent topology identities.
+- When the Main Workspace is a linked worktree, the Git main worktree remains an ordinary row without a special marker.
+- When the Git main worktree is available and not current, it offers the ordinary switch action.
 - Only one modification can apply to a worktree at a time.
 - A competing modification waits for the earlier modification and then evaluates the current state again.
 - If the earlier operation deleted the worktree, a later request to enter it fails because the worktree is absent. A later request to delete it again succeeds without another change.
@@ -250,13 +253,16 @@
 - A rejected deletion leaves Session targets, Kent worktree information, Git state, and branch state unchanged.
 - A busy target does not delay create, enter, leave, or delete operations for unrelated worktrees.
 - Worktree list returns one complete result in Git's native order. It does not use pagination.
-- List rows have three exhaustive states: registered rows combine Git and Kent facts, external rows contain only Git facts and carry an `External` marker, and missing rows contain only orphaned Kent facts and carry a `Missing` warning. Registered and external rows preserve Git's native order; missing rows follow in Kent metadata creation order. Listing never creates metadata for external rows or deletes missing rows.
+- List rows have four exhaustive states: the Main Workspace row contains live Git facts and no Kent Worktree ID; registered rows combine Git and Kent facts; external rows contain only Git facts and carry an `External` marker; missing rows contain only orphaned Kent Worktree facts and carry a `Missing` warning. The Main Workspace, registered, and external rows preserve Git's native order; missing rows follow in Kent metadata creation order. Listing never creates metadata for external rows or deletes missing rows.
+- A persisted Session whose Worktree root equals its Main Workspace is normalized to Main Workspace identity. Kent preserves its Workspace and Working Directory and clears its pending enter or exit context for the obsolete Worktree association.
 - Non-Kent Git worktrees are manageable. Explicitly entering one adopts it into Kent metadata before applying the ordinary session-target switch.
 - Worktree selector resolution gives exact Kent IDs precedence over exact branch names, display names, and paths. List/create prefer concise branch or display selectors only when resolving that text returns the same row; registered rows then fall back to their full Kent ID, while external rows fall back to a unique trailing path component and then the full canonical path. IDs and paths are omitted from normal list output unless needed for disambiguation.
 - Supported aliases preserve safety semantics: `/worktree status`, `/worktree remove`, `/worktree rm`.
 - `/worktree switch <selector>` and `/wt switch <selector>` enter the selected target.
 - `/worktree leave` and `/wt leave` return the Session to its main workspace.
 - Worktree deletion retargets Sessions before it removes the worktree.
+- Kent never offers deletion for the Main Workspace row or the Git main worktree.
+- Delete preview and deletion of the Git main worktree report `worktree blocked`, change no state, and include no blocker-detail payload.
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.
 - Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion.

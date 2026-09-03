@@ -24,6 +24,9 @@ type PreviewLine struct {
 }
 
 func DeleteActions(target Item) []DeleteAction {
+	if target.Entry == nil || target.Entry.Projection == nil || target.Entry.Projection.DeletePreview == nil {
+		return []DeleteAction{DeleteActionCancel}
+	}
 	actions := []DeleteAction{DeleteActionCancel, DeleteActionDelete}
 	if DeleteCanAutoDeleteBranch(target) || target.BranchName != nil {
 		actions = append(actions, DeleteActionDeleteBranch)

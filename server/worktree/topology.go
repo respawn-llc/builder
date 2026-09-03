@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata"
 	"core/shared/clientui"
+	"core/shared/config"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 )
@@ -25,16 +26,29 @@ func (s *Service) projectTopology(ctx context.Context, workspaceID string, works
 	if err != nil {
 		return nil, err
 	}
-	return projectTopologyEntries(gitEntries, records)
+	return projectTopologyEntries(workspaceRoot, gitEntries, records)
 }
 
-func projectTopologyEntries(gitEntries []GitWorktree, records []metadata.WorktreeRecord) ([]*worktreepb.TopologyEntry, error) {
+func projectTopologyEntries(workspaceRoot string, gitEntries []GitWorktree, records []metadata.WorktreeRecord) ([]*worktreepb.TopologyEntry, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return nil, errors.New("workspace root must not be blank")
+	}
+	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
 	byRoot := make(map[string]metadata.WorktreeRecord, len(records))
 	for _, record := range records {
-		root := strings.TrimSpace(record.CanonicalRoot)
-		if root == "" {
+		rawRoot := strings.TrimSpace(record.CanonicalRoot)
+		if rawRoot == "" {
 			return nil, fmt.Errorf("Kent worktree %q has no canonical root", strings.TrimSpace(record.ID))
 		}
+		root, err := config.CanonicalWorkspaceRoot(rawRoot)
+		if err != nil {
+			return nil, err
+		}
+		record.CanonicalRoot = root
 		if _, exists := byRoot[root]; exists {
 			return nil, fmt.Errorf("duplicate Kent worktree root %q", root)
 		}
@@ -43,17 +57,28 @@ func projectTopologyEntries(gitEntries []GitWorktree, records []metadata.Worktre
 	out := make([]*worktreepb.TopologyEntry, 0, len(gitEntries)+len(records))
 	gitRoots := make(map[string]struct{}, len(gitEntries))
 	for _, gitEntry := range gitEntries {
-		root := strings.TrimSpace(gitEntry.Root)
-		if root == "" {
+		rawRoot := strings.TrimSpace(gitEntry.Root)
+		if rawRoot == "" {
 			return nil, errors.New("Git worktree has no canonical root")
+		}
+		root, err := config.CanonicalWorkspaceRoot(rawRoot)
+		if err != nil {
+			return nil, err
 		}
 		if _, exists := gitRoots[root]; exists {
 			return nil, fmt.Errorf("duplicate Git worktree root %q", root)
 		}
+		gitEntry.Root = root
 		gitRoots[root] = struct{}{}
 		record, registered := byRoot[root]
 		delete(byRoot, root)
 		gitFacts := gitFactsFromEntry(gitEntry)
+		if root == canonicalWorkspaceRoot {
+			out = append(out, &worktreepb.TopologyEntry{Topology: &worktreepb.TopologyEntry_MainWorkspace{
+				MainWorkspace: &worktreepb.MainWorkspaceFacts{Git: gitFacts},
+			}})
+			continue
+		}
 		if registered {
 			out = append(out, registeredTopologyEntry(syncedWorktree{record: record, git: gitEntry}))
 			continue
@@ -98,6 +123,8 @@ func projectListEntry(topology *worktreepb.TopologyEntry, selector string, isCur
 	projection := &worktreepb.ListProjection{Selector: selector, IsCurrent: isCurrent}
 	var git *worktreepb.GitFacts
 	switch {
+	case topology.GetMainWorkspace() != nil:
+		git = topology.GetMainWorkspace().GetGit()
 	case topology.GetRegistered() != nil:
 		git = topology.GetRegistered().GetGit()
 	case topology.GetExternal() != nil:
@@ -117,7 +144,7 @@ func projectListEntry(topology *worktreepb.TopologyEntry, selector string, isCur
 		projection.Switch = &worktreepb.SwitchOperation{
 			Kind: worktreepb.SwitchOperationKind_WORKTREE_SWITCH_OPERATION_LEAVE_MAIN,
 		}
-		if !git.IsMain {
+		if topology.GetMainWorkspace() == nil {
 			projection.Switch.Kind = worktreepb.SwitchOperationKind_WORKTREE_SWITCH_OPERATION_ENTER
 			projection.Switch.Selector = &projection.Selector
 		}
@@ -134,13 +161,7 @@ func projectListEntry(topology *worktreepb.TopologyEntry, selector string, isCur
 
 func topologyIsCurrent(entry *worktreepb.TopologyEntry, target clientui.SessionExecutionTarget) bool {
 	if target.Worktree == nil {
-		if registered := entry.GetRegistered(); registered != nil {
-			return registered.GetGit().GetIsMain()
-		}
-		if external := entry.GetExternal(); external != nil {
-			return external.GetGit().GetIsMain()
-		}
-		return false
+		return entry.GetMainWorkspace() != nil
 	}
 	worktreeID := topologyWorktreeID(entry)
 	return worktreeID != nil && strings.TrimSpace(*worktreeID) == strings.TrimSpace(target.Worktree.ID)
@@ -204,13 +225,15 @@ func deletionSelector(entry *worktreepb.TopologyEntry) (string, error) {
 	switch {
 	case entry == nil:
 		return "", errors.New("worktree topology entry is required")
+	case entry.GetMainWorkspace() != nil:
+		return "", worktreecontract.ErrWorktreeBlocked
 	case entry.GetRegistered() != nil:
-		if entry.GetRegistered().GetGit().GetIsMain() {
+		if entry.GetRegistered().GetGit().GetIsMainWorktree() {
 			return "", worktreecontract.ErrWorktreeBlocked
 		}
 		return entry.GetRegistered().GetKent().GetWorktreeId(), nil
 	case entry.GetExternal() != nil:
-		if entry.GetExternal().GetGit().GetIsMain() {
+		if entry.GetExternal().GetGit().GetIsMainWorktree() {
 			return "", worktreecontract.ErrWorktreeBlocked
 		}
 		return entry.GetExternal().GetGit().GetCanonicalRoot(), nil
@@ -223,12 +246,12 @@ func deletionSelector(entry *worktreepb.TopologyEntry) (string, error) {
 
 func gitFactsFromEntry(entry GitWorktree) *worktreepb.GitFacts {
 	facts := &worktreepb.GitFacts{
-		CanonicalRoot: strings.TrimSpace(entry.Root),
-		HeadObject:    strings.TrimSpace(entry.HeadOID),
-		Detached:      entry.Detached,
-		Bare:          entry.Bare,
-		IsMain:        entry.IsMain,
-		PathAvailable: PathAvailability(entry.Root) == pathAvailabilityAvailable,
+		CanonicalRoot:  strings.TrimSpace(entry.Root),
+		HeadObject:     strings.TrimSpace(entry.HeadOID),
+		Detached:       entry.Detached,
+		Bare:           entry.Bare,
+		IsMainWorktree: entry.IsMainWorktree,
+		PathAvailable:  PathAvailability(entry.Root) == pathAvailabilityAvailable,
 	}
 	if entry.Branch != nil {
 		branchRef := entry.Branch.Ref()

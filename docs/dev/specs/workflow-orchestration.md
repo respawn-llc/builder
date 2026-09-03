@@ -641,7 +641,7 @@
 - Before execution Kent validates that the bound root is the exact worktree root for the source repository. Initial managed-worktree creation and conservative repair establish a named branch; an available locked worktree remains valid at either a named branch or detached `HEAD` for resume and subsequent workflow execution. Kent never compares current history or HEAD with the originally resolved commit.
 - When a locked managed root or its Kent association is missing, the initiating operation can restore an existing named branch at an available managed root and run setup for the recreated root.
 - Conservative repair never recreates a missing branch from the old base commit, overwrites an existing directory, resets or renames a branch, accepts detached HEAD, repairs another repository, or infers ownership by scanning arbitrary roots. Unsafe or ambiguous states return one typed locked-target error with a small product-level cause.
-- There is no locked-target replacement flow. A locked target is never converted to no managed worktree.
+- Outside the Compatibility Data case where a managed Worktree root equals its source Workspace root, there is no locked-target replacement flow. A locked target is never converted to no managed worktree.
 - Task detail always shows the source workspace. An unlocked Task remains readable and does not show a provisional worktree as its Task worktree. After target lock, Task detail also shows the recorded target provenance and managed-worktree path when present. Task detail does not inspect live path availability or the current Git branch; Worktree status owns those live facts.
 - An unlocked Task that remains at the Start Node may carry a provisional managed Worktree from an earlier setup failure. That relation does not mean the Task was started: ordinary Task Start, including an explicit concrete target selection, may reuse or safely recreate the provisional root and locks target facts only after setup succeeds.
 - Human task detail shortens the resolved commit for readability. Structured JSON retains the full commit value.
@@ -734,6 +734,7 @@
 
 ## Compatibility Data
 
+- A persisted Task whose managed Worktree root equals its source Workspace root is normalized to a locked no-managed-worktree Execution Target. Kent clears the obsolete managed Worktree relation and selected Git revision facts, preserves the Task's Workflow state and Sessions, and uses the source Workspace as its Execution Root.
 - Existing unlocked Tasks without a managed Worktree initialize their pending managed branch from their Task Short ID. Tasks with a managed Worktree and Tasks locked to no managed Worktree have no pending branch choice.
 - A legacy canceled Task moves to terminal Node `done` when that Node exists.
 - If that Workflow has terminal Nodes but no `done` Node, Kent preserves the

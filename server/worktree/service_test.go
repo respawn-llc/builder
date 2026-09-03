@@ -687,7 +687,7 @@ func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testin
 		t.Fatalf("list worktrees after detached create rollback: %v", listErr)
 	}
 	for _, worktree := range worktrees {
-		if !worktree.IsMain {
+		if !worktree.IsMainWorktree {
 			t.Fatalf("detached worktree remained registered after failed create: %+v", worktree)
 		}
 	}

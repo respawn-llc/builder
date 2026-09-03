@@ -357,7 +357,8 @@
 - The Worktree Operation acknowledgement and a later successful transition completion show no Toast or other success notice.
 - A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic through Sonner, and follows the server's existing model-visible failure-Steer behavior.
 - A selector or other user-correctable Worktree failure after acceptance does not restore the command to the composer.
-- The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
+- The current target row omits `Switch`. A current target retains its trash action when deletion is available. The Main Workspace row and Git main worktree have no trash action.
+- The Git main worktree row remains otherwise ordinary and has no special marker or disabled deletion control.
 - Each Worktree row uses the display name as its title.
 - Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.
 - The External title fallback never exposes the complete path. After the Session switches to that worktree and Kent adopts it, ordinary Kent display-name rules apply.

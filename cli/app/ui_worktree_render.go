@@ -150,7 +150,7 @@ func renderWorktreeBadges(item worktreeui.Item, selected bool, theme string) []s
 	if item.IsCurrent {
 		badges = append(badges, badge("current", p.secondary))
 	}
-	if item.IsMain {
+	if item.IsMainWorkspace {
 		badges = append(badges, badge("main", p.primary))
 	}
 	if item.Detached {
@@ -158,7 +158,7 @@ func renderWorktreeBadges(item worktreeui.Item, selected bool, theme string) []s
 	} else if branch := worktreeui.BranchName(item); branch != "" {
 		badges = append(badges, badge("branch:"+branch, p.foreground))
 	}
-	if !item.Managed && !item.IsMain {
+	if !item.Managed && !item.IsMainWorkspace {
 		badges = append(badges, badge("external", p.muted))
 	}
 	return badges

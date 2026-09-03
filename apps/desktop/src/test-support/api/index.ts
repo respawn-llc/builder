@@ -75,7 +75,7 @@ export function worktreeQueryFixtureRoutes(): readonly FakeRoute[] {
           branchName: "feature",
           detached: false,
           bare: false,
-          isMain: false,
+          isMainWorktree: false,
           pathAvailable: true,
         },
       },

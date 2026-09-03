@@ -15,16 +15,16 @@ import (
 var ErrMainWorkspaceNotDeletable = errors.New("main workspace is not deletable")
 
 type Item struct {
-	Entry         *worktreepb.ListEntry
-	DisplayName   string
-	CanonicalRoot string
-	WorktreeID    *string
-	BranchName    *string
-	Detached      bool
-	IsMain        bool
-	IsCurrent     bool
-	Managed       bool
-	CreatedBranch bool
+	Entry           *worktreepb.ListEntry
+	DisplayName     string
+	CanonicalRoot   string
+	WorktreeID      *string
+	BranchName      *string
+	Detached        bool
+	IsMainWorkspace bool
+	IsCurrent       bool
+	Managed         bool
+	CreatedBranch   bool
 }
 
 func ProjectItems(entries []*worktreepb.ListEntry) ([]Item, error) {
@@ -45,6 +45,13 @@ func ProjectItem(entry *worktreepb.ListEntry) (Item, error) {
 	}
 	item := Item{Entry: entry, IsCurrent: entry.Projection.IsCurrent}
 	switch {
+	case entry.Topology.GetMainWorkspace() != nil:
+		git := entry.Topology.GetMainWorkspace().Git
+		item.DisplayName = "main"
+		item.CanonicalRoot = git.CanonicalRoot
+		item.BranchName = git.BranchName
+		item.Detached = git.Detached
+		item.IsMainWorkspace = true
 	case entry.Topology.GetRegistered() != nil:
 		git := entry.Topology.GetRegistered().Git
 		kent := entry.Topology.GetRegistered().Kent
@@ -53,7 +60,6 @@ func ProjectItem(entry *worktreepb.ListEntry) (Item, error) {
 		item.WorktreeID = textutil.OptionalTrimmedString(kent.WorktreeId)
 		item.BranchName = git.BranchName
 		item.Detached = git.Detached
-		item.IsMain = git.IsMain
 		item.Managed = kent.Managed
 		item.CreatedBranch = kent.CreatedBranch
 	case entry.Topology.GetExternal() != nil:
@@ -62,7 +68,6 @@ func ProjectItem(entry *worktreepb.ListEntry) (Item, error) {
 		item.CanonicalRoot = git.CanonicalRoot
 		item.BranchName = git.BranchName
 		item.Detached = git.Detached
-		item.IsMain = git.IsMain
 	case entry.Topology.GetMissing() != nil:
 		kent := entry.Topology.GetMissing().Kent
 		item.DisplayName = kent.DisplayName
@@ -139,7 +144,10 @@ func DeleteCanAutoDeleteBranch(item Item) bool {
 }
 
 func ValidateDeletionTarget(item Item) error {
-	if item.IsMain {
+	if item.Entry == nil || item.Entry.Projection == nil {
+		return errors.New("worktree deletion projection is required")
+	}
+	if item.Entry.Projection.DeletePreview == nil {
 		return ErrMainWorkspaceNotDeletable
 	}
 	return nil

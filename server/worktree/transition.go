@@ -241,17 +241,16 @@ func (s *Service) enterTransitionWorktree(ctx context.Context, workspaceCtx sess
 		}
 		return syncedWorktree{record: record, git: gitEntry}, nil
 	case entry.GetExternal() != nil:
-		gitEntry, err := gitWorktreeFromFacts(entry.GetExternal().GetGit())
+		return s.adoptExternalWorktree(ctx, workspaceCtx.workspaceID, entry.GetExternal().GetGit())
+	case entry.GetMainWorkspace() != nil:
+		gitEntry, err := gitWorktreeFromFacts(entry.GetMainWorkspace().GetGit())
 		if err != nil {
 			return syncedWorktree{}, err
 		}
-		if entry.GetExternal().GetGit().GetIsMain() {
-			return syncedWorktree{
-				record: metadata.WorktreeRecord{WorkspaceID: workspaceCtx.workspaceID, CanonicalRoot: workspaceCtx.workspaceRoot},
-				git:    gitEntry,
-			}, nil
-		}
-		return s.adoptExternalWorktree(ctx, workspaceCtx.workspaceID, entry.GetExternal().GetGit())
+		return syncedWorktree{
+			record: metadata.WorktreeRecord{WorkspaceID: workspaceCtx.workspaceID, CanonicalRoot: workspaceCtx.workspaceRoot},
+			git:    gitEntry,
+		}, nil
 	case entry.GetMissing() != nil:
 		return syncedWorktree{}, worktreecontract.NewSelectorError(
 			worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_UNAVAILABLE,
@@ -275,7 +274,6 @@ func (s *Service) adoptExternalWorktree(ctx context.Context, workspaceID string,
 		CanonicalRoot: strings.TrimSpace(facts.CanonicalRoot),
 		DisplayName:   filepath.Base(strings.TrimSpace(facts.CanonicalRoot)),
 		Availability:  string(PathAvailability(facts.CanonicalRoot)),
-		IsMain:        facts.IsMain,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -334,32 +332,15 @@ func (s *Service) currentTransitionWorktree(
 func mainTransitionWorktree(topology []*worktreepb.TopologyEntry, workspaceRoot string) (syncedWorktree, error) {
 	for _, entry := range topology {
 		switch {
-		case entry.GetRegistered() != nil:
-			if entry.GetRegistered().GetGit().GetIsMain() {
-				gitEntry, err := gitWorktreeFromFacts(entry.GetRegistered().GetGit())
-				if err != nil {
-					return syncedWorktree{}, err
-				}
-				return syncedWorktree{
-					record: metadata.WorktreeRecord{
-						ID:            entry.GetRegistered().GetKent().GetWorktreeId(),
-						WorkspaceID:   "",
-						CanonicalRoot: entry.GetRegistered().GetGit().GetCanonicalRoot(),
-					},
-					git: gitEntry,
-				}, nil
+		case entry.GetMainWorkspace() != nil:
+			gitEntry, err := gitWorktreeFromFacts(entry.GetMainWorkspace().GetGit())
+			if err != nil {
+				return syncedWorktree{}, err
 			}
-		case entry.GetExternal() != nil:
-			if entry.GetExternal().GetGit().GetIsMain() {
-				gitEntry, err := gitWorktreeFromFacts(entry.GetExternal().GetGit())
-				if err != nil {
-					return syncedWorktree{}, err
-				}
-				return syncedWorktree{
-					record: metadata.WorktreeRecord{CanonicalRoot: strings.TrimSpace(workspaceRoot)},
-					git:    gitEntry,
-				}, nil
-			}
+			return syncedWorktree{
+				record: metadata.WorktreeRecord{CanonicalRoot: strings.TrimSpace(workspaceRoot)},
+				git:    gitEntry,
+			}, nil
 		}
 	}
 	return syncedWorktree{}, fmt.Errorf("main worktree not found")
@@ -381,7 +362,7 @@ func gitWorktreeFromFacts(facts *worktreepb.GitFacts) (GitWorktree, error) {
 		Bare:           facts.Bare,
 		LockedReason:   optionalString(facts.LockedReason),
 		PrunableReason: optionalString(facts.PrunableReason),
-		IsMain:         facts.IsMain,
+		IsMainWorktree: facts.IsMainWorktree,
 	}
 	if err := entry.validateHead(); err != nil {
 		return GitWorktree{}, err

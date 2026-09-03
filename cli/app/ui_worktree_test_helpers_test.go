@@ -200,6 +200,22 @@ func testLinkedWorktreeListResponse() *worktreepb.ListSuccess {
 func testRegisteredWorktreeListEntry(id, name, root, branch string, main, current, managed, createdBranch bool) *worktreepb.ListEntry {
 	branchRef := "refs/heads/" + branch
 	branchName := branch
+	if main {
+		return &worktreepb.ListEntry{
+			Topology: &worktreepb.TopologyEntry{
+				Topology: &worktreepb.TopologyEntry_MainWorkspace{
+					MainWorkspace: &worktreepb.MainWorkspaceFacts{Git: &worktreepb.GitFacts{
+						CanonicalRoot: root,
+						HeadObject:    "deadbeef",
+						BranchRef:     &branchRef,
+						BranchName:    &branchName,
+						PathAvailable: true,
+					}},
+				},
+			},
+			Projection: &worktreepb.ListProjection{Selector: branch, IsCurrent: current},
+		}
+	}
 	originSessionID := "session-1"
 	kent := &worktreepb.KentFacts{
 		WorktreeId:    id,
@@ -216,18 +232,26 @@ func testRegisteredWorktreeListEntry(id, name, root, branch string, main, curren
 			Topology: &worktreepb.TopologyEntry_Registered{
 				Registered: &worktreepb.RegisteredFacts{
 					Git: &worktreepb.GitFacts{
-						CanonicalRoot: root,
-						HeadObject:    "deadbeef",
-						BranchRef:     &branchRef,
-						BranchName:    &branchName,
-						IsMain:        main,
-						PathAvailable: true,
+						CanonicalRoot:  root,
+						HeadObject:     "deadbeef",
+						BranchRef:      &branchRef,
+						BranchName:     &branchName,
+						IsMainWorktree: false,
+						PathAvailable:  true,
 					},
 					Kent: kent,
 				},
 			},
 		},
-		Projection: &worktreepb.ListProjection{Selector: branch, IsCurrent: current},
+		Projection: &worktreepb.ListProjection{
+			Selector: branch, IsCurrent: current,
+			DeletePreview: func() *worktreepb.DeletePreviewOperation {
+				if main {
+					return nil
+				}
+				return &worktreepb.DeletePreviewOperation{Selector: id}
+			}(),
+		},
 	}
 }
 
@@ -250,6 +274,7 @@ func testExternalWorktreeListEntry(root string, selector string, current bool) *
 			Selector:         selector,
 			IsCurrent:        current,
 			FallbackIdentity: &fallbackIdentity,
+			DeletePreview:    &worktreepb.DeletePreviewOperation{Selector: root},
 		},
 	}
 }
