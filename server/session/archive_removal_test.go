@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"core/shared/runtimeids"
 	"github.com/klauspost/compress/zstd"
@@ -48,7 +47,7 @@ func TestArchiveAndRemoveSessionArtifactsPreserveUnknownContent(t *testing.T) {
 	if err := os.Symlink(realSessionDir, sessionAlias); err != nil {
 		t.Skipf("root symlinks unavailable: %v", err)
 	}
-	outputPath := filepath.Join(sessionAlias, "analysis.tar.zst")
+	outputPath := filepath.Join(sessionAlias, "analysis", "session.tar.zst")
 	if err := ArchiveSessionDirectory(context.Background(), sessionID, sessionAlias, outputPath); err != nil {
 		t.Fatalf("ArchiveSessionDirectory: %v", err)
 	}
@@ -100,6 +99,9 @@ func TestArchiveAndRemoveSessionArtifactsPreserveUnknownContent(t *testing.T) {
 		root + "/nested-link": {
 			typeflag: tar.TypeSymlink,
 			linkname: "../notes/personal.txt",
+		},
+		root + "/analysis/": {
+			typeflag: tar.TypeDir,
 		},
 	}
 	if len(entries) != len(want) {
@@ -213,7 +215,7 @@ func TestArchiveSessionDirectoryRejectsUnwritableOutput(t *testing.T) {
 	}
 }
 
-func TestArchiveSessionDirectoryPreservesExistingOutput(t *testing.T) {
+func TestArchiveSessionDirectoryPreservesOutputAtPublication(t *testing.T) {
 	sessionDir := t.TempDir()
 	writeArchiveFixtureFile(t, filepath.Join(sessionDir, eventsFile), "events")
 	outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
@@ -230,70 +232,6 @@ func TestArchiveSessionDirectoryPreservesExistingOutput(t *testing.T) {
 	entries, readErr := os.ReadDir(filepath.Dir(outputPath))
 	if readErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(outputPath) {
 		t.Fatalf("output directory after rejection = %v, %v", entries, readErr)
-	}
-}
-
-func TestArchiveSessionDirectoryPreservesRacedOutput(t *testing.T) {
-	sessionDir := t.TempDir()
-	eventsPath := filepath.Join(sessionDir, eventsFile)
-	events, err := os.Create(eventsPath)
-	if err != nil {
-		t.Fatalf("create Session fixture: %v", err)
-	}
-	const eventsSize = 64 << 20
-	if err := events.Truncate(eventsSize); err != nil {
-		_ = events.Close()
-		t.Fatalf("size Session fixture: %v", err)
-	}
-	if err := events.Close(); err != nil {
-		t.Fatalf("close Session fixture: %v", err)
-	}
-
-	outputDir := filepath.Join(t.TempDir(), "created", "nested")
-	outputPath := filepath.Join(outputDir, "session.tar.zst")
-	result := make(chan error, 1)
-	go func() {
-		result <- ArchiveSessionDirectory(
-			context.Background(),
-			runtimeids.NewSessionID(),
-			sessionDir,
-			outputPath,
-		)
-	}()
-
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(outputDir); err == nil {
-			break
-		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("inspect archive output parent: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("archive output parent was not created")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if err := os.WriteFile(outputPath, []byte("raced"), 0o644); err != nil {
-		t.Fatalf("create raced archive destination: %v", err)
-	}
-
-	err = <-result
-	var existsErr *ArchiveOutputExistsError
-	if !errors.As(err, &existsErr) {
-		t.Fatalf("ArchiveSessionDirectory error = %v, want ArchiveOutputExistsError", err)
-	}
-	if existsErr.Path != outputPath {
-		t.Fatalf("existing output path = %q, want %q", existsErr.Path, outputPath)
-	}
-	if body, readErr := os.ReadFile(outputPath); readErr != nil || string(body) != "raced" {
-		t.Fatalf("raced output = %q, %v", body, readErr)
-	}
-	if info, statErr := os.Stat(eventsPath); statErr != nil || info.Size() != eventsSize {
-		t.Fatalf("Session fixture after publication failure = %+v, %v", info, statErr)
-	}
-	entries, readErr := os.ReadDir(outputDir)
-	if readErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(outputPath) {
-		t.Fatalf("output directory after publication failure = %v, %v", entries, readErr)
 	}
 }
 

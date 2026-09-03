@@ -228,6 +228,60 @@ func TestArchiveDestinationRejectionLeavesIdleRuntimeOpen(t *testing.T) {
 	}
 }
 
+func TestArchiveDestinationCreatedAfterPreflightRetainsSession(t *testing.T) {
+	fixture := newSessionRemovalServiceFixture(t)
+	outputDir := filepath.Join(t.TempDir(), "created", "nested")
+	outputPath := filepath.Join(outputDir, "session.tar.zst")
+	if _, err := os.Lstat(outputDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("output parent before Archive = %v, want absent", err)
+	}
+	fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
+		Store: fixture.metadata,
+		resolve: func(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error) {
+			record, err := fixture.metadata.ResolvePersistedSession(ctx, sessionID)
+			if err != nil {
+				return session.PersistedSessionRecord{}, err
+			}
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				return session.PersistedSessionRecord{}, err
+			}
+			if err := os.WriteFile(outputPath, []byte("raced"), 0o644); err != nil {
+				return session.PersistedSessionRecord{}, err
+			}
+			return record, nil
+		},
+	})
+
+	err := fixture.service.Archive(
+		context.Background(),
+		fixture.session.Meta().SessionID,
+		outputPath,
+	)
+	var exists *session.ArchiveOutputExistsError
+	if !errors.As(err, &exists) {
+		t.Fatalf("Archive error = %v, want ArchiveOutputExistsError", err)
+	}
+	if exists.Path != outputPath {
+		t.Fatalf("existing output path = %q, want %q", exists.Path, outputPath)
+	}
+	if body, readErr := os.ReadFile(outputPath); readErr != nil || string(body) != "raced" {
+		t.Fatalf("raced output = %q, %v", body, readErr)
+	}
+	if _, err := fixture.metadata.ResolvePersistedSession(
+		t.Context(),
+		fixture.session.Meta().SessionID,
+	); err != nil {
+		t.Fatalf("Session metadata after publication failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.session.Dir(), "events.jsonl")); err != nil {
+		t.Fatalf("Session artifacts after publication failure: %v", err)
+	}
+	entries, readErr := os.ReadDir(outputDir)
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(outputPath) {
+		t.Fatalf("output directory after publication failure = %v, %v", entries, readErr)
+	}
+}
+
 func TestDetachedArchiveGraceExpiryCancelsAndDiagnosesAcceptedWork(t *testing.T) {
 	if os.Getenv("KENT_ARCHIVE_GRACE_DEBUG_HELPER") == "1" {
 		runDetachedArchiveGraceExpiryCase(t, true)

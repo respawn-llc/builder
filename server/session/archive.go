@@ -88,7 +88,9 @@ func ArchiveSessionDirectory(
 	if !filepath.IsAbs(sessionDir) {
 		return errors.New("Session directory must be absolute")
 	}
-	if err := PreflightSessionArchiveDestination(outputPath); err != nil {
+	// Publication is the authority for destinations that appear after the
+	// lifecycle preflight, so archive preparation must not repeat its existence check.
+	if err := validateSessionArchiveDestinationPath(outputPath); err != nil {
 		return err
 	}
 	outputPath = filepath.Clean(outputPath)
@@ -108,6 +110,23 @@ func ArchiveSessionDirectory(
 }
 
 func PreflightSessionArchiveDestination(outputPath string) error {
+	if err := validateSessionArchiveDestinationPath(outputPath); err != nil {
+		return err
+	}
+	outputPath = filepath.Clean(outputPath)
+	if _, err := os.Lstat(outputPath); err == nil {
+		return &ArchiveOutputExistsError{Path: outputPath}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return &ArchivePathError{
+			Path:  outputPath,
+			Phase: ArchivePathPhaseParent,
+			Err:   err,
+		}
+	}
+	return nil
+}
+
+func validateSessionArchiveDestinationPath(outputPath string) error {
 	if !filepath.IsAbs(outputPath) {
 		return &InvalidArchiveOutputPathError{
 			Path:   outputPath,
@@ -118,16 +137,6 @@ func PreflightSessionArchiveDestination(outputPath string) error {
 		return &InvalidArchiveOutputPathError{
 			Path:   outputPath,
 			Reason: InvalidArchiveOutputPathReasonSuffix,
-		}
-	}
-	outputPath = filepath.Clean(outputPath)
-	if _, err := os.Lstat(outputPath); err == nil {
-		return &ArchiveOutputExistsError{Path: outputPath}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return &ArchivePathError{
-			Path:  outputPath,
-			Phase: ArchivePathPhaseParent,
-			Err:   err,
 		}
 	}
 	return nil
