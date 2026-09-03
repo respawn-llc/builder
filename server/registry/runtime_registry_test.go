@@ -910,6 +910,16 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 	resolvePendingPromptResourceForTest(registry, ref, scopeID, request.ToolCallID)
 }
 
+func TestPromptProjectionPreservesOrderedAccessTargets(t *testing.T) {
+	targets := []clientui.FileAccessTarget{{RequestedPath: "alias/first", ResolvedPath: "/outside/target"}, {RequestedPath: "alias/second", ResolvedPath: "/outside/target"}}
+	for _, eventType := range []pendingPromptEventType{pendingPromptEventPending, pendingPromptEventResolved} {
+		got := transcriptPendingPromptFromSnapshot("session-1", PendingPromptSnapshot{Request: askquestion.AskQuestionRequest{ToolCallID: "approval-1", StepID: registryTestStepID, Approval: true, AccessTargets: targets}}, eventType)
+		if !slices.Equal(got.AccessTargets, targets) {
+			t.Fatalf("%v prompt access targets = %+v, want %+v", eventType, got.AccessTargets, targets)
+		}
+	}
+}
+
 func TestRuntimeRegistryAggregatesSleepObserverAcrossAuthorityResources(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engineA := &runtime.Engine{}

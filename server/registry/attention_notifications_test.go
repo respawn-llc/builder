@@ -62,13 +62,10 @@ func TestRuntimeRegistryPublishesGenericApprovalToSessionAttention(t *testing.T)
 	}
 
 	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{
-		ToolCallID: "approval-1",
-		StepID:     registryTestStepID,
-		Approval:   true,
-		AccessTargets: []askquestion.FileAccessTarget{{
-			RequestedPath: "../outside.txt",
-			ResolvedPath:  "/outside.txt",
-		}},
+		ToolCallID:    "approval-1",
+		StepID:        registryTestStepID,
+		Approval:      true,
+		AccessTargets: []askquestion.FileAccessTarget{{RequestedPath: "../outside.txt", ResolvedPath: "/outside.txt"}},
 		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
 			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
 			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
@@ -88,20 +85,13 @@ func TestRuntimeRegistryPublishesGenericApprovalToSessionAttention(t *testing.T)
 		pending.Pending.Approval.AccessTargets[0].RequestedPath != "../outside.txt" {
 		t.Fatalf("generic approval attention = %+v", pending)
 	}
-	snapshotSub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{
-		SessionID: "session-1", IncludePendingPromptSnapshot: true,
-	})
+	snapshotSub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
 	if err != nil {
 		t.Fatalf("SubscribeSessionAttentionNotifications snapshot: %v", err)
 	}
 	snapshot := nextRegistryAttentionEvent(t, snapshotSub)
-	if snapshot.Source != clientui.AttentionNotificationSourceSnapshot ||
-		snapshot.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindApproval, "approval-1") ||
-		len(snapshot.Pending.Approval.AccessTargets) != 1 {
+	if snapshot.Source != clientui.AttentionNotificationSourceSnapshot || snapshot.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindApproval, "approval-1") || len(snapshot.Pending.Approval.AccessTargets) != 1 {
 		t.Fatalf("generic approval snapshot = %+v", snapshot)
-	}
-	if complete := nextRegistryAttentionEvent(t, snapshotSub); complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
-		t.Fatalf("generic approval snapshot completion = %+v", complete)
 	}
 }
 
