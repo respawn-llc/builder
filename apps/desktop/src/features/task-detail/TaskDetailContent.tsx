@@ -31,6 +31,7 @@ import {
 } from "./TaskDetailDescriptionPresentation";
 import { TaskDeleteProvider } from "./TaskDeleteButton";
 import { TaskDetailList } from "./TaskDetailList";
+import type { TaskDetailSessionChatEntry } from "./taskDetailSessionChat";
 import { taskDetailSidebarDestination } from "./taskDetailSidebarDestination";
 import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import {
@@ -120,6 +121,7 @@ export function TaskDetailContent({
   initialFocus,
   onDeleteDismiss,
   onMutated,
+  openSessionChat,
   navigator,
   retainedState,
   sidebarDestination,
@@ -133,6 +135,7 @@ export function TaskDetailContent({
   initialFocus?: TaskDetailInitialFocus | undefined;
   onDeleteDismiss: TaskDetailDeleteDismissal;
   onMutated?: (() => void) | undefined;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
   navigator?: SidebarPageNavigator | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   retainedState?: unknown;
@@ -284,6 +287,7 @@ export function TaskDetailContent({
             promptAnswers.setState((previous) => previous.withSelection(key, selection));
           }}
           onSaveDraft={saveDraft}
+          openSessionChat={openSessionChat}
           primaryFocusRequest={promptAnswers.primaryFocusRequest}
           promptAnswerState={promptAnswers.state}
           selectedTab={selectedTab}

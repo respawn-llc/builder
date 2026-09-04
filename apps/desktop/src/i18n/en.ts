@@ -499,6 +499,7 @@ export const englishResources = {
       noCommentsTitle: "No comments yet",
       sessions: "Sessions",
       openInCli: "Open {{name}} in CLI",
+      openChat: "Open {{name}} in Chat",
       interruptChat: "Interrupt {{name}} Chat",
       openScript: "Open script",
       cliCommandCopied: "Copied command to clipboard",

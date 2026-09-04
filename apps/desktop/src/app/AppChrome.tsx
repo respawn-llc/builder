@@ -16,7 +16,7 @@ import {
   appChromeTitleClassNames,
   appChromeTitlePlacementClassNames,
 } from "./appChromeStyles";
-import { useAppNavigation, useNavigationStackState } from "@/app-facade";
+import { SessionChatCatalogReturnProvider, useAppNavigation, useNavigationStackState } from "@/app-facade";
 import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
 import { SidebarHost } from "./sidebar";
 import { SidebarProvider } from "./sidebarProvider";
@@ -120,19 +120,21 @@ function AppChromeContent({ children }: AppChromeProps) {
           {title}
         </div>
       ) : null}
-      <WorkflowEditorDraftBridgeProvider>
-        <ProjectDeletionEventHandler />
-        <AttentionController />
-        <div
-          className="app-region-no-drag relative flex min-h-0 min-w-0 w-full overflow-hidden"
-          data-testid="app-shell-content"
-        >
-          <div className="min-h-0 min-w-0 flex-1 overflow-visible" data-testid="app-main-content">
-            {children}
+      <SessionChatCatalogReturnProvider>
+        <WorkflowEditorDraftBridgeProvider>
+          <ProjectDeletionEventHandler />
+          <AttentionController />
+          <div
+            className="app-region-no-drag relative flex min-h-0 min-w-0 w-full overflow-hidden"
+            data-testid="app-shell-content"
+          >
+            <div className="min-h-0 min-w-0 flex-1 overflow-visible" data-testid="app-main-content">
+              {children}
+            </div>
+            <SidebarHost />
           </div>
-          <SidebarHost />
-        </div>
-      </WorkflowEditorDraftBridgeProvider>
+        </WorkflowEditorDraftBridgeProvider>
+      </SessionChatCatalogReturnProvider>
     </main>
   );
 }

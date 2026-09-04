@@ -7,6 +7,11 @@
 - Session discovery is always scoped to a selected Project; there is no unbounded all-Project session list.
 - All desktop presentations of a Session control the same server-authoritative Session. Opening the same Session in another presentation neither creates separate runtime ownership nor forks client state.
 - Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.
+- A Task attention card uses a header with the muted Task key and a bold flexible-width title, followed by a Chat icon and chevron when the attention item identifies a Session.
+- Selecting a Chat-enabled attention-card header opens that Session at its latest transcript position.
+- Selecting any target outside a Chat-enabled attention-card header opens Task Detail.
+- An attention card without a Session identity has no Chat action, Chat hover state, Chat icon, or chevron, and every target opens Task Detail.
+- Attention-card description text uses the secondary presentation, and its date uses the muted presentation at the bottom of the card.
 - Chat can appear as a full-page destination, a separate window, or an adaptive detail presentation.
 - The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
 - Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
@@ -125,8 +130,12 @@
 
 ## Chat Presentation
 
-- Chat is edge-to-edge. Existing Session hydration shows a compact centered loading state while retaining application chrome; transcript and composer appear together only after authoritative hydration. On initial failure, the same position shows an error with Retry and Back remains available. New Chat does not show this loading state.
+- Chat is edge-to-edge. Existing Session transcript hydration shows the generic loading state inside the transcript area while the composer remains visible and usable. When Desktop cannot load the selected Session, it replaces the Chat body with the generic Error state and Retry while application chrome remains mounted. New Chat does not show the transcript loading state.
 - Application chrome owns Session title and Back. Chat has neither an in-content title nor a second Back action.
+- Back uses the application's ordinary navigation-history availability and behavior.
+- When a Session has no authoritative name, Chat chrome leaves its title area blank.
+- Initial existing-Session loading leaves the Chat chrome title area blank until the authoritative Session name arrives.
+- A separate Chat window shows the Session title without Back or a separate-window action and relies on native window controls to close.
 - Transcript content is at most 1200px wide. User and assistant messages are content-sized up to 1000px, with normal wrapping. User messages align right and assistant messages align left; there are no avatars or role labels.
 - User messages, assistant commentary, and assistant final answers are the only durable transcript islands. Tools, Reasoning Traces, context, diagnostics, notices, and every other durable non-conversational item use borderless inline disclosure or tool-row presentation.
 - Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
@@ -504,8 +513,11 @@
 - Desktop never replays an ambiguous Session mutation after connection loss. A later explicit operator action is a new operation; reconnect reopens the ordered transcript subscription and independently reads the latest completed Pending Work, draft, runtime, prompt, Goal, Process, and Worktree projections from their owners.
 - A transcript sequence gap, subscription loss, or buffered-stream failure discards provisional live content and starts Scratch Rehydration. Already committed transcript content never becomes fake empty or idle state.
 - Scratch Rehydration uses the ordinary sequenced transcript hydration and independent owner reads. It adds no client transcript repair, duplicate suppression, history rewrite, freshness fence, or global snapshot/replay mechanism.
-- Loading a materialized Session uses the compact centered Chat loading state. Inspection, runtime activation, transcript hydration, or draft-load failure uses the matching compact Error state with Retry while chrome Back remains available.
-- Retry repeats the complete ordinary Session open path. It does not retry only one guessed failing sub-operation and adds no target-repair behavior.
+- Initial existing-Session transcript loading and failure use the transcript area's generic loading or Error state while the composer remains visible and usable.
+- Initial failure to load the selected Session or its draft uses the generic whole-Chat Error state with Retry while application chrome remains mounted.
+- When opening from a Session catalog row reports that the Session is unavailable, Chat uses the generic whole-Chat Error state and refreshes only that row's owning Session category so the stale row is absent when the operator returns.
+- When an unavailable Session was opened without a Session catalog origin, Chat uses the generic whole-Chat Error state without refreshing an unrelated Session category.
+- Initial Retry repeats only its failed load and adds no target-repair behavior.
 - A failed refresh after Chat is already hydrated preserves the last server-owned visible projections. Desktop surfaces the failure through the owning global connection or operation error presentation and never fabricates empty state.
 - Older/newer transcript page failure affects only that boundary row. Loaded content remains usable and Retry repeats the same opaque cursor request.
 - A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to the owning operation contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
