@@ -34,5 +34,6 @@ async function refreshVisibleQueries(queryClient: ReturnType<typeof useQueryClie
     invalidateAllTaskSearches(queryClient),
     queryClient.invalidateQueries({ queryKey: queryKeys.allActivity }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allProcesses, refetchType: "active" }),
   ]);
 }

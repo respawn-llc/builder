@@ -97,6 +97,8 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		Workdir:        workspace,
 		YieldTime:      time.Millisecond,
 		OwnerSessionID: plan.SessionID,
+		OwnerRunID:     "run-1",
+		OwnerStepID:    "step-1",
 	})
 	if err != nil {
 		t.Fatalf("Background().Start: %v", err)
@@ -105,7 +107,13 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		t.Fatal("expected backgrounded process")
 	}
 
-	proc := waitForRemoteProcess(t, processes.ProcessViews, plan.SessionID, result.SessionID)
+	proc := waitForRemoteProcess(
+		t,
+		processes.ProcessViews,
+		fixture.daemon.ProjectID(),
+		plan.SessionID,
+		result.SessionID,
+	)
 	if proc.OwnerSessionID != plan.SessionID {
 		t.Fatalf("unexpected process owner: %+v", proc)
 	}
@@ -282,11 +290,20 @@ func answerRemoteTranscriptPrompt(t *testing.T, answerer *transcriptPromptAnswer
 	}
 }
 
-func waitForRemoteProcess(t *testing.T, views apicontract.ProcessViewService, sessionID string, processID string) clientui.BackgroundProcess {
+func waitForRemoteProcess(
+	t *testing.T,
+	views apicontract.ProcessViewService,
+	projectID string,
+	sessionID string,
+	processID string,
+) clientui.BackgroundProcess {
 	t.Helper()
 	var process clientui.BackgroundProcess
 	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		resp, err := views.ListProcesses(context.Background(), serverapi.ProcessListRequest{OwnerSessionID: sessionID})
+		resp, err := views.ListProcesses(context.Background(), serverapi.ProcessListRequest{
+			ProjectID:      projectID,
+			OwnerSessionID: &sessionID,
+		})
 		if err != nil {
 			t.Fatalf("ListProcesses: %v", err)
 		}

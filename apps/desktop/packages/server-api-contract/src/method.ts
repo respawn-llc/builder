@@ -25,6 +25,14 @@ function methodOptions(method: DescMethod): KentMethodOptions {
   return getOption(method, kent_method);
 }
 
+export function legacyWireName(method: DescMethod): string {
+  const name = methodOptions(method).legacyWireName;
+  if (name === undefined || name.trim().length === 0) {
+    throw new Error(`${operationName(method)} has no legacy wire name`);
+  }
+  return name;
+}
+
 export function unaryConnectionPolicy(method: DescMethod): UnaryConnectionPolicy {
   switch (methodOptions(method).unaryConnection) {
     case UnaryConnection.MULTIPLEXED:

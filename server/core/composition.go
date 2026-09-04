@@ -151,7 +151,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	capabilityFactsService := capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: authSupport.AuthManager})
 	askService := promptcontrol.NewAskViewService(runtimeRegistry)
 	approvalService := promptcontrol.NewApprovalViewService(runtimeRegistry)
-	processService := processview.NewProcessViewService(runtimeSupport.Background)
+	processService := processview.NewProcessViewService(runtimeSupport.Background, metadataStore)
 	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeAuthority, sessionruntime.APIOptions{
 		RuntimeClientFactory:   opts.RuntimeClientFactory,
 		ManagedWorktreeBaseDir: cfg.Settings.Worktrees.BaseDir,

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "@/api";
 import { ProjectDeleteButton, ProjectEditRoute } from "@/features/project-edit";
+import { ProcessesSidebar } from "@/features/processes";
 import { SidebarInboxNav } from "@/features/home";
 import { TaskDetailSurface } from "@/features/task-detail";
 import { NewTaskForm } from "@/features/tasks";
@@ -70,6 +71,8 @@ export function SidebarDestinationView({
     );
   if (destination.kind === "projectEdit")
     return <ProjectEditDestination destination={destination} navigator={navigator} />;
+  if (destination.kind === "processes")
+    return <ProcessesSidebar key={destination.projectID} projectID={destination.projectID} />;
   return <>{destination.content}</>;
 }
 

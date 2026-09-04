@@ -372,6 +372,16 @@ export const englishResources = {
       edit: "Edit",
       delete: "Delete",
     },
+    processes: {
+      title: "Processes",
+      loading: "Loading processes",
+      loadFailed: "Processes could not be loaded",
+      emptyTitle: "No background processes",
+      emptyBody: "Background processes will appear here.",
+      terminate: "Terminate {{id}}",
+      terminateFailed: "Process termination failed",
+      stopping: "Stopping",
+    },
     task: {
       sessionStarted: "Session started",
       title: "Task",
