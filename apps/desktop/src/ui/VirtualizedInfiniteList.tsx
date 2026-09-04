@@ -636,9 +636,11 @@ function restoreLeadingAnchor({
     }
     const scrollOffset = measuredOffset - anchor.inRowOffset;
     if (element.scrollLeft === scrollOffset) {
+      virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
       return;
     }
     element.scrollLeft = scrollOffset;
+    virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
     return;
   }
   const measuredOffset = isFallbackRendering
