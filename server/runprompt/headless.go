@@ -559,7 +559,7 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 		r.retainedContinuation.CloseProgress()
 		return serverapi.RunPromptResponse{
 			SessionID:                 r.retainedSessionID.String(),
-			SessionName:               firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
+			SessionName:               textutil.FirstNonEmpty(r.retainedContinuation.SessionName(), r.sessionName),
 			Warnings:                  append([]string(nil), r.warnings...),
 			WorkflowResumeDiagnostics: workflowResumeDiagnostics(r.retainedAdmission.SiblingDiagnostics),
 		}, errors.Join(admissionErr, r.retainedAdmission.DiagnosticsError())
@@ -577,18 +577,11 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 	}
 	return serverapi.RunPromptResponse{
 		SessionID:                 r.retainedSessionID.String(),
-		SessionName:               firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
+		SessionName:               textutil.FirstNonEmpty(r.retainedContinuation.SessionName(), r.sessionName),
 		Result:                    content,
 		Warnings:                  append([]string(nil), r.warnings...),
 		WorkflowResumeDiagnostics: workflowResumeDiagnostics(r.retainedAdmission.SiblingDiagnostics),
 	}, err
-}
-
-func firstNonBlank(primary, fallback string) string {
-	if strings.TrimSpace(primary) != "" {
-		return primary
-	}
-	return fallback
 }
 
 func workflowResumeDiagnostics(
