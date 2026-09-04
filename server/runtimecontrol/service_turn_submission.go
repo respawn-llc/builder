@@ -174,7 +174,18 @@ func (s *Service) submitUserTurn(
 	}
 	workflowHistoryRecorded := false
 	var historyErr error
-	err = executeTurn()
+	persistedWorkflow, workflowErr := s.workflowTaskSession(attempt.Context(), request.SessionID, nil)
+	if workflowErr != nil {
+		return response, workflowErr
+	}
+	if persistedWorkflow && s.reactivator == nil {
+		return response, errors.New("workflow Session reactivator is required")
+	}
+	if persistedWorkflow {
+		err = sessionruntime.ErrSessionWorkflowActivationActive
+	} else {
+		err = executeTurn()
+	}
 	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
 		preparing := false
 		var preparingErr error
