@@ -2323,6 +2323,44 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	}
 }
 
+func TestServiceAdmitUserTurnReturnsAcceptedQueueItem(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+
+	response, accepted, err := service.AdmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "chat-admission", "accepted Chat input"),
+	)
+	if err != nil {
+		t.Fatalf("AdmitUserTurn: %v", err)
+	}
+	if !accepted {
+		t.Fatal("AdmitUserTurn did not report accepted work")
+	}
+	if response.ResultKind != clientui.UserTurnResultKindQueued || response.QueueItemID == "" {
+		t.Fatalf("AdmitUserTurn response = %+v, want accepted Queue Item", response)
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "done")
+}
+
+func TestServiceAdmitUserTurnReturnsDefiniteNonAcceptanceWithoutSubmitWrapper(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	resolutionErr := errors.New("prompt command disappeared")
+	service.WithPromptCommandResolver(&runtimeControlPromptCommandResolver{err: resolutionErr})
+	request := runtimeControlUserTurnRequest(store, "chat-admission-rejected", "unused")
+	request.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "")
+
+	response, accepted, err := service.AdmitUserTurn(t.Context(), request)
+	if accepted {
+		t.Fatal("AdmitUserTurn reported rejected work as accepted")
+	}
+	if response != (serverapi.RuntimeSubmitUserTurnResponse{}) {
+		t.Fatalf("AdmitUserTurn response = %+v, want zero response", response)
+	}
+	if !errors.Is(err, resolutionErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("AdmitUserTurn error = %v, want unwrapped admission failure", err)
+	}
+}
+
 func TestServiceSubmitUserTurnPromptResolutionFailureIsNotAcceptedAndRemainsRetryable(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	resolutionErr := errors.New("prompt command disappeared")

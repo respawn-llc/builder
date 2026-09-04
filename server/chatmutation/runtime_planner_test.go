@@ -146,6 +146,7 @@ func TestRuntimePlannerAttachesReadyRuntimeWithoutPersistedReplanning(t *testing
 type runtimePlannerSessionLaunch struct {
 	request sessionlaunch.PlanRequest
 	result  sessionlaunch.PlanResult
+	err     error
 }
 
 func (s *runtimePlannerSessionLaunch) PlanLaunchSession(
@@ -153,19 +154,26 @@ func (s *runtimePlannerSessionLaunch) PlanLaunchSession(
 	request sessionlaunch.PlanRequest,
 ) (sessionlaunch.PlanResult, error) {
 	s.request = request
-	return s.result, nil
+	return s.result, s.err
 }
 
 type runtimePlannerRuntimeAPI struct {
-	activate serverapi.SessionRuntimeActivateRequest
-	release  serverapi.SessionRuntimeReleaseRequest
+	activate      serverapi.SessionRuntimeActivateRequest
+	activateCalls int
+	activateErr   error
+	release       serverapi.SessionRuntimeReleaseRequest
+	releaseErr    error
 }
 
 func (a *runtimePlannerRuntimeAPI) ActivateSessionRuntime(
 	_ context.Context,
 	request serverapi.SessionRuntimeActivateRequest,
 ) (serverapi.SessionRuntimeActivateResponse, error) {
+	a.activateCalls++
 	a.activate = request
+	if a.activateErr != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, a.activateErr
+	}
 	return serverapi.SessionRuntimeActivateResponse{
 		Attachment: serverapi.SessionRuntimeAttachment{
 			SessionID:  request.SessionID,
@@ -179,7 +187,7 @@ func (a *runtimePlannerRuntimeAPI) ReleaseSessionRuntime(
 	request serverapi.SessionRuntimeReleaseRequest,
 ) (serverapi.SessionRuntimeReleaseResponse, error) {
 	a.release = request
-	return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+	return serverapi.SessionRuntimeReleaseResponse{Released: true}, a.releaseErr
 }
 
 func TestRuntimePlannerPlansDormantPersistedSessionThenOpensIt(t *testing.T) {
@@ -231,6 +239,69 @@ func TestRuntimePlannerPlansDormantPersistedSessionThenOpensIt(t *testing.T) {
 		runtimeAPI.release.OwnerID != runtimeAPI.activate.OwnerID ||
 		runtimeAPI.release.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
 		t.Fatalf("Runtime release = %+v", runtimeAPI.release)
+	}
+}
+
+func TestRuntimePlannerServiceAttachmentRejectsUnsupportedReleasePolicy(t *testing.T) {
+	fixture := newRuntimePlannerFixture(t)
+	runtimeAPI := &runtimePlannerRuntimeAPI{}
+	attachment := serviceRuntimeAttachment{
+		sessionID: fixture.sessionID,
+		attachment: serverapi.SessionRuntimeAttachment{
+			SessionID:  fixture.sessionID.String(),
+			Generation: 7,
+		},
+		ownerID:    "chat-owner",
+		runtimeAPI: runtimeAPI,
+	}
+
+	if err := attachment.Release(t.Context(), sessionruntime.RuntimeReleaseClose); err == nil {
+		t.Fatal("unsupported close release policy succeeded")
+	}
+	if runtimeAPI.release != (serverapi.SessionRuntimeReleaseRequest{}) {
+		t.Fatalf("unsupported release reached Runtime service: %+v", runtimeAPI.release)
+	}
+}
+
+func TestRuntimePlannerPropagatesCancellationDuringPersistedSessionPlanning(t *testing.T) {
+	fixture := newRuntimePlannerFixture(t)
+	launchService := &runtimePlannerSessionLaunch{err: context.Canceled}
+	runtimeAPI := &runtimePlannerRuntimeAPI{}
+	planner := NewRuntimePlanner(
+		fixture.authority,
+		func(context.Context, runtimeids.SessionID) (PersistedSessionPlanner, error) {
+			return launchService, nil
+		},
+		runtimeAPI,
+	)
+
+	if _, err := planner.Open(t.Context(), fixture.sessionID); err != context.Canceled {
+		t.Fatalf("Open error = %v, want cancellation", err)
+	}
+	if runtimeAPI.activateCalls != 0 {
+		t.Fatalf("canceled planning activated Runtime: %+v", runtimeAPI.activate)
+	}
+}
+
+func TestRuntimePlannerPropagatesCancellationDuringRuntimeOpening(t *testing.T) {
+	fixture := newRuntimePlannerFixture(t)
+	launchService := &runtimePlannerSessionLaunch{
+		result: sessionlaunch.PlanResult{Plan: launch.SessionPlan{
+			Descriptor:     mustRuntimePlannerDescriptor(t, fixture.sessionID),
+			ActiveSettings: config.DefaultOnboardingSettings(),
+		}},
+	}
+	runtimeAPI := &runtimePlannerRuntimeAPI{activateErr: context.Canceled}
+	planner := NewRuntimePlanner(
+		fixture.authority,
+		func(context.Context, runtimeids.SessionID) (PersistedSessionPlanner, error) {
+			return launchService, nil
+		},
+		runtimeAPI,
+	)
+
+	if _, err := planner.Open(t.Context(), fixture.sessionID); err != context.Canceled {
+		t.Fatalf("Open error = %v, want cancellation", err)
 	}
 }
 

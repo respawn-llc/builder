@@ -60,20 +60,30 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	request := canonicalUserTurnRequest(req)
 	return runRuntimeCommand(ctx, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
-		projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
-		if err != nil {
-			return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
-		}
-		attempt := newRuntimeCommandAttempt(ctx)
-		defer attempt.Finish()
-		response, commandErr := s.submitUserTurn(attempt, request, projection, req)
-		if commandErr == nil {
-			commandErr = response.Validate()
-		}
-		return response, attempt.Accepted(), commandErr
+		return s.AdmitUserTurn(ctx, req)
 	})
+}
+
+func (s *Service) AdmitUserTurn(
+	ctx context.Context,
+	req serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
+	}
+	request := canonicalUserTurnRequest(req)
+	projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
+	}
+	attempt := newRuntimeCommandAttempt(ctx)
+	defer attempt.Finish()
+	response, commandErr := s.submitUserTurn(attempt, request, projection, req)
+	if commandErr == nil {
+		commandErr = response.Validate()
+	}
+	return response, attempt.Accepted(), commandErr
 }
 
 func (s *Service) submitUserTurn(

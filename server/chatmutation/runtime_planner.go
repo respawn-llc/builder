@@ -134,9 +134,14 @@ func (a serviceRuntimeAttachment) Release(
 	ctx context.Context,
 	policy sessionruntime.RuntimeReleasePolicy,
 ) error {
-	closePolicy := serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle
-	if policy == sessionruntime.RuntimeReleaseDetach {
+	var closePolicy serverapi.SessionRuntimeReleaseClosePolicy
+	switch policy {
+	case sessionruntime.RuntimeReleaseDetach:
 		closePolicy = serverapi.SessionRuntimeReleaseClosePolicyDetachOnly
+	case sessionruntime.RuntimeReleaseCloseIfIdle:
+		closePolicy = serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle
+	default:
+		return errors.New("Chat Runtime attachment release policy must detach or close if idle")
 	}
 	_, err := a.runtimeAPI.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
 		Attachment:  a.attachment,
