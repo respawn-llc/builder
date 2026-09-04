@@ -20,4 +20,8 @@
 - [x] Investigate the flaky test failure in run `33840995152`: `core/server/runtimecontrol/TestServicePendingQuestionInterruptsAndAllowsNextTurn` timed out and `core/server/workflowrunner/TestWorkflowPostCompletionCompactionPreservesOrdinaryContinueReplacementKey` reported a cleanup `steps.log` close race.
 - [x] Rerun the failed jobs for run `33840995152`; the rerun completed successfully with all build, desktop, docs, GUI, lint, test, and installer jobs passing.
 - [x] Address the follow-up CI lint failure in run `33842271488`: update `cmd/dumpmodelrequest` to use the remaining direct Workflow Task ownership query after the current-workflow ownership API was narrowed to incomplete Current Nodes; committed as `d8a675681`.
+- [x] Investigate the flaky test failure in run `33842807488`: the existing `core/server/runtime/TestStoppedHumanInputPublishesPendingWorkChangedWithoutBlockingList` test panicked while closing an already-closed channel; all other server packages passed.
+- [x] Rerun the failed jobs for run `33842807488`; the rerun completed successfully.
+- [x] Confirm the follow-up CI run for the retained-goal and submission-failure fixes: run `33844094378` passed build, desktop_bundle, docs, gui, gui-native, lint, test, and windows-installer; CodeRabbit reported pass/rate limited.
+- [ ] Confirm the latest CI run after the final retained-session reactivation fix completes successfully.
 - [ ] Run `kent task complete --commentary ... --pr_url ... --worktree_session_id ...`.
