@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
 
-import { projectNotice, type TranscriptNoticeTextCopy } from "./transcriptNoticePolicy";
+import { projectNotice } from "./transcriptNoticePolicy";
 
 describe("Chat notice policy", () => {
   it("keeps notice inclusion, source, and expansion decisions typed", () => {
@@ -62,7 +62,7 @@ describe("Chat notice policy", () => {
     ];
 
     for (const testCase of cases) {
-      const policy = projectNotice(testCase.row, labels, textCopy);
+      const policy = projectNotice(testCase.row, prose);
       if (testCase.bodyKind === null) {
         expect(policy, testCase.name).toBeNull();
         continue;
@@ -82,8 +82,7 @@ describe("Chat notice policy", () => {
         MessageType: "compaction_summary",
         Compaction: { Count: 2, Detail: detail },
       }),
-      labels,
-      textCopy,
+      { expanded: detail, compact: "compaction 2" },
     );
     expect(policy).not.toBeNull();
     if (policy === null) throw new Error("Expected compaction policy.");
@@ -95,18 +94,9 @@ describe("Chat notice policy", () => {
 
 type Notice = NonNullable<ChatTranscriptCommittedRow["Notice"]>;
 
-const labels = {
-  structuredNoticeCompactText: () => "localized notice",
-};
-
-const textCopy: TranscriptNoticeTextCopy = {
-  cacheWarning: () => "cache warning",
-  compaction: (count) => `compaction ${String(count ?? "unknown")}`,
-  toolOutputRepair: () => "repair",
-  providerModelMismatch: () => "provider mismatch",
-  worktreeEnter: () => "worktree enter",
-  worktreeExit: () => "worktree exit",
-  sessionRebind: () => "session rebind",
+const prose = {
+  expanded: "structured notice",
+  compact: "localized notice",
 };
 
 function noticeRow(input: Partial<Notice> & { Visibility?: ChatTranscriptCommittedRow["Visibility"] } = {}) {

@@ -5,25 +5,16 @@ import type { ChatTranscriptCommittedRow } from "@/api";
 import { basename } from "@/app-facade";
 
 import { firstPresent } from "./firstPresent";
-import {
-  projectNotice,
-  structuredNoticeCompactText,
-  type TranscriptNoticeTextCopy,
-} from "./transcriptNoticePolicy";
+import { projectNotice, type TranscriptNotice, type TranscriptNoticeProse } from "./transcriptNoticePolicy";
 import { TranscriptFlatRow } from "./TranscriptFlatRow";
 
 export function TranscriptNoticeRow({ row }: Readonly<{ row: ChatTranscriptCommittedRow }>) {
   const { t } = useTranslation();
   if (row.Kind !== "notice") return null;
 
-  const copy = noticeTextCopy(t);
-  const policy = projectNotice(
-    row,
-    {
-      structuredNoticeCompactText: (notice) => structuredNoticeCompactText(notice, copy),
-    },
-    copy,
-  );
+  const notice = row.Notice;
+  if (notice === null) return null;
+  const policy = projectNotice(row, noticeProse(notice, t));
   if (policy === null) return null;
   const Icon = policy.icon;
 
@@ -40,79 +31,151 @@ export function TranscriptNoticeRow({ row }: Readonly<{ row: ChatTranscriptCommi
       defaultExpanded={policy.defaultExpanded}
       icon={<Icon className="size-4" />}
       iconTone={policy.iconTone}
-      labels={{
-        collapseLabel: t("app.collapse"),
-        copyFailedLabel: t("chatTranscript.copyFailed"),
-        copyLabel: t("chatTranscript.copy"),
-        copiedLabel: t("chatTranscript.copied"),
-        expandLabel: t("app.expand"),
-      }}
       summary={policy.summary}
     />
   );
 }
 
-function noticeTextCopy(t: ReturnType<typeof useTranslation>["t"]): TranscriptNoticeTextCopy {
+type Translate = ReturnType<typeof useTranslation>["t"];
+
+function noticeProse(notice: TranscriptNotice, t: Translate): TranscriptNoticeProse {
   return {
-    cacheWarning(scope: string, reason: string, lostInputTokens: number | null | undefined) {
-      const reasonKey =
-        reason === "compaction"
-          ? "chatTranscript.notice.cacheReasonCompaction"
-          : reason === "non_postfix"
-            ? scope === "reviewer"
-              ? "chatTranscript.notice.cacheReasonReviewerNonPostfix"
-              : "chatTranscript.notice.cacheReasonNonPostfix"
-            : reason === "reuse_dropped"
-              ? scope === "reviewer"
-                ? "chatTranscript.notice.cacheReasonReviewerReuseDropped"
-                : "chatTranscript.notice.cacheReasonReuseDropped"
-              : "chatTranscript.notice.cacheReasonUnknown";
-      const reasonText = t(reasonKey, { reason });
-      if (lostInputTokens === undefined || lostInputTokens === null || lostInputTokens <= 0) {
-        return t("chatTranscript.notice.cacheMiss", { reason: reasonText });
-      }
-      return t("chatTranscript.notice.cacheMissWithTokens", {
-        reason: reasonText,
-        tokens: formatTokenDeltaThousands(lostInputTokens),
-      });
-    },
-    compaction(count: number | null | undefined) {
-      return count === undefined || count === null
-        ? t("chatTranscript.notice.compaction")
-        : t("chatTranscript.notice.compactionCount", { ordinal: formatOrdinal(count) });
-    },
-    toolOutputRepair(kind: "fresh_resource" | "live_provider_rejection", count: number) {
-      const noun = t(count === 1 ? "chatTranscript.notice.toolCall" : "chatTranscript.notice.toolCalls");
-      switch (kind) {
-        case "fresh_resource":
-          return t("chatTranscript.notice.repairFreshResource", { count, noun });
-        case "live_provider_rejection":
-          return t("chatTranscript.notice.repairLiveProviderRejection", { count, noun });
-        default:
-          return assertUnreachable(kind);
-      }
-    },
-    providerModelMismatch(servedModel: string, requestedModel: string) {
-      return t("chatTranscript.notice.providerModelMismatch", {
-        requested: requestedModel,
-        served: servedModel,
-      });
-    },
-    worktreeEnter(branch: string | null | undefined, worktreePath: string, effectiveCwd: string) {
-      const name = firstPresent(branch, basename(worktreePath)) || t("chatTranscript.notice.worktree");
-      return effectiveCwd.trim().length === 0
-        ? t("chatTranscript.notice.worktreeEnter", { name })
-        : t("chatTranscript.notice.worktreeEnterCwd", { cwd: effectiveCwd, name });
-    },
-    worktreeExit(effectiveCwd: string) {
-      return effectiveCwd.trim().length === 0
-        ? t("chatTranscript.notice.worktreeExit")
-        : t("chatTranscript.notice.worktreeExitCwd", { cwd: effectiveCwd });
-    },
-    sessionRebind() {
-      return t("chatTranscript.notice.sessionRebind");
-    },
+    expanded: structuredNoticeText(notice, t, true),
+    compact: structuredNoticeText(notice, t, false),
   };
+}
+
+function structuredNoticeText(notice: TranscriptNotice, t: Translate, expanded: boolean): string {
+  const reasonText = reasonNoticeText(notice, t, expanded);
+  if (reasonText !== undefined) return reasonText;
+  const worktreeText = worktreeNoticeText(notice, t, expanded);
+  if (worktreeText !== undefined) return worktreeText;
+  if (notice.MessageType === "session_rebind" && notice.Diagnostic?.Detail === undefined) {
+    return t("chatTranscript.notice.sessionRebind");
+  }
+  return expanded
+    ? firstPresent(
+        notice.Diagnostic?.Detail,
+        notice.LegacyText,
+        notice.CondensedText,
+        notice.CompactLabel,
+        notice.SourcePath,
+        notice.Reason,
+      )
+    : firstPresent(
+        notice.CondensedText,
+        notice.LegacyText,
+        notice.CompactLabel,
+        notice.SourcePath,
+        notice.Diagnostic?.Detail,
+        notice.Reason,
+      );
+}
+
+function reasonNoticeText(notice: TranscriptNotice, t: Translate, expanded: boolean): string | undefined {
+  switch (notice.Reason) {
+    case "cache_warning":
+      return cacheWarningText(notice, t);
+    case "compaction":
+      return compactionText(notice, t, expanded);
+    case "tool_output_repair":
+      return toolOutputRepairText(notice, t);
+    case "provider_model_mismatch":
+      return providerModelMismatchText(notice, t);
+    case "legacy_untyped_notice":
+    case "runtime_diagnostic":
+      return undefined;
+  }
+}
+
+function cacheWarningText(notice: TranscriptNotice, t: Translate): string | undefined {
+  const warning = notice.CacheWarning;
+  if (warning === undefined || warning === null) return undefined;
+  const reasonKey =
+    warning.Reason === "compaction"
+      ? "chatTranscript.notice.cacheReasonCompaction"
+      : warning.Reason === "non_postfix"
+        ? warning.Scope === "reviewer"
+          ? "chatTranscript.notice.cacheReasonReviewerNonPostfix"
+          : "chatTranscript.notice.cacheReasonNonPostfix"
+        : warning.Reason === "reuse_dropped"
+          ? warning.Scope === "reviewer"
+            ? "chatTranscript.notice.cacheReasonReviewerReuseDropped"
+            : "chatTranscript.notice.cacheReasonReuseDropped"
+          : "chatTranscript.notice.cacheReasonUnknown";
+  const reasonText = t(reasonKey, { reason: warning.Reason });
+  if (
+    warning.LostInputTokens === undefined ||
+    warning.LostInputTokens === null ||
+    warning.LostInputTokens <= 0
+  ) {
+    return t("chatTranscript.notice.cacheMiss", { reason: reasonText });
+  }
+  return t("chatTranscript.notice.cacheMissWithTokens", {
+    reason: reasonText,
+    tokens: formatTokenDeltaThousands(warning.LostInputTokens),
+  });
+}
+
+function compactionText(notice: TranscriptNotice, t: Translate, expanded: boolean): string | undefined {
+  const compaction = notice.Compaction;
+  if (compaction === undefined || compaction === null) return undefined;
+  if (
+    expanded &&
+    compaction.Detail !== undefined &&
+    compaction.Detail !== null &&
+    compaction.Detail.trim() !== ""
+  ) {
+    return compaction.Detail;
+  }
+  return compaction.Count === undefined || compaction.Count === null
+    ? t("chatTranscript.notice.compaction")
+    : t("chatTranscript.notice.compactionCount", { ordinal: formatOrdinal(compaction.Count) });
+}
+
+function toolOutputRepairText(notice: TranscriptNotice, t: Translate): string | undefined {
+  const repair = notice.ToolOutputRepair;
+  if (repair === undefined || repair === null) return undefined;
+  const noun = t(repair.count === 1 ? "chatTranscript.notice.toolCall" : "chatTranscript.notice.toolCalls");
+  switch (repair.kind) {
+    case "fresh_resource":
+      return t("chatTranscript.notice.repairFreshResource", { count: repair.count, noun });
+    case "live_provider_rejection":
+      return t("chatTranscript.notice.repairLiveProviderRejection", { count: repair.count, noun });
+    default:
+      return assertUnreachable(repair.kind);
+  }
+}
+
+function providerModelMismatchText(notice: TranscriptNotice, t: Translate): string | undefined {
+  const mismatch = notice.ProviderModelMismatch;
+  return mismatch === undefined || mismatch === null
+    ? undefined
+    : t("chatTranscript.notice.providerModelMismatch", {
+        requested: mismatch.requested_model,
+        served: mismatch.served_model,
+      });
+}
+
+function worktreeNoticeText(notice: TranscriptNotice, t: Translate, expanded: boolean): string | undefined {
+  const worktree = notice.Worktree;
+  if (worktree === undefined || worktree === null) return undefined;
+  if (expanded && notice.Diagnostic?.Detail !== undefined && notice.Diagnostic.Detail.trim() !== "") {
+    return notice.Diagnostic.Detail;
+  }
+  if (notice.MessageType === "worktree_mode") {
+    const name =
+      firstPresent(worktree.Branch, basename(worktree.WorktreePath)) || t("chatTranscript.notice.worktree");
+    return worktree.EffectiveCwd.trim().length === 0
+      ? t("chatTranscript.notice.worktreeEnter", { name })
+      : t("chatTranscript.notice.worktreeEnterCwd", { cwd: worktree.EffectiveCwd, name });
+  }
+  if (notice.MessageType === "worktree_mode_exit") {
+    return worktree.EffectiveCwd.trim().length === 0
+      ? t("chatTranscript.notice.worktreeExit")
+      : t("chatTranscript.notice.worktreeExitCwd", { cwd: worktree.EffectiveCwd });
+  }
+  return undefined;
 }
 
 function assertUnreachable(value: never): never {

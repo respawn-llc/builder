@@ -1,5 +1,4 @@
 import { Circle, CircleAlert, CircleDot, CircleX, CornerDownRight, Star } from "lucide-react";
-import { useTranslation } from "react-i18next";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
 import { StaticMarkdown } from "@/ui";
@@ -14,7 +13,6 @@ import {
 } from "./transcriptAskQuestionPolicy";
 
 export function TranscriptAskQuestionRow({ row }: Readonly<{ row: ChatTranscriptCommittedRow }>) {
-  const { t } = useTranslation();
   if (!isAskQuestionToolRow(row) || row.Visibility === "hidden") return null;
   const tool = row.Tool;
   const presentation = tool.Presentation;
@@ -25,13 +23,6 @@ export function TranscriptAskQuestionRow({ row }: Readonly<{ row: ChatTranscript
       defaultExpanded={!tool.IsError}
       icon={<AskQuestionIcon isError={tool.IsError} />}
       iconTone={tool.IsError ? "error" : "success"}
-      labels={{
-        collapseLabel: t("app.collapse"),
-        copyFailedLabel: t("chatTranscript.copyFailed"),
-        copyLabel: t("chatTranscript.copy"),
-        copiedLabel: t("chatTranscript.copied"),
-        expandLabel: t("app.expand"),
-      }}
       summary={askQuestionSummary(row)}
     />
   );

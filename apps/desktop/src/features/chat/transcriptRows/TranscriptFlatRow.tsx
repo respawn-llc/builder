@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { TranscriptDisclosure } from "@/ui";
 
@@ -6,21 +7,12 @@ import { TranscriptCopyAction } from "./TranscriptCopyAction";
 
 export type TranscriptFlatRowIconTone = "neutral" | "warning" | "error" | "success";
 
-export type TranscriptFlatRowLabels = Readonly<{
-  collapseLabel: string;
-  expandLabel: string;
-  copyLabel: string;
-  copiedLabel: string;
-  copyFailedLabel: string;
-}>;
-
 export function TranscriptFlatRow({
   body,
   copyText,
   defaultExpanded,
   icon,
   iconTone,
-  labels,
   summary,
 }: Readonly<{
   body: ReactNode;
@@ -28,23 +20,23 @@ export function TranscriptFlatRow({
   defaultExpanded: boolean;
   icon: ReactNode;
   iconTone: TranscriptFlatRowIconTone;
-  labels: TranscriptFlatRowLabels;
   summary: string;
 }>) {
+  const { t } = useTranslation();
   return (
     <TranscriptDisclosure
       actions={
         <TranscriptCopyAction
-          copiedLabel={labels.copiedLabel}
-          copyLabel={labels.copyLabel}
-          failureLabel={labels.copyFailedLabel}
+          copiedLabel={t("chatTranscript.copied")}
+          copyLabel={t("chatTranscript.copy")}
+          failureLabel={t("chatTranscript.copyFailed")}
           value={copyText}
         />
       }
       body={body}
-      collapseLabel={labels.collapseLabel}
+      collapseLabel={t("app.collapse")}
       defaultExpanded={defaultExpanded}
-      expandLabel={labels.expandLabel}
+      expandLabel={t("app.expand")}
       icon={icon}
       iconTone={iconTone}
       summary={summary}

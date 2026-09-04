@@ -12,13 +12,6 @@ export function TranscriptReviewerRow({ row }: Readonly<{ row: ChatTranscriptCom
   if (row.Kind !== "reviewer_feedback" && row.Kind !== "reviewer_error") return null;
   if (row.Visibility === "hidden") return null;
 
-  const labels = {
-    collapseLabel: t("app.collapse"),
-    copyFailedLabel: t("chatTranscript.copyFailed"),
-    copyLabel: t("chatTranscript.copy"),
-    copiedLabel: t("chatTranscript.copied"),
-    expandLabel: t("app.expand"),
-  };
   if (row.Kind === "reviewer_feedback") {
     if (row.ReviewerFeedback === null) throw new Error("Reviewer feedback row is missing its payload.");
     const suggestions = [...row.ReviewerFeedback.Suggestions];
@@ -38,7 +31,6 @@ export function TranscriptReviewerRow({ row }: Readonly<{ row: ChatTranscriptCom
         defaultExpanded={false}
         icon={<MessageCircle className="size-4" />}
         iconTone="neutral"
-        labels={labels}
         summary={t("chatTranscript.reviewerSuggestions", { count: row.ReviewerFeedback.SuggestionCount })}
       />
     );
@@ -51,7 +43,6 @@ export function TranscriptReviewerRow({ row }: Readonly<{ row: ChatTranscriptCom
       defaultExpanded
       icon={<CircleX className="size-4" />}
       iconTone="error"
-      labels={labels}
       summary={row.ReviewerError.Detail}
     />
   );
