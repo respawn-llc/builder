@@ -11,7 +11,7 @@ const storedProjectRouteSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("home_project"),
     projectId: z.string(),
-    contentTab: projectContentTabSchema.optional(),
+    contentTab: projectContentTabSchema,
   }),
   z.object({
     kind: z.literal("workflow_board"),

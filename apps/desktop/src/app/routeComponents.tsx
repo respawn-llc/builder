@@ -98,11 +98,12 @@ function RoutePersistence() {
     if (homeProjectId !== null) {
       const current = readLastProjectRoute();
       writeLastProjectRoute({
+        contentTab:
+          current?.kind === "home_project" && current.projectId === homeProjectId
+            ? current.contentTab
+            : "tasks",
         kind: "home_project",
         projectId: homeProjectId,
-        ...(current?.kind === "home_project" && current.projectId === homeProjectId
-          ? { contentTab: current.contentTab }
-          : {}),
       });
     } else if (projectId !== null) {
       writeLastProjectRoute({ kind: "workflow_board", projectId, workflowId });

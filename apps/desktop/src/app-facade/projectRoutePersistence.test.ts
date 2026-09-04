@@ -31,6 +31,12 @@ it("restores an omitted workflow selector", () => {
   expect(readLastProjectRoute()).toEqual({ kind: "workflow_board", projectId: "project-1" });
 });
 
+it("rejects a legacy Home Project route without a content tab", () => {
+  localStorage.setItem(storageKey, JSON.stringify({ kind: "home_project", projectId: "project-1" }));
+
+  expect(readLastProjectRoute()).toBeNull();
+});
+
 it("rejects a persisted malformed present workflow selector", () => {
   localStorage.setItem(
     storageKey,

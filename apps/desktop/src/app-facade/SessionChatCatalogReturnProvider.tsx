@@ -1,27 +1,13 @@
 import { useRouter } from "@tanstack/react-router";
 import { useLayoutEffect, useState, type ReactNode } from "react";
-import { z } from "zod";
 
 import { SessionChatCatalogReturnContext, type SessionChatCatalogReturn } from "./sessionChatCatalogReturn";
+import { sessionChatHistoryStateSchema } from "./sessionChatHistory";
 
 type SessionChatHistoryRead =
   | Readonly<{ kind: "absent" }>
   | Readonly<{ kind: "withoutCatalog" }>
   | Readonly<{ kind: "withCatalog"; value: SessionChatCatalogReturn }>;
-
-const sessionChatHistorySchema = z.looseObject({
-  sessionChat: z
-    .object({
-      catalogOrigin: z
-        .object({
-          category: z.enum(["main", "subagent"]),
-        })
-        .nullable(),
-      projectID: z.string().min(1),
-    })
-    .nullable()
-    .optional(),
-});
 
 export function SessionChatCatalogReturnProvider({ children }: Readonly<{ children: ReactNode }>) {
   const router = useRouter();
@@ -56,7 +42,7 @@ export function SessionChatCatalogReturnProvider({ children }: Readonly<{ childr
 }
 
 function readSessionChatHistory(state: unknown): SessionChatHistoryRead {
-  const parsed = sessionChatHistorySchema.safeParse(state);
+  const parsed = sessionChatHistoryStateSchema.safeParse(state);
   if (!parsed.success || !Object.hasOwn(parsed.data, "sessionChat")) {
     return { kind: "absent" };
   }

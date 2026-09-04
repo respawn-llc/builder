@@ -86,7 +86,7 @@ function ProjectContentTabs({
     if (catalogReturn === "subagent") return "subagents";
     const lastProjectRoute = readLastProjectRoute();
     if (lastProjectRoute?.kind === "home_project" && lastProjectRoute.projectId === projectID) {
-      return lastProjectRoute.contentTab ?? "tasks";
+      return lastProjectRoute.contentTab;
     }
     return "tasks";
   });

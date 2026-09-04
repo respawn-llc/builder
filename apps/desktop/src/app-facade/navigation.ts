@@ -2,24 +2,15 @@ import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { errorMessage } from "@/api";
-import type { SessionCategory } from "@/api";
 import { runNavigationTransition } from "./navigationTransitions";
+import type { SessionChatCatalogOrigin, SessionChatHistoryState } from "./sessionChatHistory";
 import { useAppServices } from "./useAppServices";
 
 type NavigationStackAction = "PUSH" | "REPLACE" | "FORWARD" | "BACK" | "GO";
 
 export const sessionChatRoutePath = "/projects/$projectId/sessions/$sessionId" as const;
 
-export type SessionChatCatalogOrigin = Readonly<{
-  category: SessionCategory;
-}>;
-
-export type SessionChatHistoryState = Readonly<{
-  sessionChat?: Readonly<{
-    catalogOrigin: SessionChatCatalogOrigin | null;
-    projectID: string;
-  }> | null;
-}>;
+export type { SessionChatCatalogOrigin, SessionChatHistoryState } from "./sessionChatHistory";
 
 export type SessionChatTarget = Readonly<{
   projectID: string;
@@ -177,16 +168,19 @@ export function useAppNavigation(): AppNavigation {
         });
       },
       async openSessionChat(target) {
+        const sessionChatState: SessionChatHistoryState = {
+          sessionChat: {
+            catalogOrigin: target.catalogOrigin ?? null,
+            projectID: target.projectID,
+          },
+        };
         await runNavigation(async () => {
           await navigate({
             to: sessionChatRoutePath,
             params: { projectId: target.projectID, sessionId: target.sessionID },
             state: (previous) => ({
               ...previous,
-              sessionChat: {
-                catalogOrigin: target.catalogOrigin ?? null,
-                projectID: target.projectID,
-              },
+              ...sessionChatState,
             }),
           });
         });
