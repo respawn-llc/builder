@@ -3098,3 +3098,29 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 func workflowRunnerShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
+
+func requestContainsMessage(request llm.Request, content string) bool {
+	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool { return message.Content != nil && *message.Content == content })
+}
+
+func retainedRequestEndsWithMessage(request llm.Request, content string) bool {
+	messages := llm.MessagesFromItems(request.Items)
+	return len(messages) > 0 && messages[len(messages)-1].Content != nil &&
+		*messages[len(messages)-1].Content == content
+}
+
+func retainedRequestContainsBackgroundNotice(request llm.Request) bool {
+	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool {
+		return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
+	})
+}
+
+func retainedCompletionInput(_ llm.Request, transition, commentary string) string {
+	return `{"transition":"` + transition + `","commentary":"` + commentary + `"}`
+}
+
+func hasAssistantProgress(progress []serverapi.RunPromptProgress, content string) bool {
+	return slices.ContainsFunc(progress, func(event serverapi.RunPromptProgress) bool {
+		return event.AssistantMessage != nil && event.AssistantMessage.Content == content
+	})
+}

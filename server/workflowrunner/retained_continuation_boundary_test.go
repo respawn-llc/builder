@@ -886,10 +886,10 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 		case 2:
 			c.backgroundSecondGate.Do(func() { close(c.backgroundSecond) })
 			<-c.backgroundRelease
-			return llm.Response{}, &llm.ProviderAPIError{
-				ProviderID: "test", StatusCode: 400,
-				Code: llm.UnifiedErrorCodeProviderContract, Err: errors.New("stop background"),
-			}
+			return retainedResponse("background progress", llm.ToolCall{
+				ID: "background-shell-again", Name: string(toolspec.ToolExecCommand),
+				Input: []byte(`{"cmd":"true"}`),
+			}), nil
 		default:
 			return llm.Response{}, &llm.ProviderAPIError{
 				ProviderID: "test", StatusCode: 400,
@@ -929,10 +929,7 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 		if c.selectedCompletes {
 			return retainedResponse(content, llm.ToolCall{ID: "selected-complete", Name: "complete_node", Input: []byte(retainedCompletionInput(request, transition, content))}), nil
 		}
-		return retainedResponse(content, llm.ToolCall{
-			ID: "selected-shell", Name: string(toolspec.ToolExecCommand),
-			Input: []byte(`{"cmd":"true"}`),
-		}), nil
+		return retainedResponse(content), nil
 	}
 	return retainedResponse(content, llm.ToolCall{ID: "complete", Name: "complete_node", Input: []byte(retainedCompletionInput(request, transition, content))}), nil
 }
@@ -960,32 +957,6 @@ func (c *retainedProgressClient) Requests() []llm.Request {
 
 func (c *retainedProgressClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}, nil
-}
-
-func requestContainsMessage(request llm.Request, content string) bool {
-	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool { return message.Content != nil && *message.Content == content })
-}
-
-func retainedRequestEndsWithMessage(request llm.Request, content string) bool {
-	messages := llm.MessagesFromItems(request.Items)
-	return len(messages) > 0 && messages[len(messages)-1].Content != nil &&
-		*messages[len(messages)-1].Content == content
-}
-
-func retainedRequestContainsBackgroundNotice(request llm.Request) bool {
-	return slices.ContainsFunc(llm.MessagesFromItems(request.Items), func(message llm.Message) bool {
-		return message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice
-	})
-}
-
-func retainedCompletionInput(_ llm.Request, transition, commentary string) string {
-	return `{"transition":"` + transition + `","commentary":"` + commentary + `"}`
-}
-
-func hasAssistantProgress(progress []serverapi.RunPromptProgress, content string) bool {
-	return slices.ContainsFunc(progress, func(event serverapi.RunPromptProgress) bool {
-		return event.AssistantMessage != nil && event.AssistantMessage.Content == content
-	})
 }
 
 func runPromptClientForCurrentNodeFixture(

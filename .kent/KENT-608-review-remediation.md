@@ -47,3 +47,11 @@
 - [x] Restore explicit first/second selected provider request assertions for older pending input while preserving the same-resource background overlap case.
 - [x] Keep the complete ticket's added-test-line budget decision aligned with the latest user instruction; retain the approved behavioral coverage despite the 1,072-line compliance finding.
 - [x] Verify the focused retained tests, formatting, and diff checks, then commit and complete KENT-608.
+
+## Fourth follow-up review remediation (September 4, 2026)
+
+- [x] Keep the retained boundary below the 1,000-line review guardrail by relocating its shared request/progress predicates into the already cohesive Current-Node integration test file.
+- [x] Keep background assistant progress inside the selected Run Prompt observation window: the held second background request returns assistant progress with a real shell tool call, and a later provider error terminates the background loop.
+- [x] De-scope the deterministic preexisting auto-drain overlap regression per the user's September 4, 2026 decision. The current public runtime contract cannot stage that item before the selected first dispatch without relying on an internal scheduler race or adding a production/test seam, so the existing late-queue business coverage remains authoritative.
+- [x] Reject the obsolete 1,072-added-test-line objection per the user's September 3, 2026 approval to retain the historical 15-file business-boundary diff; do not delete approved observable coverage to satisfy that superseded constraint.
+- [x] Run focused tests, formatting, diff checks, and `just build go`; commit and complete KENT-608.
