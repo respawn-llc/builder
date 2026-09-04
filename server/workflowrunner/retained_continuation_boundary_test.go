@@ -418,13 +418,20 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 	runClient := runPromptClientForCurrentNodeFixture(f, f.controller, historyStore)
 	tuiService := runtimecontrol.NewService(f.authority).WithWorkflowSessionReactivator(f.controller).
 		WithPromptHistoryStore(historyStore).WithPersistedSessionResolver(f.metadata)
-	if err := f.authority.WithRetainedWorkflowRuntime(context.Background(), selectedSession, func(context.Context, *agentruntime.Engine) error { return nil }); err != nil {
+	var selectedEngine *agentruntime.Engine
+	if err := f.authority.WithRetainedWorkflowRuntime(context.Background(), selectedSession, func(_ context.Context, engine *agentruntime.Engine) error {
+		selectedEngine = engine
+		return nil
+	}); err != nil {
 		t.Fatalf("selected branch retained runtime: %v", err)
 	}
-	mustRetained(t, f.authority.WithCurrentRuntime(context.Background(), selectedSession, func(ctx context.Context, engine *agentruntime.Engine) error {
-		_, err := engine.QueueUserMessageForAutoDrain(ctx, "older pending input")
+	queueOlderInput := func(ctx context.Context) error {
+		_, err := selectedEngine.QueueUserMessageForAutoDrain(ctx, "older pending input")
 		return err
-	}), "queue older selected input: %v")
+	}
+	if scenario.name != "all success" {
+		mustRetained(t, queueOlderInput(context.Background()), "queue older selected input: %v")
+	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if scenario.cancelBeforeResume {
@@ -466,22 +473,27 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 			backgroundDone <- err
 		}()
 	}
-	requestCountBeforeSubmit := len(client.Requests())
-	go func() {
-		if scenario.tui {
-			response, err := tuiService.SubmitUserTurn(runCtx, serverapi.RuntimeSubmitUserTurnRequest{SessionID: selectedSession.String(), Input: runtimeinput.Text("continue")})
-			done <- retainedOperationResult{tuiResponse: response, err: err}
-			return
-		}
-		response, err := runClient.RunPrompt(runCtx, serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(selectedSession), Prompt: "continue", Timeout: timeout},
-			serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) {
-				progress = append(progress, event)
-			}))
-		done <- retainedOperationResult{response: response, err: err}
-	}()
 	if scenario.name == "all success" {
 		retainedWait(t, client.backgroundFirst, "background did not reach first provider request")
 		retainedWait(t, client.backgroundSecond, "background did not reach second provider request")
+	}
+	requestCountBeforeSubmit := len(client.Requests())
+	startSelected := func() {
+		go func() {
+			if scenario.tui {
+				response, err := tuiService.SubmitUserTurn(runCtx, serverapi.RuntimeSubmitUserTurnRequest{SessionID: selectedSession.String(), Input: runtimeinput.Text("continue")})
+				done <- retainedOperationResult{tuiResponse: response, err: err}
+				return
+			}
+			response, err := runClient.RunPrompt(runCtx, serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(selectedSession), Prompt: "continue", Timeout: timeout},
+				serverapi.RunPromptProgressFunc(func(event serverapi.RunPromptProgress) {
+					progress = append(progress, event)
+				}))
+			done <- retainedOperationResult{response: response, err: err}
+		}()
+	}
+	if scenario.name == "all success" {
+		startSelected()
 		deadline := time.After(currentNodeRunnerWait)
 		for {
 			if _, active := f.authority.SessionExecution(selectedSession); active {
@@ -495,10 +507,31 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 		}
 		releaseBackground()
 		if err := <-backgroundDone; err != nil {
-			t.Fatalf("background continuation: %v", err)
+			var providerErr *llm.ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("background continuation: %v", err)
+			}
 		}
 		retainedWait(t, selectedStarted, "selected continuation did not reach provider after background completed")
+		queueCtx, cancel := context.WithTimeout(context.Background(), currentNodeRunnerWait)
+		olderInputDone := make(chan error, 1)
+		go func() { olderInputDone <- queueOlderInput(queueCtx) }()
+		deadline = time.After(currentNodeRunnerWait)
+		for !selectedEngine.HasPendingRuntimeOperations() {
+			select {
+			case <-time.After(time.Millisecond):
+			case <-deadline:
+				t.Fatal("older selected input was not admitted to the runtime operation queue")
+			}
+		}
 		releaseSelected()
+		if err := <-olderInputDone; err != nil {
+			cancel()
+			t.Fatalf("queue older selected input while direct prompt was active: %v", err)
+		}
+		cancel()
+	} else {
+		startSelected()
 	}
 	release := func() {}
 	if scenario.resumeLock || scenario.historyLock {
@@ -678,18 +711,28 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 			hasAssistantProgress(progress, "background progress") {
 			t.Fatalf("selected progress = %+v, want selected-only", progress)
 		}
+	}
+	if scenario.name == "all success" {
 		var selectedRequests []llm.Request
 		for _, request := range client.Requests() {
 			if requestContainsMessage(request, "continue") {
 				selectedRequests = append(selectedRequests, request)
 			}
 		}
-		if len(selectedRequests) < 2 ||
-			!retainedRequestEndsWithMessage(selectedRequests[0], "continue") ||
+		if len(selectedRequests) < 2 {
+			t.Fatalf("selected requests=%d, want direct then later selected dispatch", len(selectedRequests))
+		}
+		if !retainedRequestEndsWithMessage(selectedRequests[0], "continue") ||
 			retainedRequestEndsWithMessage(selectedRequests[1], "continue") {
 			t.Fatalf("selected requests=%d firstEndsContinue=%t secondEndsContinue=%t, want direct then later selected dispatch",
 				len(selectedRequests), retainedRequestEndsWithMessage(selectedRequests[0], "continue"),
 				len(selectedRequests) > 1 && retainedRequestEndsWithMessage(selectedRequests[1], "continue"))
+		}
+		if requestContainsMessage(selectedRequests[0], "older pending input") {
+			t.Fatal("first selected request included older pending input")
+		}
+		if !requestContainsMessage(selectedRequests[1], "older pending input") {
+			t.Fatal("second selected request omitted older pending input")
 		}
 	}
 	if scenario.selectedDeliveryRace || scenario.selectedResumeError != nil {
@@ -843,7 +886,10 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 		case 2:
 			c.backgroundSecondGate.Do(func() { close(c.backgroundSecond) })
 			<-c.backgroundRelease
-			return retainedResponse("background progress"), nil
+			return llm.Response{}, &llm.ProviderAPIError{
+				ProviderID: "test", StatusCode: 400,
+				Code: llm.UnifiedErrorCodeProviderContract, Err: errors.New("stop background"),
+			}
 		default:
 			return llm.Response{}, &llm.ProviderAPIError{
 				ProviderID: "test", StatusCode: 400,
@@ -883,7 +929,10 @@ func (c *retainedProgressClient) Generate(_ context.Context, request llm.Request
 		if c.selectedCompletes {
 			return retainedResponse(content, llm.ToolCall{ID: "selected-complete", Name: "complete_node", Input: []byte(retainedCompletionInput(request, transition, content))}), nil
 		}
-		return retainedResponse(content), nil
+		return retainedResponse(content, llm.ToolCall{
+			ID: "selected-shell", Name: string(toolspec.ToolExecCommand),
+			Input: []byte(`{"cmd":"true"}`),
+		}), nil
 	}
 	return retainedResponse(content, llm.ToolCall{ID: "complete", Name: "complete_node", Input: []byte(retainedCompletionInput(request, transition, content))}), nil
 }

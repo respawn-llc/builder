@@ -41,3 +41,9 @@
 - [x] Add a public selected-continuation progress case proving an unregistered background Step is excluded from user-visible progress.
 - [x] Configure authorization-denial Run Prompt coverage with the metadata-backed history owner and assert zero selected-session history.
 - [x] Keep the ordinary history timeout regression's technical persistence wait separate from its fresh selected-result wait.
+
+## Third follow-up review remediation (September 4, 2026)
+
+- [x] Restore explicit first/second selected provider request assertions for older pending input while preserving the same-resource background overlap case.
+- [x] Keep the complete ticket's added-test-line budget decision aligned with the latest user instruction; retain the approved behavioral coverage despite the 1,072-line compliance finding.
+- [x] Verify the focused retained tests, formatting, and diff checks, then commit and complete KENT-608.
