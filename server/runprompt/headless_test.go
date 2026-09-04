@@ -816,6 +816,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	})
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    sessionLauncher,
+		PromptHistory:    meta,
 		RuntimeAuthority: authority,
 	})
 	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
@@ -877,6 +878,11 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}, nil)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("selected RunPrompt error = %T %v, want workflow policy denial", err, err)
+	}
+	if history, historyErr := meta.ReadPromptHistory(ctx, selectedBefore.SessionID); historyErr != nil {
+		t.Fatalf("read denied selected prompt history: %v", historyErr)
+	} else if len(history) != 0 {
+		t.Fatalf("denied selected prompt history = %v, want none", history)
 	}
 	reopenedSelected, err := session.OpenByID(root, selectedBefore.SessionID, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
