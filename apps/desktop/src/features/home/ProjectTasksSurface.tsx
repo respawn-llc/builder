@@ -178,7 +178,7 @@ export function ProjectTasksSurface({
     failed: workflowsInitialState.failed,
     loading: workflowsInitialState.loading,
     loadingLabel: t("states.loading"),
-    message: workflowsQuery.isError ? t("workflowLibrary.loadFailed") : "",
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
     onRetry: () => void workflowsQuery.refetch(),
     retryLabel: t("app.retry"),
   });
@@ -186,7 +186,7 @@ export function ProjectTasksSurface({
     failed: workflowsQuery.isFetchPreviousPageError,
     loading: workflowsQuery.isFetchingPreviousPage,
     loadingLabel: t("states.loading"),
-    message: workflowsQuery.isError ? t("workflowLibrary.loadFailed") : "",
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
     onRetry: () => void workflowsQuery.fetchPreviousPage(),
     retryLabel: t("app.retry"),
   });
@@ -194,7 +194,7 @@ export function ProjectTasksSurface({
     failed: workflowsQuery.isFetchNextPageError,
     loading: workflowsQuery.isFetchingNextPage,
     loadingLabel: t("app.loadingMore"),
-    message: workflowsQuery.isError ? t("workflowLibrary.loadFailed") : "",
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
     onRetry: () => void workflowsQuery.fetchNextPage(),
     retryLabel: t("app.retry"),
   });
@@ -220,7 +220,7 @@ export function ProjectTasksSurface({
     failed: data.counts.isError,
     loading: data.counts.isPending,
     loadingLabel: t("states.loading"),
-    message: data.counts.isError ? t("task.cardsLoadFailed") : "",
+    message: data.counts.isError ? errorMessage(data.counts.error) : "",
     onRetry: () => void data.counts.refetch(),
     retryLabel: t("app.retry"),
   });
