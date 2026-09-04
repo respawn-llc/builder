@@ -12,7 +12,9 @@ export type SessionChatCatalogReturnContextValue = Readonly<{
   consume(projectID: string): void;
 }>;
 
-export const SessionChatCatalogReturnContext = createContext<SessionChatCatalogReturnContextValue | null>(null);
+export const SessionChatCatalogReturnContext = createContext<SessionChatCatalogReturnContextValue | null>(
+  null,
+);
 
 export function useSessionChatCatalogReturn(
   projectID: string,

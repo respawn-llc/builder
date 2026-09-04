@@ -2,10 +2,7 @@ import { useRouter } from "@tanstack/react-router";
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { z } from "zod";
 
-import {
-  SessionChatCatalogReturnContext,
-  type SessionChatCatalogReturn,
-} from "./sessionChatCatalogReturn";
+import { SessionChatCatalogReturnContext, type SessionChatCatalogReturn } from "./sessionChatCatalogReturn";
 
 type SessionChatHistoryRead =
   | Readonly<{ kind: "absent" }>

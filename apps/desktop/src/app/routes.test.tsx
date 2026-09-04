@@ -14,11 +14,8 @@ const fixture = vi.hoisted(() => ({
 vi.mock("./routeComponents", async () => {
   const { Outlet } = await import("@tanstack/react-router");
   const { useEffect } = await import("react");
-  const {
-    SessionChatCatalogReturnProvider,
-    useAppNavigation,
-    useSessionChatCatalogReturn,
-  } = await import("@/app-facade");
+  const { SessionChatCatalogReturnProvider, useAppNavigation, useSessionChatCatalogReturn } =
+    await import("@/app-facade");
   return {
     HomeShellRoute: () => null,
     ChatRoute: () => <div data-testid="standalone-chat-route" />,
