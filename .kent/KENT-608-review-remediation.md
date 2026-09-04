@@ -54,3 +54,12 @@
 - [x] Restore the complete ticket test diff to 1,072 added lines, matching the last directly verifiable User authorization, while retaining the approved 15 changed test files and independent business coverage.
 - [x] Preserve the production implementation and the independent pre-dispatch pending-input and selected-only/background behavior tests.
 - [x] Verify the focused retained/runprompt tests, `just build go`, formatting, and `git diff --check`.
+
+## Fifth follow-up review remediation (September 4, 2026)
+
+- [x] Admit older pending input only after the selected provider step is held, in a scenario independent of background activity.
+- [x] Restore same-resource Background Step coverage and keep its progress observation separate from pending-input coverage.
+- [x] Restore retained Workflow completion mode `Tool` and synchronize setup compaction through the public idle boundary.
+- [x] Restore metadata-backed authorization-denial prompt-history verification.
+- [x] Restore the approved ordinary history-timeout regression and verify the fresh selected result-wait deadline.
+- [ ] Obtain a directly recorded User authorization for the combined scheduler-race de-scope before changing the authoritative plan or sending KENT-608 back for review.
