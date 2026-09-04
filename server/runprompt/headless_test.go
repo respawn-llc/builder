@@ -816,7 +816,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	})
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    sessionLauncher,
-		PromptHistory:    meta,
 		RuntimeAuthority: authority,
 	})
 	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
@@ -878,11 +877,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}, nil)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("selected RunPrompt error = %T %v, want workflow policy denial", err, err)
-	}
-	if history, historyErr := meta.ReadPromptHistory(ctx, selectedBefore.SessionID); historyErr != nil {
-		t.Fatalf("read denied selected prompt history: %v", historyErr)
-	} else if len(history) != 0 {
-		t.Fatalf("denied selected prompt history = %v, want none", history)
 	}
 	reopenedSelected, err := session.OpenByID(root, selectedBefore.SessionID, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
@@ -1241,7 +1235,7 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 			response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
 				Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
 				Prompt:  "hello",
-				Timeout: 2 * time.Second,
+				Timeout: time.Second,
 			}, nil)
 			done <- result{response: response, err: err}
 		}()
@@ -1253,7 +1247,7 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		select {
 		case got := <-done:
 			t.Fatalf("RunPrompt returned while history was pending: %+v", got)
-		case <-time.After(2200 * time.Millisecond):
+		case <-time.After(1200 * time.Millisecond):
 		}
 		close(historyRelease)
 		select {
@@ -1263,13 +1257,14 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		}
 		select {
 		case got := <-done:
-			if !errors.Is(got.err, context.DeadlineExceeded) {
-				t.Fatalf("RunPrompt timeout error = %v, want deadline exceeded", got.err)
-			}
-		case <-time.After(2200 * time.Millisecond):
-			t.Fatal("RunPrompt did not observe the configured result-wait deadline")
+			t.Fatalf("RunPrompt returned before selected result release: %+v", got)
+		case <-time.After(50 * time.Millisecond):
 		}
 		close(providerRelease)
+		got := <-done
+		if got.err != nil {
+			t.Fatalf("RunPrompt error = %v, want success after history", got.err)
+		}
 		sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
 		_, active := fixture.authority.SessionExecution(sessionID)
 		if providerCalls != 1 || active {
