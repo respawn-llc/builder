@@ -4,8 +4,9 @@
 
 - This specification owns observable Session mutation order and the choice of work between Agent Steps for one Active Session Runtime.
 - A durable Session may have no Active Session Runtime or one Active Session Runtime.
-- Interactive startup, a Headless Run, or Workflow Execution may open an Active Session Runtime when it has the complete activation context.
-- A mutation request alone never creates an Active Session Runtime.
+- Interactive startup, a Headless Run, Workflow Execution, or an interactive Chat mutation may open an Active Session Runtime when the server has the complete activation context.
+- Interactive Chat mutations prepare and open their required Active Session Runtime inside the server before mutation acceptance.
+- Clients never activate, own, release, or otherwise manage an Active Session Runtime as a prerequisite for a Chat mutation.
 - The Active Session Runtime is authoritative for its live model, transcript, Pending Work, and Session-setting state.
 - Clients render server state and do not create another ordering authority.
 - Boundary-required Session mutations are applied one at a time in acceptance order.
@@ -21,10 +22,13 @@
 ## Acceptance And Responses
 
 - Human Send/Steer accepts each message as a distinct Pending Work item and returns its server identity without waiting for model execution.
+- The intent-level Chat Steer result maps existing admission into accepted or not accepted without changing the ordinary Submit User Turn response. An accepted result carries its Session and Queue Item identities. A concrete failure observed synchronously after acceptance may accompany those identities as a typed diagnostic.
+- Provider, model, tool, or Runtime failure after Chat Steer acceptance follows the existing Runtime or transcript event path and never downgrades, replaces, or rewrites the delivered Chat result.
 - Valid human text remains acceptable while provider, tool, Worktree, process, Reviewer, Workflow, or compaction work is active whenever the Session can reach another Step Boundary.
 - An Idle Active Session Runtime applies accepted short mutations without waiting for a prior Agent Step.
-- Post-turn Queue is a separate server-owned first-in, first-out message collection.
-- Post-turn Queue accepts each message as a distinct Queue Item and returns without waiting for its later eligible turn.
+- Post-turn Queue is a separate server-owned first-in, first-out message collection exposed through one public Session Queue operation.
+- Queue accepts the same typed ordinary-text or prompt/Agent-command input as Submit User Turn. The server resolves a prompt or Agent command at admission from the Session's authoritative effective workspace, queues the resolved model input, and preserves the canonical command text for history and Pending Work presentation.
+- Post-turn Queue accepts each input as a distinct Queue Item and returns its identity without waiting for its later eligible turn. If no Agent Turn is active and the Session can start ordinary work, the accepted Queue Item starts immediately; otherwise it retains ordinary after-turn eligibility.
 - Session Name persists immediately while an Agent Step is running.
 - Thinking, Fast Mode, Supervisor, Questions, and Auto-compaction changes may complete failure-prone preparation, durably commit, and return while an Agent Step is running.
 - A committed live-Runtime setting change is accepted in Session mutation order and applies at the next between-Agent-Step boundary.
@@ -43,7 +47,7 @@
 - A foreground shell process may run while later short Session mutations apply.
 - A background process becomes independent after Kent reports it as backgrounded.
 - Background completion is delivered when applicable and never blocks unrelated model or tool work.
-- Manual compaction requests enter Pending Work and return after scheduling.
+- Manual compaction requests enter Pending Work and return after scheduling. A request admitted while an Agent Step is active enters the current Active Session Runtime in accepted order instead of attempting to start another Agent execution.
 - Each manual compaction request remains distinct and receives its own later success or typed failure.
 - Reviewer execution never delays delivery of the main answer.
 - Reviewer feedback or failure arrives later if the originating Runtime remains available.
@@ -61,9 +65,13 @@
 - A validation failure before acceptance creates no Pending Work or Queue Item.
 - A typed domain failure after acceptance completes only that operation and leaves unrelated later mutations accepted.
 - Interactive submission is accepted against one current Active Session Runtime.
+- If an interactive Chat mutation, including submission, Queue, or manual compaction, targets a Session without an Active Session Runtime, the server prepares and opens one before admission.
+- The server owns Runtime preparation; clients never activate or release it.
+- If Chat admission definitely does not accept work, Kent releases its preparation attachment through the existing close-if-idle policy.
+- After Chat admission accepts work, Kent releases its preparation attachment through the existing detach-and-retain policy so the accepted work remains Session-owned.
 - If Runtime replacement wins before acceptance, Kent resolves the replacement and retries admission without requiring another user submission.
 - Authentication, metadata, execution-target, filesystem, tool, validation, Runtime-opening, or Runtime-publication failure before acceptance is terminal for that submission and creates no Pending Work or Queue Item.
-- Cancellation while waiting for acceptance creates no Pending Work or Queue Item.
+- Cancellation before acceptance creates no Pending Work or Queue Item. A Session already committed during New Chat target resolution remains discoverable.
 
 ## Pending Work
 

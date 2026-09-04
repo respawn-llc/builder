@@ -418,11 +418,11 @@ The interval after one Agent Step ends and before another provider request begin
 
 ### Queue
 
-The user-facing TUI action that holds user messages until the current turn ends. Queued messages wait for the runtime to go idle, then drain into the next turn.
+A user-facing action that accepts one input into the server-owned post-turn Queue. During an Agent Turn, queued input waits until that turn ends and then drains in Queue order. When the Active Session Runtime is idle and ordinary work is eligible, queued input starts the next turn immediately.
 
 ### Steer
 
-The user-facing TUI action that injects a message to take effect after the current step ends, mid-turn between steps, rather than waiting for the turn to finish.
+A user-facing action that accepts one input into the Active Session Runtime's mutation order. During an Agent Step, steered input takes effect at the next eligible Step Boundary instead of waiting for the Agent Turn to finish. When the Active Session Runtime is idle, Steer starts ordinary work immediately.
 
 ### Equal Full-Control Attach
 
