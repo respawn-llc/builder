@@ -64,13 +64,19 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		return nil, errors.New("headless session launch service is required")
 	}
 	selectedSessionID, openingExisting := req.Intent.SessionID()
-	retained := false
-	if openingExisting && l.boot.WorkflowSessionOwnership != nil {
+	resolveRetained := func() (bool, error) {
+		if !openingExisting || l.boot.WorkflowSessionOwnership == nil {
+			return false, nil
+		}
 		owned, ownershipErr := l.boot.WorkflowSessionOwnership.SessionHasCurrentWorkflowTask(ctx, selectedSessionID.String())
 		if ownershipErr != nil {
-			return nil, ownershipErr
+			return false, ownershipErr
 		}
-		retained = owned
+		return owned, nil
+	}
+	retained, ownershipErr := resolveRetained()
+	if ownershipErr != nil {
+		return nil, ownershipErr
 	}
 	if retained && l.boot.WorkflowSessionReactivator == nil {
 		return nil, errors.New("headless workflow Session reactivator is required")
@@ -98,6 +104,10 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 			if terminal {
 				if err := sessionruntime.WaitForWorkflowExecutionRetirement(ctx, l.boot.RuntimeAuthority, selectedSessionID); err != nil {
 					return nil, err
+				}
+				retained, ownershipErr = resolveRetained()
+				if ownershipErr != nil {
+					return nil, ownershipErr
 				}
 			} else if runtimeErr == nil {
 				return nil, ErrSessionRunning
@@ -583,7 +593,7 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 		r.retainedContinuation.CloseProgress()
 		return serverapi.RunPromptResponse{
 			SessionID:                 r.retainedSessionID.String(),
-			SessionName:               textutil.FirstNonEmpty(r.retainedContinuation.SessionName(), r.sessionName),
+			SessionName:               sessionNameOrFallback(r.retainedContinuation.SessionName(), r.sessionName),
 			Warnings:                  append([]string(nil), r.warnings...),
 			WorkflowResumeDiagnostics: workflowResumeDiagnostics(r.retainedAdmission.SiblingDiagnostics),
 		}, errors.Join(admissionErr, r.retainedAdmission.DiagnosticsError())
@@ -601,11 +611,18 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 	}
 	return serverapi.RunPromptResponse{
 		SessionID:                 r.retainedSessionID.String(),
-		SessionName:               textutil.FirstNonEmpty(r.retainedContinuation.SessionName(), r.sessionName),
+		SessionName:               sessionNameOrFallback(r.retainedContinuation.SessionName(), r.sessionName),
 		Result:                    content,
 		Warnings:                  append([]string(nil), r.warnings...),
 		WorkflowResumeDiagnostics: workflowResumeDiagnostics(r.retainedAdmission.SiblingDiagnostics),
 	}, err
+}
+
+func sessionNameOrFallback(name *string, fallback string) string {
+	if name != nil {
+		return *name
+	}
+	return fallback
 }
 
 func workflowResumeDiagnostics(

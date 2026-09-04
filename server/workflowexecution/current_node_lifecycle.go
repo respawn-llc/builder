@@ -14,6 +14,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
@@ -134,7 +135,7 @@ type WorkflowSessionContinuation struct {
 	turn        continuationSignal[runtime.UserTurnResult]
 	exact       continuationSignal[sessionruntime.ExecutionResult]
 	nameMu      sync.RWMutex
-	sessionName string
+	sessionName *string
 	progressMu  sync.RWMutex
 	progress    func(runtime.Event)
 	stepIDs     map[string]struct{}
@@ -245,22 +246,27 @@ func (s *continuationSignal[T]) wait(ctx context.Context) (T, error) {
 	}
 }
 
-func (c *WorkflowSessionContinuation) RecordSessionName(name string) {
+func (c *WorkflowSessionContinuation) RecordSessionName(name string) error {
 	if c == nil {
-		return
+		return errors.New("workflow Session continuation is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("workflow Session continuation name must not be empty")
 	}
 	c.nameMu.Lock()
-	c.sessionName = name
+	c.sessionName = &name
 	c.nameMu.Unlock()
+	return nil
 }
 
-func (c *WorkflowSessionContinuation) SessionName() string {
+func (c *WorkflowSessionContinuation) SessionName() *string {
 	if c == nil {
-		return ""
+		return nil
 	}
 	c.nameMu.RLock()
 	defer c.nameMu.RUnlock()
-	return c.sessionName
+	return textutil.Pointer(c.sessionName)
 }
 
 func (c *WorkflowSessionContinuation) SetProgressSink(progress func(runtime.Event)) {

@@ -211,7 +211,17 @@ func (s *Service) submitUserTurn(
 		return response, errors.New("workflow Session reactivator is required")
 	}
 	if live && liveWorkflow {
-		_, err = runLiveWorkflowTurn()
+		liveWorkflowHandled, liveWorkflowErr := runLiveWorkflowTurn()
+		if liveWorkflowHandled {
+			err = liveWorkflowErr
+		} else if persistedWorkflow {
+			err = sessionruntime.ErrSessionWorkflowActivationActive
+		} else {
+			if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
+				return response, waitErr
+			}
+			err = executeTurn()
+		}
 	} else if persistedWorkflow {
 		err = sessionruntime.ErrSessionWorkflowActivationActive
 	} else {

@@ -881,7 +881,11 @@ func (s *Starter) currentNodeAgentRunner(
 		turnErr = bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 			turnEngine = engine
 			if continuation != nil {
-				continuation.RecordSessionName(engine.SessionName())
+				if name := textutil.OptionalTrimmedString(engine.SessionName()); name != nil {
+					if err := continuation.RecordSessionName(*name); err != nil {
+						return err
+					}
+				}
 			}
 			if continuation != nil {
 				continuationInput := continuation.Input()
