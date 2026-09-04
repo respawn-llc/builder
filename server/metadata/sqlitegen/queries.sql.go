@@ -1866,6 +1866,85 @@ func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID s
 	return i, err
 }
 
+const getSessionDeletionState = `-- name: GetSessionDeletionState :one
+SELECT
+    CAST(EXISTS (
+        SELECT 1
+        FROM sessions session
+        WHERE session.id = ?1
+    ) AS INTEGER) AS session_exists,
+    CAST(
+        EXISTS (
+            SELECT 1
+            FROM task_current_nodes current_node
+            JOIN workflow_task_status_records status
+                ON status.task_id = current_node.task_id
+            WHERE current_node.session_id = ?1
+              AND status.is_done = 0
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM task_pending_approvals approval
+            WHERE approval.source_session_id = ?1
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM task_pending_approval_branches branch
+            WHERE (
+                json_extract(
+                    branch.context_source_resolution_json,
+                    '$.target_session.kind'
+                ) = 'reuse'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.target_session.session_id'
+                ) = ?1
+            )
+            OR (
+                json_extract(
+                    branch.context_source_resolution_json,
+                    '$.active_source.kind'
+                ) = 'exact'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.active_source.session_id'
+                ) = ?1
+            )
+            OR (
+                json_type(
+                    branch.context_source_resolution_json,
+                    '$.target_session'
+                ) IS NULL
+                AND json_type(
+                    branch.context_source_resolution_json,
+                    '$.active_source'
+                ) IS NULL
+                AND json_type(
+                    branch.context_source_resolution_json,
+                    '$.session_id'
+                ) = 'text'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.session_id'
+                ) = ?1
+            )
+        )
+    AS INTEGER) AS session_in_use
+`
+
+type GetSessionDeletionStateRow struct {
+	SessionExists int64
+	SessionInUse  int64
+}
+
+func (q *Queries) GetSessionDeletionState(ctx context.Context, sessionID string) (GetSessionDeletionStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionDeletionState, sessionID)
+	var i GetSessionDeletionStateRow
+	err := recordQueryError(ctx, row.Scan(&i.SessionExists, &i.SessionInUse), getSessionDeletionState, 1)
+
+	return i, err
+}
+
 const getSessionExecutionTargetByID = `-- name: GetSessionExecutionTargetByID :one
 SELECT
     s.id AS session_id,

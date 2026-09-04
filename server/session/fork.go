@@ -431,26 +431,46 @@ const (
 	SessionCreationSourceParentAgent
 )
 
+type CreationContextSource interface {
+	Meta() Meta
+}
+
+type creationContextMetaSource struct {
+	meta Meta
+}
+
+func CreationContextSourceFromMeta(meta Meta) CreationContextSource {
+	return creationContextMetaSource{meta: cloneMeta(meta)}
+}
+
+func (source creationContextMetaSource) Meta() Meta {
+	return cloneMeta(source.meta)
+}
+
 // InitializeCreationContext atomically initializes immutable provenance and
 // source-owned execution context before a fresh session becomes durable.
-func InitializeCreationContext(child *Store, source *Store, kind SessionCreationSourceKind, opts ChildContextOptions) error {
+func InitializeCreationContext(child *Store, source CreationContextSource, kind SessionCreationSourceKind, opts ChildContextOptions) error {
 	if child == nil {
 		return fmt.Errorf("child store is required")
 	}
+	sourcePresent := source != nil
+	if store, ok := source.(*Store); ok && store == nil {
+		sourcePresent = false
+	}
 	switch kind {
 	case SessionCreationSourceIndependent:
-		if source != nil {
+		if sourcePresent {
 			return fmt.Errorf("independent session creation cannot have a source")
 		}
 	case SessionCreationSourcePreviousSession, SessionCreationSourceParentAgent:
-		if source == nil {
+		if !sourcePresent {
 			return fmt.Errorf("session creation source is required")
 		}
 	default:
 		return fmt.Errorf("session creation source kind is invalid")
 	}
 	var sourceMeta Meta
-	if source != nil {
+	if sourcePresent {
 		sourceMeta = source.Meta()
 	}
 	child.mutationMu.Lock()

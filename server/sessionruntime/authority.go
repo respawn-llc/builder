@@ -75,24 +75,40 @@ func NewAuthority(options AuthorityOptions) *Authority {
 }
 
 func (a *Authority) launchLifecycleTask(task func(context.Context)) bool {
-	if a == nil || task == nil {
+	if task == nil {
 		return false
+	}
+	_, err := a.AcceptLifecycleTask(func(ctx context.Context) error {
+		task(ctx)
+		return nil
+	})
+	return err == nil
+}
+
+func (a *Authority) AcceptLifecycleTask(task func(context.Context) error) (<-chan error, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if task == nil {
+		return nil, errors.New("lifecycle task is required")
 	}
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
-		return false
+		return nil, ErrAuthorityClosed
 	}
 	a.lifecycleWG.Add(1)
 	ctx := a.lifecycleCtx
 	a.mu.Unlock()
-	go a.runLifecycleTask(ctx, task)
-	return true
+	result := make(chan error, 1)
+	go a.runLifecycleTask(ctx, task, result)
+	return result, nil
 }
 
-func (a *Authority) runLifecycleTask(ctx context.Context, task func(context.Context)) {
+func (a *Authority) runLifecycleTask(ctx context.Context, task func(context.Context) error, result chan<- error) {
 	defer a.lifecycleWG.Done()
-	task(ctx)
+	result <- task(ctx)
+	close(result)
 }
 
 func (a *Authority) nextGenerationsLocked() (ExecutionGeneration, runtimeids.ResourceGeneration) {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,8 +14,6 @@ import (
 	"core/server/session"
 	"core/shared/transcriptdiag"
 )
-
-const RunLogFileName = "steps.log"
 
 type RunLogger struct {
 	mu                   sync.Mutex
@@ -124,7 +121,7 @@ func (o *DurabilityObserver) recordLineLocked(line string) *RunLogger {
 }
 
 func NewRunLogger(sessionDir string, onDiagnostic func(RunLoggerDiagnostic)) (*RunLogger, error) {
-	fp, err := os.OpenFile(filepath.Join(sessionDir, RunLogFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	fp, err := os.OpenFile(session.RunLogPath(sessionDir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &RunLogger{onDiagnostic: onDiagnostic}, nil

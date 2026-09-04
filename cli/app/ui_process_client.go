@@ -11,15 +11,20 @@ import (
 )
 
 type backgroundUIProcessClient struct {
-	reads   apicontract.ProcessViewService
-	control apicontract.ProcessControlService
+	projectID string
+	reads     apicontract.ProcessViewService
+	control   apicontract.ProcessControlService
 }
 
-func newUIProcessClientWithReads(reads apicontract.ProcessViewService, control apicontract.ProcessControlService) clientui.ProcessClient {
+func newUIProcessClientWithReads(projectID string, reads apicontract.ProcessViewService, control apicontract.ProcessControlService) clientui.ProcessClient {
 	if reads == nil && control == nil {
 		return nil
 	}
-	return backgroundUIProcessClient{reads: reads, control: control}
+	return backgroundUIProcessClient{
+		projectID: strings.TrimSpace(projectID),
+		reads:     reads,
+		control:   control,
+	}
 }
 
 func (m *uiModel) listProcesses() []clientui.BackgroundProcess {
@@ -43,7 +48,7 @@ func (m *uiModel) listProcessesWithError(ctx context.Context) ([]clientui.Backgr
 
 func (c backgroundUIProcessClient) ListProcesses(ctx context.Context) ([]clientui.BackgroundProcess, error) {
 	if c.reads != nil {
-		resp, err := c.reads.ListProcesses(ctx, serverapi.ProcessListRequest{})
+		resp, err := c.reads.ListProcesses(ctx, serverapi.ProcessListRequest{ProjectID: c.projectID})
 		if err != nil {
 			return nil, err
 		}
@@ -65,7 +70,6 @@ func (c backgroundUIProcessClient) KillProcess(ctx context.Context, id string) e
 }
 
 func (c backgroundUIProcessClient) InlineOutput(ctx context.Context, id string, maxChars int) (string, string, error) {
-	id = strings.TrimSpace(id)
 	if c.control != nil {
 		resp, err := c.control.GetInlineOutput(ctx, serverapi.ProcessInlineOutputRequest{ProcessID: id, MaxChars: maxChars})
 		if err != nil {

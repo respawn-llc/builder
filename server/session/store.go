@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const eventsFile = "events.jsonl"
-
 var ErrSessionNotFound = sessioncontract.ErrSessionNotFound
 
 var ErrGoalAgentOverwriteBlocked = errors.New("agent goal set cannot overwrite an active or paused goal")

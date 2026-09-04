@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	appendRecoveryFile          = "append-recovery.json"
 	appendRecoveryRecordVersion = 1
 	maxAppendRecoveryRecordSize = int64(16 << 20)
 	maxAppendRecoverySuffixSize = int64(16 << 20)

@@ -15,6 +15,7 @@ import (
 )
 
 const processViewTestWaitTimeout = 10 * time.Second
+const processViewTestProjectID = "project-1"
 
 func TestServiceListProcessesIncludesRunOwnership(t *testing.T) {
 	fixture := newProcessViewFixture(t)
@@ -34,7 +35,13 @@ func TestServiceListProcessesIncludesRunOwnership(t *testing.T) {
 		}
 		return process, true
 	})
-	resp, err := fixture.service.ListProcesses(context.Background(), serverapi.ProcessListRequest{OwnerSessionID: "session-1", OwnerRunID: "run-1"})
+	ownerSessionID := "session-1"
+	ownerRunID := "run-1"
+	resp, err := fixture.service.ListProcesses(context.Background(), serverapi.ProcessListRequest{
+		ProjectID:      processViewTestProjectID,
+		OwnerSessionID: &ownerSessionID,
+		OwnerRunID:     &ownerRunID,
+	})
 	if err != nil {
 		t.Fatalf("ListProcesses: %v", err)
 	}
@@ -80,7 +87,11 @@ func newProcessViewFixture(t *testing.T) processViewFixture {
 
 	workspace := t.TempDir()
 	tool := shelltool.NewExecCommandTool(workspace, 16_000, 200_000, manager, "session-1")
-	return processViewFixture{manager: manager, tool: tool, service: NewProcessViewService(manager)}
+	return processViewFixture{
+		manager: manager,
+		tool:    tool,
+		service: NewProcessViewService(manager, allProjectSessionMembership{}),
+	}
 }
 
 func (f processViewFixture) startCommand(t *testing.T, id string, command string, runID string, stepID string) tools.Result {
@@ -115,7 +126,11 @@ func TestServiceListProcessesFiltersByOwnerRunID(t *testing.T) {
 
 	waitForProcessCount(t, fixture.manager, 2)
 
-	resp, err := fixture.service.ListProcesses(context.Background(), serverapi.ProcessListRequest{OwnerRunID: "run-b"})
+	ownerRunID := "run-b"
+	resp, err := fixture.service.ListProcesses(context.Background(), serverapi.ProcessListRequest{
+		ProjectID:  processViewTestProjectID,
+		OwnerRunID: &ownerRunID,
+	})
 	if err != nil {
 		t.Fatalf("ListProcesses: %v", err)
 	}
@@ -160,7 +175,7 @@ func TestServiceKillProcessSignalsManagerEntry(t *testing.T) {
 
 func TestServiceKillProcessHonorsCanceledContext(t *testing.T) {
 	source := &stubKillProcessSource{}
-	svc := NewProcessViewService(source)
+	svc := NewProcessViewService(source, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := svc.KillProcess(ctx, serverapi.ProcessKillRequest{ProcessID: "1000"}); err != context.Canceled {
@@ -173,7 +188,7 @@ func TestServiceKillProcessHonorsCanceledContext(t *testing.T) {
 
 func TestServiceKillProcessRepeatedCallExecutesAgain(t *testing.T) {
 	source := &stubKillProcessSource{}
-	svc := NewProcessViewService(source)
+	svc := NewProcessViewService(source, nil)
 	req := serverapi.ProcessKillRequest{ProcessID: "1000"}
 
 	if _, err := svc.KillProcess(context.Background(), req); err != nil {
@@ -190,6 +205,15 @@ func TestServiceKillProcessRepeatedCallExecutesAgain(t *testing.T) {
 type stubKillProcessSource struct {
 	killCalls int
 	killErr   error
+}
+
+type allProjectSessionMembership struct{}
+
+func (allProjectSessionMembership) ListProjectSessionIDs(
+	_ context.Context,
+	_ string,
+) ([]string, error) {
+	return []string{"session-1"}, nil
 }
 
 func (s *stubKillProcessSource) List() []shelltool.Snapshot { return nil }

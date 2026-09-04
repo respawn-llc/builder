@@ -8,8 +8,9 @@ import (
 )
 
 type ProcessListRequest struct {
-	OwnerSessionID string
-	OwnerRunID     string
+	ProjectID      string
+	OwnerSessionID *string
+	OwnerRunID     *string
 }
 
 type ProcessListResponse struct {

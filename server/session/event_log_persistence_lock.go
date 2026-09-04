@@ -8,8 +8,6 @@ import (
 	"github.com/gofrs/flock"
 )
 
-const eventLogPersistenceLockFile = "events.jsonl.lock"
-
 func acquireEventLogPersistenceLock(sessionDir string) (*flock.Flock, string, error) {
 	lockPath := filepath.Join(sessionDir, eventLogPersistenceLockFile)
 	lock := flock.New(lockPath)

@@ -107,6 +107,48 @@
 - A self-agent rebind ignores Session-owned background commands. Those commands continue in the directories where they started.
 - A cross-Project move either changes both Session location and artifact location or leaves both unchanged.
 
+## Session Archive And Deletion
+
+- `kent session archive <session-id> --output <path>` creates an external analysis artifact and then removes the Session from Kent.
+- `kent session delete <session-id>` removes the Session without creating an artifact.
+- Archive output is an absolute path on the server filesystem and must end in `.tar.zst`.
+- Archive creates missing output parent directories and fails without changing an existing destination.
+- The tar+Zstandard archive has one top-level directory named with the Session ID and preserves each Session entry at its relative path. Nested symbolic links remain symbolic links.
+- An archive output path inside the source Session directory is supported.
+- The in-Session `.tar.zst` artifact survives Session removal at the requested path.
+- Archive removes the Session only after the artifact is complete. A failure before that leaves the Session available.
+- If the artifact is complete but Session removal fails, the valid artifact and Session both remain and the diagnostic directs the operator to `kent session delete <session-id>`.
+- If the Session is removed but artifact cleanup fails, the Session remains absent and the diagnostic names the remaining path to remove manually.
+- Archive does not overwrite or rename a published artifact on retry.
+- Archive requires no confirmation flag.
+- Delete is non-interactive and requires a hidden `--confirm` flag.
+- Public documentation, command help, and the documentation site omit delete's `--confirm` flag.
+- Without confirmation, delete makes no server request and reports exactly `Session deletion was not confirmed. Rerun with --confirm to delete session <session-id>.`
+- The missing-confirmation diagnostic is the only product surface that reveals delete's `--confirm` flag.
+- Archive and delete reject a Session in use by live execution, unfinished Workflow work, or a pending Approval.
+- A Session retained only by a terminal Task is eligible.
+- An agent cannot archive or delete the Session identified by its own `KENT_SESSION_ID`.
+- Self-targeting reports exactly `You're trying to delete your own session, which is effectively a suicide. Don't do it, you still have things worth living for! Seek help immediately via ask_question, or exclude your session if this is accidental`.
+- An otherwise-idle Session remains eligible when it is open in a client.
+- Delete and archive never remove unknown files or directories from a Session directory.
+- Kent removes the Session directory only when it is empty; a non-empty directory remains without making the removed Session visible or resumable.
+- A missing Session fails with a readable message.
+- A connected archive caller waits without a fixed mutation deadline.
+- After caller cancellation or disconnection, an accepted archive continues under the Kent server lifetime for at most five additional minutes.
+- Kent cancels an archive that remains after that grace period.
+- Detached archive work has no durable job status, reconnectable outcome, retry, or restart recovery.
+- Caller cancellation or disconnection after delete acceptance stops only that caller's waiting and delivery. The accepted delete continues until completion or server shutdown.
+- Successful plain output is exactly `done`.
+- Plain archive and delete emit no progress output.
+- Both commands accept `--json`.
+- Successful JSON uses `status: "ok"` and includes `session_id`; archive success also includes `output_path`.
+- Failed JSON uses `status: "error"` and includes `code`, `message`, and `session_id`.
+- Stable failure codes are `confirmation_required`, `session_not_found`, `session_in_use`, `self_session_forbidden`, `invalid_output_path`, `output_exists`, and `request_failed`.
+- `confirmation_required` and `self_session_forbidden` are CLI-local outcomes decided before any remote connection or request.
+- Uncommon server, filesystem, cleanup, transport, and response failures use `request_failed` and preserve the returned error message.
+- JSON mode emits exactly one final object to stdout and remains quiet while the command runs.
+- Successful operations exit 0, operational failures exit 1, and usage failures exit 2.
+
 ## Question Commands
 
 - `kent question` shows the first pending ordinary Question or live internal access request. `kent questions` is an alias.
