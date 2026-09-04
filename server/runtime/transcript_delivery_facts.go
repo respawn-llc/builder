@@ -260,22 +260,33 @@ func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []Transcript
 }
 
 func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
+	facts, err := TranscriptToolStartFactsFromEventChecked(evt)
+	if err != nil {
+		panic(err)
+	}
+	return facts
+}
+
+func TranscriptToolStartFactsFromEventChecked(evt Event) ([]TranscriptLiveToolStart, error) {
 	switch evt.Kind {
 	case EventToolCallStarted:
 		if evt.ToolCall == nil {
-			return nil
+			return nil, nil
 		}
 		stepID, err := requireStepID(evt.StepID, "project live tool start")
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		start := transcriptLiveToolStartFromCall(stepID, *evt.ToolCall)
+		start, err := transcriptLiveToolStartFromCallChecked(stepID, *evt.ToolCall)
+		if err != nil {
+			return nil, err
+		}
 		if strings.TrimSpace(start.ToolCallID) == "" {
-			return nil
+			return nil, nil
 		}
-		return []TranscriptLiveToolStart{start}
+		return []TranscriptLiveToolStart{start}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -622,12 +633,13 @@ func transcriptToolEntryHasRecoverableText(entry ChatEntry) bool {
 	if meta == nil {
 		return false
 	}
+	if meta.PatchPresentation != nil && meta.PatchPresentation.Valid() {
+		return true
+	}
 	return firstNonBlankTranscriptValue(
 		meta.ToolName,
 		meta.Command,
 		meta.CompactText,
-		meta.PatchSummary,
-		meta.PatchDetail,
 		meta.Question,
 	) != "" || len(meta.Suggestions) > 0 || (meta.RenderHint != nil && strings.TrimSpace(meta.RenderHint.Path) != "")
 }

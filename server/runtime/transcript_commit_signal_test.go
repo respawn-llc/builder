@@ -97,15 +97,15 @@ func TestPatchToolCallStartedUsesTranscriptWorkingDir(t *testing.T) {
 	if _, err := eng.SubmitUserMessage(context.Background(), "apply patch"); err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if started == nil || started.PatchRender == nil {
-		t.Fatalf("expected patch render metadata, got %+v", started)
+	if started == nil || started.PatchPresentation == nil || started.PatchPresentation.Changes == nil {
+		t.Fatalf("expected Patch changes metadata, got %+v", started)
 	}
-	detail := started.PatchDetail
-	if !strings.Contains(detail, "/worktree/probe.txt") {
-		t.Fatalf("expected worktree path in patch detail, got %q", detail)
+	path := started.PatchPresentation.Changes.Files[0].Path.Absolute
+	if path != "/worktree/probe.txt" {
+		t.Fatalf("Patch absolute path = %q, want /worktree/probe.txt", path)
 	}
-	if strings.Contains(detail, "/main/probe.txt") {
-		t.Fatalf("did not expect main workspace path in patch detail, got %q", detail)
+	if strings.Contains(path, "/main/probe.txt") {
+		t.Fatalf("did not expect main workspace path, got %q", path)
 	}
 }
 

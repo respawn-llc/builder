@@ -1,28 +1,43 @@
 package patchformat
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 )
 
-func Render(src, cwd string) RenderedPatch {
+func Render(src, cwd string) Presentation {
 	doc, err := Parse(src)
 	if err != nil {
-		return Raw(src)
+		return InvalidInputPresentation(src)
 	}
-	rendered := Format(doc, cwd)
-	if len(rendered.Files) == 0 {
-		return Raw(src)
+	changes := Format(doc, cwd)
+	if !changes.Valid() {
+		return InvalidInputPresentation(src)
 	}
-	return rendered
+	return Presentation{
+		Variant: PresentationVariantChanges,
+		Changes: &changes,
+	}
 }
 
-func RenderEdit(path, oldText, newText, cwd string) RenderedPatch {
-	return Format(Document{Hunks: []any{UpdateFile{
+func RenderEdit(path, oldText, newText, cwd string) Presentation {
+	changes := Format(Document{Hunks: []any{UpdateFile{
 		Path:    path,
 		Changes: editChangeLines(oldText, newText),
 	}}}, cwd)
+	return Presentation{
+		Variant: PresentationVariantChanges,
+		Changes: &changes,
+	}
+}
+
+func InvalidInputPresentation(inputDetail string) Presentation {
+	return Presentation{
+		Variant: PresentationVariantInvalidInput,
+		InvalidInput: &InvalidInput{
+			InputDetail: inputDetail,
+		},
+	}
 }
 
 func editChangeLines(oldText, newText string) []ChangeLine {
@@ -59,196 +74,177 @@ func normalizedEditLines(text string) []string {
 	return lines
 }
 
-func Raw(src string) RenderedPatch {
-	trimmed := strings.TrimSpace(src)
-	if trimmed == "" {
-		line := RenderedLine{Kind: RenderedLineKindRaw, Text: "empty patch input", FileIndex: -1}
-		return RenderedPatch{SummaryLines: []RenderedLine{line}, DetailLines: []RenderedLine{line}}
-	}
-	detail := make([]RenderedLine, 0, 8)
-	for _, line := range strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n") {
-		detail = append(detail, RenderedLine{Kind: RenderedLineKindRaw, Text: line, FileIndex: -1})
-	}
-	return RenderedPatch{SummaryLines: []RenderedLine{detail[0]}, DetailLines: detail}
+func Format(doc Document, cwd string) Changes {
+	files := buildFileChanges(doc, cwd)
+	return Changes{Files: files}
 }
 
-func Format(doc Document, cwd string) RenderedPatch {
-	files := buildRenderedFiles(doc, cwd)
-	return renderFiles(files)
-}
+func buildFileChanges(doc Document, cwd string) []FileChange {
+	files := make([]FileChange, 0, 8)
+	byAbsolutePath := make(map[string]int, 8)
 
-func renderFiles(files []RenderedFile) RenderedPatch {
-	if len(files) == 0 {
-		return RenderedPatch{}
-	}
-
-	rendered := RenderedPatch{Files: files}
-	if len(files) == 1 {
-		file := files[0]
-		rendered.SummaryLines = []RenderedLine{{
-			Kind:      RenderedLineKindFile,
-			Text:      summaryLine(file),
-			FileIndex: 0,
-			Path:      file.RelPath,
-		}}
-		detailLinePath := file.RelPath
-		if strings.TrimSpace(file.AbsPath) != "" {
-			detailLinePath = file.AbsPath
-		}
-		rendered.DetailLines = append(rendered.DetailLines, RenderedLine{
-			Kind:      RenderedLineKindFile,
-			Text:      detailHeader(file),
-			FileIndex: 0,
-			Path:      detailLinePath,
-		})
-		for _, diff := range file.Diff {
-			rendered.DetailLines = append(rendered.DetailLines, RenderedLine{Kind: RenderedLineKindDiff, Text: diff, FileIndex: 0})
-		}
-		return rendered
-	}
-
-	for idx, file := range files {
-		rendered.SummaryLines = append(rendered.SummaryLines, RenderedLine{
-			Kind:      RenderedLineKindFile,
-			Text:      summaryLine(file),
-			FileIndex: idx,
-			Path:      file.RelPath,
-		})
-		detailLinePath := file.RelPath
-		if strings.TrimSpace(file.AbsPath) != "" {
-			detailLinePath = file.AbsPath
-		}
-		rendered.DetailLines = append(rendered.DetailLines, RenderedLine{
-			Kind:      RenderedLineKindFile,
-			Text:      detailHeader(file),
-			FileIndex: idx,
-			Path:      detailLinePath,
-		})
-		for _, diff := range file.Diff {
-			rendered.DetailLines = append(rendered.DetailLines, RenderedLine{Kind: RenderedLineKindDiff, Text: diff, FileIndex: idx})
-		}
-	}
-	return rendered
-}
-
-func buildRenderedFiles(doc Document, cwd string) []RenderedFile {
-	files := make([]RenderedFile, 0, 8)
-	byAbs := make(map[string]int, 8)
-
-	getFile := func(path string) *RenderedFile {
-		abs, rel := resolvePath(path, cwd)
-		if abs == "" {
+	getFile := func(path string) *FileChange {
+		resolved := resolvePath(path, cwd)
+		if !resolved.Valid() {
 			return nil
 		}
-		if idx, ok := byAbs[abs]; ok {
-			return &files[idx]
+		if index, ok := byAbsolutePath[resolved.Absolute]; ok {
+			return &files[index]
 		}
-		files = append(files, RenderedFile{AbsPath: abs, RelPath: rel, Diff: make([]string, 0, 32)})
-		idx := len(files) - 1
-		byAbs[abs] = idx
-		return &files[idx]
+		removed := 0
+		files = append(files, FileChange{
+			Path:    resolved,
+			Removed: &removed,
+		})
+		index := len(files) - 1
+		byAbsolutePath[resolved.Absolute] = index
+		return &files[index]
 	}
 
 	for ordinal, hunk := range doc.Hunks {
-		switch op := hunk.(type) {
+		switch operation := hunk.(type) {
 		case AddFile:
-			file := getFile(op.Path)
+			file := getFile(operation.Path)
 			if file == nil {
 				continue
 			}
-			for _, line := range op.Content {
-				file.Added++
-				file.Diff = append(file.Diff, "+"+line)
-			}
+			file.Operations = append(file.Operations, FileOperation{
+				Kind: FileOperationAdd,
+				Groups: []ChangeGroup{{
+					Lines: changedLines(ChangedLineAdded, operation.Content),
+				}},
+			})
+			refreshFileCounts(file)
 		case UpdateFile:
-			target := op.Path
-			if strings.TrimSpace(op.MoveTo) != "" {
-				target = op.MoveTo
+			targetPath := operation.Path
+			kind := FileOperationUpdate
+			var source *Path
+			if strings.TrimSpace(operation.MoveTo) != "" {
+				targetPath = operation.MoveTo
+				kind = FileOperationMove
+				resolvedSource := resolvePath(operation.Path, cwd)
+				source = &resolvedSource
 			}
-			file := getFile(target)
+			file := getFile(targetPath)
 			if file == nil {
 				continue
 			}
-			for _, change := range op.Changes {
-				switch change.Kind {
-				case '+':
-					file.Added++
-				case '-':
-					file.Removed++
-				}
-				file.Diff = append(file.Diff, renderChangeLine(change))
-			}
+			file.Operations = append(file.Operations, FileOperation{
+				Kind:   kind,
+				Source: source,
+				Groups: changedLineGroups(operation.Changes),
+			})
+			refreshFileCounts(file)
 		case DeleteFile:
-			file := getFile(op.Path)
+			file := getFile(operation.Path)
 			if file == nil {
 				continue
 			}
-			file.WholeFileDeletions = append(
-				file.WholeFileDeletions,
-				WholeFileDeletionOperation{
+			file.Operations = append(file.Operations, FileOperation{
+				Kind: FileOperationDelete,
+				Deletion: &WholeFileDeletionOperation{
 					ID: WholeFileDeletionOperationID{HunkOrdinal: ordinal},
 				},
-			)
-			file.Diff = append(file.Diff, "-<deleted file>")
+			})
+			refreshFileCounts(file)
 		}
 	}
-
 	return files
 }
 
-func renderChangeLine(change ChangeLine) string {
-	if change.EndOfFile {
-		return "*** End of File"
+func changedLines(kind ChangedLineKind, content []string) []ChangedLine {
+	lines := make([]ChangedLine, 0, len(content))
+	for _, line := range content {
+		lines = append(lines, ChangedLine{Kind: kind, Content: line})
 	}
-	if change.Kind == ' ' && change.Content == "" {
-		return ""
-	}
-	return string(change.Kind) + change.Content
+	return lines
 }
 
-func summaryLine(file RenderedFile) string {
-	line := file.RelPath
-	if line == "" {
-		line = file.AbsPath
+func changedLineGroups(changes []ChangeLine) []ChangeGroup {
+	groups := make([]ChangeGroup, 0, 4)
+	current := ChangeGroup{}
+	flush := func() {
+		if len(current.Lines) == 0 {
+			return
+		}
+		groups = append(groups, current)
+		current = ChangeGroup{}
 	}
-	if file.Added > 0 {
-		line += fmt.Sprintf(" +%d", file.Added)
+	for _, change := range changes {
+		var kind ChangedLineKind
+		switch change.Kind {
+		case '+':
+			kind = ChangedLineAdded
+		case '-':
+			kind = ChangedLineRemoved
+		default:
+			flush()
+			continue
+		}
+		current.Lines = append(current.Lines, ChangedLine{
+			Kind:    kind,
+			Content: change.Content,
+		})
 	}
-	if removed := RemovedLineCount(file); removed != nil {
-		line += fmt.Sprintf(" -%d", *removed)
-	}
-	return line
+	flush()
+	return groups
 }
 
-func RemovedLineCount(file RenderedFile) *int {
-	total := file.Removed
-	known := file.Removed > 0
-	groups := make(map[WholeFileDeletionGroupID]struct{}, len(file.WholeFileDeletions))
-	for _, operation := range file.WholeFileDeletions {
-		if operation.Disposition == nil {
+func refreshFileCounts(file *FileChange) {
+	added := 0
+	removed := 0
+	pendingDeletion := false
+	countedDeletionGroups := make(map[WholeFileDeletionGroupID]struct{})
+	for _, operation := range file.Operations {
+		for _, group := range operation.Groups {
+			for _, line := range group.Lines {
+				switch line.Kind {
+				case ChangedLineAdded:
+					added++
+				case ChangedLineRemoved:
+					removed++
+				}
+			}
+		}
+		if operation.Deletion == nil {
 			continue
 		}
-		known = true
-		group := operation.Disposition.PhysicalGroup
-		if _, exists := groups[group]; exists {
+		if operation.Deletion.Disposition == nil {
+			pendingDeletion = true
 			continue
 		}
-		groups[group] = struct{}{}
-		total += operation.Disposition.Removed
+		group := operation.Deletion.Disposition.PhysicalGroup
+		if _, counted := countedDeletionGroups[group]; counted {
+			continue
+		}
+		countedDeletionGroups[group] = struct{}{}
+		removed += operation.Deletion.Disposition.Removed
 	}
-	if !known {
-		return nil
+	file.Added = added
+	if pendingDeletion {
+		file.Removed = nil
+		return
 	}
-	return &total
+	file.Removed = intPointer(removed)
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func ApplyWholeFileDeletionFacts(
-	rendered RenderedPatch,
+	presentation Presentation,
 	facts []WholeFileDeletionFact,
-) (RenderedPatch, *WholeFileDeletionFactMismatch) {
-	out := Clone(&rendered)
-	if out == nil {
-		out = &RenderedPatch{}
+) (Presentation, *WholeFileDeletionFactMismatch) {
+	out := ClonePresentation(&presentation)
+	if out == nil || out.Changes == nil {
+		return presentation, deletionFactMismatch(
+			WholeFileDeletionFactMismatchMissingOperation,
+			nil,
+			nil,
+			nil,
+			nil,
+		)
 	}
 	type operationLocation struct {
 		fileIndex      int
@@ -257,10 +253,14 @@ func ApplyWholeFileDeletionFacts(
 	expected := make([]WholeFileDeletionOperationID, 0)
 	locations := make(map[WholeFileDeletionOperationID]operationLocation)
 	for fileIndex := range out.Files {
-		for operationIndex, operation := range out.Files[fileIndex].WholeFileDeletions {
-			expected = append(expected, operation.ID)
-			if _, duplicate := locations[operation.ID]; duplicate {
-				return rendered, deletionFactMismatch(
+		for operationIndex, operation := range out.Files[fileIndex].Operations {
+			if operation.Deletion == nil {
+				continue
+			}
+			id := operation.Deletion.ID
+			expected = append(expected, id)
+			if _, duplicate := locations[id]; duplicate {
+				return presentation, deletionFactMismatch(
 					WholeFileDeletionFactMismatchDuplicateOperation,
 					expected,
 					nil,
@@ -268,7 +268,7 @@ func ApplyWholeFileDeletionFacts(
 					nil,
 				)
 			}
-			locations[operation.ID] = operationLocation{
+			locations[id] = operationLocation{
 				fileIndex:      fileIndex,
 				operationIndex: operationIndex,
 			}
@@ -282,7 +282,7 @@ func ApplyWholeFileDeletionFacts(
 		group := fact.PhysicalGroup
 		removed := fact.Removed
 		if fact.Removed < 0 {
-			return rendered, deletionFactMismatch(
+			return presentation, deletionFactMismatch(
 				WholeFileDeletionFactMismatchInvalidCount,
 				expected,
 				append(received, fact.OperationIDs...),
@@ -292,7 +292,7 @@ func ApplyWholeFileDeletionFacts(
 		}
 		if len(fact.OperationIDs) == 0 ||
 			fact.PhysicalGroup.FirstOperation != fact.OperationIDs[0] {
-			return rendered, deletionFactMismatch(
+			return presentation, deletionFactMismatch(
 				WholeFileDeletionFactMismatchInvalidGroup,
 				expected,
 				append(received, fact.OperationIDs...),
@@ -303,7 +303,7 @@ func ApplyWholeFileDeletionFacts(
 		for index := 1; index < len(fact.OperationIDs); index++ {
 			if fact.OperationIDs[index-1].HunkOrdinal >
 				fact.OperationIDs[index].HunkOrdinal {
-				return rendered, deletionFactMismatch(
+				return presentation, deletionFactMismatch(
 					WholeFileDeletionFactMismatchInvalidGroup,
 					expected,
 					append(received, fact.OperationIDs...),
@@ -313,7 +313,7 @@ func ApplyWholeFileDeletionFacts(
 			}
 		}
 		if _, duplicate := seenGroups[group]; duplicate {
-			return rendered, deletionFactMismatch(
+			return presentation, deletionFactMismatch(
 				WholeFileDeletionFactMismatchInvalidGroup,
 				expected,
 				append(received, fact.OperationIDs...),
@@ -325,7 +325,7 @@ func ApplyWholeFileDeletionFacts(
 		for _, operationID := range fact.OperationIDs {
 			received = append(received, operationID)
 			if _, duplicate := seen[operationID]; duplicate {
-				return rendered, deletionFactMismatch(
+				return presentation, deletionFactMismatch(
 					WholeFileDeletionFactMismatchDuplicateOperation,
 					expected,
 					received,
@@ -336,7 +336,7 @@ func ApplyWholeFileDeletionFacts(
 			seen[operationID] = struct{}{}
 			location, exists := locations[operationID]
 			if !exists {
-				return rendered, deletionFactMismatch(
+				return presentation, deletionFactMismatch(
 					WholeFileDeletionFactMismatchUnexpectedOperation,
 					expected,
 					received,
@@ -344,8 +344,9 @@ func ApplyWholeFileDeletionFacts(
 					&removed,
 				)
 			}
-			if out.Files[location.fileIndex].WholeFileDeletions[location.operationIndex].Disposition != nil {
-				return rendered, deletionFactMismatch(
+			deletion := out.Files[location.fileIndex].Operations[location.operationIndex].Deletion
+			if deletion.Disposition != nil {
+				return presentation, deletionFactMismatch(
 					WholeFileDeletionFactMismatchDuplicateOperation,
 					expected,
 					received,
@@ -356,7 +357,7 @@ func ApplyWholeFileDeletionFacts(
 		}
 	}
 	if len(received) != len(expected) {
-		return rendered, deletionFactMismatch(
+		return presentation, deletionFactMismatch(
 			WholeFileDeletionFactMismatchMissingOperation,
 			expected,
 			received,
@@ -368,14 +369,17 @@ func ApplyWholeFileDeletionFacts(
 	for _, fact := range facts {
 		for _, operationID := range fact.OperationIDs {
 			location := locations[operationID]
-			out.Files[location.fileIndex].WholeFileDeletions[location.operationIndex].Disposition =
+			out.Files[location.fileIndex].Operations[location.operationIndex].Deletion.Disposition =
 				&WholeFileDeletionDisposition{
 					PhysicalGroup: fact.PhysicalGroup,
 					Removed:       fact.Removed,
 				}
 		}
 	}
-	return renderFiles(out.Files), nil
+	for index := range out.Files {
+		refreshFileCounts(&out.Files[index])
+	}
+	return *out, nil
 }
 
 func deletionFactMismatch(
@@ -401,50 +405,45 @@ func deletionFactMismatch(
 	return mismatch
 }
 
-func detailHeader(file RenderedFile) string {
-	line := file.AbsPath
-	if line == "" {
-		line = file.RelPath
-	}
-	return line
-}
-
-func resolvePath(path, cwd string) (string, string) {
+func resolvePath(path, cwd string) Path {
 	p := strings.TrimSpace(path)
 	if p == "" {
-		return "", ""
+		return Path{}
 	}
-	requestedRel := normalizeRequestedRelativePath(p)
-	var abs string
+	requestedRelative := normalizeRequestedRelativePath(p)
+	var absolute string
 	if filepath.IsAbs(p) {
-		abs = filepath.Clean(p)
+		absolute = filepath.Clean(p)
 	} else if cwd != "" {
-		abs = filepath.Clean(filepath.Join(cwd, p))
+		absolute = filepath.Clean(filepath.Join(cwd, p))
 	} else {
-		abs = filepath.Clean(p)
+		absolute = filepath.Clean(p)
 	}
-	abs = filepath.ToSlash(abs)
+	absolute = filepath.ToSlash(absolute)
 	if cwd == "" {
 		if filepath.IsAbs(p) {
-			return abs, abs
+			return Path{Absolute: absolute, Relative: absolute}
 		}
-		return abs, "./" + filepath.ToSlash(strings.TrimPrefix(p, "./"))
+		return Path{
+			Absolute: absolute,
+			Relative: "./" + filepath.ToSlash(strings.TrimPrefix(p, "./")),
+		}
 	}
-	rel, err := filepath.Rel(cwd, filepath.FromSlash(abs))
+	relative, err := filepath.Rel(cwd, filepath.FromSlash(absolute))
 	if err != nil {
-		return abs, abs
+		return Path{Absolute: absolute, Relative: absolute}
 	}
-	rel = filepath.ToSlash(rel)
-	if rel == "." {
-		return abs, "./"
+	relative = filepath.ToSlash(relative)
+	if relative == "." {
+		return Path{Absolute: absolute, Relative: "./"}
 	}
-	if !strings.HasPrefix(rel, "../") && rel != ".." {
-		return abs, "./" + rel
+	if !strings.HasPrefix(relative, "../") && relative != ".." {
+		return Path{Absolute: absolute, Relative: "./" + relative}
 	}
-	if requestedRel != "" {
-		return abs, requestedRel
+	if requestedRelative != "" {
+		return Path{Absolute: absolute, Relative: requestedRelative}
 	}
-	return abs, abs
+	return Path{Absolute: absolute, Relative: absolute}
 }
 
 func normalizeRequestedRelativePath(path string) string {

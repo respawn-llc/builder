@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"container/list"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -152,12 +153,24 @@ func normalizeTranscriptLiveToolStart(start TranscriptLiveToolStart) (Transcript
 }
 
 func transcriptLiveToolStartFromCall(stepID string, call llm.ToolCall) TranscriptLiveToolStart {
+	start, err := transcriptLiveToolStartFromCallChecked(stepID, call)
+	if err != nil {
+		panic(err)
+	}
+	return start
+}
+
+func transcriptLiveToolStartFromCallChecked(stepID string, call llm.ToolCall) (TranscriptLiveToolStart, error) {
+	presentation, err := transcriptToolCallMetaChecked(call, "")
+	if err != nil {
+		return TranscriptLiveToolStart{}, fmt.Errorf("project live tool start: %w", err)
+	}
 	return TranscriptLiveToolStart{
 		StepID:       strings.TrimSpace(stepID),
 		ToolCallID:   strings.TrimSpace(call.ID),
 		ToolName:     strings.TrimSpace(call.Name),
-		Presentation: decodeToolCallMeta(call),
-	}
+		Presentation: presentation,
+	}, nil
 }
 
 func cloneTranscriptLiveToolStart(start TranscriptLiveToolStart) TranscriptLiveToolStart {

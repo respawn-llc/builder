@@ -171,7 +171,14 @@ func sessionToolCompletionRecordFromRuntime(
 		}
 	}
 	if result.Presentation != nil {
-		record.Presentation = transcript.EncodeToolCallMeta(*result.Presentation)
+		presentation, encodeErr := transcript.TryEncodeToolCallMeta(*result.Presentation)
+		if encodeErr != nil {
+			return session.ToolCompletionRecord{}, fmt.Errorf(
+				"encode session tool completion presentation: %w",
+				encodeErr,
+			)
+		}
+		record.Presentation = presentation
 	}
 	if len(providerItems) > 0 {
 		record.ProviderItems = make([]session.ToolCompletionProviderItem, 0, len(providerItems))
@@ -202,12 +209,26 @@ func storedToolCompletionFromSessionRecord(
 		return storedToolCompletion{}, err
 	}
 	var presentation *transcript.ToolCallMeta
-	if len(record.Presentation) > 0 {
-		decoded, ok := transcript.DecodeToolCallMeta(record.Presentation)
-		if !ok {
-			return storedToolCompletion{}, errors.New("session tool completion presentation is invalid")
+	decoded := transcript.DecodeToolCallMeta(record.Presentation)
+	switch decoded.Kind {
+	case transcript.ToolCallMetaDecodeAbsent:
+	case transcript.ToolCallMetaDecodeCurrent, transcript.ToolCallMetaDecodeLegacyNormalized:
+		if decoded.Meta == nil {
+			return storedToolCompletion{}, errors.New(
+				"session tool completion presentation decode returned no metadata",
+			)
 		}
-		presentation = decoded
+		presentation = decoded.Meta
+	case transcript.ToolCallMetaDecodeInvalid:
+		return storedToolCompletion{}, fmt.Errorf(
+			"session tool completion presentation is invalid: %w",
+			decoded.Cause,
+		)
+	default:
+		return storedToolCompletion{}, fmt.Errorf(
+			"session tool completion presentation decode returned unknown outcome %d",
+			decoded.Kind,
+		)
 	}
 	providerItems := make([]llm.ResponseItem, 0, len(record.ProviderItems))
 	for _, item := range record.ProviderItems {

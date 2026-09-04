@@ -38,6 +38,11 @@
   transition: transform var(--motion-fast);
 }
 
+.transcript-disclosure-summary--multiline {
+  display: grid;
+  overflow-wrap: anywhere;
+}
+
 @starting-style {
   .transcript-disclosure-body--visible {
     grid-template-rows: 0fr;

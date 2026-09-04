@@ -41,7 +41,7 @@ func (s TranscriptToolStart) Validate() error {
 	if strings.TrimSpace(s.ToolName) == "" {
 		return fmt.Errorf("tool start tool name is required")
 	}
-	return nil
+	return validateTranscriptToolPresentation("tool start", s.ToolName, s.Presentation)
 }
 
 func (a TranscriptToolAbort) Validate() error {
@@ -70,6 +70,31 @@ func (a TranscriptToolAbort) Validate() error {
 func (id ToolCallID) Validate() error {
 	if strings.TrimSpace(string(id)) == "" {
 		return fmt.Errorf("tool call id is required")
+	}
+	return nil
+}
+
+func validateTranscriptToolPresentation(
+	owner string,
+	toolName string,
+	presentation *transcript.ToolCallMeta,
+) error {
+	normalizedToolName := strings.TrimSpace(toolName)
+	patchFamily := transcript.IsPatchFamilyToolName(normalizedToolName)
+	if presentation == nil {
+		if patchFamily {
+			return fmt.Errorf("%s Patch/Edit presentation is required", owner)
+		}
+		return nil
+	}
+	if strings.TrimSpace(presentation.ToolName) != normalizedToolName {
+		return fmt.Errorf("%s presentation tool name does not match tool identity", owner)
+	}
+	if !presentation.Valid() {
+		return fmt.Errorf("%s presentation is structurally invalid", owner)
+	}
+	if !patchFamily && presentation.PatchPresentation != nil {
+		return fmt.Errorf("%s non-Patch tool contains Patch/Edit presentation", owner)
 	}
 	return nil
 }

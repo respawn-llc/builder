@@ -167,7 +167,11 @@ func newChatStoreWithCWD(cwd string) *chatStore {
 }
 
 func (s *chatStore) validateMessage(stepID *string, msg llm.Message) error {
-	msg = normalizeMessageForTranscript(msg, s.cwd)
+	var err error
+	msg, err = normalizeMessageForTranscriptChecked(msg, s.cwd)
+	if err != nil {
+		return fmt.Errorf("normalize message transcript presentation: %w", err)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.validateMessageLocked(stepID, msg)
@@ -180,7 +184,11 @@ func (s *chatStore) appendMessage(stepID *string, msg llm.Message, provenances .
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	msg = normalizeMessageForTranscript(msg, s.cwd)
+	var err error
+	msg, err = normalizeMessageForTranscriptChecked(msg, s.cwd)
+	if err != nil {
+		return fmt.Errorf("normalize message transcript presentation: %w", err)
+	}
 	if err := s.validateMessageLocked(stepID, msg); err != nil {
 		return err
 	}

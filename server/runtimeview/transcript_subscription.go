@@ -36,6 +36,15 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveThinkingStatus = transcriptThinkingStatusFromRuntime(runtimeSnapshot.ActiveThinkingStatus)
 	hydration.ActiveReasoningTraces = transcriptReasoningTracesFromRuntime(runtimeSnapshot.ActiveReasoningTraces)
 	hydration.InFlightTools = transcriptToolStartsFromRuntime(runtimeSnapshot.InFlightTools)
+	for index := range hydration.InFlightTools {
+		if err := hydration.InFlightTools[index].Validate(); err != nil {
+			return clientui.TranscriptHydration{}, fmt.Errorf(
+				"runtime hydrated in-flight tool %d violates transcript contract: %w",
+				index,
+				err,
+			)
+		}
+	}
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
 	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
@@ -134,7 +143,27 @@ func TranscriptMessagesFromRuntimeEventChecked(evt runtime.Event) ([]clientui.Tr
 			return nil, fmt.Errorf("runtime committed row fact %d from event %q lacks valid provenance: %w", index, evt.Kind, err)
 		}
 	}
-	return transcriptMessagesFromRuntimeEvent(evt), nil
+	var messages []clientui.TranscriptEvent
+	if evt.Kind == runtime.EventToolCallStarted {
+		starts, err := runtime.TranscriptToolStartFactsFromEventChecked(evt)
+		if err != nil {
+			return nil, fmt.Errorf("runtime tool start violates transcript contract: %w", err)
+		}
+		messages = transcriptToolStartMessages(starts)
+	} else {
+		messages = transcriptMessagesFromRuntimeEvent(evt)
+	}
+	for index := range messages {
+		if err := validateProjectedToolContract(messages[index]); err != nil {
+			return nil, fmt.Errorf(
+				"runtime transcript event %q projection %d violates contract: %w",
+				evt.Kind,
+				index,
+				err,
+			)
+		}
+	}
+	return messages, nil
 }
 
 func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.TranscriptEvent {
@@ -470,9 +499,31 @@ func transcriptRowsFromFactsChecked(facts []runtime.TranscriptCommittedRowFact) 
 				err,
 			)
 		}
-		rows = append(rows, transcriptRowFromFact(fact))
+		row := transcriptRowFromFact(fact)
+		if row.Tool != nil {
+			if err := row.Tool.Validate(); err != nil {
+				return nil, fmt.Errorf(
+					"runtime hydrated committed tool row %d violates transcript contract: %w",
+					index,
+					err,
+				)
+			}
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+func validateProjectedToolContract(event clientui.TranscriptEvent) error {
+	switch payload := event.Payload().(type) {
+	case clientui.TranscriptToolStart:
+		return payload.Validate()
+	case clientui.TranscriptCommittedRow:
+		if payload.Tool != nil {
+			return payload.Tool.Validate()
+		}
+	}
+	return nil
 }
 
 func transcriptNoticeFactDiagnostic(notice *runtime.TranscriptNoticeRowFact) any {

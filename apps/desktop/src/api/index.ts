@@ -10,6 +10,7 @@ export type {
   ChatSessionTarget,
   ChatSettings,
   ChatSettingsTarget,
+  ChatTranscriptCommittedRow,
   ChatTranscriptCompletion,
   ChatTranscriptHandler,
   ChatTranscriptKind,
@@ -20,6 +21,8 @@ export type {
   ChatTranscriptPayloadByKind,
   ChatWorkspaceSelector,
 } from "./chat";
+export { resolveChatToolIdentity } from "./chatToolIdentity";
+export type { ChatToolIdentity, ChatToolIdentityKind } from "./chatToolIdentity";
 export type {
   BoardNodeCardsInput,
   PromptAnswerBatchInput,

@@ -17,7 +17,11 @@ export type { ProgressChipProps, ProgressInteractiveChipProps } from "./Progress
 export { ActionableListRow } from "./ActionableListRow";
 export type { ActionableListRowProps } from "./ActionableListRow";
 export { TranscriptDisclosure } from "./TranscriptDisclosure";
-export type { TranscriptDisclosureIconTone, TranscriptDisclosureProps } from "./TranscriptDisclosure";
+export type {
+  TranscriptDisclosureIconTone,
+  TranscriptDisclosureProps,
+  TranscriptDisclosureSummaryMode,
+} from "./TranscriptDisclosure";
 export { OneLineOverflowRow } from "./OneLineOverflowRow";
 export type { OneLineOverflowItem, OneLineOverflowRowProps } from "./OneLineOverflowRow";
 export { SegmentedControl } from "./SegmentedControl";
@@ -62,6 +66,8 @@ export {
 } from "./HomeListCard";
 export { StaticMarkdown, StreamingMarkdown, TaskBodyMarkdown } from "./MarkdownText";
 export type { StaticMarkdownProps, StreamingMarkdownProps, TaskBodyMarkdownProps } from "./MarkdownText";
+export { SyntaxHighlightedCode } from "./SyntaxHighlightedCode";
+export type { SyntaxHighlightedCodeProps } from "./SyntaxHighlightedCode";
 export { compactExternalUrlLabel, safeExternalUrl } from "./externalLinks";
 export { readEffectiveTheme, type AppTheme } from "./theme";
 export { cx } from "./classes";

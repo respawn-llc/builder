@@ -340,8 +340,12 @@ func reviewerToolPresentationText(meta *transcript.ToolCallMeta) string {
 	if inlineMeta := strings.TrimSpace(meta.InlineMeta); inlineMeta != "" {
 		lines = append(lines, "meta: "+inlineMeta)
 	}
-	if detail := strings.TrimSpace(meta.PatchDetail); detail != "" {
-		lines = append(lines, detail)
+	if meta.PatchPresentation != nil {
+		encoded, err := json.Marshal(meta.PatchPresentation)
+		if err != nil {
+			panic(fmt.Sprintf("encode reviewer Patch/Edit presentation: %v", err))
+		}
+		lines = append(lines, string(encoded))
 	}
 	if meta.RenderHint != nil {
 		if path := strings.TrimSpace(meta.RenderHint.Path); path != "" {

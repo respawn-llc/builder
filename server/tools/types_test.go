@@ -5,6 +5,7 @@ import (
 	"core/shared/jsoncontract"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -375,27 +376,24 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 	if !patchMeta.OmitSuccessfulResult {
 		t.Fatalf("expected patch transcript to suppress success result append, got %+v", patchMeta)
 	}
-	if patchMeta.PatchSummary == "" || patchMeta.PatchDetail == "" {
-		t.Fatalf("expected patch transcript metadata, got %+v", patchMeta)
-	}
-	if patchMeta.PatchRender == nil {
-		t.Fatalf("expected typed patch render metadata, got %+v", patchMeta)
-	}
-	if patchMeta.CompactText != patchMeta.PatchSummary || patchMeta.Command != patchMeta.PatchDetail {
-		t.Fatalf("expected patch aliases normalized, got %+v", patchMeta)
+	if patchMeta.PatchPresentation == nil ||
+		patchMeta.PatchPresentation.Variant != patchformat.PresentationVariantChanges ||
+		patchMeta.PatchPresentation.Changes == nil {
+		t.Fatalf("expected typed patch change facts, got %+v", patchMeta)
 	}
 	freeformPatchMeta := patch.BuildToolCallMeta(ToolCallContext{WorkingDir: "/workspace"}, json.RawMessage(`"*** Begin Patch\n*** Update File: custom.go\n-old\n+new\n*** End Patch\n"`))
-	if freeformPatchMeta.PatchSummary != "./custom.go +1 -1" {
+	if freeformPatchMeta.PatchPresentation == nil ||
+		freeformPatchMeta.PatchPresentation.Changes == nil ||
+		freeformPatchMeta.PatchPresentation.Changes.Files[0].Path.Relative != "./custom.go" {
 		t.Fatalf("expected custom freeform patch input summary, got %+v", freeformPatchMeta)
 	}
 
 	edit := requireDefinition(t, toolspec.ToolEdit)
 	editMeta := edit.BuildToolCallMeta(ToolCallContext{}, json.RawMessage(`{"path":"a.go","old_string":"old","new_string":"new"}`))
-	if editMeta.ToolName != string(toolspec.ToolEdit) || editMeta.PatchRender == nil {
+	if editMeta.ToolName != string(toolspec.ToolEdit) ||
+		editMeta.PatchPresentation == nil ||
+		editMeta.PatchPresentation.Variant != patchformat.PresentationVariantChanges {
 		t.Fatalf("unexpected edit transcript metadata: %+v", editMeta)
-	}
-	if editMeta.Command != editMeta.PatchDetail || editMeta.CompactText != editMeta.PatchSummary {
-		t.Fatalf("expected edit text aliases normalized, got %+v", editMeta)
 	}
 	if editMeta.RenderHint == nil || editMeta.RenderHint.Kind != transcript.ToolRenderKindDiff {
 		t.Fatalf("expected edit diff render hint, got %+v", editMeta.RenderHint)
@@ -432,19 +430,19 @@ func TestEditDefinitionBuildsStructuredPresentationFromCallInput(t *testing.T) {
 		"new_string":"new\nunchanged\n"
 	}`))
 
-	if meta.PatchRender == nil || len(meta.PatchRender.Files) != 1 {
-		t.Fatalf("expected one structured edit file, got %+v", meta.PatchRender)
+	if meta.PatchPresentation == nil ||
+		meta.PatchPresentation.Changes == nil ||
+		len(meta.PatchPresentation.Changes.Files) != 1 {
+		t.Fatalf("expected one structured edit file, got %+v", meta.PatchPresentation)
 	}
-	file := meta.PatchRender.Files[0]
-	if file.RelPath != "./a.go" || file.Added != 1 || file.Removed != 1 {
+	file := meta.PatchPresentation.Changes.Files[0]
+	if file.Path.Relative != "./a.go" || file.Added != 1 ||
+		file.Removed == nil || *file.Removed != 1 {
 		t.Fatalf("unexpected structured edit file: %+v", file)
-	}
-	if meta.Command != meta.PatchDetail || meta.CompactText != meta.PatchSummary {
-		t.Fatalf("expected edit text aliases to come from structured input: %+v", meta)
 	}
 }
 
-func TestEditDefinitionFallsBackForIncompleteInput(t *testing.T) {
+func TestEditDefinitionClassifiesIncompleteInput(t *testing.T) {
 	edit := requireDefinition(t, toolspec.ToolEdit)
 	for _, raw := range []string{
 		`{"path":"a.go","old_string":"old"}`,
@@ -456,8 +454,11 @@ func TestEditDefinitionFallsBackForIncompleteInput(t *testing.T) {
 			ToolCallContext{WorkingDir: "/workspace"},
 			json.RawMessage(raw),
 		)
-		if meta.PatchRender != nil {
-			t.Fatalf("incomplete edit input %s produced a structured diff: %+v", raw, meta)
+		if meta.PatchPresentation == nil ||
+			meta.PatchPresentation.Variant != patchformat.PresentationVariantInvalidInput ||
+			meta.PatchPresentation.InvalidInput == nil ||
+			meta.PatchPresentation.InvalidInput.InputDetail != raw {
+			t.Fatalf("incomplete edit input %s did not retain invalid input facts: %+v", raw, meta)
 		}
 		if meta.RenderHint == nil || meta.RenderHint.Kind != transcript.ToolRenderKindDiff {
 			t.Fatalf("incomplete edit input %s lost its diff render hint: %+v", raw, meta)

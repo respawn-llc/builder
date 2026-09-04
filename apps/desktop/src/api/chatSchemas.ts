@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { renderedPatchSchema } from "./chatPatchSchemas";
+import { patchPresentationSchema } from "./chatPatchSchemas";
+import { resolveChatToolIdentity } from "./chatToolIdentity";
 
 export const nonBlank = z.string().refine((value) => value.trim().length > 0);
 export const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
@@ -250,9 +251,7 @@ export const toolMetaSchema = z
     CompactText: z.string(),
     InlineMeta: z.string(),
     TimeoutLabel: z.string(),
-    PatchSummary: z.string(),
-    PatchDetail: z.string(),
-    PatchRender: optionalNullable(renderedPatchSchema),
+    PatchPresentation: patchPresentationSchema.nullable(),
     RenderHint: optionalNullable(
       z
         .object({
@@ -272,7 +271,44 @@ export const toolMetaSchema = z
     MovedToBackground: z.boolean(),
     ShellExitCode: optionalNullable(z.number().int()),
   })
-  .strict();
+  .strict()
+  .superRefine((meta, context) => {
+    const ownsPatchPresentation = resolveChatToolIdentity(meta.ToolName)?.ownsPatchPresentation === true;
+    if (ownsPatchPresentation !== (meta.PatchPresentation != null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["PatchPresentation"],
+        message: ownsPatchPresentation
+          ? "Patch/Edit presentation is required"
+          : "non-Patch tool cannot carry Patch/Edit presentation",
+      });
+    }
+  });
+
+export function validateToolPresentationOwner(
+  owner: Readonly<{
+    ToolName: string;
+    Presentation?: z.output<typeof toolMetaSchema> | null | undefined;
+  }>,
+  context: z.RefinementCtx,
+) {
+  const ownsPatchPresentation = resolveChatToolIdentity(owner.ToolName)?.ownsPatchPresentation === true;
+  if (ownsPatchPresentation && owner.Presentation == null) {
+    context.addIssue({
+      code: "custom",
+      path: ["Presentation"],
+      message: "Patch/Edit presentation is required",
+    });
+    return;
+  }
+  if (owner.Presentation != null && owner.Presentation.ToolName !== owner.ToolName) {
+    context.addIssue({
+      code: "custom",
+      path: ["Presentation", "ToolName"],
+      message: "presentation tool name does not match tool identity",
+    });
+  }
+}
 export const toolRowSchema = z
   .object({
     StepID: optionalIdentifier,
@@ -284,7 +320,8 @@ export const toolRowSchema = z
     CondensedText: optionalText,
     Presentation: optionalNullable(toolMetaSchema),
   })
-  .strict();
+  .strict()
+  .superRefine(validateToolPresentationOwner);
 export const reasoningIdentitySchema = z
   .object({
     Provider: z

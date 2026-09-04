@@ -34,25 +34,40 @@ func transcriptPayload[T any](t *testing.T, event clientui.TranscriptEvent) T {
 
 func TestTranscriptProjectionOwnsNestedDeletionPresentation(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	removed := 3
 	source := &transcript.ToolCallMeta{
 		ToolName: "patch",
-		PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
-			RelPath: "target.txt",
-			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-				ID: id,
-				Disposition: &patchformat.WholeFileDeletionDisposition{
-					PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
-					Removed:       3,
+		PatchPresentation: &patchformat.Presentation{
+			Variant: patchformat.PresentationVariantChanges,
+			Changes: &patchformat.Changes{
+				Files: []patchformat.FileChange{
+					{
+						Path:    patchformat.Path{Absolute: "/workspace/target.txt", Relative: "target.txt"},
+						Removed: &removed,
+						Operations: []patchformat.FileOperation{
+							{
+								Kind: patchformat.FileOperationDelete,
+								Deletion: &patchformat.WholeFileDeletionOperation{
+									ID: id,
+									Disposition: &patchformat.WholeFileDeletionDisposition{
+										PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
+										Removed:       3,
+									},
+								},
+							},
+						},
+					},
 				},
-			}},
-		}}},
+			},
+		},
 	}
 
 	cloned := cloneToolCallMeta(source)
-	cloned.PatchRender.Files[0].WholeFileDeletions[0].Disposition.Removed = 9
-	cloned.PatchRender.Files[0].WholeFileDeletions[0].Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 4
+	deletion := cloned.PatchPresentation.Changes.Files[0].Operations[0].Deletion
+	deletion.Disposition.Removed = 9
+	deletion.Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 4
 
-	disposition := source.PatchRender.Files[0].WholeFileDeletions[0].Disposition
+	disposition := source.PatchPresentation.Changes.Files[0].Operations[0].Deletion.Disposition
 	if disposition == nil || disposition.Removed != 3 ||
 		disposition.PhysicalGroup.FirstOperation.HunkOrdinal != 0 {
 		t.Fatalf("runtimeview clone aliased nested deletion metadata: %+v", disposition)
@@ -196,6 +211,10 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			var removed *int
+			if test.disposition != nil {
+				removed = textutil.Value(test.disposition.Removed)
+			}
 			hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 				CommittedRows: []runtime.TranscriptCommittedRowFact{{
 					StepID:     runtimeStepIDPointer(transcriptProjectionStepID),
@@ -208,14 +227,29 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 						ToolCallID: "call-delete",
 						ToolName:   "patch",
 						Presentation: &transcript.ToolCallMeta{
-							ToolName: "patch",
-							PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
-								RelPath: "target.txt",
-								WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-									ID:          id,
-									Disposition: test.disposition,
-								}},
-							}}},
+							ToolName:       "patch",
+							Presentation:   transcript.ToolPresentationDefault,
+							RenderBehavior: transcript.ToolCallRenderBehaviorDefault,
+							PatchPresentation: &patchformat.Presentation{
+								Variant: patchformat.PresentationVariantChanges,
+								Changes: &patchformat.Changes{
+									Files: []patchformat.FileChange{
+										{
+											Path:    patchformat.Path{Absolute: "/workspace/target.txt", Relative: "target.txt"},
+											Removed: removed,
+											Operations: []patchformat.FileOperation{
+												{
+													Kind: patchformat.FileOperationDelete,
+													Deletion: &patchformat.WholeFileDeletionOperation{
+														ID:          id,
+														Disposition: test.disposition,
+													},
+												},
+											},
+										},
+									},
+								},
+							},
 						},
 					},
 				}},
@@ -223,11 +257,12 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 			if len(hydration.CommittedRows) != 1 ||
 				hydration.CommittedRows[0].Tool == nil ||
 				hydration.CommittedRows[0].Tool.Presentation == nil ||
-				hydration.CommittedRows[0].Tool.Presentation.PatchRender == nil {
+				hydration.CommittedRows[0].Tool.Presentation.PatchPresentation == nil ||
+				hydration.CommittedRows[0].Tool.Presentation.PatchPresentation.Changes == nil {
 				t.Fatalf("projected deletion row = %+v", hydration.CommittedRows)
 			}
-			file := hydration.CommittedRows[0].Tool.Presentation.PatchRender.Files[0]
-			removed := patchformat.RemovedLineCount(file)
+			file := hydration.CommittedRows[0].Tool.Presentation.PatchPresentation.Changes.Files[0]
+			removed = patchformat.RemovedLineCount(file)
 			if test.wantRemoved == nil {
 				if removed != nil {
 					t.Fatalf("projected removed count = %d, want absent", *removed)

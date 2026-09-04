@@ -11,6 +11,7 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func streamScanTestEvent(t *testing.T, kind string, payload any) session.EventRecord {
@@ -240,8 +241,10 @@ func TestStreamingTranscriptScanKeepsToolAttachedLocalEntryAfterMaterializedOutp
 	t.Parallel()
 	fallbackCallID := "call-fallback"
 	ordinaryCallID := "call-ordinary"
+	fallbackPatchPresentation := patchformat.InvalidInputPresentation("presentation fallback")
 	fallbackPresentation := transcript.ToolCallMeta{
-		ToolName: string(toolspec.ToolPatch),
+		ToolName:          string(toolspec.ToolPatch),
+		PatchPresentation: &fallbackPatchPresentation,
 	}
 	ordinaryPresentation := transcript.ToolCallMeta{
 		ToolName: string(toolspec.ToolExecCommand),

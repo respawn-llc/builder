@@ -422,8 +422,11 @@ type preparedMessageProjection struct {
 }
 
 func (e *Engine) prepareMessageProjection(stepID *string, msg llm.Message) (preparedMessageProjection, error) {
-	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	msg, err := normalizePersistedMessageWorktreeContext(msg)
+	msg, err := normalizeMessageForTranscriptChecked(msg, e.transcriptWorkingDir())
+	if err != nil {
+		return preparedMessageProjection{}, fmt.Errorf("normalize message transcript presentation: %w", err)
+	}
+	msg, err = normalizePersistedMessageWorktreeContext(msg)
 	if err != nil {
 		return preparedMessageProjection{}, err
 	}
