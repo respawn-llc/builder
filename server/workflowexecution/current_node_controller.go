@@ -3,6 +3,7 @@ package workflowexecution
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -213,6 +214,27 @@ func NewCurrentNodeController(
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
 	return controller, nil
+}
+
+// SessionHasCurrentWorkflowTask reports whether a Session is bound to an
+// incomplete Current Node. Historical Task ownership alone does not retain
+// Workflow continuation behavior.
+func (c *CurrentNodeController) SessionHasCurrentWorkflowTask(ctx context.Context, rawSessionID string) (bool, error) {
+	if c == nil {
+		return false, errors.New("current node workflow controller is required")
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(rawSessionID))
+	if err != nil {
+		return false, err
+	}
+	_, err = c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
+	if errors.Is(err, workflowstore.ErrSessionNotCurrentWorkflowNode) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *CurrentNodeController) CompleteAgentCurrentNode(

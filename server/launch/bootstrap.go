@@ -34,11 +34,11 @@ func ResolveSessionCaller(persistenceRoot string, sessionID string) (subagentpol
 		return subagentpolicy.Caller{}, err
 	}
 	defer func() { _ = metadataStore.Close() }()
-	workflow, err := metadataStore.SessionHasWorkflowTask(context.Background(), sessionID)
+	taskID, err := metadataStore.WorkflowTaskIDForSession(context.Background(), sessionID)
 	if err != nil {
 		return subagentpolicy.Caller{}, err
 	}
-	return subagentpolicy.Caller{Workflow: workflow}, nil
+	return subagentpolicy.Caller{Workflow: taskID != nil}, nil
 }
 
 // ValidateSessionExists verifies a session reference without exposing its

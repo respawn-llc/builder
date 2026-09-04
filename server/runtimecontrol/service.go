@@ -448,7 +448,7 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 		}
 	}
 	if s != nil && s.workflowTasks != nil {
-		workflow, err := s.workflowTasks.SessionHasWorkflowTask(ctx, sessionID)
+		workflow, err := s.workflowTasks.SessionHasCurrentWorkflowTask(ctx, sessionID)
 		if err != nil {
 			return false, err
 		}

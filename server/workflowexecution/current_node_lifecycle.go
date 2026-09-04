@@ -483,15 +483,15 @@ func (c *CurrentNodeController) reactivateWorkflowSession(
 		return WorkflowSessionContinuationResult{}, err
 	}
 	if resumeState != nil && resumeState.acceptance != nil {
-		if resumed.result.Outcome != TaskResumeApplied {
-			conflict, conflictErr := c.workflowSessionConflict(ctx, input.Task.ID, &input.CurrentNode.Reference, nil)
-			return WorkflowSessionContinuationResult{}, errors.Join(conflictErr, conflict)
-		}
 		if resumed.selectedError != nil {
 			return WorkflowSessionContinuationResult{
 				SiblingDiagnostics: resumed.diagnostics,
 				accepted:           resumeState.accepted,
 			}, errors.Join(resumed.selectedError, workflowResumeDiagnosticsError(resumed.diagnostics))
+		}
+		if resumed.result.Outcome != TaskResumeApplied {
+			conflict, conflictErr := c.workflowSessionConflict(ctx, input.Task.ID, &input.CurrentNode.Reference, nil)
+			return WorkflowSessionContinuationResult{}, errors.Join(conflictErr, conflict)
 		}
 		if !resumeState.accepted {
 			conflict, conflictErr := c.workflowSessionConflict(ctx, input.Task.ID, &input.CurrentNode.Reference, nil)
@@ -936,15 +936,22 @@ func (c *CurrentNodeController) resumeTask(
 				return resumed.result, nil
 			}
 			if selectedErr != nil {
-				resumed.selectedError = WorkflowSessionResumeDiagnostic{
+				diagnostic := WorkflowSessionResumeDiagnostic{
 					Reference: resumeState.acceptance.Selected,
 					Cause:     selectedErr,
 				}
-			} else if eligibilityErr := selectedClassification.eligibilityError(); eligibilityErr != nil {
-				resumed.selectedError = WorkflowSessionResumeDiagnostic{
+				resumed.selectedError = diagnostic
+				resumed.diagnostics = append(resumed.diagnostics, diagnostic)
+				return resumed.result, nil
+			}
+			if eligibilityErr := selectedClassification.eligibilityError(); eligibilityErr != nil {
+				diagnostic := WorkflowSessionResumeDiagnostic{
 					Reference: resumeState.acceptance.Selected,
 					Cause:     eligibilityErr,
 				}
+				resumed.selectedError = diagnostic
+				resumed.diagnostics = append(resumed.diagnostics, diagnostic)
+				return resumed.result, nil
 			}
 		}
 		classificationSelection := watch

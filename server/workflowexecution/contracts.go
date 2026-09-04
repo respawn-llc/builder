@@ -6,7 +6,7 @@ import (
 )
 
 type WorkflowSessionOwnershipReader interface {
-	SessionHasWorkflowTask(context.Context, string) (bool, error)
+	SessionHasCurrentWorkflowTask(context.Context, string) (bool, error)
 }
 
 var (

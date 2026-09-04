@@ -522,11 +522,11 @@ INSERT INTO task_runs (
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
-	workflowOwned, err := metadataStore.SessionHasWorkflowTask(t.Context(), sessionID)
+	taskID, err := metadataStore.WorkflowTaskIDForSession(t.Context(), sessionID)
 	if err != nil {
-		t.Fatalf("SessionHasWorkflowTask: %v", err)
+		t.Fatalf("WorkflowTaskIDForSession: %v", err)
 	}
-	if !workflowOwned {
+	if taskID == nil {
 		t.Fatal("migrated session direct task ownership was not retained")
 	}
 	input, err := store.ResolveCurrentSessionStartContext(t.Context(), parsedSessionID)

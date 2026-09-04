@@ -71,7 +71,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	}
 	retained := false
 	if openingExisting && l.boot.WorkflowSessionOwnership != nil {
-		owned, ownershipErr := l.boot.WorkflowSessionOwnership.SessionHasWorkflowTask(ctx, selectedSessionID.String())
+		owned, ownershipErr := l.boot.WorkflowSessionOwnership.SessionHasCurrentWorkflowTask(ctx, selectedSessionID.String())
 		if ownershipErr != nil {
 			return nil, ownershipErr
 		}
@@ -558,9 +558,10 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 	if admissionErr != nil {
 		r.retainedContinuation.CloseProgress()
 		return serverapi.RunPromptResponse{
-			SessionID:   r.retainedSessionID.String(),
-			SessionName: firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
-			Warnings:    append([]string(nil), r.warnings...),
+			SessionID:                 r.retainedSessionID.String(),
+			SessionName:               firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
+			Warnings:                  append([]string(nil), r.warnings...),
+			WorkflowResumeDiagnostics: workflowResumeDiagnostics(r.retainedAdmission.SiblingDiagnostics),
 		}, errors.Join(admissionErr, r.retainedAdmission.DiagnosticsError())
 	}
 	turn, turnErr := r.retainedContinuation.WaitTurn(ctx)

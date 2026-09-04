@@ -202,8 +202,7 @@
 - Clipboard paste hotkeys are `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D`; explicit system clipboard reads save images to temporary PNG files and insert the path, or insert text at the active cursor. Terminal bracketed paste remains ordinary text input and never causes a system clipboard read.
 - Runtime acceptance, protected Agent Steps, Steering drains, and the separate post-turn Queue follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
-- Pending steering and pending user messages are strict FIFO except when input submitted to an idle retained Workflow Session is attached to Task Resume. That selected continuation input belongs to the resumed Workflow turn: if its selected Workflow Step wins runtime admission, it may commit before older pending items, which remain pending in their existing relative order; if an existing pending worker wins, ordinary FIFO processing proceeds first.
-- While a retained-Workflow Resume submission awaits its selected resumed turn outcome, later input remains visible as pending work behind that active submission. Resume acceptance does not remove or complete the active submission.
+- Retained-Workflow continuation input ordering and pending-submission lifetime follow [TUI Chat Core](tui-chat-core.md#queueing-and-steering).
 - Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
 - A pending steer issued from another Session shows its complete wrapped message.
 - Each queued human Steering message remains a separate FIFO user message. Each queued steer issued from another Session remains a separate message.

@@ -8,7 +8,47 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
+
+func TestCurrentNodeControllerSessionOwnershipRequiresCurrentNodeBinding(t *testing.T) {
+	taskID := workflow.TaskID("task-current-session-ownership")
+	reference := currentNodeReferenceForControllerTest(t, string(taskID), "node-current")
+	sessionID, err := runtimeids.ParseSessionID("550e8400-e29b-41d4-a716-446655440302")
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{{Reference: reference}},
+		sessionTaskID: &taskID,
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: reference,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	owned, err := controller.SessionHasCurrentWorkflowTask(context.Background(), sessionID.String())
+	if err != nil || !owned {
+		t.Fatalf("current Workflow ownership = %t, %v, want true", owned, err)
+	}
+	store.mu.Lock()
+	store.interrupted = nil
+	store.mu.Unlock()
+	owned, err = controller.SessionHasCurrentWorkflowTask(context.Background(), sessionID.String())
+	if err != nil || owned {
+		t.Fatalf("historical Workflow ownership = %t, %v, want false", owned, err)
+	}
+}
 
 func TestCurrentNodeControllerResumeEligibilityRejectsTaskWithoutInterruptedExecutableCurrentNodes(t *testing.T) {
 	taskID := workflow.TaskID("task-resume-eligibility-empty")
@@ -32,6 +72,68 @@ func TestCurrentNodeControllerResumeEligibilityRejectsTaskWithoutInterruptedExec
 	}
 	if len(store.resumed) != 0 {
 		t.Fatalf("resume mutations = %v, want none", store.resumed)
+	}
+}
+
+func TestCurrentNodeControllerRetainedResumeRejectsInvalidSelectedNodeBeforeSiblingMutation(t *testing.T) {
+	taskID := workflow.TaskID("task-selected-resume-invalid")
+	selected := currentNodeReferenceForControllerTest(t, string(taskID), "node-selected")
+	sibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-sibling")
+	sessionID, err := runtimeids.ParseSessionID("550e8400-e29b-41d4-a716-446655440301")
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{Reference: selected},
+			{Reference: sibling},
+		},
+		resumeClassifications: []workflowstore.CurrentNodeResumeClassification{
+			{
+				CurrentNode: workflow.CurrentNode{Reference: selected},
+				Diagnostics: []workflowstore.CurrentNodeResumeValidationDiagnostic{{
+					Code:           workflowstore.CurrentNodeResumeParameterNotMaterializedCode,
+					CurrentNode:    selected,
+					EnteringEdgeID: workflow.EdgeID("edge-selected"),
+					ParameterKey:   "reviewer",
+				}},
+			},
+			{CurrentNode: workflow.CurrentNode{Reference: sibling}},
+		},
+		sessionTaskID: &taskID,
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: selected,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 2)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	continuation, err := NewWorkflowSessionContinuation("continue", nil)
+	if err != nil {
+		t.Fatalf("NewWorkflowSessionContinuation: %v", err)
+	}
+
+	_, err = controller.ReactivateWorkflowSessionWithAcceptance(
+		context.Background(),
+		sessionID,
+		func(commit func() (bool, error)) (bool, error) { return commit() },
+		context.Background(),
+		continuation,
+	)
+	var validationErr *workflowstore.CurrentNodeResumeValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("retained Resume error = %T %v, want selected validation error", err, err)
+	}
+	if len(store.resumed) != 0 {
+		t.Fatalf("resumed Current Nodes = %v, want none before selected validation succeeds", store.resumed)
 	}
 }
 

@@ -350,7 +350,7 @@ type staticRuntimeControlWorkflowTaskResolver struct {
 	workflow bool
 }
 
-func (r staticRuntimeControlWorkflowTaskResolver) SessionHasWorkflowTask(context.Context, string) (bool, error) {
+func (r staticRuntimeControlWorkflowTaskResolver) SessionHasCurrentWorkflowTask(context.Context, string) (bool, error) {
 	return r.workflow, nil
 }
 
