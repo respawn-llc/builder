@@ -25,6 +25,18 @@ describe("Chat notice policy", () => {
         bodyKind: null,
       },
       {
+        name: "worktree enter with structured facts",
+        row: noticeRow({ MessageType: "worktree_mode", Worktree: worktreeFacts() }),
+        bodyKind: "plain_text",
+        defaultExpanded: false,
+      },
+      {
+        name: "worktree exit with structured facts",
+        row: noticeRow({ MessageType: "worktree_mode_exit", Worktree: worktreeFacts() }),
+        bodyKind: "plain_text",
+        defaultExpanded: false,
+      },
+      {
         name: "empty unknown context",
         row: noticeRow({
           Visibility: "detail",
@@ -118,4 +130,13 @@ function noticeRow(input: Partial<Notice> & { Visibility?: ChatTranscriptCommitt
     ReviewerFeedback: null,
     ReviewerError: null,
   } satisfies ChatTranscriptCommittedRow;
+}
+
+function worktreeFacts() {
+  return {
+    Branch: "feature",
+    WorktreePath: "/workspace/.worktrees/feature",
+    WorkspaceRoot: "/workspace",
+    EffectiveCwd: "/workspace/.worktrees/feature",
+  };
 }

@@ -88,7 +88,16 @@ function shouldOmitNotice(row: ChatTranscriptCommittedRow, notice: TranscriptNot
   return (
     isKnownDeveloperContext(notice) &&
     notice.Reason !== "compaction" &&
+    !hasWorktreeFacts(notice) &&
     noticeRawText(notice).trim().length === 0
+  );
+}
+
+function hasWorktreeFacts(notice: TranscriptNotice): boolean {
+  return (
+    (notice.MessageType === "worktree_mode" || notice.MessageType === "worktree_mode_exit") &&
+    notice.Worktree !== undefined &&
+    notice.Worktree !== null
   );
 }
 
