@@ -23,5 +23,5 @@
 - [x] Investigate the flaky test failure in run `33842807488`: the existing `core/server/runtime/TestStoppedHumanInputPublishesPendingWorkChangedWithoutBlockingList` test panicked while closing an already-closed channel; all other server packages passed.
 - [x] Rerun the failed jobs for run `33842807488`; the rerun completed successfully.
 - [x] Confirm the follow-up CI run for the retained-goal and submission-failure fixes: run `33844094378` passed build, desktop_bundle, docs, gui, gui-native, lint, test, and windows-installer; CodeRabbit reported pass/rate limited.
-- [x] Confirm the latest CI run after the final retained-session reactivation fix completes successfully: rerun of CI run `33853779522` passed all build, desktop, docs, GUI, lint, test, and installer jobs for head `4aa5c6862`.
+- [x] Confirm the latest CI run after the final retained-session reactivation fix completes successfully: CI run `33858791845` passed all build, desktop, docs, GUI, lint, test, and installer jobs for head `9a5daf913`.
 - [ ] Run `kent task complete --commentary ... --pr_url ... --worktree_session_id ...`.
