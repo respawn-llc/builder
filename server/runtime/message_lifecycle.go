@@ -481,7 +481,7 @@ func startsAgentStep(message llm.Message) bool {
 
 func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	result, err := m.CommitPendingUserInjections(stepID, selection)
-	if err != nil || result.disposition != userInjectionFlushContinue {
+	if err != nil {
 		return result, err
 	}
 	if m.background != nil {
@@ -495,55 +495,44 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 }
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
-	var pending []queuedUserMessage
-	switch selected := selection.(type) {
+	var claim *queuedUserMessageClaim
+	switch selection.(type) {
 	case allPendingUserInjectionSelection:
-		pending = m.queue.Drain()
+		claim = m.queue.ClaimAll()
 	case steerUserInjectionSelection:
-		if len(selected.queueItemIDs) > 0 {
-			pending = m.queue.DrainByID(selected.queueItemIDs)
-		}
+		claim = m.queue.ClaimSteers()
 	default:
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
-	if len(pending) != 0 {
-		m.engine.publishPendingWorkChanged()
+	if claim == nil {
+		return userInjectionCommitResult{}, nil
 	}
-	return m.commitPendingUserInjections(stepID, pending)
+	return m.commitPendingUserInjections(stepID, claim)
 }
 
-func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pending []queuedUserMessage) (userInjectionCommitResult, error) {
+func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, claim *queuedUserMessageClaim) (userInjectionCommitResult, error) {
 	e := m.engine
-	result := userInjectionCommitResult{disposition: userInjectionFlushContinue}
+	result := userInjectionCommitResult{}
+	defer m.queue.ReleaseClaim(claim)
 
-	groups, err := queuedUserMessageFlushGroups(pending)
+	groups, err := queuedUserMessageFlushGroups(claim.items)
 	if err != nil {
 		return result, err
 	}
-	for groupIndex, group := range groups {
+	for _, group := range groups {
 		receipt, err := e.steerWithCommitReceipt(
 			stepID,
 			steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems),
 		)
 		result.receipt = receipt
-		if err != nil {
-			if !result.receipt.Committed {
-				tail := make([]queuedUserMessage, 0, len(groups)-groupIndex)
-				for _, remaining := range groups[groupIndex:] {
-					for _, item := range remaining.queueItems {
-						for _, original := range pending {
-							if original.message.ID == item.ID {
-								tail = append(tail, original)
-								break
-							}
-						}
-					}
-				}
-				err = errors.Join(err, e.steer(stepID, steerQueuedUserMessageRestoreIntent(tail)))
+		if !receipt.Committed {
+			if err == nil {
+				err = errors.New("queued user message flush completed without a durable commit")
 			}
 			return result, err
 		}
 		committedQueueItemIDs := queuedUserMessageIDSet(group.queueItems)
+		m.queue.FinalizeClaimItems(claim, committedQueueItemIDs)
 		if result.queueItemIDs == nil {
 			result.queueItemIDs = committedQueueItemIDs
 		} else {
@@ -551,10 +540,13 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 				result.queueItemIDs[queueItemID] = struct{}{}
 			}
 		}
-		e.unmarkQueuedUserInjectionForAutoDrainSet(committedQueueItemIDs)
 		e.completeLiveRunQueueItems(committedQueueItemIDs)
 		result.startedStep = result.startedStep || startsAgentStep(group.message)
 		result.flushed++
+		e.publishPendingWorkChanged()
+		if err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }
@@ -611,13 +603,6 @@ func (m *defaultMessageLifecycle) PendingUserMessageEntries() []queuedUserMessag
 	return m.queue.EntrySnapshot()
 }
 
-func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUserMessage) {
-	if m == nil || m.queue == nil {
-		return
-	}
-	m.queue.RestoreFront(items)
-}
-
 func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool) {
 	if m == nil || m.queue == nil {
 		return queuedUserMessage{}, false
@@ -627,6 +612,10 @@ func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (
 
 func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
 	return m != nil && m.queue != nil && m.queue.HasPending()
+}
+
+func (m *defaultMessageLifecycle) HasPendingUserSteers() bool {
+	return m != nil && m.queue != nil && m.queue.HasPendingSteers()
 }
 
 func newActiveMetaContextBuilder(meta session.Meta, executionRoot, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {

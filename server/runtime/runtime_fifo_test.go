@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -98,6 +100,87 @@ func TestRuntimeOperationFIFODefersAcceptedOperationsUntilTheProtectedStepBounda
 	result, err := deferred.Await(t.Context())
 	if err != nil || result != "applied" {
 		t.Fatalf("deferred Runtime operation = %q, %v; want applied, nil", result, err)
+	}
+}
+
+func TestAgentStepBoundaryDrainsEveryAcceptedSteerBeforeNextRequest(t *testing.T) {
+	first := commentaryResponse("working", llm.ToolCall{
+		ID:    "boundary-tool",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"true"}`),
+	})
+	client, requestStarted, releaseRequest := newGatedHookClient(first, finalTextResponse("done"))
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{Model: "gpt-5"},
+	)
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(t.Context(), "start")
+		runDone <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("initial Agent Step did not start")
+	}
+
+	texts := []string{"first steer", "second steer", "third steer"}
+	expectedMessages := make([]string, 0, len(texts))
+	steerDone := make(chan error, len(texts))
+	for _, text := range texts {
+		steer, err := NewAgentSteer(runtimeids.NewSessionID(), text)
+		if err != nil {
+			t.Fatalf("create Agent Steer %q: %v", text, err)
+		}
+		expectedMessages = append(expectedMessages, messageContent(steer.Message()))
+		go func() {
+			_, accepted, err := engine.QueueAgentSteerForActiveRun(t.Context(), steer, nil)
+			if err == nil && !accepted {
+				err = errors.New("Agent Steer was not accepted")
+			}
+			steerDone <- err
+		}()
+	}
+	waitForAcceptedRuntimeOperationCount(t, engine, len(texts))
+	releaseRequest()
+	for range texts {
+		if err := <-steerDone; err != nil {
+			t.Fatalf("accept Agent Steer: %v", err)
+		}
+	}
+	if err := <-runDone; err != nil {
+		t.Fatalf("Agent Turn: %v", err)
+	}
+
+	client.mu.Lock()
+	requests := append([]llm.Request(nil), client.calls...)
+	client.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(requests))
+	}
+	found := make(map[string]bool, len(expectedMessages))
+	for _, message := range requestMessages(requests[1]) {
+		if message.Role == llm.RoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == llm.MessageTypeAgentSteer {
+			found[messageContent(message)] = true
+		}
+	}
+	for _, message := range expectedMessages {
+		if !found[message] {
+			t.Fatalf("next provider request omitted an accepted Agent Steer: %+v", requestMessages(requests[1]))
+		}
+	}
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 0 {
+		t.Fatalf("Pending Work after next request = %+v, want empty", pending.Items)
 	}
 }
 
@@ -1125,6 +1208,64 @@ func TestManualCompactionReleasesRuntimeFIFOAfterScheduling(t *testing.T) {
 		t.Fatalf("apply setting while manual compaction is held: %v", err)
 	}
 	close(client.release)
+}
+
+func TestSteersAcceptedDuringCompactionFullyDrainIntoTheFollowingAgentStep(t *testing.T) {
+	client := &heldRuntimeCompactionClient{
+		fakeCompactionClient: &fakeCompactionClient{
+			compactionResponses: []llm.CompactionResponse{{
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					EncryptedContent: textutil.Value("checkpoint"),
+				},
+				Usage: llm.Usage{WindowTokens: 200000},
+			}},
+			responses: []llm.Response{finalTextResponse("done")},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", SupportedThinkingValues: []string{"low"}},
+	)
+	engine.compactionRuntimeState().SetManualCompactionEligible(true)
+
+	if err := engine.CompactContext(t.Context(), ""); err != nil {
+		t.Fatalf("schedule manual compaction: %v", err)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for manual compaction")
+	}
+
+	texts := []string{"first steer", "second steer", "third steer"}
+	for _, text := range texts {
+		if _, err := engine.QueueUserMessageForAutoDrain(t.Context(), text); err != nil {
+			t.Fatalf("accept %q during compaction: %v", text, err)
+		}
+	}
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != len(texts) {
+		t.Fatalf("Pending Work during compaction = %+v, want every accepted Steer", pending.Items)
+	}
+
+	close(client.release)
+	waitEngineLifecycleTasks(t, engine)
+
+	client.mu.Lock()
+	requests := append([]llm.Request(nil), client.calls...)
+	client.mu.Unlock()
+	if len(requests) != 1 {
+		t.Fatalf("post-compaction provider requests = %d, want 1", len(requests))
+	}
+	assertRequestHasUserMessage(t, requests[0], strings.Join(texts, "\n\n"), true)
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 0 {
+		t.Fatalf("Pending Work after post-compaction request = %+v, want empty", pending.Items)
+	}
 }
 
 type heldRuntimeShell struct {

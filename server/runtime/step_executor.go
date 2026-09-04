@@ -251,12 +251,7 @@ func registerAcceptedOutputPosition(
 }
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
-	result, err := s.runStepLoopWithOptions(ctx, stepID, options)
-	var stopped *queuedUserFlushStoppedError
-	if errors.As(err, &stopped) && !s.engine.currentNodeExecutionActive() {
-		return stepLoopResult{}, nil
-	}
-	return result, err
+	return s.runStepLoopWithOptions(ctx, stepID, options)
 }
 
 func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
@@ -540,13 +535,10 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 }
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) (int, error) {
-	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
+	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections())
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
 		return 0, err
-	}
-	if result.disposition == userInjectionFlushStopped {
-		return 0, &queuedUserFlushStoppedError{}
 	}
 	if result.startedStep {
 		*mismatchWarningCommitted = false
@@ -555,13 +547,10 @@ func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options 
 }
 
 func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) error {
-	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
+	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections())
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
 		return err
-	}
-	if result.disposition == userInjectionFlushStopped {
-		return &queuedUserFlushStoppedError{}
 	}
 	if result.startedStep {
 		*mismatchWarningCommitted = false

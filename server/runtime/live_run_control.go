@@ -61,7 +61,6 @@ type LiveRunWaitHandle struct {
 
 type liveRunCoordinator struct {
 	mu                          sync.Mutex
-	queueFlushCommitMu          sync.Mutex
 	current                     *liveRunGroup
 	stoppedQueueItems           map[runtimeids.QueueItemID]struct{}
 	stoppedPublishingQueueItems map[runtimeids.QueueItemID]struct{}
@@ -310,9 +309,7 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Con
 		if err := callerCtx.Err(); err != nil {
 			return false, err
 		}
-		finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
-			e.markQueuedUserInjectionForAutoDrain(queueItemID)
-		})
+		finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID))
 		if !finalized {
 			return false, context.Canceled
 		}
@@ -330,7 +327,6 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Con
 		if queueErr != nil {
 			queueItemID := mustQueueItemID(item.ID)
 			e.liveRun.finishQueueItemPublication(queueItemID)
-			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 			e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
 			return false, queueErr
 		}
@@ -408,11 +404,6 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 		return
 	}
 	stringIDs := stringQueueItemIDSet(ids)
-	rawIDs := make([]string, 0, len(stringIDs))
-	for id := range stringIDs {
-		rawIDs = append(rawIDs, id)
-	}
-	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
 	e.outputMutationMu.Lock()
 	failed := map[runtimeids.QueueItemID]struct{}{}
 	removed := e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
@@ -425,49 +416,6 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 		e.publishPendingWorkChanged()
 	}
 	e.liveRun.clearStoppedQueueItems(failed)
-}
-
-func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queuedUserMessage {
-	if e == nil || len(items) == 0 {
-		return items
-	}
-	ids := make(map[runtimeids.QueueItemID]struct{}, len(items))
-	for _, item := range items {
-		ids[mustQueueItemID(item.message.ID)] = struct{}{}
-	}
-	stopped := e.liveRun.takeStoppedQueueItems(ids)
-	if len(stopped) == 0 {
-		return items
-	}
-	filtered := items[:0]
-	removed := make([]QueuedUserMessage, 0, len(stopped))
-	e.outputMutationMu.Lock()
-	for _, item := range items {
-		id := mustQueueItemID(item.message.ID)
-		if _, ok := stopped[id]; ok {
-			e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-			removed = append(removed, item.message)
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	e.emitInterruptedHumanInputs(removed)
-	e.outputMutationMu.Unlock()
-	return filtered
-}
-
-func (e *Engine) commitLiveRunQueueItemsUnlessStopped(items []queuedUserMessage, commit func() error) (bool, error) {
-	if e == nil {
-		if commit == nil {
-			return true, nil
-		}
-		return true, commit()
-	}
-	ids := make(map[runtimeids.QueueItemID]struct{}, len(items))
-	for _, item := range items {
-		ids[mustQueueItemID(item.message.ID)] = struct{}{}
-	}
-	return e.liveRun.commitQueueItemsUnlessStopped(ids, commit)
 }
 
 func (c *liveRunCoordinator) hasActive() bool {
@@ -661,7 +609,7 @@ func (c *liveRunCoordinator) beginAdmission() (liveRunAdmission, bool) {
 	return liveRunAdmission{group: c.current}, true
 }
 
-func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueItemID runtimeids.QueueItemID, markAutoDrain func(string)) bool {
+func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueItemID runtimeids.QueueItemID) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.current == nil || c.current != admission.group || c.current.status == RunStatusFailed || c.current.status == RunStatusInterrupted {
@@ -671,22 +619,16 @@ func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueIt
 		c.current.reservations--
 	}
 	c.current.trackQueuedItemForLiveRun(queueItemID)
-	if markAutoDrain != nil {
-		markAutoDrain(queueItemID.String())
-	}
 	return true
 }
 
-func (c *liveRunCoordinator) beginQueueItemPublication(queueItemID runtimeids.QueueItemID, markAutoDrain func(string)) bool {
+func (c *liveRunCoordinator) beginQueueItemPublication(queueItemID runtimeids.QueueItemID) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.current == nil || (c.current.status != RunStatusRunning && c.current.status != RunStatusCompleted) {
 		return false
 	}
 	c.current.trackQueuedItemForLiveRun(queueItemID)
-	if markAutoDrain != nil {
-		markAutoDrain(queueItemID.String())
-	}
 	return true
 }
 
@@ -795,8 +737,6 @@ func (c *liveRunCoordinator) interruptMatchingStep(snapshot *RunSnapshot) (bool,
 }
 
 func (c *liveRunCoordinator) interruptWhere(matches func(*liveRunGroup) bool) (bool, map[runtimeids.QueueItemID]struct{}, bool) {
-	c.queueFlushCommitMu.Lock()
-	defer c.queueFlushCommitMu.Unlock()
 	c.mu.Lock()
 	group := c.current
 	if group == nil || !matches(group) {
@@ -841,63 +781,6 @@ func (c *liveRunCoordinator) clearStoppedQueueItems(ids map[runtimeids.QueueItem
 	if len(c.stoppedQueueItems) == 0 {
 		c.stoppedQueueItems = nil
 	}
-}
-
-func (c *liveRunCoordinator) takeStoppedQueueItems(ids map[runtimeids.QueueItemID]struct{}) map[runtimeids.QueueItemID]struct{} {
-	if c == nil || len(ids) == 0 {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := map[runtimeids.QueueItemID]struct{}{}
-	for id := range ids {
-		if _, stopped := c.stoppedQueueItems[id]; stopped {
-			out[id] = struct{}{}
-			delete(c.stoppedQueueItems, id)
-		}
-	}
-	if len(c.stoppedQueueItems) == 0 {
-		c.stoppedQueueItems = nil
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (c *liveRunCoordinator) commitQueueItemsUnlessStopped(ids map[runtimeids.QueueItemID]struct{}, commit func() error) (bool, error) {
-	if c == nil {
-		if commit == nil {
-			return true, nil
-		}
-		return true, commit()
-	}
-	c.queueFlushCommitMu.Lock()
-	defer c.queueFlushCommitMu.Unlock()
-	c.mu.Lock()
-	stopped := map[runtimeids.QueueItemID]struct{}{}
-	for id := range ids {
-		if _, ok := c.stoppedQueueItems[id]; ok {
-			stopped[id] = struct{}{}
-		}
-	}
-	if len(stopped) > 0 {
-		for id := range stopped {
-			delete(c.stoppedQueueItems, id)
-		}
-		if len(c.stoppedQueueItems) == 0 {
-			c.stoppedQueueItems = nil
-		}
-		c.mu.Unlock()
-		return false, nil
-	}
-	if commit == nil {
-		c.mu.Unlock()
-		return true, nil
-	}
-	c.mu.Unlock()
-	err := commit()
-	return true, err
 }
 
 func (c *liveRunCoordinator) markStoppedQueueItemsLocked(ids map[runtimeids.QueueItemID]struct{}) {

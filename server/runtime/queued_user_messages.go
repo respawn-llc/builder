@@ -15,13 +15,22 @@ import (
 var errInvalidQueuedUserMessage = errors.New("queued message requires a role and content")
 
 type queuedUserMessageStore struct {
-	mu      sync.Mutex
-	pending []queuedUserMessage
+	mu          sync.Mutex
+	items       []queuedUserMessage
+	nextClaimID queuedUserMessageClaimID
 }
 
 type queuedUserMessage struct {
 	message        QueuedUserMessage
 	steerAdmission *pendingWorkSteerAdmission
+	claimID        *queuedUserMessageClaimID
+}
+
+type queuedUserMessageClaimID uint64
+
+type queuedUserMessageClaim struct {
+	id    queuedUserMessageClaimID
+	items []queuedUserMessage
 }
 
 func newQueuedUserMessageStore() *queuedUserMessageStore {
@@ -57,7 +66,7 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations 
 		association = associations[0]
 	}
 	s.mu.Lock()
-	s.pending = append(s.pending, queuedUserMessage{
+	s.items = append(s.items, queuedUserMessage{
 		message:        item,
 		steerAdmission: clonePendingWorkSteerAdmission(association.steerAdmission),
 	})
@@ -84,19 +93,92 @@ func (s *queuedUserMessageStore) DiscardItem(queueItemID string) (queuedUserMess
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	filtered := s.pending[:0]
+	filtered := s.items[:0]
 	removed := false
 	var item queuedUserMessage
-	for _, pending := range s.pending {
-		if pending.message.ID == id {
+	for _, pending := range s.items {
+		if pending.message.ID == id && pending.claimID == nil {
 			removed = true
 			item = pending
 			continue
 		}
 		filtered = append(filtered, pending)
 	}
-	s.pending = filtered
+	s.items = filtered
 	return item, removed
+}
+
+func (s *queuedUserMessageStore) ClaimAll() *queuedUserMessageClaim {
+	return s.claim(func(queuedUserMessage) bool { return true })
+}
+
+func (s *queuedUserMessageStore) ClaimSteers() *queuedUserMessageClaim {
+	return s.claim(func(pending queuedUserMessage) bool {
+		return pending.steerAdmission != nil
+	})
+}
+
+func (s *queuedUserMessageStore) claim(selected func(queuedUserMessage) bool) *queuedUserMessageClaim {
+	if s == nil || selected == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := s.nextClaimID + 1
+	if next == 0 {
+		panic("queued user message claim identity overflow")
+	}
+	items := make([]queuedUserMessage, 0)
+	for index := range s.items {
+		pending := &s.items[index]
+		if pending.claimID != nil || !selected(*pending) {
+			continue
+		}
+		pending.claimID = &next
+		items = append(items, *pending)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	s.nextClaimID = next
+	return &queuedUserMessageClaim{id: next, items: items}
+}
+
+func (s *queuedUserMessageStore) FinalizeClaimItems(claim *queuedUserMessageClaim, ids map[string]struct{}) []queuedUserMessage {
+	if s == nil || claim == nil || len(ids) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	finalized := make([]queuedUserMessage, 0, len(ids))
+	remaining := s.items[:0]
+	for _, pending := range s.items {
+		_, selected := ids[strings.TrimSpace(pending.message.ID)]
+		if selected && pending.claimID != nil && *pending.claimID == claim.id {
+			finalized = append(finalized, pending)
+			continue
+		}
+		remaining = append(remaining, pending)
+	}
+	s.items = remaining
+	if len(finalized) != len(ids) {
+		panic("queued user message claim lost an owned item before finalization")
+	}
+	return finalized
+}
+
+func (s *queuedUserMessageStore) ReleaseClaim(claim *queuedUserMessageClaim) {
+	if s == nil || claim == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.items {
+		pending := &s.items[index]
+		if pending.claimID != nil && *pending.claimID == claim.id {
+			pending.claimID = nil
+		}
+	}
 }
 
 func (s *queuedUserMessageStore) Drain() []queuedUserMessage {
@@ -104,8 +186,16 @@ func (s *queuedUserMessageStore) Drain() []queuedUserMessage {
 		return nil
 	}
 	s.mu.Lock()
-	pending := append([]queuedUserMessage(nil), s.pending...)
-	s.pending = nil
+	pending := make([]queuedUserMessage, 0, len(s.items))
+	remaining := s.items[:0]
+	for _, item := range s.items {
+		if item.claimID != nil {
+			remaining = append(remaining, item)
+			continue
+		}
+		pending = append(pending, item)
+	}
+	s.items = remaining
 	s.mu.Unlock()
 	return pending
 }
@@ -117,26 +207,16 @@ func (s *queuedUserMessageStore) DrainByID(ids map[string]struct{}) []queuedUser
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	matched := make([]queuedUserMessage, 0, len(ids))
-	remaining := s.pending[:0]
-	for _, pending := range s.pending {
-		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; ok {
+	remaining := s.items[:0]
+	for _, pending := range s.items {
+		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; ok && pending.claimID == nil {
 			matched = append(matched, pending)
 			continue
 		}
 		remaining = append(remaining, pending)
 	}
-	s.pending = remaining
+	s.items = remaining
 	return matched
-}
-
-func (s *queuedUserMessageStore) RestoreFront(items []queuedUserMessage) {
-	if s == nil || len(items) == 0 {
-		return
-	}
-	restored := append([]queuedUserMessage(nil), items...)
-	s.mu.Lock()
-	s.pending = append(restored, s.pending...)
-	s.mu.Unlock()
 }
 
 func (s *queuedUserMessageStore) HasPending() bool {
@@ -145,7 +225,21 @@ func (s *queuedUserMessageStore) HasPending() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.pending) > 0
+	return len(s.items) > 0
+}
+
+func (s *queuedUserMessageStore) HasPendingSteers() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, pending := range s.items {
+		if pending.steerAdmission != nil && pending.claimID == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *queuedUserMessageStore) Snapshot() []QueuedUserMessage {
@@ -154,8 +248,8 @@ func (s *queuedUserMessageStore) Snapshot() []QueuedUserMessage {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]QueuedUserMessage, 0, len(s.pending))
-	for _, pending := range s.pending {
+	out := make([]QueuedUserMessage, 0, len(s.items))
+	for _, pending := range s.items {
 		out = append(out, pending.message)
 	}
 	return out
@@ -167,8 +261,8 @@ func (s *queuedUserMessageStore) EntrySnapshot() []queuedUserMessage {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]queuedUserMessage, 0, len(s.pending))
-	for _, pending := range s.pending {
+	out := make([]queuedUserMessage, 0, len(s.items))
+	for _, pending := range s.items {
 		out = append(out, queuedUserMessage{
 			message:        pending.message,
 			steerAdmission: clonePendingWorkSteerAdmission(pending.steerAdmission),

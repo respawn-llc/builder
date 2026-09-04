@@ -254,17 +254,17 @@ func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Me
 }
 
 func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(ctx context.Context, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, err error) {
-	assistant, receipt, _, err = e.submitQueuedUserMessages(ctx, nil, onActive)
+	assistant, receipt, _, err = e.submitQueuedUserMessages(ctx, allPendingUserInjectionSelection{}, onActive)
 	return
 }
 
-func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, consumedQueueItemIDs map[string]struct{}, err error) {
+func (e *Engine) submitQueuedUserMessages(ctx context.Context, selection userInjectionSelection, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, consumedQueueItemIDs map[string]struct{}, err error) {
 	e.ensureOrchestrationCollaborators()
 	for {
 		if e.failQueuedUserWorkIfTerminal() {
 			return llm.Message{}, receipt, consumedQueueItemIDs, nil
 		}
-		if len(queueItemIDs) > 0 {
+		if _, steerOnly := selection.(steerUserInjectionSelection); steerOnly {
 			if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
 				return llm.Message{}, receipt, consumedQueueItemIDs, err
 			}
@@ -279,10 +279,6 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
-			var selection userInjectionSelection = allPendingUserInjectionSelection{}
-			if len(queueItemIDs) > 0 {
-				selection = steerUserInjections(queueItemIDs)
-			}
 			flushResult, err := e.flushPendingUserInjections(stepID, selection)
 			if flushResult.receipt.Committed {
 				receipt = flushResult.receipt
@@ -291,9 +287,6 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 				return err
 			}
 			consumedQueueItemIDs = flushResult.queueItemIDs
-			if flushResult.disposition == userInjectionFlushStopped {
-				return nil
-			}
 			if flushResult.flushed == 0 {
 				return nil
 			}
@@ -376,41 +369,6 @@ func (e *Engine) HasQueuedUserWork() bool {
 	return false
 }
 
-func (e *Engine) markQueuedUserInjectionForAutoDrain(queueItemID string) {
-	queueItemID = strings.TrimSpace(queueItemID)
-	if queueItemID == "" {
-		return
-	}
-	e.queuedUserWorkMu.Lock()
-	if e.queuedUserWorkAutoDrainIDs == nil {
-		e.queuedUserWorkAutoDrainIDs = make(map[string]struct{})
-	}
-	e.queuedUserWorkAutoDrainIDs[queueItemID] = struct{}{}
-	e.queuedUserWorkMu.Unlock()
-}
-
-func (e *Engine) unmarkQueuedUserInjectionForAutoDrain(queueItemIDs ...string) {
-	e.queuedUserWorkMu.Lock()
-	for _, queueItemID := range queueItemIDs {
-		delete(e.queuedUserWorkAutoDrainIDs, strings.TrimSpace(queueItemID))
-	}
-	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
-		e.queuedUserWorkAutoDrainIDs = nil
-	}
-	e.queuedUserWorkMu.Unlock()
-}
-
-func (e *Engine) unmarkQueuedUserInjectionForAutoDrainSet(queueItemIDs map[string]struct{}) {
-	if len(queueItemIDs) == 0 {
-		return
-	}
-	ids := make([]string, 0, len(queueItemIDs))
-	for queueItemID := range queueItemIDs {
-		ids = append(ids, queueItemID)
-	}
-	e.unmarkQueuedUserInjectionForAutoDrain(ids...)
-}
-
 func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if e == nil {
 		return false
@@ -425,11 +383,10 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if e.failQueuedUserWorkIfTerminal() {
 		return false
 	}
-	e.queuedUserWorkMu.Lock()
-	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
-		e.queuedUserWorkMu.Unlock()
+	if !e.messageFlow.HasPendingUserSteers() {
 		return false
 	}
+	e.queuedUserWorkMu.Lock()
 	if e.queuedUserWorkScheduled {
 		e.queuedUserWorkMu.Unlock()
 		return true
@@ -451,14 +408,14 @@ func (e *Engine) processQueuedUserWork(
 	ctx context.Context,
 	completion runtimeDeferred[struct{}],
 ) (runtimeAbort *resultGroupFatal) {
-	completed := false
+	reschedulePending := false
 	defer func() {
 		e.clearQueuedUserWorkScheduled(completion, nil)
-		if !completed {
+		if !reschedulePending {
 			return
 		}
 		e.ensureOrchestrationCollaborators()
-		if e.hasQueuedUserAutoDrainIDs() {
+		if e.messageFlow.HasPendingUserSteers() {
 			e.scheduleQueuedUserInjectionsIfIdle()
 		}
 	}()
@@ -469,8 +426,8 @@ func (e *Engine) processQueuedUserWork(
 		e.surfaceRunError(err)
 		return nil
 	}
-	ids := e.queuedUserAutoDrainIDSnapshot()
-	_, _, _, err := e.submitQueuedUserMessages(ctx, ids, nil)
+	_, receipt, _, err := e.submitQueuedUserMessages(ctx, steerUserInjections(), nil)
+	reschedulePending = receipt.Committed
 	if err != nil {
 		if fatal, abort := resultGroupFatalFromError(err); abort {
 			return fatal
@@ -478,7 +435,7 @@ func (e *Engine) processQueuedUserWork(
 		e.surfaceRunError(err)
 		return nil
 	}
-	completed = true
+	reschedulePending = true
 	return nil
 }
 
@@ -520,18 +477,6 @@ func (e *Engine) clearQueuedUserWorkScheduled(
 	e.queuedUserWorkCompletion = runtimeDeferred[struct{}]{}
 	e.queuedUserWorkMu.Unlock()
 	completion.complete(struct{}{}, err)
-}
-
-func (e *Engine) hasQueuedUserAutoDrainIDs() bool {
-	e.queuedUserWorkMu.Lock()
-	defer e.queuedUserWorkMu.Unlock()
-	return len(e.queuedUserWorkAutoDrainIDs) > 0
-}
-
-func (e *Engine) queuedUserAutoDrainIDSnapshot() map[string]struct{} {
-	e.queuedUserWorkMu.Lock()
-	defer e.queuedUserWorkMu.Unlock()
-	return cloneMapIfNonEmpty(e.queuedUserWorkAutoDrainIDs)
 }
 
 func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {
