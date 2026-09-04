@@ -48,6 +48,31 @@ func TestCommitPendingUserSteersKeepsUncommittedTailVisibleAfterCommittedFailure
 	}
 }
 
+func TestCommitPendingUserSteersReportsCommittedProgressBeforeUncommittedTailFailure(t *testing.T) {
+	observer := newCallbackPersistenceObserver(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(observer))
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	stepID := runtimeTestStepID("queued-steer-partial-commit")
+	restoreStep := setTestActiveStep(engine, stepID)
+	t.Cleanup(restoreStep)
+	queued := queueMessageLifecycleTestSteers(t, engine, "first", "second", "third")
+
+	observer.Arm(func() {
+		mustBlockTestEventLogAppends(t, store)
+	})
+	result, err := engine.messageFlow.CommitPendingUserInjections(stepID, steerUserInjections())
+	if err == nil {
+		t.Fatal("later queued Steer did not surface the blocked event-log append")
+	}
+	if !result.receipt.Committed || result.flushed != 1 {
+		t.Fatalf("commit result = %+v, want one committed group before the uncommitted failure", result)
+	}
+	pending := engine.messageFlow.PendingUserMessages()
+	if len(pending) != 2 || pending[0].ID != queued[1].ID || pending[1].ID != queued[2].ID {
+		t.Fatalf("pending tail after partial commit = %+v, want second and third Steers", pending)
+	}
+}
+
 func TestPendingSteersRemainProjectedWhileTheirBoundaryCommitIsInFlight(t *testing.T) {
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))

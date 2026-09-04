@@ -524,7 +524,9 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, cla
 			stepID,
 			steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems),
 		)
-		result.receipt = receipt
+		if receipt.Committed {
+			result.receipt = receipt
+		}
 		if !receipt.Committed {
 			if err == nil {
 				err = errors.New("queued user message flush completed without a durable commit")
