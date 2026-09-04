@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 
-import { readLastProjectRoute, writeLastProjectRoute } from "./projectRoutePersistence";
+import {
+  readLastProjectRoute,
+  writeLastProjectContentTab,
+  writeLastProjectRoute,
+} from "./projectRoutePersistence";
 
 const storageKey = "desktop.lastProjectRoute";
 const canonicalWorkflowID = "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0";
@@ -51,9 +55,25 @@ it("writes a canonical workflow selector unchanged", () => {
 });
 
 it("writes a Home Project destination unchanged", () => {
-  writeLastProjectRoute({ kind: "home_project", projectId: "project-1" });
+  writeLastProjectRoute({ contentTab: "sessions", kind: "home_project", projectId: "project-1" });
 
-  expect(readLastProjectRoute()).toEqual({ kind: "home_project", projectId: "project-1" });
+  expect(readLastProjectRoute()).toEqual({
+    contentTab: "sessions",
+    kind: "home_project",
+    projectId: "project-1",
+  });
+});
+
+it("updates the persisted Home Project content tab", () => {
+  writeLastProjectRoute({ contentTab: "tasks", kind: "home_project", projectId: "project-1" });
+
+  writeLastProjectContentTab("project-1", "sessions");
+
+  expect(readLastProjectRoute()).toEqual({
+    contentTab: "sessions",
+    kind: "home_project",
+    projectId: "project-1",
+  });
 });
 
 class TestStorage implements Storage {

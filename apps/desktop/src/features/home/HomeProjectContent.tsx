@@ -8,11 +8,14 @@ import {
   clearLastProjectRoute,
   formatRelativeTime,
   mainSessionCatalogInfiniteQueryOptions,
+  type ProjectContentTab,
   queryKeys,
   subagentSessionCatalogInfiniteQueryOptions,
   useSessionChatCatalogReturn,
   useAppNavigation,
   useAppServices,
+  readLastProjectRoute,
+  writeLastProjectContentTab,
   type SidebarMode,
 } from "@/app-facade";
 import {
@@ -27,8 +30,6 @@ import {
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectTasksSurface } from "./ProjectTasksSurface";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
-
-type ProjectContentTab = "tasks" | "sessions" | "subagents";
 
 export function HomeProjectContent({
   projectID,
@@ -83,8 +84,15 @@ function ProjectContentTabs({
   const [tab, setTab] = useState<ProjectContentTab>(() => {
     if (catalogReturn === "main") return "sessions";
     if (catalogReturn === "subagent") return "subagents";
+    const lastProjectRoute = readLastProjectRoute();
+    if (lastProjectRoute?.kind === "home_project" && lastProjectRoute.projectId === projectID) {
+      return lastProjectRoute.contentTab ?? "tasks";
+    }
     return "tasks";
   });
+  useEffect(() => {
+    writeLastProjectContentTab(projectID, tab);
+  }, [projectID, tab]);
   const mainSessionsQuery = useInfiniteQuery({
     ...mainSessionCatalogInfiniteQueryOptions(api, projectID),
     enabled: tab === "sessions",

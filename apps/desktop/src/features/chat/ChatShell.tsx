@@ -1,13 +1,10 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { useWindowChromeTitle } from "@/app-facade";
+import { useWindowChromeTitle, type SessionChatTarget } from "@/app-facade";
 import { ErrorState } from "@/ui";
 
-export type SelectedSession = Readonly<{
-  projectID: string;
-  sessionID: string;
-}>;
+export type SelectedSession = Pick<SessionChatTarget, "projectID" | "sessionID">;
 
 export type ChatShellState =
   | Readonly<{ kind: "ready" }>
