@@ -310,7 +310,7 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Con
 		if err := callerCtx.Err(); err != nil {
 			return false, err
 		}
-		finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
+		stepID, finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
 		})
 		if !finalized {
@@ -322,18 +322,21 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Con
 		queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
 			steerAdmission: admission,
 		})
-		if queueErr == nil {
-			item = queuedItem
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-		}
-		e.outputMutationMu.Unlock()
 		if queueErr != nil {
+			e.outputMutationMu.Unlock()
 			queueItemID := mustQueueItemID(item.ID)
 			e.liveRun.finishQueueItemPublication(queueItemID)
 			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 			e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
 			return false, queueErr
 		}
+		item = queuedItem
+		var statusStepID *string
+		if stepID != nil {
+			statusStepID = textutil.Value(stepID.String())
+		}
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false, statusStepID)
+		e.outputMutationMu.Unlock()
 		e.publishPendingWorkChanged()
 		return true, nil
 	})
@@ -661,11 +664,11 @@ func (c *liveRunCoordinator) beginAdmission() (liveRunAdmission, bool) {
 	return liveRunAdmission{group: c.current}, true
 }
 
-func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueItemID runtimeids.QueueItemID, markAutoDrain func(string)) bool {
+func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueItemID runtimeids.QueueItemID, markAutoDrain func(string)) (*runtimeids.StepID, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.current == nil || c.current != admission.group || c.current.status == RunStatusFailed || c.current.status == RunStatusInterrupted {
-		return false
+		return nil, false
 	}
 	if c.current.reservations > 0 {
 		c.current.reservations--
@@ -674,7 +677,8 @@ func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueIt
 	if markAutoDrain != nil {
 		markAutoDrain(queueItemID.String())
 	}
-	return true
+	stepID := c.current.stepID
+	return &stepID, true
 }
 
 func (c *liveRunCoordinator) beginQueueItemPublication(queueItemID runtimeids.QueueItemID, markAutoDrain func(string)) bool {

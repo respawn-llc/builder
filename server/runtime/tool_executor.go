@@ -445,8 +445,13 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 	execution, active := e.currentNodeExecutionConfig()
 	if !active || execution.Controller == nil {
 		result.IsError = true
-		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during current-node execution"})
-		result.Summary = textutil.Value("not in current-node execution")
+		if e.completedWorkflowSession() {
+			result.Output = workflowruntime.ToolErrorPayload(workflowCompletedNodeGuidance)
+			result.Summary = textutil.Value("Workflow Node is already complete")
+		} else {
+			result.Output = mustJSON(map[string]any{"error": "complete_node is only available during current-node execution"})
+			result.Summary = textutil.Value("not in current-node execution")
+		}
 		return result, nil
 	}
 	parsed, err := workflowruntime.DecodeCompletion(call.Input, execution.Contract)

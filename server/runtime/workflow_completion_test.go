@@ -751,41 +751,6 @@ func TestWorkflowModePromptResumedCurrentNodeMessageSkipsTaskAwarenessQueryAndRe
 	}
 }
 
-func TestWorkflowModePromptResumeRejectsMissingCurrentNodeAssignmentBeforeModelRequest(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	counter := &fakeTaskAwarenessSource{
-		awareness: workflowruntime.TaskAwareness{CommentCount: 2},
-	}
-	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
-	workflowCfg.TaskAwarenessSource = counter
-	workflowCfg.TaskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
-	client := &fakeClient{responses: []llm.Response{commentaryResponse(
-		"complete",
-		completeNodeCall(
-			"call_complete",
-			json.RawMessage(`{"commentary":"complete","summary":"done"}`),
-		),
-	)}}
-	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{})
-	before := eng.transcriptRuntimeState().SnapshotItems()
-
-	_, err := eng.SubmitWorkflowTurn(context.Background())
-	if !errors.Is(err, errWorkflowResumeAssignmentUnavailable) {
-		t.Fatalf(
-			"submit resumed workflow turn error = %v, want missing assignment invariant",
-			err,
-		)
-	}
-	assertModelCallCount(t, client, 0)
-	if after := eng.transcriptRuntimeState().SnapshotItems(); !reflect.DeepEqual(after, before) {
-		t.Fatalf("Resume mutated model-visible history: before=%+v after=%+v", before, after)
-	}
-	if got := counter.calls.Load(); got != 0 {
-		t.Fatalf("TaskAwareness calls = %d, want no assignment reconstruction", got)
-	}
-}
-
 func TestWorkflowModePromptSameNodeReentryRefreshesAssignment(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

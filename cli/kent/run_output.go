@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"core/cli/clienterrors"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -19,7 +20,7 @@ type runJSONResult struct {
 	Status      string        `json:"status"`
 	Result      string        `json:"result,omitempty"`
 	SessionID   string        `json:"session_id,omitempty"`
-	SessionName string        `json:"session_name,omitempty"`
+	SessionName *string       `json:"session_name,omitempty"`
 	ContinueID  string        `json:"continue_id,omitempty"`
 	ContinueCmd string        `json:"continue_command,omitempty"`
 	Warnings    []string      `json:"warnings,omitempty"`
@@ -78,6 +79,9 @@ func runErrorMessage(err error) string {
 		default:
 			return "the subagent launch request is invalid"
 		}
+	}
+	if message, ok := clienterrors.WorkflowTaskResumeConflictMessage(err); ok {
+		return message
 	}
 	if message := llmerrors.UserFacingError(err); message != "" {
 		return message

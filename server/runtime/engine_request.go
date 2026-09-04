@@ -86,6 +86,9 @@ func (e *Engine) assembleRequest(ctx context.Context, stepID string, extra []llm
 	if err != nil {
 		return requestAssembly{}, err
 	}
+	if err := e.rejectCompletedStructuredWorkflowContinuation(locked); err != nil {
+		return requestAssembly{}, err
+	}
 	if _, err := e.lockedRequestShape(); err != nil {
 		return requestAssembly{}, err
 	}
@@ -136,7 +139,10 @@ func (e *Engine) assembleRequest(ctx context.Context, stepID string, extra []llm
 	}
 	toolChoiceMode := llm.ToolChoiceModeAutomatic
 	if allowTools {
-		toolChoiceMode = toolChoiceModeForWorkflowCompletion(workflowMode, e.workflowUseRequiredToolCalls())
+		toolChoiceMode = toolChoiceModeForWorkflowCompletion(
+			workflowMode,
+			e.currentNodeExecutionActive() && e.workflowUseRequiredToolCalls(),
+		)
 	}
 	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{
 		ChoiceMode:            toolChoiceMode,
@@ -383,6 +389,20 @@ func (e *Engine) workflowCompletionMode(ctx context.Context) (workflowruntime.Co
 		)
 	}
 	return lockedMode, nil
+}
+
+func (e *Engine) rejectCompletedStructuredWorkflowContinuation(locked session.LockedContract) error {
+	if e == nil || e.currentNodeExecutionActive() || locked.WorkflowCompletionMode == nil {
+		return nil
+	}
+	mode, err := workflowruntime.ParseCompletionMode(string(*locked.WorkflowCompletionMode))
+	if err != nil {
+		return fmt.Errorf("parse completed Workflow Session completion mode: %w", err)
+	}
+	if mode != workflowruntime.CompletionModeStructuredOutput {
+		return nil
+	}
+	return errors.New("completed Workflow Session with structured_output cannot accept an ordinary continuation")
 }
 
 func (e *Engine) systemPrompt(locked session.LockedContract) (string, error) {

@@ -1669,7 +1669,10 @@ func (s *Service) resumeWorkflowTaskAuthorized(
 	}
 	resumed := resumeResult.CurrentNodes
 	if len(resumed) == 0 {
-		return serverapi.WorkflowTaskResumeResponse{}, &workflowexecution.TaskResumeConflictError{TaskID: taskID}
+		return serverapi.WorkflowTaskResumeResponse{}, &workflowexecution.TaskResumeConflictError{
+			TaskID: string(taskID),
+			State:  workflowexecution.TaskResumeConflictNoResumableCurrentNode,
+		}
 	}
 	if preparation == nil {
 		observation.finalize(workflowexecution.TaskPreparationFinalization{

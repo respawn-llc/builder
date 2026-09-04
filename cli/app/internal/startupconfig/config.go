@@ -94,14 +94,24 @@ func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {
 	if sessionID == "" && !req.WorkspaceRootExplicit {
 		sessionID = contextSessionID
 	}
-	plan, err := bootstrap.ResolveConfig(bootstrap.Request{
+	bootstrapRequest := bootstrap.Request{
 		WorkspaceRoot:         workspaceRoot,
 		WorkspaceRootExplicit: req.WorkspaceRootExplicit,
 		SessionID:             sessionID,
 		OpenAIBaseURL:         req.OpenAIBaseURL,
 		OpenAIBaseURLExplicit: req.OpenAIBaseURLExplicit,
 		LoadOptions:           req.LoadOptions,
-	})
+	}
+	if strings.TrimSpace(req.SessionID) != "" {
+		// Existing-session Run Prompt must reach the server before it can
+		// classify a retained Workflow continuation. Provider and base-URL
+		// launch overrides are ignored by that classification, so they must
+		// not make the client-side attach configuration fail first.
+		bootstrapRequest.OpenAIBaseURL = ""
+		bootstrapRequest.OpenAIBaseURLExplicit = false
+		bootstrapRequest.LoadOptions.ProviderOverride = ""
+	}
+	plan, err := bootstrap.ResolveConfig(bootstrapRequest)
 	if err != nil {
 		if sessionID != "" && sessionID == contextSessionID {
 			return RunPromptResult{}, workspaceContextSessionError(contextSessionID, err)

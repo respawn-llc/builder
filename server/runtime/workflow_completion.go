@@ -44,6 +44,19 @@ func workflowCompletionOperatorDiagnostic(
 }
 
 var workflowFinalAnswerNudge = strings.TrimSpace(prompts.WorkflowFinalAnswerNudgePrompt)
+var workflowCompletedNodeGuidance = errors.New("Workflow Node is already complete. Finish with an ordinary final answer.")
+
+func (e *Engine) completedWorkflowSession() bool {
+	if e == nil || e.currentNodeExecutionActive() {
+		return false
+	}
+	locked, configured := e.lockedContractState().Snapshot()
+	if !configured || locked.WorkflowCompletionMode == nil {
+		return false
+	}
+	mode, err := workflowruntime.ParseCompletionMode(string(*locked.WorkflowCompletionMode))
+	return err == nil && mode == workflowruntime.CompletionModeTool
+}
 
 func (e *Engine) workflowCompletionRejectedResult(ctx context.Context, result tools.Result, completionErr error) tools.Result {
 	record, err := e.recordWorkflowProtocolViolation(ctx, workflowruntime.ViolationKindInvalidCompletion, completionErr.Error())
@@ -172,7 +185,7 @@ func (e *Engine) ApplyWorkflowAgentCompletion(
 		if err != nil {
 			return err
 		}
-		e.recordWorkflowTerminalState(workflowCompletionSource(execution.CompletionMode), result)
+		e.recordWorkflowTerminalState(workflowCompletionSource(execution.CompletionMode), result, stepID)
 		return nil
 	})
 	return result, err

@@ -22,6 +22,7 @@ import (
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 
@@ -57,6 +58,43 @@ func TestDialConfiguredRemotePrefersLocalUnixSocket(t *testing.T) {
 		t.Fatalf("ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
+}
+
+func TestRemoteRunPromptDecodesWorkflowResumeConflictErrorFrame(t *testing.T) {
+	source := &serverapi.WorkflowTaskResumeConflictError{
+		TaskID: "task-123", State: serverapi.WorkflowTaskResumeConflictNoResumableCurrentNode,
+	}
+	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
+		for event := range conn.Events() {
+			if event.Err != nil {
+				return
+			}
+			if _, handled, err := handleRemoteTestSetupFrame(ctx, conn, event.Frame, remoteTestSetupResponse{}); handled {
+				if err != nil {
+					return
+				}
+				continue
+			}
+			request := event.Frame.Request()
+			_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewErrorResponseWithData(
+				request.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData(),
+			)))
+			return
+		}
+	}))
+	defer server.Close()
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		Intent: serverapi.OpenExistingSessionLaunchIntent(runtimeids.NewSessionID()), Prompt: "continue",
+	}, nil)
+	var decoded *serverapi.WorkflowTaskResumeConflictError
+	if !errors.As(err, &decoded) || decoded.TaskID != source.TaskID || decoded.State != source.State {
+		t.Fatalf("RunPrompt error = %T %+v, want %+v", err, decoded, source)
+	}
 }
 
 func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {

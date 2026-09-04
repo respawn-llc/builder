@@ -57,8 +57,8 @@ type RunPromptOverridesKey struct {
 	AgentRole           OptionalStringKey
 	Model               string
 	ProviderOverride    string
-	ThinkingLevel       string
-	Theme               string
+	ThinkingLevel       OptionalStringKey
+	Theme               OptionalStringKey
 	ModelTimeoutSeconds int
 	Tools               string
 	OpenAIBaseURL       string
@@ -72,8 +72,8 @@ func (o RunPromptOverrides) CanonicalKey() (RunPromptOverridesKey, error) {
 	key := RunPromptOverridesKey{
 		Model:               strings.TrimSpace(o.Model),
 		ProviderOverride:    strings.TrimSpace(o.ProviderOverride),
-		ThinkingLevel:       strings.TrimSpace(o.ThinkingLevel),
-		Theme:               strings.TrimSpace(o.Theme),
+		ThinkingLevel:       CanonicalOptionalString(o.ThinkingLevel),
+		Theme:               CanonicalOptionalString(o.Theme),
 		ModelTimeoutSeconds: o.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(o.Tools),
 		OpenAIBaseURL:       strings.TrimSpace(o.OpenAIBaseURL),
@@ -115,15 +115,15 @@ func (r RunPromptRequest) Validate() error {
 	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
 		return err
 	}
-	return r.Overrides.ValidateAgentRoleOverride()
+	return r.Overrides.Validate()
 }
 
 type RunPromptOverrides struct {
 	AgentRole           *string `json:"agent_role,omitempty"`
 	Model               string  `json:"model"`
 	ProviderOverride    string  `json:"provider_override"`
-	ThinkingLevel       string  `json:"thinking_level"`
-	Theme               string  `json:"theme"`
+	ThinkingLevel       *string `json:"thinking_level,omitempty"`
+	Theme               *string `json:"theme,omitempty"`
 	ModelTimeoutSeconds int     `json:"model_timeout_seconds"`
 	Tools               string  `json:"tools"`
 	OpenAIBaseURL       string  `json:"openai_base_url"`
@@ -164,6 +164,16 @@ func (o RunPromptOverrides) ValidateAgentRoleOverride() error {
 	return err
 }
 
+func (o RunPromptOverrides) Validate() error {
+	if err := o.ValidateAgentRoleOverride(); err != nil {
+		return err
+	}
+	if err := ValidateOptionalIdentifier("thinking_level", o.ThinkingLevel); err != nil {
+		return err
+	}
+	return ValidateOptionalIdentifier("theme", o.Theme)
+}
+
 func (o RunPromptOverrides) HasAgentRoleOverride() bool {
 	return o.AgentRole != nil
 }
@@ -172,8 +182,8 @@ func (o RunPromptOverrides) HasAny() bool {
 	return o.AgentRole != nil ||
 		strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
-		strings.TrimSpace(o.ThinkingLevel) != "" ||
-		strings.TrimSpace(o.Theme) != "" ||
+		o.ThinkingLevel != nil ||
+		o.Theme != nil ||
 		o.ModelTimeoutSeconds > 0 ||
 		strings.TrimSpace(o.Tools) != "" ||
 		strings.TrimSpace(o.OpenAIBaseURL) != ""
@@ -182,8 +192,8 @@ func (o RunPromptOverrides) HasAny() bool {
 func (o RunPromptOverrides) HasConfigOverrides() bool {
 	return strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
-		strings.TrimSpace(o.ThinkingLevel) != "" ||
-		strings.TrimSpace(o.Theme) != "" ||
+		o.ThinkingLevel != nil ||
+		o.Theme != nil ||
 		o.ModelTimeoutSeconds > 0 ||
 		strings.TrimSpace(o.Tools) != "" ||
 		strings.TrimSpace(o.OpenAIBaseURL) != ""
@@ -195,11 +205,19 @@ func (o RunPromptOverrides) NeedsAuthState() bool {
 }
 
 type RunPromptResponse struct {
-	SessionID   string
-	SessionName string
-	Result      string
-	Duration    time.Duration
-	Warnings    []string
+	SessionID                 string
+	SessionName               *string
+	Result                    string
+	Duration                  time.Duration
+	Warnings                  []string
+	WorkflowResumeDiagnostics []RunPromptWorkflowResumeDiagnostic
+}
+
+type RunPromptWorkflowResumeDiagnostic struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey *string
+	Cause               string
 }
 
 type RunPromptProgress struct {

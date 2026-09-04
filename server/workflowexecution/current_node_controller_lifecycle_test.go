@@ -371,6 +371,7 @@ func (r retainedSessionReactivationPublicationRunner) StartAgentCurrentNode(
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
+	_ *WorkflowSessionContinuation,
 	onRetire func(),
 	controller workflowruntime.Controller,
 ) (sessionruntime.ExecutionHandle, error) {

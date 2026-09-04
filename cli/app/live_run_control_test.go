@@ -36,7 +36,11 @@ func TestRuntimeLiveWaitResultUsesSuccessfulResponseFields(t *testing.T) {
 		DurationMillis: 2500,
 	})
 
-	if result.SessionID != "018fdd67-89ab-4cde-8123-456789abcdea" || result.SessionName != "live session" || result.Result != resultText || result.Duration != 2500*time.Millisecond {
+	if result.SessionID != "018fdd67-89ab-4cde-8123-456789abcdea" ||
+		result.SessionName == nil ||
+		*result.SessionName != "live session" ||
+		result.Result != resultText ||
+		result.Duration != 2500*time.Millisecond {
 		t.Fatalf("unexpected live wait result: %+v", result)
 	}
 }

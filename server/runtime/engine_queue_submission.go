@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"strings"
+	"sync"
 	"time"
 
 	"core/server/llm"
@@ -22,6 +23,101 @@ var ErrReviewerActive = errors.New("Reviewer is active")
 
 // CommandAcceptance serializes caller cancellation with a candidate mutation that reports whether it committed.
 type CommandAcceptance func(commit func() (bool, error)) (bool, error)
+
+type CommandAttempt struct {
+	caller     context.Context
+	ctx        context.Context
+	cancel     context.CancelCauseFunc
+	stopCaller func() bool
+
+	mu       sync.Mutex
+	accepted bool
+	finished bool
+}
+
+func NewCommandAttempt(caller context.Context) *CommandAttempt {
+	if caller == nil {
+		caller = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(caller))
+	attempt := &CommandAttempt{caller: caller, ctx: ctx, cancel: cancel}
+	attempt.stopCaller = context.AfterFunc(caller, func() {
+		attempt.mu.Lock()
+		defer attempt.mu.Unlock()
+		if !attempt.accepted && !attempt.finished {
+			attempt.cancel(context.Cause(caller))
+		}
+	})
+	if cause := context.Cause(caller); cause != nil {
+		attempt.cancel(cause)
+	}
+	return attempt
+}
+
+func (a *CommandAttempt) Caller() context.Context {
+	if a == nil {
+		return context.Background()
+	}
+	return a.caller
+}
+
+func (a *CommandAttempt) Context() context.Context {
+	if a == nil {
+		return context.Background()
+	}
+	return a.ctx
+}
+
+func (a *CommandAttempt) Accept(commit func() (bool, error)) (bool, error) {
+	if a == nil {
+		return false, errors.New("runtime command attempt is required")
+	}
+	if commit == nil {
+		return false, errors.New("runtime command acceptance mutation is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.finished {
+		return false, errors.New("runtime command attempt already finished")
+	}
+	if a.accepted {
+		return false, errors.New("runtime command was accepted more than once")
+	}
+	if cause := context.Cause(a.caller); cause != nil {
+		a.cancel(cause)
+		return false, cause
+	}
+	committed, err := commit()
+	if committed {
+		a.accepted = true
+		if a.stopCaller != nil {
+			a.stopCaller()
+		}
+	}
+	return committed, err
+}
+
+func (a *CommandAttempt) Accepted() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.accepted
+}
+
+func (a *CommandAttempt) Finish() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.finished = true
+	if a.stopCaller != nil {
+		a.stopCaller()
+	}
+	a.cancel(context.Canceled)
+}
 
 func runCommandAcceptance(accept CommandAcceptance, commit func() (bool, error)) (bool, error) {
 	if accept == nil {
@@ -48,13 +144,17 @@ func (e *Engine) RunWhenIdle(ctx context.Context, activeKind ActiveKind, fn func
 }
 
 func runExclusiveStepWhenIdle(ctx context.Context, steps exclusiveStepLifecycle, activeKind ActiveKind, reservation *exclusiveStepReservation, fn func(context.Context, string) error) error {
+	return runExclusiveStepWhenIdleWithStepHook(ctx, steps, activeKind, reservation, nil, fn)
+}
+
+func runExclusiveStepWhenIdleWithStepHook(ctx context.Context, steps exclusiveStepLifecycle, activeKind ActiveKind, reservation *exclusiveStepReservation, onStepStarted func(string), fn func(context.Context, string) error) error {
 	if steps == nil {
 		return errors.New("exclusive step lifecycle is required")
 	}
 	if fn == nil {
 		return nil
 	}
-	return steps.RunNext(ctx, exclusiveStepOptions{ActiveKind: activeKind, Reservation: reservation}, fn)
+	return steps.RunNext(ctx, exclusiveStepOptions{ActiveKind: activeKind, Reservation: reservation, OnStepStarted: onStepStarted}, fn)
 }
 
 func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind ActiveKind, fn func() error) error {
@@ -319,6 +419,19 @@ func (e *Engine) pauseQueuedUserAutoDrain() {
 	e.queuedUserWorkMu.Lock()
 	e.queuedUserWorkPauseCount++
 	e.queuedUserWorkMu.Unlock()
+}
+
+// HoldQueuedUserAutoDrain prevents accepted auto-drain work from starting until
+// the returned release function is called.
+func (e *Engine) HoldQueuedUserAutoDrain() func() {
+	if e == nil {
+		return func() {}
+	}
+	e.pauseQueuedUserAutoDrain()
+	var once sync.Once
+	return func() {
+		once.Do(e.resumeQueuedUserAutoDrain)
+	}
 }
 
 func (e *Engine) resumeQueuedUserAutoDrain() {

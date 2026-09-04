@@ -241,7 +241,7 @@ func ValidateSettingsWithSources(settings Settings, sources map[string]string) e
 	return configRegistry.validate(settingsState{Settings: settings}, sources)
 }
 
-func parseEnabledToolsCSV(raw string) ([]toolspec.ID, error) {
+func ParseEnabledToolsCSV(raw string) ([]toolspec.ID, error) {
 	parts := strings.Split(raw, ",")
 	seen := map[toolspec.ID]bool{}
 	out := make([]toolspec.ID, 0, len(parts))

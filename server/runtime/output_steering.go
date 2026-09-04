@@ -700,7 +700,7 @@ func (e *Engine) steerOrdered(provenance steeringProvenance, intents ...steering
 		e.outputMutationMu.Lock()
 		e.messageFlow.RestorePendingUserInjections(restored)
 		for _, pending := range restored {
-			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
+			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false, nil)
 		}
 		e.outputMutationMu.Unlock()
 		if len(restored) != 0 {

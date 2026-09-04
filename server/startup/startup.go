@@ -11,6 +11,7 @@ import (
 	"core/server/core"
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
 type Request struct {
@@ -119,8 +120,8 @@ func buildRequest(req Request, authHandler AuthHandler) serverbootstrap.Request 
 		loadOptions = config.LoadOptions{
 			Model:               req.Model,
 			ProviderOverride:    req.ProviderOverride,
-			ThinkingLevel:       req.ThinkingLevel,
-			Theme:               req.Theme,
+			ThinkingLevel:       textutil.OptionalTrimmedString(req.ThinkingLevel),
+			Theme:               textutil.OptionalTrimmedString(req.Theme),
 			ModelTimeoutSeconds: req.ModelTimeoutSeconds,
 			Tools:               req.Tools,
 		}

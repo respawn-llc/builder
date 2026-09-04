@@ -65,16 +65,53 @@ func TestResolveRunPromptConfigKeepsExplicitSessionLookupStrict(t *testing.T) {
 	}
 }
 
+func TestResolveRunPromptConfigDoesNotValidateIgnoredExistingSessionProviderOverrides(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(t.Context(), workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	store, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+
+	_, err = ResolveRunPromptConfig(Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		SessionID:             store.Meta().SessionID,
+		OpenAIBaseURL:         "https://example.test/v1",
+		OpenAIBaseURLExplicit: true,
+		LoadOptions: config.LoadOptions{
+			ConfigRoot:       root,
+			Model:            "gpt-5",
+			ProviderOverride: "anthropic",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveRunPromptConfig: %v", err)
+	}
+}
+
 func TestResolveSessionConfigAppliesLoadOptions(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
+	thinkingLevel := "high"
 
 	resolved, err := ResolveSessionConfig(Request{
 		WorkspaceRoot: workspace,
 		LoadOptions: config.LoadOptions{
+			ConfigRoot:    t.TempDir(),
 			Model:         "gpt-5",
-			ThinkingLevel: "high",
+			ThinkingLevel: &thinkingLevel,
 		},
 	})
 	if err != nil {

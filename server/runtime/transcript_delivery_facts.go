@@ -428,7 +428,7 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 		integrity := transcriptTextEntryIntegrity(entry.Text, entry.CondensedText, entry.CompactLabel)
 		text := entry.Text
 		if strings.TrimSpace(text) == "" {
-			text = firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)
+			text = textutil.FirstNonEmpty(entry.CondensedText, entry.CompactLabel)
 		}
 		if entry.RollbackTargetID != nil && strings.TrimSpace(*entry.RollbackTargetID) == "" {
 			panic("transcript user entry has a present but empty rollback target id")
@@ -449,7 +449,7 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 		integrity := transcriptTextEntryIntegrity(entry.Text, entry.CondensedText, entry.CompactLabel)
 		text := entry.Text
 		if strings.TrimSpace(text) == "" {
-			text = firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)
+			text = textutil.FirstNonEmpty(entry.CondensedText, entry.CompactLabel)
 		}
 		return TranscriptCommittedRowFact{
 			StepID: entry.StepID,
@@ -501,7 +501,7 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 				Text:          entry.Text,
 				IsError:       role == "tool_result_error",
 				ResultSummary: strings.TrimSpace(entry.ToolResultSummary),
-				CondensedText: strings.TrimSpace(firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)),
+				CondensedText: strings.TrimSpace(textutil.FirstNonEmpty(entry.CondensedText, entry.CompactLabel)),
 				Presentation:  cloneTranscriptToolCallMeta(entry.ToolCall),
 			},
 		}, true
@@ -598,7 +598,7 @@ func transcriptTextEntryIntegrity(primary string, alternatives ...string) transc
 	if strings.TrimSpace(primary) != "" {
 		return transcript.RowIntegrityValid
 	}
-	if strings.TrimSpace(firstNonBlankTranscriptValue(alternatives...)) != "" {
+	if strings.TrimSpace(textutil.FirstNonEmpty(alternatives...)) != "" {
 		return transcript.RowIntegrityRecoverableMalformed
 	}
 	return transcript.RowIntegrityUnrecoverableMalformed
@@ -615,14 +615,14 @@ func transcriptToolEntryIntegrity(entry ChatEntry) transcript.RowIntegrity {
 }
 
 func transcriptToolEntryHasRecoverableText(entry ChatEntry) bool {
-	if firstNonBlankTranscriptValue(entry.Text, entry.CondensedText, entry.CompactLabel, entry.ToolResultSummary) != "" {
+	if textutil.FirstNonEmpty(entry.Text, entry.CondensedText, entry.CompactLabel, entry.ToolResultSummary) != "" {
 		return true
 	}
 	meta := entry.ToolCall
 	if meta == nil {
 		return false
 	}
-	return firstNonBlankTranscriptValue(
+	return textutil.FirstNonEmpty(
 		meta.ToolName,
 		meta.Command,
 		meta.CompactText,
@@ -645,7 +645,7 @@ func transcriptNoticeEntryIntegrity(entry ChatEntry) transcript.RowIntegrity {
 		}
 		return transcript.RowIntegrityUnrecoverableMalformed
 	}
-	if firstNonBlankTranscriptValue(entry.Text, entry.CondensedText, entry.CompactLabel, entry.SourcePath) == "" {
+	if textutil.FirstNonEmpty(entry.Text, entry.CondensedText, entry.CompactLabel, entry.SourcePath) == "" {
 		return transcript.RowIntegrityUnrecoverableMalformed
 	}
 	messageType := entry.MessageType
@@ -734,15 +734,6 @@ func defaultTranscriptNoticeVisibility(entry ChatEntry) transcript.EntryVisibili
 	default:
 		return transcript.EntryVisibilityOngoing
 	}
-}
-
-func firstNonBlankTranscriptValue(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {

@@ -202,6 +202,7 @@
 - Clipboard paste hotkeys are `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D`; explicit system clipboard reads save images to temporary PNG files and insert the path, or insert text at the active cursor. Terminal bracketed paste remains ordinary text input and never causes a system clipboard read.
 - Runtime acceptance, protected Agent Steps, Steering drains, and the separate post-turn Queue follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
+- Retained-Workflow continuation input ordering and pending-submission lifetime follow [TUI Chat Core](tui-chat-core.md#queueing-and-steering).
 - Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
 - A pending steer issued from another Session shows its complete wrapped message.
 - Each queued human Steering message remains a separate FIFO user message. Each queued steer issued from another Session remains a separate message.

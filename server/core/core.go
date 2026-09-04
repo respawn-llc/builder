@@ -340,10 +340,12 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 		return cached
 	}
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
-		SessionLaunch:          s.sessionLaunchServiceForProjectContext(projectCtx),
-		PromptHistory:          s.safeBundles().Persistence.metadataStore,
-		RuntimeAuthority:       s.safeBundles().Runtime.runtimeAuthority,
-		ManagedWorktreeBaseDir: s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
+		SessionLaunch:              s.sessionLaunchServiceForProjectContext(projectCtx),
+		PromptHistory:              s.safeBundles().Persistence.metadataStore,
+		RuntimeAuthority:           s.safeBundles().Runtime.runtimeAuthority,
+		WorkflowSessionOwnership:   s.safeBundles().Workflows.controller,
+		WorkflowSessionReactivator: s.safeBundles().Workflows.controller,
+		ManagedWorktreeBaseDir:     s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
 	})
 	s.safeBundles().Sessions.runPromptMap[scopeKey] = client
 	return client

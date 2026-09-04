@@ -327,7 +327,10 @@ func (s *currentNodeCompletionExecutionStub) PreflightTaskResume(
 			}, nil
 		}
 	}
-	return workflowexecution.TaskResumePreflight{}, &workflowexecution.TaskResumeConflictError{TaskID: taskID}
+	return workflowexecution.TaskResumePreflight{}, &workflowexecution.TaskResumeConflictError{
+		TaskID: string(taskID),
+		State:  workflowexecution.TaskResumeConflictNoResumableCurrentNode,
+	}
 }
 
 func (s *currentNodeCompletionExecutionStub) StartTask(

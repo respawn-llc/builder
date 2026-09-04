@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
+	"core/server/runtime"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
@@ -109,6 +113,234 @@ type TaskResumeResult struct {
 	CurrentNodes []workflow.CurrentNode
 }
 
+type WorkflowSessionContinuationInput interface {
+	isWorkflowSessionContinuationInput()
+}
+
+type WorkflowSessionTextInput struct {
+	Text string
+}
+
+func (WorkflowSessionTextInput) isWorkflowSessionContinuationInput() {}
+
+type WorkflowSessionSteerInput struct {
+	Steer *runtime.AgentSteer
+}
+
+func (WorkflowSessionSteerInput) isWorkflowSessionContinuationInput() {}
+
+type WorkflowSessionContinuation struct {
+	input WorkflowSessionContinuationInput
+
+	turn        completionSignal[runtime.UserTurnResult]
+	exact       completionSignal[sessionruntime.ExecutionResult]
+	nameMu      sync.RWMutex
+	sessionName *string
+	progressMu  sync.RWMutex
+	progress    func(runtime.Event)
+	stepIDs     map[string]struct{}
+	closed      bool
+}
+
+func NewWorkflowSessionContinuationFromInput(input WorkflowSessionContinuationInput) (*WorkflowSessionContinuation, error) {
+	switch value := input.(type) {
+	case WorkflowSessionTextInput:
+		if strings.TrimSpace(value.Text) == "" {
+			return nil, errors.New("workflow Session continuation input is required")
+		}
+	case WorkflowSessionSteerInput:
+		if value.Steer == nil {
+			return nil, errors.New("workflow Session Agent steer is required")
+		}
+	default:
+		return nil, errors.New("workflow Session continuation input is invalid")
+	}
+	return newWorkflowSessionContinuation(input), nil
+}
+
+func newWorkflowSessionContinuation(input WorkflowSessionContinuationInput) *WorkflowSessionContinuation {
+	return &WorkflowSessionContinuation{
+		input:   input,
+		turn:    newCompletionSignal[runtime.UserTurnResult](),
+		exact:   newCompletionSignal[sessionruntime.ExecutionResult](),
+		stepIDs: make(map[string]struct{}),
+	}
+}
+
+func (c *WorkflowSessionContinuation) Input() WorkflowSessionContinuationInput {
+	if c == nil {
+		return nil
+	}
+	return c.input
+}
+
+func (c *WorkflowSessionContinuation) RecordTurn(result runtime.UserTurnResult, err error) {
+	if c == nil {
+		return
+	}
+	c.turn.resolve(result, err)
+}
+
+func (c *WorkflowSessionContinuation) WaitTurn(ctx context.Context) (runtime.UserTurnResult, error) {
+	if c == nil {
+		return runtime.UserTurnResult{}, errors.New("workflow Session continuation is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return c.turn.wait(ctx)
+}
+
+func (c *WorkflowSessionContinuation) RecordExact(result sessionruntime.ExecutionResult, err error) {
+	if c == nil {
+		return
+	}
+	c.exact.resolve(result, err)
+}
+
+func (c *WorkflowSessionContinuation) WaitExact(ctx context.Context) (sessionruntime.ExecutionResult, error) {
+	if c == nil {
+		return sessionruntime.ExecutionResult{}, errors.New("workflow Session continuation is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return c.exact.wait(ctx)
+}
+
+func (c *WorkflowSessionContinuation) RecordSessionName(name string) error {
+	if c == nil {
+		return errors.New("workflow Session continuation is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("workflow Session continuation name must not be empty")
+	}
+	c.nameMu.Lock()
+	c.sessionName = &name
+	c.nameMu.Unlock()
+	return nil
+}
+
+func (c *WorkflowSessionContinuation) SessionName() *string {
+	if c == nil {
+		return nil
+	}
+	c.nameMu.RLock()
+	defer c.nameMu.RUnlock()
+	return textutil.Pointer(c.sessionName)
+}
+
+func (c *WorkflowSessionContinuation) SetProgressSink(progress func(runtime.Event)) {
+	if c == nil {
+		return
+	}
+	c.progressMu.Lock()
+	c.progress = progress
+	c.progressMu.Unlock()
+}
+
+func (c *WorkflowSessionContinuation) RegisterStep(stepID string) {
+	if c == nil || strings.TrimSpace(stepID) == "" {
+		return
+	}
+	c.progressMu.Lock()
+	if !c.closed {
+		c.stepIDs[stepID] = struct{}{}
+	}
+	c.progressMu.Unlock()
+}
+
+func (c *WorkflowSessionContinuation) PublishEvent(event runtime.Event) {
+	if c == nil || event.StepID == nil {
+		return
+	}
+	c.progressMu.RLock()
+	_, selected := c.stepIDs[*event.StepID]
+	progress := c.progress
+	c.progressMu.RUnlock()
+	if selected && progress != nil {
+		progress(event)
+	}
+}
+
+func (c *WorkflowSessionContinuation) CloseProgress() {
+	if c == nil {
+		return
+	}
+	c.progressMu.Lock()
+	c.closed = true
+	c.stepIDs = nil
+	c.progressMu.Unlock()
+}
+
+type WorkflowSessionResumeDiagnostic struct {
+	Reference workflow.CurrentNodeReference
+	Cause     error
+}
+
+func (d WorkflowSessionResumeDiagnostic) Error() string {
+	return fmt.Sprintf("resume current node %v: %v", d.Reference, d.Cause)
+}
+
+func (d WorkflowSessionResumeDiagnostic) Unwrap() error {
+	return d.Cause
+}
+
+type WorkflowSessionContinuationResult struct {
+	Handle             sessionruntime.ExecutionHandle
+	SiblingDiagnostics []WorkflowSessionResumeDiagnostic
+	waitAdmission      func(context.Context) (sessionruntime.ExecutionHandle, error)
+	accepted           bool
+}
+
+type WorkflowSessionReactivatorWithAcceptance interface {
+	ReactivateWorkflowSessionWithAcceptance(
+		context.Context,
+		runtimeids.SessionID,
+		runtime.CommandAcceptance,
+		context.Context,
+		*WorkflowSessionContinuation,
+	) (WorkflowSessionContinuationResult, error)
+}
+
+func (r WorkflowSessionContinuationResult) WaitAdmission(ctx context.Context) (sessionruntime.ExecutionHandle, error) {
+	if r.waitAdmission != nil {
+		return r.waitAdmission(ctx)
+	}
+	if r.Handle == nil {
+		return nil, errors.New("workflow Session continuation admission is unavailable")
+	}
+	return r.Handle, nil
+}
+
+func (r WorkflowSessionContinuationResult) Accepted() bool {
+	return r.accepted
+}
+
+func (r WorkflowSessionContinuationResult) DiagnosticsError() error {
+	return workflowResumeDiagnosticsError(r.SiblingDiagnostics)
+}
+
+type workflowSessionResumeAcceptance struct {
+	Selected     workflow.CurrentNodeReference
+	Accept       runtime.CommandAcceptance
+	AcceptedCtx  context.Context
+	Continuation *WorkflowSessionContinuation
+}
+
+type workflowSessionResumeState struct {
+	acceptance *workflowSessionResumeAcceptance
+	accepted   bool
+}
+
+type workflowSessionResumeResult struct {
+	result        TaskResumeResult
+	completion    *currentNodeAdmissionCompletion
+	selectedError error
+	diagnostics   []WorkflowSessionResumeDiagnostic
+}
+
 type TaskResumePreflightOutcome string
 
 const (
@@ -122,52 +354,152 @@ type TaskResumePreflight struct {
 }
 
 func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) (TaskResumeResult, error) {
-	result, _, err := c.resumeTask(ctx, taskID, nil, nil, nil)
-	return result, err
+	resumed, err := c.resumeTask(ctx, taskID, nil, nil, nil, nil)
+	return resumed.result, errors.Join(err, resumed.selectedError, workflowResumeDiagnosticsError(resumed.diagnostics))
 }
 
 func (c *CurrentNodeController) ReactivateWorkflowSession(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 ) (sessionruntime.ExecutionHandle, error) {
+	result, err := c.reactivateWorkflowSession(ctx, sessionID, nil)
+	return result.Handle, errors.Join(err, result.DiagnosticsError())
+}
+
+func (c *CurrentNodeController) ReactivateWorkflowSessionWithAcceptance(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	accept runtime.CommandAcceptance,
+	acceptedCtx context.Context,
+	continuation *WorkflowSessionContinuation,
+) (WorkflowSessionContinuationResult, error) {
+	if accept == nil {
+		return WorkflowSessionContinuationResult{}, errors.New("workflow Session continuation acceptance is required")
+	}
+	if continuation == nil {
+		return WorkflowSessionContinuationResult{}, errors.New("workflow Session continuation is required")
+	}
+	return c.reactivateWorkflowSession(ctx, sessionID, &workflowSessionResumeState{
+		acceptance: &workflowSessionResumeAcceptance{
+			Selected:     workflow.CurrentNodeReference{},
+			Accept:       accept,
+			AcceptedCtx:  acceptedCtx,
+			Continuation: continuation,
+		},
+	})
+}
+
+func (c *CurrentNodeController) reactivateWorkflowSession(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	resumeState *workflowSessionResumeState,
+) (WorkflowSessionContinuationResult, error) {
 	if c == nil {
-		return nil, errors.New("current node workflow controller is required")
+		return WorkflowSessionContinuationResult{}, errors.New("current node workflow controller is required")
 	}
 	if sessionID.IsZero() {
-		return nil, errors.New("session id is required")
+		return WorkflowSessionContinuationResult{}, errors.New("session id is required")
 	}
 	input, err := c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, workflowstore.ErrSessionNotCurrentWorkflowNode) {
+			taskID, resolveErr := c.store.TaskIDForSession(ctx, sessionID)
+			if resolveErr != nil {
+				return WorkflowSessionContinuationResult{}, resolveErr
+			}
+			if taskID != nil {
+				conflict, conflictErr := c.workflowSessionConflict(ctx, *taskID, nil, err)
+				if conflictErr != nil {
+					return WorkflowSessionContinuationResult{}, conflictErr
+				}
+				if conflict.State != TaskResumeConflictFinished &&
+					conflict.State != TaskResumeConflictPendingApproval {
+					conflict.State = TaskResumeConflictMovedCurrentNode
+				}
+				return WorkflowSessionContinuationResult{}, conflict
+			}
+		}
+		return WorkflowSessionContinuationResult{}, err
 	}
 	if handle, live := c.authority.SessionExecution(sessionID); live {
-		return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+		if resumeState != nil && resumeState.acceptance != nil {
+			return WorkflowSessionContinuationResult{}, &TaskResumeConflictError{
+				TaskID: string(input.Task.ID),
+				State:  TaskResumeConflictNoResumableCurrentNode,
+			}
+		}
+		handle, err := c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+		return WorkflowSessionContinuationResult{Handle: handle}, err
 	}
-	result, completion, err := c.resumeTask(
+	if resumeState != nil && resumeState.acceptance != nil {
+		resumeState.acceptance.Selected = input.CurrentNode.Reference
+	}
+	watch := &input.CurrentNode.Reference
+	resumed, err := c.resumeTask(
 		ctx,
 		input.Task.ID,
 		nil,
 		nil,
-		&input.CurrentNode.Reference,
+		watch,
+		resumeState,
 	)
 	if err != nil {
-		return nil, err
-	}
-	if result.Outcome != TaskResumeApplied && result.Outcome != TaskResumeNoOp {
-		return nil, fmt.Errorf("workflow Session reactivation returned invalid Resume outcome %q", result.Outcome)
-	}
-	if completion != nil {
-		handle, waitErr := completion.wait(ctx)
-		if waitErr != nil {
-			return nil, fmt.Errorf("reactivate workflow Session %s: %w", sessionID, waitErr)
+		var conflict *TaskResumeConflictError
+		if errors.As(err, &conflict) {
+			classified, classificationErr := c.workflowSessionConflict(
+				ctx,
+				input.Task.ID,
+				&input.CurrentNode.Reference,
+				err,
+			)
+			return WorkflowSessionContinuationResult{}, errors.Join(classificationErr, classified)
 		}
-		return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+		return WorkflowSessionContinuationResult{}, err
+	}
+	if resumeState != nil && resumeState.acceptance != nil {
+		if resumed.selectedError != nil {
+			return WorkflowSessionContinuationResult{
+				SiblingDiagnostics: resumed.diagnostics,
+				accepted:           resumeState.accepted,
+			}, errors.Join(resumed.selectedError, workflowResumeDiagnosticsError(resumed.diagnostics))
+		}
+		if resumed.result.Outcome != TaskResumeApplied {
+			conflict, conflictErr := c.workflowSessionConflict(ctx, input.Task.ID, &input.CurrentNode.Reference, nil)
+			return WorkflowSessionContinuationResult{}, errors.Join(conflictErr, conflict)
+		}
+		if !resumeState.accepted {
+			conflict, conflictErr := c.workflowSessionConflict(ctx, input.Task.ID, &input.CurrentNode.Reference, nil)
+			return WorkflowSessionContinuationResult{}, errors.Join(conflictErr, conflict)
+		}
+	}
+	if resumed.result.Outcome != TaskResumeApplied && resumed.result.Outcome != TaskResumeNoOp {
+		return WorkflowSessionContinuationResult{}, fmt.Errorf("workflow Session reactivation returned invalid Resume outcome %q", resumed.result.Outcome)
+	}
+	if resumed.completion != nil {
+		waitAdmission := func(waitCtx context.Context) (sessionruntime.ExecutionHandle, error) {
+			handle, waitErr := resumed.completion.wait(waitCtx)
+			if waitErr != nil {
+				return nil, fmt.Errorf("reactivate workflow Session %s: %w", sessionID, waitErr)
+			}
+			return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+		}
+		if resumeState != nil && resumeState.acceptance != nil {
+			return WorkflowSessionContinuationResult{
+				SiblingDiagnostics: resumed.diagnostics,
+				waitAdmission:      waitAdmission,
+				accepted:           true,
+			}, nil
+		}
+		handle, err := waitAdmission(ctx)
+		return WorkflowSessionContinuationResult{Handle: handle, SiblingDiagnostics: resumed.diagnostics}, err
 	}
 	handle, live := c.authority.SessionExecution(sessionID)
 	if !live {
-		return nil, &TaskResumeConflictError{TaskID: input.Task.ID}
+		conflict, conflictErr := c.workflowSessionConflict(ctx, input.Task.ID, &input.CurrentNode.Reference, nil)
+		return WorkflowSessionContinuationResult{}, errors.Join(conflictErr, conflict)
 	}
-	return c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+	handle, err = c.validateReactivatedWorkflowExecution(handle, sessionID, input.CurrentNode.Reference)
+	return WorkflowSessionContinuationResult{Handle: handle, SiblingDiagnostics: resumed.diagnostics}, err
 }
 
 func (c *CurrentNodeController) validateReactivatedWorkflowExecution(
@@ -318,17 +650,31 @@ func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	if finalizer == nil {
 		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
-	result, _, err := c.resumeTask(ctx, taskID, &preparation, finalizer, nil)
-	return result, err
+	resumed, err := c.resumeTask(ctx, taskID, &preparation, finalizer, nil, nil)
+	return resumed.result, errors.Join(err, resumed.selectedError, workflowResumeDiagnosticsError(resumed.diagnostics))
 }
 
-type TaskResumeConflictError struct {
-	TaskID workflow.TaskID
+func workflowResumeDiagnosticsError(diagnostics []WorkflowSessionResumeDiagnostic) error {
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	causes := make([]error, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		causes = append(causes, diagnostic)
+	}
+	return errors.Join(causes...)
 }
 
-func (e *TaskResumeConflictError) Error() string {
-	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
-}
+type TaskResumeConflictState = serverapi.WorkflowTaskResumeConflictState
+type TaskResumeConflictError = serverapi.WorkflowTaskResumeConflictError
+
+const (
+	TaskResumeConflictPendingApproval           = serverapi.WorkflowTaskResumeConflictPendingApproval
+	TaskResumeConflictFinished                  = serverapi.WorkflowTaskResumeConflictFinished
+	TaskResumeConflictMovedCurrentNode          = serverapi.WorkflowTaskResumeConflictMovedCurrentNode
+	TaskResumeConflictCurrentNodeNotInterrupted = serverapi.WorkflowTaskResumeConflictCurrentNodeNotInterrupted
+	TaskResumeConflictNoResumableCurrentNode    = serverapi.WorkflowTaskResumeConflictNoResumableCurrentNode
+)
 
 func (c *CurrentNodeController) PreflightTaskResume(
 	ctx context.Context,
@@ -359,9 +705,12 @@ func (c *CurrentNodeController) PreflightTaskResume(
 }
 
 type taskResumeClassification struct {
-	resumable      []workflow.CurrentNode
-	alreadyResumed []workflow.CurrentNode
-	validationErr  error
+	taskID                workflow.TaskID
+	resumable             []workflow.CurrentNode
+	alreadyResumed        []workflow.CurrentNode
+	validationErr         error
+	validationDiagnostics []WorkflowSessionResumeDiagnostic
+	conflict              *TaskResumeConflictError
 }
 
 func (c *CurrentNodeController) classifyTaskResume(
@@ -379,6 +728,21 @@ func (c *CurrentNodeController) classifyTaskResume(
 	if err != nil {
 		return taskResumeClassification{}, err
 	}
+	if selected != nil {
+		currentNodes, err := c.store.ListCurrentNodes(ctx, taskID)
+		if err != nil {
+			return taskResumeClassification{}, err
+		}
+		for _, currentNode := range currentNodes {
+			if !currentNode.Reference.Equal(*selected) || currentNode.Scheduling == nil {
+				continue
+			}
+			switch currentNode.Scheduling.State {
+			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+				return taskResumeClassification{taskID: taskID, alreadyResumed: []workflow.CurrentNode{currentNode}}, nil
+			}
+		}
+	}
 	if len(classifications) == 0 {
 		currentNodes, err := c.store.ListCurrentNodes(ctx, taskID)
 		if err != nil {
@@ -393,12 +757,20 @@ func (c *CurrentNodeController) classifyTaskResume(
 			}
 			switch currentNode.Scheduling.State {
 			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
-				return taskResumeClassification{alreadyResumed: []workflow.CurrentNode{currentNode}}, nil
+				return taskResumeClassification{taskID: taskID, alreadyResumed: []workflow.CurrentNode{currentNode}}, nil
 			}
 		}
-		return taskResumeClassification{}, &TaskResumeConflictError{TaskID: taskID}
+		conflict, conflictErr := c.workflowSessionConflict(ctx, taskID, selected, nil)
+		if conflictErr != nil {
+			return taskResumeClassification{}, conflictErr
+		}
+		return taskResumeClassification{
+			taskID:   taskID,
+			conflict: conflict,
+		}, conflict
 	}
 	result := taskResumeClassification{
+		taskID:    taskID,
 		resumable: make([]workflow.CurrentNode, 0, len(classifications)),
 	}
 	var validationErrs []error
@@ -408,11 +780,21 @@ func (c *CurrentNodeController) classifyTaskResume(
 		}
 		if validationErr := classification.ValidationError(); validationErr != nil {
 			validationErrs = append(validationErrs, validationErr)
+			result.validationDiagnostics = append(result.validationDiagnostics, WorkflowSessionResumeDiagnostic{
+				Reference: classification.CurrentNode.Reference,
+				Cause:     validationErr,
+			})
 			continue
 		}
 		result.resumable = append(result.resumable, classification.CurrentNode)
 	}
 	result.validationErr = errors.Join(validationErrs...)
+	if len(result.resumable) == 0 && result.validationErr == nil {
+		result.conflict, err = c.workflowSessionConflict(ctx, taskID, selected, nil)
+		if err != nil {
+			return taskResumeClassification{}, err
+		}
+	}
 	return result, nil
 }
 
@@ -420,7 +802,70 @@ func (c taskResumeClassification) eligibilityError() error {
 	if len(c.resumable) != 0 {
 		return nil
 	}
+	if c.conflict != nil {
+		return c.conflict
+	}
+	if c.validationErr == nil {
+		return &TaskResumeConflictError{TaskID: string(c.taskID), State: TaskResumeConflictNoResumableCurrentNode}
+	}
 	return c.validationErr
+}
+
+func (c *CurrentNodeController) workflowSessionConflict(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	selected *workflow.CurrentNodeReference,
+	cause error,
+) (*TaskResumeConflictError, error) {
+	var existing *TaskResumeConflictError
+	if errors.As(cause, &existing) && existing.State.IsValid() {
+		return &TaskResumeConflictError{TaskID: string(taskID), State: existing.State}, nil
+	}
+	if errors.Is(cause, workflowstore.ErrCurrentNodePendingApproval) {
+		return &TaskResumeConflictError{
+			TaskID: string(taskID),
+			State:  TaskResumeConflictPendingApproval,
+		}, nil
+	}
+	if approvals, ok := c.store.(interface {
+		ListPendingApprovals(context.Context, workflow.TaskID) ([]workflow.PendingApproval, error)
+	}); ok {
+		pending, err := approvals.ListPendingApprovals(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if len(pending) != 0 {
+			return &TaskResumeConflictError{
+				TaskID: string(taskID),
+				State:  TaskResumeConflictPendingApproval,
+			}, nil
+		}
+	}
+	currentNodes, err := c.store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if len(currentNodes) == 0 {
+		return &TaskResumeConflictError{
+			TaskID: string(taskID),
+			State:  TaskResumeConflictFinished,
+		}, nil
+	}
+	if selected != nil {
+		for _, currentNode := range currentNodes {
+			if currentNode.Reference.Equal(*selected) {
+				return &TaskResumeConflictError{
+					TaskID: string(taskID),
+					State:  TaskResumeConflictCurrentNodeNotInterrupted,
+				}, nil
+			}
+		}
+		return &TaskResumeConflictError{
+			TaskID: string(taskID),
+			State:  TaskResumeConflictMovedCurrentNode,
+		}, nil
+	}
+	return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictNoResumableCurrentNode}, nil
 }
 
 func (c *CurrentNodeController) resumeTask(
@@ -429,56 +874,110 @@ func (c *CurrentNodeController) resumeTask(
 	preparation *TaskStartPreparation,
 	finalizer TaskPreparationFinalizer,
 	watch *workflow.CurrentNodeReference,
-) (TaskResumeResult, *currentNodeAdmissionCompletion, error) {
+	resumeState *workflowSessionResumeState,
+) (workflowSessionResumeResult, error) {
 	if c == nil {
-		return TaskResumeResult{}, nil, errors.New("current node workflow controller is required")
+		return workflowSessionResumeResult{}, errors.New("current node workflow controller is required")
 	}
 	if preparation != nil && finalizer == nil {
-		return TaskResumeResult{}, nil, errors.New("task resume preparation finalizer is required")
+		return workflowSessionResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
 	var watchedCompletion *currentNodeAdmissionCompletion
-	result, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumeResult, error) {
+	resumed := workflowSessionResumeResult{}
+	_, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumeResult, error) {
 		var resolution workflowstore.TaskAttentionResolution
-		classification, err := c.classifyTaskResume(ctx, taskID, watch)
+		if resumeState != nil && resumeState.acceptance != nil {
+			selectedClassification, selectedErr := c.classifyTaskResume(ctx, taskID, &resumeState.acceptance.Selected)
+			if selectedErr == nil && len(selectedClassification.alreadyResumed) != 0 {
+				resumed.result = TaskResumeResult{
+					Outcome:      TaskResumeNoOp,
+					CurrentNodes: selectedClassification.alreadyResumed,
+				}
+				return resumed.result, nil
+			}
+			if selectedErr != nil {
+				diagnostic := WorkflowSessionResumeDiagnostic{
+					Reference: resumeState.acceptance.Selected,
+					Cause:     selectedErr,
+				}
+				resumed.selectedError = diagnostic
+				resumed.diagnostics = append(resumed.diagnostics, diagnostic)
+				return resumed.result, nil
+			}
+			if eligibilityErr := selectedClassification.eligibilityError(); eligibilityErr != nil {
+				diagnostic := WorkflowSessionResumeDiagnostic{
+					Reference: resumeState.acceptance.Selected,
+					Cause:     eligibilityErr,
+				}
+				resumed.selectedError = diagnostic
+				resumed.diagnostics = append(resumed.diagnostics, diagnostic)
+				return resumed.result, nil
+			}
+		}
+		classificationSelection := watch
+		if resumeState != nil && resumeState.acceptance != nil {
+			classificationSelection = nil
+		}
+		classification, err := c.classifyTaskResume(ctx, taskID, classificationSelection)
 		if err != nil {
 			return TaskResumeResult{}, err
 		}
 		if len(classification.alreadyResumed) != 0 {
-			return TaskResumeResult{
+			if watch != nil {
+				for _, currentNode := range classification.alreadyResumed {
+					if currentNode.Reference.Equal(*watch) {
+						resumed.result = TaskResumeResult{
+							Outcome:      TaskResumeNoOp,
+							CurrentNodes: []workflow.CurrentNode{currentNode},
+						}
+						return resumed.result, nil
+					}
+				}
+			}
+			resumed.result = TaskResumeResult{
 				Outcome:      TaskResumeNoOp,
 				CurrentNodes: classification.alreadyResumed,
-			}, nil
-		}
-		var resumeErrs []error
-		if classification.validationErr != nil {
-			resumeErrs = append(resumeErrs, classification.validationErr)
+			}
+			return resumed.result, nil
 		}
 		eligible := make([]workflow.CurrentNode, 0, len(classification.resumable))
 		eligibleStarts := make([]currentNodeQueuedStart, 0, len(classification.resumable))
 		seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(classification.resumable))
+		recordDiagnostic := func(diagnostic WorkflowSessionResumeDiagnostic) {
+			resumed.diagnostics = append(resumed.diagnostics, diagnostic)
+			if resumeState != nil && resumeState.acceptance != nil &&
+				diagnostic.Reference.Equal(resumeState.acceptance.Selected) {
+				resumed.selectedError = diagnostic
+			}
+		}
+		for _, diagnostic := range classification.validationDiagnostics {
+			recordDiagnostic(diagnostic)
+		}
 		for _, currentNode := range classification.resumable {
 			key, keyErr := currentNode.Reference.Key()
 			if keyErr != nil {
-				resumeErrs = append(resumeErrs, keyErr)
+				recordDiagnostic(WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: keyErr})
 				continue
 			}
 			if currentNode.SessionID != nil {
 				if active, exists := c.authority.SessionExecution(*currentNode.SessionID); exists {
-					resumeErrs = append(
-						resumeErrs,
-						fmt.Errorf(
-							"resume current node %v: retained Session %s already has active execution scope %s: %w",
-							currentNode.Reference,
+					recordDiagnostic(WorkflowSessionResumeDiagnostic{
+						Reference: currentNode.Reference,
+						Cause: fmt.Errorf(
+							"retained Session %s already has active execution scope %s: %w",
 							*currentNode.SessionID,
 							active.Scope().ID(),
 							ErrTaskExecutionNotQuiescent,
 						),
-					)
+					})
 					continue
 				}
 			}
 			if _, duplicate := seen[key]; duplicate {
-				resumeErrs = append(resumeErrs, fmt.Errorf("resumable current node %v is duplicated", currentNode.Reference))
+				recordDiagnostic(WorkflowSessionResumeDiagnostic{
+					Reference: currentNode.Reference,
+					Cause:     errors.New("resumable current node is duplicated"),
+				})
 				continue
 			}
 			seen[key] = struct{}{}
@@ -493,36 +992,81 @@ func (c *CurrentNodeController) resumeTask(
 				completion:         newCurrentNodeAdmissionCompletion(),
 			})
 		}
+		if resumeState != nil && resumeState.acceptance != nil {
+			for index := range eligible {
+				if eligible[index].Reference.Equal(resumeState.acceptance.Selected) {
+					eligible[0], eligible[index] = eligible[index], eligible[0]
+					eligibleStarts[0], eligibleStarts[index] = eligibleStarts[index], eligibleStarts[0]
+					break
+				}
+			}
+		}
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			c.mu.Unlock()
-			return TaskResumeResult{}, errors.Join(errors.Join(resumeErrs...), err)
+			return TaskResumeResult{}, err
 		}
 		for _, start := range eligibleStarts {
 			key, _ := start.reference.Key()
 			if c.currentNodeOwnedLocked(key) {
 				c.mu.Unlock()
-				return TaskResumeResult{}, errors.Join(
-					errors.Join(resumeErrs...),
-					fmt.Errorf("current node %v cannot resume while controller ownership remains: %w", start.reference, ErrTaskExecutionNotQuiescent),
-				)
+				return TaskResumeResult{}, fmt.Errorf("current node %v cannot resume while controller ownership remains: %w", start.reference, ErrTaskExecutionNotQuiescent)
 			}
 		}
 		c.mu.Unlock()
 
-		resumed := make([]workflow.CurrentNode, 0, len(eligible))
+		resumedNodes := make([]workflow.CurrentNode, 0, len(eligible))
 		starts := make([]currentNodeQueuedStart, 0, len(eligible))
+		resumeCtx := ctx
 		for index, currentNode := range eligible {
-			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
-			if err != nil {
-				resumeErrs = append(resumeErrs, fmt.Errorf("resume current node %v: %w", currentNode.Reference, err))
+			commitCalled := false
+			commit := func() (bool, error) {
+				commitCalled = true
+				projection, found, err := c.store.ResumeCurrentNode(resumeCtx, currentNode.Reference)
+				if err != nil {
+					return false, err
+				}
+				if found {
+					resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
+				}
+				if resumeState != nil && resumeState.acceptance != nil &&
+					currentNode.Reference.Equal(resumeState.acceptance.Selected) {
+					eligibleStarts[index].continuation = resumeState.acceptance.Continuation
+				}
+				starts = append(starts, eligibleStarts[index])
+				resumedNodes = append(resumedNodes, currentNode)
+				return true, nil
+			}
+			if resumeState != nil &&
+				resumeState.acceptance != nil &&
+				currentNode.Reference.Equal(resumeState.acceptance.Selected) {
+				committed, err := resumeState.acceptance.Accept(commit)
+				if err != nil {
+					diagnostic := WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: err}
+					recordDiagnostic(diagnostic)
+					if commitCalled {
+						continue
+					}
+					return resumed.result, nil
+				}
+				if !committed {
+					diagnostic := WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: errors.New("resume was not accepted")}
+					recordDiagnostic(diagnostic)
+					if commitCalled {
+						continue
+					}
+					return resumed.result, nil
+				}
+				resumeState.accepted = true
+				if resumeState.acceptance.AcceptedCtx != nil {
+					resumeCtx = resumeState.acceptance.AcceptedCtx
+				}
 				continue
 			}
-			if found {
-				resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
+			if _, err := commit(); err != nil {
+				diagnostic := WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: err}
+				recordDiagnostic(diagnostic)
 			}
-			starts = append(starts, eligibleStarts[index])
-			resumed = append(resumed, currentNode)
 		}
 		c.finalizeTaskAttentionResolution(resolution)
 		c.mu.Lock()
@@ -531,23 +1075,19 @@ func (c *CurrentNodeController) resumeTask(
 				if watch != nil && start.reference.Equal(*watch) {
 					key, keyErr := start.reference.Key()
 					if keyErr != nil {
-						resumeErrs = append(resumeErrs, keyErr)
+						recordDiagnostic(WorkflowSessionResumeDiagnostic{Reference: start.reference, Cause: keyErr})
 						continue
 					}
 					if c.currentNodeOwnedLocked(key) {
-						resumeErrs = append(
-							resumeErrs,
-							fmt.Errorf(
-								"queue resumed current node %v while controller ownership remains: %w",
-								start.reference,
-								ErrTaskExecutionNotQuiescent,
-							),
-						)
+						recordDiagnostic(WorkflowSessionResumeDiagnostic{
+							Reference: start.reference,
+							Cause:     fmt.Errorf("queue resumed current node while controller ownership remains: %w", ErrTaskExecutionNotQuiescent),
+						})
 						continue
 					}
 				}
 				if queueErr := c.queueExplicitStartLocked(start); queueErr != nil {
-					resumeErrs = append(resumeErrs, fmt.Errorf("queue resumed current node %v: %w", start.reference, queueErr))
+					recordDiagnostic(WorkflowSessionResumeDiagnostic{Reference: start.reference, Cause: queueErr})
 					continue
 				}
 				if watch != nil && start.reference.Equal(*watch) {
@@ -560,7 +1100,11 @@ func (c *CurrentNodeController) resumeTask(
 				batchErr = c.queueTaskPreparationBatchLocked(batch)
 			}
 			if batchErr != nil {
-				resumeErrs = append(resumeErrs, batchErr)
+				reference := workflow.CurrentNodeReference{}
+				if len(starts) > 0 {
+					reference = starts[0].reference
+				}
+				recordDiagnostic(WorkflowSessionResumeDiagnostic{Reference: reference, Cause: batchErr})
 			} else if watch != nil {
 				for _, start := range starts {
 					if start.reference.Equal(*watch) {
@@ -571,12 +1115,17 @@ func (c *CurrentNodeController) resumeTask(
 			}
 		}
 		c.mu.Unlock()
+		resumed.result = TaskResumeResult{
+			Outcome:      TaskResumeApplied,
+			CurrentNodes: resumedNodes,
+		}
 		return TaskResumeResult{
 			Outcome:      TaskResumeApplied,
-			CurrentNodes: resumed,
-		}, errors.Join(resumeErrs...)
+			CurrentNodes: resumedNodes,
+		}, nil
 	})
-	return result, watchedCompletion, err
+	resumed.completion = watchedCompletion
+	return resumed, err
 }
 
 func (c *CurrentNodeController) ApplyPendingApproval(

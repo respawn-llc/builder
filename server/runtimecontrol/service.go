@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 
 	"core/server/metadata"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/workflowexecution"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -37,17 +37,6 @@ type PromptCommandResolver interface {
 	ResolvePromptCommand(ctx context.Context, sessionID, name, arguments string) (string, error)
 }
 
-type WorkflowTaskSessionResolver interface {
-	SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error)
-}
-
-type WorkflowSessionReactivator interface {
-	ReactivateWorkflowSession(
-		context.Context,
-		runtimeids.SessionID,
-	) (sessionruntime.ExecutionHandle, error)
-}
-
 type WorkflowSessionPreparationReader interface {
 	WorkflowSessionPreparing(context.Context, runtimeids.SessionID) (bool, error)
 }
@@ -59,8 +48,8 @@ type Service struct {
 	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
 	promptCommands PromptCommandResolver
-	workflowTasks  WorkflowTaskSessionResolver
-	reactivator    WorkflowSessionReactivator
+	workflowTasks  workflowexecution.WorkflowSessionOwnershipReader
+	reactivator    workflowexecution.WorkflowSessionReactivatorWithAcceptance
 	preparations   WorkflowSessionPreparationReader
 	persisted      session.PersistedSessionResolver
 	askViews       servicecontract.AskViewService
@@ -152,7 +141,7 @@ func (s *Service) WithPromptCommandResolver(resolver PromptCommandResolver) *Ser
 	return s
 }
 
-func (s *Service) WithWorkflowTaskSessionResolver(resolver WorkflowTaskSessionResolver) *Service {
+func (s *Service) WithWorkflowTaskSessionResolver(resolver workflowexecution.WorkflowSessionOwnershipReader) *Service {
 	if s == nil {
 		return nil
 	}
@@ -160,7 +149,7 @@ func (s *Service) WithWorkflowTaskSessionResolver(resolver WorkflowTaskSessionRe
 	return s
 }
 
-func (s *Service) WithWorkflowSessionReactivator(reactivator WorkflowSessionReactivator) *Service {
+func (s *Service) WithWorkflowSessionReactivator(reactivator workflowexecution.WorkflowSessionReactivatorWithAcceptance) *Service {
 	if s == nil {
 		return nil
 	}
@@ -200,94 +189,6 @@ func (s *Service) withRuntime(ctx context.Context, sessionID string, fn func(con
 		return err
 	}
 	return s.authority.WithCurrentRuntime(ctx, id, fn)
-}
-
-type runtimeCommandAttempt struct {
-	caller     context.Context
-	ctx        context.Context
-	cancel     context.CancelCauseFunc
-	stopCaller func() bool
-
-	mu       sync.Mutex
-	accepted bool
-	finished bool
-}
-
-func newRuntimeCommandAttempt(caller context.Context) *runtimeCommandAttempt {
-	if caller == nil {
-		caller = context.Background()
-	}
-	ctx, cancel := context.WithCancelCause(context.WithoutCancel(caller))
-	attempt := &runtimeCommandAttempt{caller: caller, ctx: ctx, cancel: cancel}
-	attempt.stopCaller = context.AfterFunc(caller, func() {
-		attempt.mu.Lock()
-		defer attempt.mu.Unlock()
-		if !attempt.accepted && !attempt.finished {
-			attempt.cancel(context.Cause(caller))
-		}
-	})
-	if cause := context.Cause(caller); cause != nil {
-		attempt.cancel(cause)
-	}
-	return attempt
-}
-
-func (a *runtimeCommandAttempt) Context() context.Context {
-	if a == nil {
-		return context.Background()
-	}
-	return a.ctx
-}
-
-func (a *runtimeCommandAttempt) Accept(commit func() (bool, error)) (bool, error) {
-	if a == nil {
-		return false, errors.New("runtime command attempt is required")
-	}
-	if commit == nil {
-		return false, errors.New("runtime command acceptance mutation is required")
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.finished {
-		return false, errors.New("runtime command attempt already finished")
-	}
-	if a.accepted {
-		return false, errors.New("runtime command was accepted more than once")
-	}
-	if cause := context.Cause(a.caller); cause != nil {
-		a.cancel(cause)
-		return false, cause
-	}
-	committed, err := commit()
-	if committed {
-		a.accepted = true
-		if a.stopCaller != nil {
-			a.stopCaller()
-		}
-	}
-	return committed, err
-}
-
-func (a *runtimeCommandAttempt) Accepted() bool {
-	if a == nil {
-		return false
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.accepted
-}
-
-func (a *runtimeCommandAttempt) Finish() {
-	if a == nil {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.finished = true
-	if a.stopCaller != nil {
-		a.stopCaller()
-	}
-	a.cancel(context.Canceled)
 }
 
 func runRuntimeCommand[Resp any](
@@ -384,7 +285,7 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 		return err
 	}
 	_, err := runRuntimeCommand(ctx, func(ctx context.Context) (struct{}, bool, error) {
-		attempt := newRuntimeCommandAttempt(ctx)
+		attempt := runtime.NewCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			_, err := engine.SubmitUserShellCommandWithAcceptance(runCtx, req.Command, attempt.Accept)
@@ -400,7 +301,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return err
 	}
 	_, err := runRuntimeCommand(ctx, func(ctx context.Context) (struct{}, bool, error) {
-		attempt := newRuntimeCommandAttempt(ctx)
+		attempt := runtime.NewCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			_, compactErr := engine.CompactContextAdmissionForRequestWithAcceptance(runCtx, req.RequestID, req.Admission, attempt.Accept)
@@ -547,7 +448,7 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 		}
 	}
 	if s != nil && s.workflowTasks != nil {
-		workflow, err := s.workflowTasks.SessionHasWorkflowTask(ctx, sessionID)
+		workflow, err := s.workflowTasks.SessionHasCurrentWorkflowTask(ctx, sessionID)
 		if err != nil {
 			return false, err
 		}

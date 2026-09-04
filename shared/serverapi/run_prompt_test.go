@@ -95,8 +95,8 @@ func TestRunPromptOverridesMarshalUsesSnakeCaseAndNullableSelector(t *testing.T)
 		AgentRole:           runPromptStringPtr("worker"),
 		Model:               "gpt-5",
 		ProviderOverride:    "openai",
-		ThinkingLevel:       "medium",
-		Theme:               "dark",
+		ThinkingLevel:       runPromptStringPtr("medium"),
+		Theme:               runPromptStringPtr("dark"),
 		ModelTimeoutSeconds: 30,
 		Tools:               "shell",
 		OpenAIBaseURL:       "https://example.test",
@@ -162,5 +162,19 @@ func TestRunPromptOverridesRejectReservedNonDefaultRoles(t *testing.T) {
 				t.Fatal("expected reserved non-default role to be invalid")
 			}
 		})
+	}
+}
+
+func TestRunPromptOverridesRejectsBlankTheme(t *testing.T) {
+	theme := "  "
+	if err := (RunPromptOverrides{Theme: &theme}).Validate(); err == nil {
+		t.Fatal("expected blank Theme to be invalid")
+	}
+}
+
+func TestRunPromptOverridesRejectsBlankThinkingLevel(t *testing.T) {
+	thinkingLevel := "  "
+	if err := (RunPromptOverrides{ThinkingLevel: &thinkingLevel}).Validate(); err == nil {
+		t.Fatal("expected blank ThinkingLevel to be invalid")
 	}
 }

@@ -199,7 +199,7 @@ func projectRunWaitJSON(targetSessionID string, result app.RunPromptResult, err 
 		Status: "success", Target: observationTargetSession(targetSessionID),
 		Outcomes: []observationJSONOutcome{observationJSONFinalAnswer{
 			observationJSONKind: observationJSONKind{Kind: "final_answer"},
-			Result:              textutil.Value(result.Result), SessionName: textutil.Value(result.SessionName),
+			Result:              textutil.Value(result.Result), SessionName: result.SessionName,
 			DurationMS: textutil.Value(result.Duration.Milliseconds()), Warnings: append([]string(nil), result.Warnings...),
 		}},
 	}, 0

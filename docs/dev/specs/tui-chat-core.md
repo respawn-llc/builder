@@ -37,7 +37,12 @@
 - While the Agent Turn is busy, `Enter` adds another Steer without locking the composer.
 - Server acceptance, the separate post-turn Queue, Steering timing, Runtime-affecting slash commands, and process-loss behavior follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
 - Each accepted human Steer remains a separate FIFO message. Each steer issued from another Session remains a separate message.
-- Pending messages survive only until delivery or process exit. The backend overload invariant is owned by the Runtime Steering specification.
+- Pending messages have no fixed count limit and survive only until delivery or process exit. The backend overload invariant is owned by the Runtime Steering specification.
+- Steer operations take effect at safe Agent Step boundaries.
+- Pending Queue and Steer messages use FIFO order except when input submitted to an idle retained Workflow Session is attached to Task Resume. That selected continuation input belongs to the resumed Workflow turn: if its selected Workflow Step wins runtime admission, it may commit before older pending items, which remain pending in their existing relative order; if an existing pending worker wins, ordinary FIFO processing proceeds first.
+- A submission attached to retained-Workflow Task Resume remains the active pending submission until the selected resumed Workflow turn completes or fails. Resume acceptance alone does not complete the submission, and input submitted afterward remains queued behind it while Workflow preparation, admission, or execution is pending.
+- The TUI remains Workflow-agnostic: its submission result reflects only the selected Session turn and does not add Workflow-specific response fields or notices for parallel sibling Resume diagnostics. Task lifecycle surfaces remain responsible for those sibling states.
+- Several human messages delivered at one boundary become one user message separated by blank lines. Each steer issued from another Session remains a separate message.
 - Pending Work renders as a visible pane between transcript and input until drained. The pane shows Queue messages first in Queue order and then Steer items in server acceptance order.
 - There is no standalone per-item removal or reordering affordance. The only TUI removal action is the busy `Ctrl+C` interrupt, which drains pending human Send/Steer and post-turn Queue messages into the main input (see Interrupts And Exit). Operational Pending Work remains accepted and is not removed.
 - When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server acceptance order, followed by the composer draft.

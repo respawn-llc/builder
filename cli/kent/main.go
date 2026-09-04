@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"core/cli/app"
+	"core/cli/clienterrors"
 	"core/prompts"
 	"core/shared/client"
 	"core/shared/config"
@@ -24,6 +25,11 @@ import (
 	"core/shared/sessionenv"
 	"golang.org/x/term"
 )
+
+func runPromptWarnings(result app.RunPromptResult) []string {
+	warnings := append([]string(nil), result.Warnings...)
+	return append(warnings, clienterrors.WorkflowResumeDiagnosticMessages(result.WorkflowResumeDiagnostics)...)
+}
 
 type commonFlags struct {
 	WorkspaceRoot         string
@@ -281,7 +287,7 @@ func runSubcommand(args []string) int {
 	flags := registerCommonFlags(runFS, true)
 	agentRoleRaw := runFS.String("agent", "", "configured subagent role; use default for base settings")
 	fastRole := runFS.Bool("fast", false, "use the built-in fast subagent role")
-	timeoutRaw := runFS.String("timeout", "", "maximum run duration, such as 30s or 2m")
+	timeoutRaw := runFS.String("timeout", "", "maximum agent or Workflow result-wait duration, such as 30s or 2m")
 	outputModeRaw := runFS.String("output-mode", string(runOutputModeFinalText), "result format: final-text|json")
 	progressModeRaw := runFS.String("progress-mode", string(runProgressModeStderr), "live output: stderr|quiet")
 	quiet := false
@@ -383,6 +389,7 @@ func runSubcommand(args []string) int {
 		progress = progressRenderer
 	}
 	result, runErr := runPromptApp(ctx, opts, prompt, timeout, progress)
+	warnings := runPromptWarnings(result)
 	continueID := strings.TrimSpace(result.SessionID)
 	continueRoot := continueCommandPersistenceRoot(flags.PersistenceRoot)
 	continueCmd := prompts.ContinueRunCommandWithRoot(continueID, continueRoot)
@@ -396,12 +403,12 @@ func runSubcommand(args []string) int {
 				SessionName: result.SessionName,
 				ContinueID:  continueID,
 				ContinueCmd: continueCmd,
-				Warnings:    append([]string(nil), result.Warnings...),
+				Warnings:    warnings,
 				DurationMS:  result.Duration.Milliseconds(),
 				Error:       newRunJSONError(runErr),
 			})
 		} else {
-			emitWarnings(os.Stderr, result.Warnings)
+			emitWarnings(os.Stderr, warnings)
 			fmt.Fprintln(os.Stderr, runErrorMessage(runErr))
 			if continueHint != "" {
 				fmt.Fprintln(os.Stderr)
@@ -421,14 +428,14 @@ func runSubcommand(args []string) int {
 			SessionName: result.SessionName,
 			ContinueID:  continueID,
 			ContinueCmd: continueCmd,
-			Warnings:    append([]string(nil), result.Warnings...),
+			Warnings:    warnings,
 			DurationMS:  result.Duration.Milliseconds(),
 		})
 	} else {
 		if progressRenderer != nil {
-			progressRenderer.Complete(result.Result, result.Warnings, continueHint)
+			progressRenderer.Complete(result.Result, warnings, continueHint)
 		} else {
-			emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
+			emitRunFinalText(os.Stdout, warnings, result.Result, continueHint)
 		}
 	}
 	return 0

@@ -75,6 +75,8 @@ type execution struct {
 
 	protocolViolations int64
 	onRetire           func()
+	onSelectedResult   func(ExecutionResult, error)
+	onSelectedProgress func(runtime.Event)
 
 	closeResource bool
 }
@@ -225,6 +227,9 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	if e.onRetire != nil {
 		e.onRetire()
 	}
+	if e.onSelectedResult != nil {
+		e.onSelectedResult(result, finalErr)
+	}
 	close(e.done)
 }
 
@@ -357,6 +362,7 @@ func (e *execution) cleanup() error {
 		cleanupErr = errors.Join(cleanupErr, resource.localTools.BindExecutionCorrelation(nil))
 	}
 	resource.current = nil
+	resource.selectedProgress.Store(selectedProgressHandler{})
 	resource.signalLocked()
 	return cleanupErr
 }

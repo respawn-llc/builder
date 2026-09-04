@@ -3,6 +3,7 @@ package workflowexecution
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -47,6 +48,7 @@ type CurrentNodeAgentRunner interface {
 		workflow.CurrentNodeReference,
 		workflowruntime.TaskPromptDelivery,
 		CurrentNodeAssignmentSteer,
+		*WorkflowSessionContinuation,
 		func(),
 		workflowruntime.Controller,
 	) (sessionruntime.ExecutionHandle, error)
@@ -105,6 +107,7 @@ type CurrentNodeController struct {
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionOutcome, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		ResolveCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
+		TaskIDForSession(context.Context, runtimeids.SessionID) (*workflow.TaskID, error)
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
 	runner    CurrentNodePublicationRunner
@@ -159,6 +162,7 @@ func NewCurrentNodeController(
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionOutcome, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		ResolveCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
+		TaskIDForSession(context.Context, runtimeids.SessionID) (*workflow.TaskID, error)
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	},
 	runner CurrentNodePublicationRunner,
@@ -210,6 +214,27 @@ func NewCurrentNodeController(
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
 	return controller, nil
+}
+
+// SessionHasCurrentWorkflowTask reports whether a Session is bound to an
+// incomplete Current Node. Historical Task ownership alone does not retain
+// Workflow continuation behavior.
+func (c *CurrentNodeController) SessionHasCurrentWorkflowTask(ctx context.Context, rawSessionID string) (bool, error) {
+	if c == nil {
+		return false, errors.New("current node workflow controller is required")
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(rawSessionID))
+	if err != nil {
+		return false, err
+	}
+	_, err = c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
+	if errors.Is(err, workflowstore.ErrSessionNotCurrentWorkflowNode) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *CurrentNodeController) CompleteAgentCurrentNode(

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	"core/cli/clienterrors"
 	"core/shared/llmerrors"
+	"core/shared/serverapi"
 )
 
 func TestFormatSubmissionErrorSurfacesStall(t *testing.T) {
@@ -26,5 +28,27 @@ func TestFormatSubmissionErrorSuppressesCancellation(t *testing.T) {
 	}
 	if got := FormatSubmissionError(errors.Join(ErrSubmissionInterrupted, errors.New("noise"))); got != "" {
 		t.Fatalf("interrupt should not surface a submission error, got %q", got)
+	}
+}
+
+func TestFormatSubmissionErrorRendersWorkflowResumeConflictGuidance(t *testing.T) {
+	for _, state := range []serverapi.WorkflowTaskResumeConflictState{
+		serverapi.WorkflowTaskResumeConflictPendingApproval,
+		serverapi.WorkflowTaskResumeConflictFinished,
+		serverapi.WorkflowTaskResumeConflictMovedCurrentNode,
+		serverapi.WorkflowTaskResumeConflictCurrentNodeNotInterrupted,
+		serverapi.WorkflowTaskResumeConflictNoResumableCurrentNode,
+	} {
+		err := errors.Join(serverapi.ErrRuntimeCommandNotAccepted, &serverapi.WorkflowTaskResumeConflictError{
+			TaskID: "KNT-123", State: state,
+		})
+		want, ok := clienterrors.WorkflowTaskResumeConflictMessage(err)
+		if !ok {
+			t.Fatalf("WorkflowTaskResumeConflictMessage(%s) did not recognize conflict", state)
+		}
+		got := FormatSubmissionError(err)
+		if got != want {
+			t.Fatalf("FormatSubmissionError(%s) = %q, want %q", state, got, want)
+		}
 	}
 }

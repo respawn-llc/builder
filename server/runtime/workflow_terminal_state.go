@@ -22,6 +22,7 @@ const (
 type WorkflowTerminalState struct {
 	Completed   bool
 	Generation  int64
+	StepID      *runtimeids.StepID
 	Source      WorkflowCompletionSource
 	Completion  workflowruntime.CompletionResult
 	CompletedAt time.Time
@@ -96,15 +97,17 @@ func (e *Engine) failQueuedUserWorkIfTerminal() bool {
 	return true
 }
 
-func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource, completion workflowruntime.CompletionResult) bool {
+func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource, completion workflowruntime.CompletionResult, stepID runtimeids.StepID) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.workflowTerminal.Completed {
 		return false
 	}
+	ownedStepID := stepID
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
 		Generation:  e.workflowTerminal.Generation + 1,
+		StepID:      &ownedStepID,
 		Source:      source,
 		Completion:  completion,
 		CompletedAt: time.Now(),

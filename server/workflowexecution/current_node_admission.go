@@ -88,31 +88,34 @@ type currentNodeQueuedStart struct {
 	nodeKind           workflow.NodeKind
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
+	continuation       *WorkflowSessionContinuation
 	policy             currentNodeAdmissionPolicy
 	completion         *currentNodeAdmissionCompletion
 	agentCapacityLease *currentNodeAgentCapacityLease
 }
 
 type currentNodeAdmissionCompletion struct {
-	once   sync.Once
-	done   chan struct{}
-	handle sessionruntime.ExecutionHandle
-	err    error
+	signal completionSignal[sessionruntime.ExecutionHandle]
 }
 
 func newCurrentNodeAdmissionCompletion() *currentNodeAdmissionCompletion {
-	return &currentNodeAdmissionCompletion{done: make(chan struct{})}
+	return &currentNodeAdmissionCompletion{
+		signal: newCompletionSignal[sessionruntime.ExecutionHandle](),
+	}
+}
+
+func (c *currentNodeAdmissionCompletion) doneChannel() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	return c.signal.done
 }
 
 func (c *currentNodeAdmissionCompletion) resolve(handle sessionruntime.ExecutionHandle, err error) {
 	if c == nil {
 		return
 	}
-	c.once.Do(func() {
-		c.handle = handle
-		c.err = err
-		close(c.done)
-	})
+	c.signal.resolve(handle, err)
 }
 
 func (c *currentNodeAdmissionCompletion) wait(
@@ -121,21 +124,14 @@ func (c *currentNodeAdmissionCompletion) wait(
 	if c == nil {
 		return nil, errors.New("current node admission completion is required")
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	handle, err := c.signal.wait(ctx)
+	if err != nil {
+		return nil, err
 	}
-	select {
-	case <-c.done:
-	case <-ctx.Done():
-		return nil, context.Cause(ctx)
-	}
-	if c.err != nil {
-		return nil, c.err
-	}
-	if c.handle == nil {
+	if handle == nil {
 		return nil, errors.New("current node admission completed without an execution")
 	}
-	return c.handle, nil
+	return handle, nil
 }
 
 type currentNodeAdmissionError struct {
@@ -417,6 +413,7 @@ func (c *CurrentNodeController) admitAgent(
 		start.reference,
 		start.taskPromptDelivery,
 		assignmentSteer,
+		start.continuation,
 		func() { c.releaseAgentCapacity(start.agentCapacityLease) },
 		c,
 	)

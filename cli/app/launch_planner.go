@@ -338,10 +338,10 @@ func sessionPlanOverridesFromConfig(cfg config.App) serverapi.RunPromptOverrides
 		overrides.ProviderOverride = cfg.Settings.ProviderOverride
 	}
 	if sourceIsCLI(sources, "thinking_level") {
-		overrides.ThinkingLevel = cfg.Settings.ThinkingLevel
+		overrides.ThinkingLevel = textutil.Value(cfg.Settings.ThinkingLevel)
 	}
 	if sourceIsCLI(sources, "theme") {
-		overrides.Theme = cfg.Settings.Theme
+		overrides.Theme = textutil.Value(cfg.Settings.Theme)
 	}
 	if sourceIsCLI(sources, "timeouts.model_request_seconds") {
 		overrides.ModelTimeoutSeconds = cfg.Settings.Timeouts.ModelRequestSeconds
@@ -367,11 +367,15 @@ func mergeSessionPlanOverrides(base serverapi.RunPromptOverrides, override serve
 	if value := strings.TrimSpace(override.ProviderOverride); value != "" {
 		merged.ProviderOverride = value
 	}
-	if value := strings.TrimSpace(override.ThinkingLevel); value != "" {
-		merged.ThinkingLevel = value
+	if override.ThinkingLevel != nil {
+		if value := strings.TrimSpace(*override.ThinkingLevel); value != "" {
+			merged.ThinkingLevel = &value
+		}
 	}
-	if value := strings.TrimSpace(override.Theme); value != "" {
-		merged.Theme = value
+	if override.Theme != nil {
+		if value := textutil.OptionalTrimmedString(*override.Theme); value != nil {
+			merged.Theme = value
+		}
 	}
 	if override.ModelTimeoutSeconds > 0 {
 		merged.ModelTimeoutSeconds = override.ModelTimeoutSeconds

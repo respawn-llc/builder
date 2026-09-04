@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
 
 	"core/cli/app/internal/runner"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -61,7 +63,40 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 			_ = closeFn()
 		}
 	}()
-	return runPrompt(ctx, runClient, workspaceConfig.Options, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
+	runOptions := workspaceConfig.Options
+	runOverrides := runPromptOverridesFromOptions(runOptions)
+	if strings.TrimSpace(opts.SessionID) != "" {
+		runOverrides.Theme = nil
+	}
+	if strings.TrimSpace(opts.SessionID) != "" && strings.TrimSpace(opts.ThinkingLevel) != "" {
+		sessionID, sessionIDErr := runtimeids.ParseSessionID(strings.TrimSpace(opts.SessionID))
+		if sessionIDErr != nil {
+			return RunPromptResult{}, sessionIDErr
+		}
+		thinkingLevel := strings.TrimSpace(opts.ThinkingLevel)
+		controls, closeControls, controlErr := startRuntimeControlRemote(ctx, workspaceConfig.Options)
+		if controlErr != nil {
+			return RunPromptResult{}, controlErr
+		}
+		thinkingResponse, thinkingErr := controls.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
+			Target: serverapi.SessionChatSettingsTarget(sessionID),
+			Operation: serverapi.ChatSettingsMutationOperation{
+				Kind:  serverapi.ChatSettingsMutationThinking,
+				Value: &thinkingLevel,
+			},
+		})
+		if thinkingErr == nil && thinkingResponse.Result.Kind == serverapi.ChatSettingsMutationRejected {
+			thinkingErr = fmt.Errorf("thinking level mutation rejected: %s", thinkingResponse.Result.Rejected.Reason)
+		}
+		if closeControls != nil {
+			thinkingErr = errors.Join(thinkingErr, closeControls())
+		}
+		if thinkingErr != nil {
+			return RunPromptResult{}, thinkingErr
+		}
+		runOverrides.ThinkingLevel = nil
+	}
+	return runPrompt(ctx, runClient, runOptions, runOverrides, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
 }
 
 func runnerRequestFromOptions(opts Options) runner.Request {

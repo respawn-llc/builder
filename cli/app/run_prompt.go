@@ -9,19 +9,21 @@ import (
 	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 const subagentSessionSuffix = "subagent"
 
 type RunPromptResult struct {
-	SessionID   string
-	SessionName string
-	Result      string
-	Duration    time.Duration
-	Warnings    []string
+	SessionID                 string
+	SessionName               *string
+	Result                    string
+	Duration                  time.Duration
+	Warnings                  []string
+	WorkflowResumeDiagnostics []serverapi.RunPromptWorkflowResumeDiagnostic
 }
 
-func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
+func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, overrides serverapi.RunPromptOverrides, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
 	intent, err := runPromptLaunchIntent(opts, initialSessionID)
 	if err != nil {
 		return RunPromptResult{}, err
@@ -32,14 +34,18 @@ func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Op
 		CallerSessionID: callerSessionID,
 		Prompt:          prompt,
 		Timeout:         timeout,
-		Overrides:       runPromptOverridesFromOptions(opts),
+		Overrides:       overrides,
 	}, progress)
 	result := RunPromptResult{
 		SessionID:   response.SessionID,
-		SessionName: response.SessionName,
+		SessionName: textutil.Pointer(response.SessionName),
 		Result:      response.Result,
 		Duration:    response.Duration,
 		Warnings:    append([]string(nil), response.Warnings...),
+		WorkflowResumeDiagnostics: append(
+			[]serverapi.RunPromptWorkflowResumeDiagnostic(nil),
+			response.WorkflowResumeDiagnostics...,
+		),
 	}
 	if err != nil {
 		return result, err
@@ -86,8 +92,8 @@ func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {
 		AgentRole:           agentRole,
 		Model:               strings.TrimSpace(opts.Model),
 		ProviderOverride:    strings.TrimSpace(opts.ProviderOverride),
-		ThinkingLevel:       strings.TrimSpace(opts.ThinkingLevel),
-		Theme:               strings.TrimSpace(opts.Theme),
+		ThinkingLevel:       textutil.OptionalTrimmedString(opts.ThinkingLevel),
+		Theme:               textutil.OptionalTrimmedString(opts.Theme),
 		ModelTimeoutSeconds: opts.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(opts.Tools),
 		OpenAIBaseURL:       strings.TrimSpace(opts.OpenAIBaseURL),

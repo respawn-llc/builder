@@ -144,6 +144,7 @@ func (r currentNodeTestPublicationRunner) StartAgentCurrentNode(
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
 	assignment CurrentNodeAssignmentSteer,
+	_ *WorkflowSessionContinuation,
 	onRetire func(),
 	controller workflowruntime.Controller,
 ) (sessionruntime.ExecutionHandle, error) {
@@ -823,6 +824,19 @@ func (s *currentNodeControllerStore) ResolveCurrentSessionStartContext(
 		}
 	}
 	return workflowstore.CurrentNodeStartContext{}, workflowstore.ErrSessionNotCurrentWorkflowNode
+}
+
+func (s *currentNodeControllerStore) TaskIDForSession(
+	_ context.Context,
+	_ runtimeids.SessionID,
+) (*workflow.TaskID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionTaskID == nil {
+		return nil, nil
+	}
+	taskID := *s.sessionTaskID
+	return &taskID, nil
 }
 
 func (s *currentNodeControllerStore) admitCount() int {

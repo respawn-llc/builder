@@ -179,7 +179,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeControlService := runtimecontrol.NewService(runtimeAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithPromptHistoryStore(metadataStore).
-		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
 		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
@@ -294,6 +293,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
 	runtimeControlService.WithWorkflowSessionReactivator(workflowController)
+	runtimeControlService.WithWorkflowTaskSessionResolver(workflowController)
 	runtimeControlService.WithWorkflowSessionPreparationReader(workflowController)
 	if _, err := workflowController.Recover(context.Background()); err != nil {
 		cleanupNewFailure()

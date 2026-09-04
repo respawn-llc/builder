@@ -31,3 +31,11 @@ func userTurnResultFromStepLoop(result stepLoopResult) UserTurnResult {
 	}
 	return UserTurnResult{Kind: UserTurnResultNoFinal}
 }
+
+func WorkflowTurnUserResult(result WorkflowTurnResult) UserTurnResult {
+	if result.Assistant.Content == nil || isBlankFinalAnswer(result.Assistant) {
+		return UserTurnResult{Kind: UserTurnResultNoFinal}
+	}
+	message := result.Assistant
+	return UserTurnResult{Kind: UserTurnResultAssistantFinal, FinalAnswer: &message}
+}

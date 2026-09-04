@@ -2187,16 +2187,6 @@ func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, p
 	return strings.TrimSpace(row.ProjectID) == strings.TrimSpace(projectID), nil
 }
 
-// SessionHasWorkflowTask reports whether direct Session ownership links the
-// Session to a retained workflow Task.
-func (s *Store) SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error) {
-	taskID, err := s.WorkflowTaskIDForSession(ctx, sessionID)
-	if err != nil {
-		return false, err
-	}
-	return taskID != nil, nil
-}
-
 // WorkflowTaskIDForSession resolves the direct workflow Task ownership of a
 // Session. A Session without Task ownership returns nil.
 func (s *Store) WorkflowTaskIDForSession(ctx context.Context, sessionID string) (*string, error) {

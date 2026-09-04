@@ -13,6 +13,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestObservationCleanupClosesOnceAndPreservesPrimaryEnvelope(t *testing.T) {
@@ -226,7 +227,7 @@ func TestRunFinalJSONPreservesSessionNameAndDuration(t *testing.T) {
 		t.Fatalf("final outcome = %#v", outcome)
 	}
 	wait, code := projectRunWaitJSON("session", app.RunPromptResult{
-		Result: "done", SessionName: "waited", Duration: 1500 * time.Millisecond,
+		Result: "done", SessionName: textutil.Value("waited"), Duration: 1500 * time.Millisecond,
 	}, nil, context.Background())
 	if code != 0 {
 		t.Fatalf("wait projection code = %d", code)

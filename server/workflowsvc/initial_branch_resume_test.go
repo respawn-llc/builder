@@ -65,7 +65,7 @@ func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(
 	})
 
 	var conflict *workflowexecution.TaskResumeConflictError
-	if !errors.As(err, &conflict) || conflict.TaskID != taskID {
+	if !errors.As(err, &conflict) || conflict.TaskID != string(taskID) {
 		t.Fatalf("ResumeWorkflowTask error = %T %v, want typed conflict", err, err)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)

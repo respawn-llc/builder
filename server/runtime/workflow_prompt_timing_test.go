@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"errors"
 	"testing"
 
 	"core/prompts"
@@ -140,40 +139,6 @@ func TestSelectWorkflowTaskPromptAfterCompactionForAnotherNodeAssignment(t *test
 	)
 	if !ok || kind != prompts.WorkflowTaskPromptReassignment {
 		t.Fatalf("selected workflow prompt = %d, present=%t, want reassignment", kind, ok)
-	}
-}
-
-func TestSelectWorkflowTaskPromptResumeRequiresMatchingAssignment(t *testing.T) {
-	t.Parallel()
-	for _, test := range []struct {
-		items   []llm.ResponseItem
-		wantErr bool
-	}{
-		{items: nil, wantErr: true},
-		{items: workflowPromptItems("run-previous"), wantErr: true},
-		{items: workflowPromptItems("run-current")},
-	} {
-		kind, inject, err := selectWorkflowTaskPrompt(
-			test.items,
-			"run-current",
-			workflowTaskPromptTriggerResumeDelivery,
-		)
-		if inject {
-			t.Fatalf(
-				"resume selected workflow assignment kind %d for items %+v; want no assignment",
-				kind,
-				test.items,
-			)
-		}
-		gotErr := errors.Is(err, errWorkflowResumeAssignmentUnavailable)
-		if gotErr != test.wantErr {
-			t.Fatalf(
-				"resume selection error = %v for items %+v, want error=%t",
-				err,
-				test.items,
-				test.wantErr,
-			)
-		}
 	}
 }
 

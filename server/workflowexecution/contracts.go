@@ -1,8 +1,13 @@
 package workflowexecution
 
 import (
+	"context"
 	"errors"
 )
+
+type WorkflowSessionOwnershipReader interface {
+	SessionHasCurrentWorkflowTask(context.Context, string) (bool, error)
+}
 
 var (
 	ErrNoInterruptibleExecution  = errors.New("task has no actively executing workflow scope to interrupt")

@@ -236,14 +236,14 @@ func sessionCreateOriginFromProto(message *sessionlaunchpb.SessionCreateOrigin) 
 }
 
 func RunPromptOverridesToProto(overrides serverapi.RunPromptOverrides) (*sessionlaunchpb.RunPromptOverrides, error) {
-	if err := overrides.ValidateAgentRoleOverride(); err != nil {
+	if err := overrides.Validate(); err != nil {
 		return nil, err
 	}
 	message := &sessionlaunchpb.RunPromptOverrides{AgentRole: clonePointer(overrides.AgentRole)}
 	setOptionalNonblank(&message.Model, overrides.Model)
 	setOptionalNonblank(&message.ProviderOverride, overrides.ProviderOverride)
-	setOptionalNonblank(&message.ThinkingLevel, overrides.ThinkingLevel)
-	setOptionalNonblank(&message.Theme, overrides.Theme)
+	setOptionalString(&message.ThinkingLevel, overrides.ThinkingLevel)
+	setOptionalString(&message.Theme, overrides.Theme)
 	setOptionalNonblank(&message.Tools, overrides.Tools)
 	setOptionalNonblank(&message.OpenaiBaseUrl, overrides.OpenAIBaseURL)
 	if overrides.ModelTimeoutSeconds != 0 {
@@ -264,15 +264,15 @@ func RunPromptOverridesFromProto(message *sessionlaunchpb.RunPromptOverrides) (s
 		AgentRole:        clonePointer(message.AgentRole),
 		Model:            dereference(message.Model),
 		ProviderOverride: dereference(message.ProviderOverride),
-		ThinkingLevel:    dereference(message.ThinkingLevel),
-		Theme:            dereference(message.Theme),
+		ThinkingLevel:    clonePointer(message.ThinkingLevel),
+		Theme:            clonePointer(message.Theme),
 		Tools:            dereference(message.Tools),
 		OpenAIBaseURL:    dereference(message.OpenaiBaseUrl),
 	}
 	if message.ModelTimeoutSeconds != nil {
 		overrides.ModelTimeoutSeconds = int(*message.ModelTimeoutSeconds)
 	}
-	return overrides, overrides.ValidateAgentRoleOverride()
+	return overrides, overrides.Validate()
 }
 
 func setOptionalNonblank(target **string, value string) {
@@ -280,6 +280,14 @@ func setOptionalNonblank(target **string, value string) {
 		return
 	}
 	copied := value
+	*target = &copied
+}
+
+func setOptionalString(target **string, value *string) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return
+	}
+	copied := strings.TrimSpace(*value)
 	*target = &copied
 }
 
