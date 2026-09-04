@@ -102,21 +102,18 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 
 	t.Run("archive metadata not removed", func(t *testing.T) {
 		fixture := newSessionRemovalServiceFixture(t)
+		blocker := &metadata.SessionInUseError{SessionID: fixture.session.Meta().SessionID}
 		fixture.service.WithPersistedSessionResolver(sessionRemovalMetadataDelegate{
 			Store: fixture.metadata,
-			delete: func(_ context.Context, sessionID string) error {
-				return &metadata.SessionInUseError{SessionID: sessionID}
+			delete: func(_ context.Context, _ string) error {
+				return blocker
 			},
 		})
 		outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 
 		err := fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
-		var removalErr *SessionRemovalFailureError
-		if !errors.As(err, &removalErr) {
-			t.Fatalf("Archive error = %v, want metadata-not-removed state", err)
-		}
-		if _, ok := removalErr.State.(SessionRemovalMetadataNotRemoved); !ok {
-			t.Fatalf("Archive error = %v, want metadata-not-removed state", err)
+		if !errors.Is(err, blocker) {
+			t.Fatalf("Archive error = %v, want metadata blocker", err)
 		}
 		if _, err := os.Stat(outputPath); err != nil {
 			t.Fatalf("published archive missing: %v", err)
@@ -147,12 +144,11 @@ func TestSessionLifecycleRemovalReportsDurableOutcomes(t *testing.T) {
 		outputPath := filepath.Join(t.TempDir(), "session.tar.zst")
 
 		err := fixture.service.Archive(context.Background(), fixture.session.Meta().SessionID, outputPath)
-		var removalErr *SessionRemovalFailureError
+		var removalErr *SessionRemovalCleanupError
 		if !errors.As(err, &removalErr) {
 			t.Fatalf("Archive error = %v, want cleanup failure for %q", err, eventsPath)
 		}
-		state, ok := removalErr.State.(SessionRemovalMetadataRemovedCleanupFailed)
-		if !ok || state.RemainingPath != eventsPath {
+		if removalErr.RemainingPath != eventsPath {
 			t.Fatalf("Archive error = %v, want cleanup failure for %q", err, eventsPath)
 		}
 		if _, err := os.Stat(outputPath); err != nil {

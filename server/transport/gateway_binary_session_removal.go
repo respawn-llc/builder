@@ -7,7 +7,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
-	"core/server/sessionservice"
 	"core/shared/apicontract"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 
@@ -45,7 +44,7 @@ func registerSessionRemovalGatewayBinaryBindings(bindings map[string]gatewayBina
 				request *sessionlaunchpb.SessionArchiveRequest,
 				err error,
 			) proto.Message {
-				return sessionRemovalFailureDetails(sessionRemovalRequestID(request), err)
+				return sessionRemovalFailureDetails(request, err)
 			},
 		),
 		registerGatewayBinaryUnary(
@@ -75,7 +74,7 @@ func registerSessionRemovalGatewayBinaryBindings(bindings map[string]gatewayBina
 				request *sessionlaunchpb.SessionDeleteRequest,
 				err error,
 			) proto.Message {
-				return sessionRemovalFailureDetails(sessionRemovalRequestID(request), err)
+				return sessionRemovalFailureDetails(request, err)
 			},
 		),
 	)
@@ -100,11 +99,9 @@ func sessionRemovalRequestID(request proto.Message) *string {
 	return &sessionID
 }
 
-func sessionRemovalFailureDetails(sessionID *string, err error) proto.Message {
-	var removalFailure *sessionservice.SessionRemovalFailureError
-	if errors.As(err, &removalFailure) {
-		return sessionRemovalFailureStateDetails(removalFailure)
-	}
+func sessionRemovalFailureDetails(request proto.Message, err error) proto.Message {
+	sessionID := sessionRemovalRequestID(request)
+	_, deleteRequest := request.(*sessionlaunchpb.SessionDeleteRequest)
 	if errors.Is(err, session.ErrSessionNotFound) {
 		if sessionID == nil {
 			return binaryInternalFailure(err)
@@ -113,7 +110,8 @@ func sessionRemovalFailureDetails(sessionID *string, err error) proto.Message {
 	}
 	var runtimeInUse *sessionruntime.SessionInUseError
 	var metadataInUse *metadata.SessionInUseError
-	if errors.As(err, &runtimeInUse) || errors.As(err, &metadataInUse) {
+	if errors.As(err, &runtimeInUse) ||
+		(deleteRequest && errors.As(err, &metadataInUse)) {
 		if sessionID == nil {
 			return binaryInternalFailure(err)
 		}
@@ -130,13 +128,6 @@ func sessionRemovalFailureDetails(sessionID *string, err error) proto.Message {
 	if errors.As(err, &outputExists) {
 		return &sessionlaunchpb.ArchiveOutputExistsDetails{Path: outputExists.Path}
 	}
-	var pathFailure *session.ArchivePathError
-	if errors.As(err, &pathFailure) {
-		return &sessionlaunchpb.ArchivePathFailureDetails{
-			Path:  pathFailure.Path,
-			Phase: archivePathFailurePhase(pathFailure.Phase),
-		}
-	}
 	return binaryInternalFailure(err)
 }
 
@@ -151,40 +142,4 @@ func invalidArchiveOutputPathReason(
 	default:
 		return sessionlaunchpb.InvalidArchiveOutputPathReason_INVALID_ARCHIVE_OUTPUT_PATH_REASON_UNSPECIFIED
 	}
-}
-
-func archivePathFailurePhase(phase session.ArchivePathPhase) sessionlaunchpb.ArchivePathFailurePhase {
-	switch phase {
-	case session.ArchivePathPhaseParent:
-		return sessionlaunchpb.ArchivePathFailurePhase_ARCHIVE_PATH_FAILURE_PHASE_PARENT
-	case session.ArchivePathPhaseTemp:
-		return sessionlaunchpb.ArchivePathFailurePhase_ARCHIVE_PATH_FAILURE_PHASE_TEMP
-	case session.ArchivePathPhaseWrite:
-		return sessionlaunchpb.ArchivePathFailurePhase_ARCHIVE_PATH_FAILURE_PHASE_WRITE
-	case session.ArchivePathPhasePublish:
-		return sessionlaunchpb.ArchivePathFailurePhase_ARCHIVE_PATH_FAILURE_PHASE_PUBLISH
-	case session.ArchivePathPhaseCleanup:
-		return sessionlaunchpb.ArchivePathFailurePhase_ARCHIVE_PATH_FAILURE_PHASE_CLEANUP
-	default:
-		return sessionlaunchpb.ArchivePathFailurePhase_ARCHIVE_PATH_FAILURE_PHASE_UNSPECIFIED
-	}
-}
-
-func sessionRemovalFailureStateDetails(
-	failure *sessionservice.SessionRemovalFailureError,
-) *sessionlaunchpb.SessionRemovalFailureDetails {
-	details := &sessionlaunchpb.SessionRemovalFailureDetails{}
-	switch state := failure.State.(type) {
-	case sessionservice.SessionRemovalMetadataNotRemoved:
-		details.State = &sessionlaunchpb.SessionRemovalFailureDetails_MetadataNotRemoved{
-			MetadataNotRemoved: &sessionlaunchpb.SessionRemovalMetadataNotRemoved{},
-		}
-	case sessionservice.SessionRemovalMetadataRemovedCleanupFailed:
-		details.State = &sessionlaunchpb.SessionRemovalFailureDetails_MetadataRemovedCleanupFailed{
-			MetadataRemovedCleanupFailed: &sessionlaunchpb.SessionRemovalMetadataRemovedCleanupFailed{
-				RemainingPath: state.RemainingPath,
-			},
-		}
-	}
-	return details
 }

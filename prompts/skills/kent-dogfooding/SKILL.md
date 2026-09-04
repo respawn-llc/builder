@@ -1,6 +1,6 @@
 ---
 name: kent-dogfooding
-description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks you to use/manage a worktree, set a goal, change Kent config.toml/settings/behavior/hooks/subagents, or to debug project/workspace/worktree/workflow errors.
+description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks you to use/manage a worktree, archive or delete a Session, set a goal, change Kent config.toml/settings/behavior/hooks/subagents, or to debug project/workspace/worktree/workflow errors.
 ---
 
 Kent is the harness you are running inside, but it's also a server that runs agentic loops, a TUI, and a CLI.
@@ -35,6 +35,12 @@ kent worktree delete <selector>
 
 Use `--force` only when the user explicitly authorizes removing a dirty or indeterminate worktree folder.
 Worktree setup scripts prepare new checkouts with local files, credentials, symlinks, or dependencies. Read the setup contract at `https://kent.sh/worktrees.md`.
+
+## Session Removal
+
+- Archive a Session when the user asks to preserve it before removal.
+- Delete a Session when the user asks to remove it without an archive.
+- Never archive or delete the current Session.
 
 ## Config Locations
 Global config (applies to all projects) `~/.kent/config.toml` (`%USERPROFILE%\.kent\` on Windows), local config is at `<workspace-root>/.kent/config.toml`. Workspace root is usually your cwd, or your worktree's main workspace cwd. Config schema and full notes at `https://kent.sh/config.md`. The database and session logs that kent uses are colocated with the config file. Session logs are `.json` files with a full history of events, split per-project. Careful: session logs are very long and can weigh gigabytes.

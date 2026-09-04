@@ -18,6 +18,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
+	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
@@ -129,6 +130,41 @@ func TestSessionRemovalGatewayCancellationRetainsAcceptedWorkAndAdmission(t *tes
 				t.Fatalf("Session after accepted %s completion = %v, want absent", test.name, err)
 			}
 		})
+	}
+}
+
+func TestSessionRemovalFailureDetailsKeepOnlyExpectedOperatorErrors(t *testing.T) {
+	sessionID := runtimeids.NewSessionID().String()
+	inUse := &metadata.SessionInUseError{SessionID: sessionID}
+
+	archiveFailure := sessionRemovalFailureDetails(
+		&sessionlaunchpb.SessionArchiveRequest{SessionId: sessionID},
+		inUse,
+	)
+	internal, ok := archiveFailure.(*sharedpb.InternalFailureDetails)
+	if !ok || internal.Cause == nil || *internal.Cause != inUse.Error() {
+		t.Fatalf("archive metadata blocker = %#v, want internal failure with server cause", archiveFailure)
+	}
+
+	deleteFailure := sessionRemovalFailureDetails(
+		&sessionlaunchpb.SessionDeleteRequest{SessionId: sessionID},
+		inUse,
+	)
+	if _, ok := deleteFailure.(*sessionlaunchpb.SessionInUseDetails); !ok {
+		t.Fatalf("delete metadata blocker = %#v, want Session in use", deleteFailure)
+	}
+
+	pathFailure := &session.ArchivePathError{
+		Path: filepath.Join(t.TempDir(), "archive.tar.zst"),
+		Err:  errors.New("write failed"),
+	}
+	archiveFailure = sessionRemovalFailureDetails(
+		&sessionlaunchpb.SessionArchiveRequest{SessionId: sessionID},
+		pathFailure,
+	)
+	internal, ok = archiveFailure.(*sharedpb.InternalFailureDetails)
+	if !ok || internal.Cause == nil || *internal.Cause != pathFailure.Error() {
+		t.Fatalf("archive path failure = %#v, want internal failure with server cause", archiveFailure)
 	}
 }
 

@@ -9,9 +9,7 @@ import (
 
 	"core/shared/client"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
-	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/sessionenv"
-	"core/shared/textutil"
 )
 
 type sessionCommandTestRemote struct {
@@ -146,48 +144,38 @@ func TestSessionRemovalCommandPreflightsBeforeDial(t *testing.T) {
 func TestSessionRemovalFailureClassification(t *testing.T) {
 	sessionID := "session-failure"
 	outputPath := "/tmp/session-failure.tar.zst"
-	remainingPath := "/tmp/sessions/session-failure/events.jsonl"
 	notFound := &sessionlaunchpb.SessionArchiveError_SessionNotFound{SessionNotFound: &sessionlaunchpb.SessionNotFoundDetails{SessionId: sessionID}}
 	inUse := &sessionlaunchpb.SessionDeleteError_SessionInUse{SessionInUse: &sessionlaunchpb.SessionInUseDetails{SessionId: sessionID}}
 	invalidPath := &sessionlaunchpb.SessionArchiveError_InvalidOutputPath{InvalidOutputPath: &sessionlaunchpb.InvalidArchiveOutputPathDetails{Path: outputPath, Reason: sessionlaunchpb.InvalidArchiveOutputPathReason_INVALID_ARCHIVE_OUTPUT_PATH_REASON_NOT_ABSOLUTE}}
 	outputExists := &sessionlaunchpb.SessionArchiveError_OutputExists{OutputExists: &sessionlaunchpb.ArchiveOutputExistsDetails{Path: outputPath}}
-	pathFailure := &sessionlaunchpb.SessionArchiveError_ArchivePathFailure{ArchivePathFailure: &sessionlaunchpb.ArchivePathFailureDetails{Path: outputPath, Phase: sessionlaunchpb.ArchivePathFailurePhase_ARCHIVE_PATH_FAILURE_PHASE_WRITE}}
-	internalFailure := &sessionlaunchpb.SessionArchiveError_InternalFailure{InternalFailure: &sharedpb.InternalFailureDetails{}}
-	metadataNotRemoved := &sessionlaunchpb.SessionArchiveError_SessionRemovalFailure{SessionRemovalFailure: &sessionlaunchpb.SessionRemovalFailureDetails{State: &sessionlaunchpb.SessionRemovalFailureDetails_MetadataNotRemoved{MetadataNotRemoved: &sessionlaunchpb.SessionRemovalMetadataNotRemoved{}}}}
-	cleanupFailed := &sessionlaunchpb.SessionDeleteError_SessionRemovalFailure{SessionRemovalFailure: &sessionlaunchpb.SessionRemovalFailureDetails{State: &sessionlaunchpb.SessionRemovalFailureDetails_MetadataRemovedCleanupFailed{MetadataRemovedCleanupFailed: &sessionlaunchpb.SessionRemovalMetadataRemovedCleanupFailed{RemainingPath: remainingPath}}}}
 	tests := []struct {
-		name      string
-		err       error
-		operation sessionRemovalOperation
-		wantCode  string
-		wantPath  *string
+		name        string
+		err         error
+		archive     bool
+		wantCode    string
+		wantMessage string
 	}{
-		{name: "session not found", err: archiveWireFailure("session_not_found", notFound), operation: sessionArchiveOperation, wantCode: "session_not_found"},
-		{name: "session in use", err: deleteWireFailure("session_in_use", inUse), operation: sessionDeleteOperation, wantCode: "session_in_use"},
-		{name: "invalid output path", err: archiveWireFailure("invalid_output_path", invalidPath), operation: sessionArchiveOperation, wantCode: "invalid_output_path", wantPath: &outputPath},
-		{name: "output exists", err: archiveWireFailure("output_exists", outputExists), operation: sessionArchiveOperation, wantCode: "output_exists", wantPath: &outputPath},
-		{name: "archive path failure", err: archiveWireFailure("archive_path_failure", pathFailure), operation: sessionArchiveOperation, wantCode: "request_failed", wantPath: &outputPath},
-		{name: "internal failure", err: archiveWireFailure("internal_failure", internalFailure), operation: sessionArchiveOperation, wantCode: "request_failed"},
-		{name: "metadata not removed", err: archiveWireFailure("session_removal_failure", metadataNotRemoved), operation: sessionArchiveOperation, wantCode: "request_failed", wantPath: &outputPath},
-		{name: "metadata removed cleanup failed", err: deleteWireFailure("session_removal_failure", cleanupFailed), operation: sessionDeleteOperation, wantCode: "request_failed", wantPath: &remainingPath},
-		{name: "transport", err: errors.New("connection closed"), operation: sessionArchiveOperation, wantCode: "request_failed"},
-		{name: "unknown future wire error", err: archiveWireFailure("future_server_failure", nil), operation: sessionArchiveOperation, wantCode: "request_failed"},
+		{name: "session not found", err: archiveWireFailure("session_not_found", notFound), archive: true, wantCode: "session_not_found"},
+		{name: "session in use", err: deleteWireFailure("session_in_use", inUse), wantCode: "session_in_use"},
+		{name: "invalid output path", err: archiveWireFailure("invalid_output_path", invalidPath), archive: true, wantCode: "invalid_output_path"},
+		{name: "output exists", err: archiveWireFailure("output_exists", outputExists), archive: true, wantCode: "output_exists"},
+		{name: "server failure", err: errors.New("server-authored cleanup failure"), archive: true, wantCode: "request_failed", wantMessage: "server-authored cleanup failure"},
+		{name: "transport", err: errors.New("connection closed"), archive: true, wantCode: "request_failed", wantMessage: "connection closed"},
+		{name: "unknown future wire error", err: archiveWireFailure("future_server_failure", nil), archive: true, wantCode: "request_failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var outcome sessionRemovalOutcome
-			switch test.operation {
-			case sessionArchiveOperation:
-				outcome = sessionArchiveFailure(sessionID, outputPath, test.err)
-			case sessionDeleteOperation:
-				outcome = sessionDeleteFailure(sessionID, test.err)
-			default:
-				t.Fatalf("unsupported Session removal operation %d", test.operation)
+			var failure *sessionRemovalError
+			if test.archive {
+				failure = sessionArchiveFailure(sessionID, test.err)
+			} else {
+				failure = sessionDeleteFailure(sessionID, test.err)
 			}
-			if outcome.Error == nil ||
-				outcome.Error.Code != test.wantCode ||
-				!textutil.EqualOptional(outcome.Error.Path, test.wantPath) {
-				t.Fatalf("outcome = %+v, want code %q path %v", outcome, test.wantCode, test.wantPath)
+			if failure == nil || failure.Code != test.wantCode {
+				t.Fatalf("failure = %+v, want code %q message %q", failure, test.wantCode, test.wantMessage)
+			}
+			if test.wantMessage != "" && failure.Message != test.wantMessage {
+				t.Fatalf("failure message = %q, want server error %q", failure.Message, test.wantMessage)
 			}
 		})
 	}
@@ -212,12 +200,6 @@ func archiveWireFailure(code string, detail any) error {
 		failure.Detail = detail
 	case *sessionlaunchpb.SessionArchiveError_OutputExists:
 		failure.Detail = detail
-	case *sessionlaunchpb.SessionArchiveError_ArchivePathFailure:
-		failure.Detail = detail
-	case *sessionlaunchpb.SessionArchiveError_SessionRemovalFailure:
-		failure.Detail = detail
-	case *sessionlaunchpb.SessionArchiveError_InternalFailure:
-		failure.Detail = detail
 	default:
 		panic("unsupported Session archive test detail")
 	}
@@ -228,9 +210,9 @@ func deleteWireFailure(code string, detail any) error {
 	failure := &sessionlaunchpb.SessionDeleteError{Code: code}
 	switch detail := detail.(type) {
 	case nil:
-	case *sessionlaunchpb.SessionDeleteError_SessionInUse:
+	case *sessionlaunchpb.SessionDeleteError_SessionNotFound:
 		failure.Detail = detail
-	case *sessionlaunchpb.SessionDeleteError_SessionRemovalFailure:
+	case *sessionlaunchpb.SessionDeleteError_SessionInUse:
 		failure.Detail = detail
 	default:
 		panic("unsupported Session delete test detail")

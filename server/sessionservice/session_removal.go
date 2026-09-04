@@ -22,41 +22,20 @@ type sessionRemovalMetadata interface {
 	DeleteSession(context.Context, string) error
 }
 
-type SessionRemovalFailureState interface {
-	sessionRemovalFailureState()
-}
-
-type SessionRemovalMetadataNotRemoved struct{}
-
-func (SessionRemovalMetadataNotRemoved) sessionRemovalFailureState() {}
-
-type SessionRemovalMetadataRemovedCleanupFailed struct {
+type SessionRemovalCleanupError struct {
 	RemainingPath string
+	Cause         error
 }
 
-func (SessionRemovalMetadataRemovedCleanupFailed) sessionRemovalFailureState() {}
-
-type SessionRemovalFailureError struct {
-	State SessionRemovalFailureState
-	Cause error
+func (e *SessionRemovalCleanupError) Error() string {
+	return fmt.Sprintf(
+		"Session is gone from Kent, but artifact cleanup failed. Remove %s manually: %v",
+		e.RemainingPath,
+		e.Cause,
+	)
 }
 
-func (e *SessionRemovalFailureError) Error() string {
-	switch state := e.State.(type) {
-	case SessionRemovalMetadataNotRemoved:
-		return fmt.Sprintf("Session metadata was not removed: %v", e.Cause)
-	case SessionRemovalMetadataRemovedCleanupFailed:
-		return fmt.Sprintf(
-			"Session metadata was removed but artifact cleanup failed at %s: %v",
-			state.RemainingPath,
-			e.Cause,
-		)
-	default:
-		return fmt.Sprintf("Session removal failed: %v", e.Cause)
-	}
-}
-
-func (e *SessionRemovalFailureError) Unwrap() error {
+func (e *SessionRemovalCleanupError) Unwrap() error {
 	return e.Cause
 }
 
@@ -210,16 +189,17 @@ func (s *SessionLifecycleService) runAcceptedArchive(
 					return err
 				}
 				if err := s.removeSessionUnderAdmission(runCtx, sessionID); err != nil {
-					var removalErr *SessionRemovalFailureError
-					if errors.As(err, &removalErr) {
-						if _, removed := removalErr.State.(SessionRemovalMetadataRemovedCleanupFailed); removed {
-							return err
-						}
+					var cleanupErr *SessionRemovalCleanupError
+					if errors.As(err, &cleanupErr) {
+						return err
 					}
-					return &SessionRemovalFailureError{
-						State: SessionRemovalMetadataNotRemoved{},
-						Cause: err,
-					}
+					return fmt.Errorf(
+						"archive %s exists, but Session %s was retained: %w. Resolve the blocker, then run kent session delete %s",
+						outputPath,
+						sessionID,
+						err,
+						sessionID,
+					)
 				}
 				return nil
 			},
@@ -296,11 +276,9 @@ func (s *SessionLifecycleService) removeSessionUnderAdmission(
 	if err := session.RemovePreflightedSessionArtifacts(schedule); err != nil {
 		var removalErr *session.SessionArtifactRemovalError
 		if errors.As(err, &removalErr) {
-			return &SessionRemovalFailureError{
-				State: SessionRemovalMetadataRemovedCleanupFailed{
-					RemainingPath: removalErr.RemainingPath,
-				},
-				Cause: err,
+			return &SessionRemovalCleanupError{
+				RemainingPath: removalErr.RemainingPath,
+				Cause:         err,
 			}
 		}
 		return err

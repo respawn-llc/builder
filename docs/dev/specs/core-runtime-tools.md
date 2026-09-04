@@ -18,7 +18,7 @@
 - A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; Kent does not fabricate a target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
 - Active Session Runtime mutation and model-loop ownership follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification. Dormant Session mutations and long-running operations remain with their concrete domain owners.
-- Transport may correlate one request with one response, sequence connection setup, bound concurrent handling on one connection, apply socket backpressure, and stop connection-bound waiting and delivery when that connection closes. Transport teardown never cancels or drains the underlying server operation except under the detached Session archive lifetime defined by the [CLI Commands](cli-commands.md) specification. Transport correlation is not a product identity, replay key, domain order, or server-work owner.
+- Transport may correlate one request with one response, sequence connection setup, bound concurrent handling on one connection, apply socket backpressure, and stop connection-bound waiting and delivery when that connection closes. Transport teardown never cancels or drains the underlying server operation. Transport correlation is not a product identity, replay key, domain order, or server-work owner.
 
 ## Skills And Generated Assets
 
@@ -176,7 +176,6 @@ To respond, run: kent run steer <source-session-id> "message"
 - Except for an active agent rebinding its own Session under the self-agent rule below, moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
 - An accepted cross-Project move retires an idle Active Session Runtime before moving the Session. Opening the Session in the destination Project creates a fresh learned-Workspace cache.
 - Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, when the Question-history command performs its explicitly requested backward history read, or when streaming a complete Session into an archive.
-- Session archive creation reads transcript/history content with bounded memory and never parses, rewrites, or retains the complete transcript in memory.
 - Transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
 - `server_host` and `server_port` explicitly select the daemon address; Kent binds exactly that address and fails startup if it is occupied. Local same-machine optimization is additive and cannot override either explicit setting.
 - Session activation and release identify the exact session resource generation. A stale release is a successful no-op and cannot close or detach a replacement generation.

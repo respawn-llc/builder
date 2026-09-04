@@ -145,8 +145,8 @@ func TestArchiveSessionDirectoryReportsFilesystemFailurePaths(t *testing.T) {
 	outputPath := filepath.Join(outputDir, "session.tar.zst")
 	err := ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sessionDir, outputPath)
 	var pathErr *ArchivePathError
-	if !errors.As(err, &pathErr) || pathErr.Path != outputPath || pathErr.Phase != ArchivePathPhaseTemp {
-		t.Fatalf("archive path error = %+v, want path %q phase %q", pathErr, outputPath, ArchivePathPhaseTemp)
+	if !errors.As(err, &pathErr) || pathErr.Path != outputPath {
+		t.Fatalf("archive path error = %+v, want path %q", pathErr, outputPath)
 	}
 	if _, statErr := os.Lstat(outputPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("output exists after failure: %v", statErr)
@@ -156,8 +156,8 @@ func TestArchiveSessionDirectoryReportsFilesystemFailurePaths(t *testing.T) {
 		t.Fatalf("archive source error = %v, want path %q", err, sourcePath)
 	}
 	cleanupErr := (&preparedSessionArchive{outputPath: outputPath, tempPath: sessionDir}).cleanup()
-	if !errors.As(cleanupErr, &pathErr) || pathErr.Path != sessionDir || pathErr.Phase != ArchivePathPhaseCleanup {
-		t.Fatalf("archive cleanup error = %v, want path %q phase %q", cleanupErr, sessionDir, ArchivePathPhaseCleanup)
+	if !errors.As(cleanupErr, &pathErr) || pathErr.Path != sessionDir {
+		t.Fatalf("archive cleanup error = %v, want path %q", cleanupErr, sessionDir)
 	}
 }
 

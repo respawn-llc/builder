@@ -534,38 +534,6 @@ message ArchiveOutputExistsDetails {
   string path = 1 [(buf.validate.field).string.min_len = 1];
 }
 
-enum ArchivePathFailurePhase {
-  ARCHIVE_PATH_FAILURE_PHASE_UNSPECIFIED = 0;
-  ARCHIVE_PATH_FAILURE_PHASE_PARENT = 1;
-  ARCHIVE_PATH_FAILURE_PHASE_TEMP = 2;
-  ARCHIVE_PATH_FAILURE_PHASE_WRITE = 3;
-  ARCHIVE_PATH_FAILURE_PHASE_PUBLISH = 4;
-  ARCHIVE_PATH_FAILURE_PHASE_CLEANUP = 5;
-}
-
-message ArchivePathFailureDetails {
-  string path = 1 [(buf.validate.field).string.min_len = 1];
-  ArchivePathFailurePhase phase = 2 [(buf.validate.field).enum = {
-    defined_only: true
-    not_in: [0]
-  }];
-}
-
-message SessionRemovalMetadataNotRemoved {}
-
-message SessionRemovalMetadataRemovedCleanupFailed {
-  string remaining_path = 1 [(buf.validate.field).string.min_len = 1];
-}
-
-message SessionRemovalFailureDetails {
-  oneof state {
-    option (buf.validate.oneof).required = true;
-
-    SessionRemovalMetadataNotRemoved metadata_not_removed = 1;
-    SessionRemovalMetadataRemovedCleanupFailed metadata_removed_cleanup_failed = 2;
-  }
-}
-
 message SessionArchiveError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -596,19 +564,7 @@ message SessionArchiveError {
         error_code: "output_exists"
       }
     ];
-    ArchivePathFailureDetails archive_path_failure = 6 [
-      (kent.api.shared.kent_result_field) = {
-        role: RESULT_FIELD_ROLE_ERROR_DETAIL
-        error_code: "archive_path_failure"
-      }
-    ];
-    SessionRemovalFailureDetails session_removal_failure = 7 [
-      (kent.api.shared.kent_result_field) = {
-        role: RESULT_FIELD_ROLE_ERROR_DETAIL
-        error_code: "session_removal_failure"
-      }
-    ];
-    kent.api.shared.InternalFailureDetails internal_failure = 8 [
+    kent.api.shared.InternalFailureDetails internal_failure = 6 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"
@@ -635,13 +591,7 @@ message SessionDeleteError {
         error_code: "session_in_use"
       }
     ];
-    SessionRemovalFailureDetails session_removal_failure = 4 [
-      (kent.api.shared.kent_result_field) = {
-        role: RESULT_FIELD_ROLE_ERROR_DETAIL
-        error_code: "session_removal_failure"
-      }
-    ];
-    kent.api.shared.InternalFailureDetails internal_failure = 5 [
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "internal_failure"

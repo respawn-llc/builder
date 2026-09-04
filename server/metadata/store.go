@@ -696,8 +696,6 @@ func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update Session
 	return nil
 }
 
-// DeleteFailedSessionCreationRecordByID removes metadata left by a failed
-// Session creation flow.
 func (s *Store) DeleteFailedSessionCreationRecordByID(ctx context.Context, sessionID string) error {
 	if s == nil || s.db == nil {
 		return errors.New("metadata store is required")

@@ -172,25 +172,6 @@ Stable deletion error codes are `confirmation_required`, `human_only_unfinished_
 
 Project deletion never deletes or moves workspace files.
 
-### Session archive and deletion
-
-Archive a Session to an external analysis artifact, or delete it without creating an artifact:
-
-```bash
-kent session archive <session-id> --output /absolute/server/path/<session-id>.tar.zst
-kent session delete <session-id>
-```
-
-Archive writes tar+Zstandard with one top-level directory named after the Session, creates missing destination parent directories, and never replaces an existing destination. `--output` is an absolute path on the Kent server, not necessarily the machine running the CLI. The archive is published before Kent removes the Session.
-
-Archive and delete reject a Session while it is executing or retained by unfinished Workflow work or a pending Approval. An agent cannot archive or delete the Session identified by its own `KENT_SESSION_ID`.
-
-Kent removes only its Session-owned artifacts and preserves unknown files. A non-empty Session directory can therefore remain after the Session disappears from Kent.
-
-If archive publication succeeds but Session removal does not, the valid archive and Session both remain; follow the deletion command in the diagnostic. If Session metadata is removed but artifact cleanup fails, the Session is gone and the diagnostic names the exact path to remove manually.
-
-Both commands support `--json`. Successful plain output is `done`; successful JSON includes `session_id` and archive also includes `output_path`. Stable error codes are `confirmation_required`, `session_not_found`, `session_in_use`, `self_session_forbidden`, `invalid_output_path`, `output_exists`, and `request_failed`.
-
 ## Output Modes
 
 By default, `kent run` writes each finalized assistant commentary or final response to `stdout` as it is committed. Use `--quiet` to suppress live output and print only the terminal result. For scripting, use JSON mode:

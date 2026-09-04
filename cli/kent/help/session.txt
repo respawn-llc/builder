@@ -2,12 +2,8 @@ Usage of kent session:
   kent session archive <session-id> --output <absolute-path>.tar.zst [--json]
   kent session delete <session-id> [--json]
 
-Create an external analysis archive or permanently remove a Session.
+Archive and remove a Session, or delete it without an archive.
 
-Archive writes a tar+Zstandard artifact to an absolute path on the Kent server, then removes the Session. It creates missing parent directories and never replaces an existing destination.
+Archive requires an absolute .tar.zst output path on the Kent server and never replaces an existing destination.
 
-Archive and delete reject Sessions that are executing or retained by unfinished Workflow work or a pending Approval. An agent cannot target its own Session.
-
-If archive publication succeeds but Session removal does not, the archive and Session both remain and the diagnostic gives the deletion command. If metadata removal succeeds but artifact cleanup fails, the Session is gone and the diagnostic names the exact path to remove manually.
-
-Both commands support --json. Successful plain output is exactly `done`.
+Sessions in use cannot be archived or deleted. An agent cannot target its own Session.

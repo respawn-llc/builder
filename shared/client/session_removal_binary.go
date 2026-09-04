@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"core/shared/protoapi"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -50,9 +51,7 @@ func (c *Remote) ArchiveSession(
 		sessionLifecycleMethod("Archive"),
 		request,
 		&sessionlaunchpb.SessionArchiveResult{},
-		func(failure *sessionlaunchpb.SessionArchiveError) error {
-			return &SessionArchiveFailureError{Failure: failure}
-		},
+		sessionArchiveGeneratedError,
 	)
 	if err != nil {
 		return nil, err
@@ -76,9 +75,7 @@ func (c *Remote) DeleteSession(
 		sessionLifecycleMethod("Delete"),
 		request,
 		&sessionlaunchpb.SessionDeleteResult{},
-		func(failure *sessionlaunchpb.SessionDeleteError) error {
-			return &SessionDeleteFailureError{Failure: failure}
-		},
+		sessionDeleteGeneratedError,
 	)
 	if err != nil {
 		return nil, err
@@ -90,4 +87,18 @@ func (c *Remote) DeleteSession(
 		)
 	}
 	return response, nil
+}
+
+func sessionArchiveGeneratedError(failure *sessionlaunchpb.SessionArchiveError) error {
+	if internal := failure.GetInternalFailure(); internal != nil {
+		return protoapi.InternalFailureFromProto(internal)
+	}
+	return &SessionArchiveFailureError{Failure: failure}
+}
+
+func sessionDeleteGeneratedError(failure *sessionlaunchpb.SessionDeleteError) error {
+	if internal := failure.GetInternalFailure(); internal != nil {
+		return protoapi.InternalFailureFromProto(internal)
+	}
+	return &SessionDeleteFailureError{Failure: failure}
 }
