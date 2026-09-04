@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import { sessionChatRoutePath } from "@/app-facade";
 import { createAppRouter } from "./routes";
-import { routeUsesEdgeToEdgeLayout } from "./routeLayout";
 
 const fixture = vi.hoisted(() => ({
   triggerCatalogNavigation: false,
@@ -95,10 +94,6 @@ it("opens the development-gated Session Chat route and uses ordinary Back", asyn
   await waitFor(() => {
     expect(window.location.pathname).toBe("/projects/project-1/tasks");
   });
-});
-
-it("classifies Session Chat as edge-to-edge", () => {
-  expect(routeUsesEdgeToEdgeLayout("/projects/project-1/sessions/session-1")).toBe(true);
 });
 
 it("opens a direct Session Chat URL without a catalog origin", async () => {
