@@ -351,7 +351,6 @@ func (a *Authority) WithDestructiveSessionAdmission(
 		resource.mu.Lock()
 		if resource.state != AgentResourceReady ||
 			resource.current != nil ||
-			resource.pins != 0 ||
 			resource.callbacks != 0 ||
 			resource.steps != 0 ||
 			resource.engine == nil ||

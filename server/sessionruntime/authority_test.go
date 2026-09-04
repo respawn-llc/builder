@@ -86,13 +86,24 @@ func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "open-client", &plan)
+	lifecycle := &authorityAutoReleaseLifecycle{}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "open-client", &plan)
 
 	callbackEntered := make(chan struct{})
 	releaseCallback := make(chan struct{})
 	callbackDone := make(chan error, 1)
 	go func() {
-		callbackDone <- fixture.authority.WithRuntime(
+		callbackDone <- authority.WithRuntime(
 			context.Background(),
 			attachment.Resource(),
 			func(context.Context, *runtime.Engine) error {
@@ -105,7 +116,7 @@ func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
 	<-callbackEntered
 
 	destructiveCalled := false
-	err := fixture.authority.WithDestructiveSessionAdmission(
+	err := authority.WithDestructiveSessionAdmission(
 		context.Background(),
 		sessionID,
 		func(context.Context) error {
@@ -137,7 +148,7 @@ func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
 	t.Cleanup(releaseDestructiveDeletion)
 	deletionDone := make(chan error, 1)
 	go func() {
-		deletionDone <- fixture.authority.WithDestructiveSessionAdmission(
+		deletionDone <- authority.WithDestructiveSessionAdmission(
 			context.Background(),
 			sessionID,
 			func(ctx context.Context) error {
@@ -166,7 +177,7 @@ func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
 		t.Fatal("destructive deletion callback did not enter")
 	}
 
-	if runtimeErr := fixture.authority.WithRuntime(
+	if runtimeErr := authority.WithRuntime(
 		context.Background(),
 		attachment.Resource(),
 		func(context.Context, *runtime.Engine) error { return nil },
@@ -177,7 +188,7 @@ func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
 	if err := <-deletionDone; err != nil {
 		t.Fatalf("destructive deletion: %v", err)
 	}
-	if _, openErr := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+	if _, openErr := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   "recreate-client",
 		Runtime:   &plan,
