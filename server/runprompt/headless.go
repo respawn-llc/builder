@@ -164,11 +164,13 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		return nil, err
 	}
 	if retained {
-		continuationText := req.Prompt
+		var continuationInput workflowexecution.WorkflowSessionContinuationInput
 		if agentSteer != nil {
-			continuationText = ""
+			continuationInput = workflowexecution.WorkflowSessionSteerInput{Steer: agentSteer}
+		} else {
+			continuationInput = workflowexecution.WorkflowSessionTextInput{Text: req.Prompt}
 		}
-		continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuation(continuationText, agentSteer)
+		continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuationFromInput(continuationInput)
 		if continuationErr != nil {
 			return nil, continuationErr
 		}

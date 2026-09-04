@@ -9,6 +9,7 @@ import (
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflowexecution"
+	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -196,6 +197,12 @@ func (s *Service) submitUserTurn(
 		}
 		return true, err
 	}
+	executeOrdinaryTurn := func() error {
+		if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
+			return waitErr
+		}
+		return executeTurn()
+	}
 	workflowHistoryRecorded := false
 	var historyErr error
 	persistedWorkflow, workflowErr := s.workflowTaskSession(attempt.Context(), request.SessionID, nil)
@@ -217,18 +224,12 @@ func (s *Service) submitUserTurn(
 		} else if persistedWorkflow {
 			err = sessionruntime.ErrSessionWorkflowActivationActive
 		} else {
-			if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
-				return response, waitErr
-			}
-			err = executeTurn()
+			err = executeOrdinaryTurn()
 		}
 	} else if persistedWorkflow {
 		err = sessionruntime.ErrSessionWorkflowActivationActive
 	} else {
-		if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
-			return response, waitErr
-		}
-		err = executeTurn()
+		err = executeOrdinaryTurn()
 	}
 	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
 		preparing := false
@@ -238,7 +239,19 @@ func (s *Service) submitUserTurn(
 		}
 		switch {
 		case preparingErr != nil:
-			err = preparingErr
+			if errors.Is(preparingErr, workflowstore.ErrSessionNotCurrentWorkflowNode) {
+				currentWorkflow, ownershipErr := s.workflowTaskSession(attempt.Context(), request.SessionID, nil)
+				switch {
+				case ownershipErr != nil:
+					err = ownershipErr
+				case !currentWorkflow:
+					err = executeOrdinaryTurn()
+				default:
+					err = preparingErr
+				}
+			} else {
+				err = preparingErr
+			}
 		case preparing:
 			err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 				queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(

@@ -132,8 +132,8 @@ func (WorkflowSessionSteerInput) isWorkflowSessionContinuationInput() {}
 type WorkflowSessionContinuation struct {
 	input WorkflowSessionContinuationInput
 
-	turn        continuationSignal[runtime.UserTurnResult]
-	exact       continuationSignal[sessionruntime.ExecutionResult]
+	turn        completionSignal[runtime.UserTurnResult]
+	exact       completionSignal[sessionruntime.ExecutionResult]
 	nameMu      sync.RWMutex
 	sessionName *string
 	progressMu  sync.RWMutex
@@ -155,12 +155,32 @@ func NewWorkflowSessionContinuation(text string, steer *runtime.AgentSteer) (*Wo
 	} else {
 		input = WorkflowSessionTextInput{Text: text}
 	}
+	return newWorkflowSessionContinuation(input), nil
+}
+
+func NewWorkflowSessionContinuationFromInput(input WorkflowSessionContinuationInput) (*WorkflowSessionContinuation, error) {
+	switch value := input.(type) {
+	case WorkflowSessionTextInput:
+		if strings.TrimSpace(value.Text) == "" {
+			return nil, errors.New("workflow Session continuation input is required")
+		}
+	case WorkflowSessionSteerInput:
+		if value.Steer == nil {
+			return nil, errors.New("workflow Session Agent steer is required")
+		}
+	default:
+		return nil, errors.New("workflow Session continuation input is invalid")
+	}
+	return newWorkflowSessionContinuation(input), nil
+}
+
+func newWorkflowSessionContinuation(input WorkflowSessionContinuationInput) *WorkflowSessionContinuation {
 	return &WorkflowSessionContinuation{
 		input:   input,
-		turn:    newContinuationSignal[runtime.UserTurnResult](),
-		exact:   newContinuationSignal[sessionruntime.ExecutionResult](),
+		turn:    newCompletionSignal[runtime.UserTurnResult](),
+		exact:   newCompletionSignal[sessionruntime.ExecutionResult](),
 		stepIDs: make(map[string]struct{}),
-	}, nil
+	}
 }
 
 func (c *WorkflowSessionContinuation) Input() WorkflowSessionContinuationInput {
@@ -174,7 +194,7 @@ func (c *WorkflowSessionContinuation) RecordTurn(result runtime.UserTurnResult, 
 	if c == nil {
 		return
 	}
-	c.turn.set(result, err)
+	c.turn.resolve(result, err)
 }
 
 func (c *WorkflowSessionContinuation) WaitTurn(ctx context.Context) (runtime.UserTurnResult, error) {
@@ -191,7 +211,7 @@ func (c *WorkflowSessionContinuation) RecordExact(result sessionruntime.Executio
 	if c == nil {
 		return
 	}
-	c.exact.set(result, err)
+	c.exact.resolve(result, err)
 }
 
 func (c *WorkflowSessionContinuation) WaitExact(ctx context.Context) (sessionruntime.ExecutionResult, error) {
@@ -202,48 +222,6 @@ func (c *WorkflowSessionContinuation) WaitExact(ctx context.Context) (sessionrun
 		ctx = context.Background()
 	}
 	return c.exact.wait(ctx)
-}
-
-type continuationSignal[T any] struct {
-	once  sync.Once
-	done  chan struct{}
-	value T
-	err   error
-}
-
-func newContinuationSignal[T any]() continuationSignal[T] {
-	return continuationSignal[T]{done: make(chan struct{})}
-}
-
-func (s *continuationSignal[T]) set(value T, err error) {
-	s.once.Do(func() {
-		s.value = value
-		s.err = err
-		close(s.done)
-	})
-}
-
-func (s *continuationSignal[T]) wait(ctx context.Context) (T, error) {
-	var zero T
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-s.done:
-		return s.value, s.err
-	default:
-	}
-	select {
-	case <-s.done:
-		return s.value, s.err
-	case <-ctx.Done():
-		select {
-		case <-s.done:
-			return s.value, s.err
-		default:
-			return zero, context.Cause(ctx)
-		}
-	}
 }
 
 func (c *WorkflowSessionContinuation) RecordSessionName(name string) error {

@@ -466,7 +466,7 @@ func drainTaskControllerWorkLocked(
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		start.completion.resolve(nil, ErrTaskExecutionNotQuiescent)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.completion.done)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.completion.doneChannel())
 	}
 	for key, start := range c.automaticReservations {
 		if start.reference.TaskID != taskID {
@@ -480,7 +480,7 @@ func drainTaskControllerWorkLocked(
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		start.completion.resolve(nil, ErrTaskExecutionNotQuiescent)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.completion.done)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.completion.doneChannel())
 	}
 	return nil
 }
