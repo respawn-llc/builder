@@ -20,6 +20,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -352,6 +353,46 @@ type staticRuntimeControlWorkflowTaskResolver struct {
 
 func (r staticRuntimeControlWorkflowTaskResolver) SessionHasCurrentWorkflowTask(context.Context, string) (bool, error) {
 	return r.workflow, nil
+}
+
+type runtimeControlWorkflowCompletionController struct {
+	engine *runtime.Engine
+}
+
+func (c *runtimeControlWorkflowCompletionController) CompleteAgentCurrentNode(
+	ctx context.Context,
+	req workflowruntime.AgentCompletionRequest,
+) (workflowruntime.CompletionResult, error) {
+	if c.engine == nil {
+		return workflowruntime.CompletionResult{}, errors.New("Workflow completion engine is unavailable")
+	}
+	return c.engine.ApplyWorkflowAgentCompletion(
+		req.Provenance.ScopeID,
+		req.Provenance.RunID,
+		req.Provenance.StepID,
+		func() (workflowruntime.CompletionResult, error) {
+			return workflowruntime.CompletionResult{
+				TransitionID: workflow.TransitionID("done"),
+				State:        workflowruntime.CompletionStateApplied,
+			}, nil
+		},
+	)
+}
+
+func (runtimeControlWorkflowCompletionController) CompleteScriptCurrentNode(context.Context, workflowruntime.ScriptCompletionRequest) (workflowruntime.CompletionResult, error) {
+	return workflowruntime.CompletionResult{}, errors.New("unexpected Script completion")
+}
+
+func (runtimeControlWorkflowCompletionController) ContinueCurrentNode(context.Context, workflowstore.CurrentNodeCompletionResult) error {
+	return errors.New("unexpected Current Node continuation")
+}
+
+func (runtimeControlWorkflowCompletionController) RecordProtocolViolation(context.Context, workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {
+	return workflowruntime.ViolationResult{}, errors.New("unexpected protocol violation")
+}
+
+func (runtimeControlWorkflowCompletionController) ResetProtocolViolationBudget(context.Context, workflowruntime.ViolationResetRequest) error {
+	return errors.New("unexpected protocol violation reset")
 }
 
 type runtimeControlFakeClient struct {
@@ -823,6 +864,144 @@ func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 	}
 	close(client.release)
 	waitForRuntimeControlIdle(t, engine)
+}
+
+func TestServiceSubmitUserTurnWaitsForWorkflowExecutionRetirement(t *testing.T) {
+	client := &runtimeControlFakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:  llm.RoleAssistant,
+				Phase: textutil.Value(llm.MessagePhaseCommentary),
+			},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "complete-node",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"done","summary":"done"}`),
+			}},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("ordinary continuation completed"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+		},
+	}}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse Session ID: %v", err)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new Session descriptor: %v", err)
+	}
+	node, err := workflow.NewCurrentNodeReference("workflow-task", "workflow-node", nil)
+	if err != nil {
+		t.Fatalf("new Current Node reference: %v", err)
+	}
+	workflowID, err := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440101")
+	if err != nil {
+		t.Fatalf("parse Workflow ID: %v", err)
+	}
+	started := make(chan struct{})
+	completed := make(chan struct{})
+	runnerErr := make(chan error, 1)
+	release := make(chan struct{})
+	controller := &runtimeControlWorkflowCompletionController{}
+	handle, err := service.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: sessionruntime.WorkflowExecutionRef{
+				ProjectID:   "project-test",
+				WorkflowID:  workflowID,
+				CurrentNode: node,
+			},
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Contract: workflowruntime.CompletionContract{
+					Transitions: []workflowruntime.CompletionTransition{{ID: "done"}},
+				},
+				CompletionMode: workflowruntime.CompletionModeTool,
+				Controller:     controller,
+				Instructions: workflowruntime.TaskInstructions{
+					WorkflowID:  workflowID,
+					CurrentNode: node,
+				},
+			},
+		},
+		Resource: sessionruntime.OpenAgentResource{},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			close(started)
+			if err := bridge.WithEngine(ctx, func(runCtx context.Context, engine *runtime.Engine) error {
+				controller.engine = engine
+				_, err := engine.SubmitWorkflowTurn(runCtx)
+				return err
+			}); err != nil {
+				runnerErr <- err
+				return err
+			}
+			close(completed)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("start Workflow execution: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		_, _ = handle.Wait(context.Background())
+	})
+	select {
+	case <-completed:
+	case <-time.After(5 * time.Second):
+		select {
+		case err := <-runnerErr:
+			t.Fatalf("Workflow execution failed before completing its Current Node: %v", err)
+		default:
+			t.Fatal("Workflow execution did not complete its Current Node")
+		}
+	}
+	if terminal := engine.WorkflowTerminalState(); !terminal.Completed {
+		client.mu.Lock()
+		calls := client.calls
+		client.mu.Unlock()
+		t.Fatalf("Workflow execution completed without terminal state: %+v (provider calls=%d)", terminal, calls)
+	}
+
+	submission := submitUserTurnRuntimeControlAsync(
+		service,
+		runtimeControlUserTurnRequest(store, "ordinary-after-workflow", "ordinary continuation"),
+	)
+	select {
+	case result := <-submission:
+		t.Fatalf("SubmitUserTurn completed while Workflow execution was live: %+v", result)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+
+	select {
+	case result := <-submission:
+		if result.err != nil {
+			t.Fatalf("SubmitUserTurn after Workflow retirement: %v", result.err)
+		}
+		if result.response.ResultKind != clientui.UserTurnResultKindQueued || result.response.QueueItemID == "" {
+			t.Fatalf("SubmitUserTurn response = %+v, want ordinary queued response", result.response)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SubmitUserTurn did not continue after Workflow execution retirement")
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "ordinary continuation completed")
 }
 
 func TestServicePendingQuestionInterruptsAndAllowsNextTurn(t *testing.T) {
