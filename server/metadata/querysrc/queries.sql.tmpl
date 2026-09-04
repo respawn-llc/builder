@@ -2520,7 +2520,7 @@ UPDATE sessions
 SET
     project_id = sqlc.arg(target_project_id),
     workspace_id = sqlc.arg(target_workspace_id),
-    worktree_id = NULL,
+    worktree_id = sqlc.narg(target_worktree_id),
     cwd_relpath = '.',
     artifact_relpath = sqlc.arg(target_artifact_relpath),
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
@@ -2530,14 +2530,22 @@ SET
                 CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
                 '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
                 '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
-                '$.worktree_reminder', json('null')
+                '$.worktree_reminder',
+                CASE WHEN CAST(sqlc.narg(worktree_reminder_json) AS TEXT) IS NULL
+                    THEN json('null')
+                    ELSE json(CAST(sqlc.narg(worktree_reminder_json) AS TEXT))
+                END
             )
         ELSE
             json_set(
                 CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
                 '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
                 '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
-                '$.worktree_reminder', json('null'),
+                '$.worktree_reminder',
+                CASE WHEN CAST(sqlc.narg(worktree_reminder_json) AS TEXT) IS NULL
+                    THEN json('null')
+                    ELSE json(CAST(sqlc.narg(worktree_reminder_json) AS TEXT))
+                END,
                 '$.rebind_reminder', json(CAST(sqlc.narg(rebind_reminder_json) AS TEXT))
             )
         END,

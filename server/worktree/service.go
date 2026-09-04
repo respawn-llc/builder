@@ -47,11 +47,17 @@ type processSource interface {
 	CurrentSnapshots() []shelltool.Snapshot
 }
 
+type sessionWorkspaceRetargeter interface {
+	RetargetWorkspace(context.Context, metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
+	ScheduleWorkspaceRetargetWithCompletion(context.Context, metadata.SessionWorkspaceRetargetRequest, serverapi.RuntimeStepOrigin, worktreecontract.OperationID, func(error)) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error)
+}
+
 type ServiceOptions struct {
 	BaseDir             string
 	SetupScript         string
 	SetupTimeoutSeconds int
 	ResolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
+	SessionRetargeter   sessionWorkspaceRetargeter
 }
 
 type Service struct {
@@ -66,6 +72,7 @@ type Service struct {
 	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
 	workspaceMutations  *mutationlane.MutationLaneRegistry[string]
+	sessionRetargeter   sessionWorkspaceRetargeter
 }
 
 type syncedWorktree struct {
@@ -355,6 +362,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
 		workspaceMutations:  mutationlane.NewMutationLaneRegistry[string](),
+		sessionRetargeter:   opts.SessionRetargeter,
 	}
 }
 

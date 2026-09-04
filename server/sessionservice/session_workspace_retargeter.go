@@ -154,6 +154,16 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 	origin serverapi.RuntimeStepOrigin,
 	operationID worktreecontract.OperationID,
 ) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error) {
+	return s.ScheduleWorkspaceRetargetWithCompletion(ctx, req, origin, operationID, nil)
+}
+
+func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetargetWithCompletion(
+	ctx context.Context,
+	req metadata.SessionWorkspaceRetargetRequest,
+	origin serverapi.RuntimeStepOrigin,
+	operationID worktreecontract.OperationID,
+	completion func(error),
+) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error) {
 	if s == nil || s.metadata == nil || s.authority == nil || s.publisher == nil || s.processes == nil {
 		return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{}, errors.New("session workspace retarget dependencies are required")
 	}
@@ -170,6 +180,12 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 	runCtx, cancelRun := context.WithCancel(context.WithoutCancel(ctx))
 	go func() {
 		defer cancelRun()
+		var completionErr error
+		defer func() {
+			if completion != nil && admission.accepted() {
+				completion(completionErr)
+			}
+		}()
 		failurePersisted := false
 		retirementScheduled := false
 		var publicationErr error
@@ -226,6 +242,7 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 				runErr = nil
 			}
 			if runErr != nil {
+				completionErr = runErr
 				persistCtx := context.WithoutCancel(runCtx)
 				if failureCause == nil {
 					failureCause = runErr
@@ -255,6 +272,7 @@ func (s *SessionWorkspaceRetargeter) ScheduleWorkspaceRetarget(
 			}
 			return
 		}
+		completionErr = runErr
 		result <- runErr
 	}()
 	select {
@@ -353,9 +371,9 @@ func (s *SessionWorkspaceRetargeter) applyWorkspaceRetarget(
 			return metadata.SessionWorkspaceRetargetResult{}, err
 		}
 	}
-	workingDirectoryChanged := sourceTarget.EffectiveWorkdir != currentPlan.TargetWorkspaceRoot
+	workingDirectoryChanged := sourceTarget.EffectiveWorkdir != currentPlan.TargetExecutionRoot
 	if currentPlan.CrossProject() || workingDirectoryChanged {
-		workingDirectory := currentPlan.TargetWorkspaceRoot
+		workingDirectory := currentPlan.TargetExecutionRoot
 		currentPlan.RebindReminder = &session.SessionRebindReminder{
 			Kind:          session.SessionRebindReminderSucceeded,
 			SourceProject: currentPlan.SourceProject,
@@ -373,6 +391,7 @@ func (s *SessionWorkspaceRetargeter) applyWorkspaceRetarget(
 		WorkspaceContainer: filepath.Base(currentPlan.TargetWorkspaceRoot),
 		UpdatedAt:          updatedAt,
 		RebindReminder:     currentPlan.RebindReminder,
+		WorktreeReminder:   currentPlan.WorktreeReminder,
 	}, func() error {
 		if activeRuntime != nil {
 			if err := activeRuntime.Replace(targetFilesystemContext); err != nil {
@@ -439,14 +458,25 @@ func (s *SessionWorkspaceRetargeter) targetFilesystemContext(
 				return tools.FilesystemContext{}, err
 			}
 		}
-		target, err = runtimewire.NewFilesystemContext(plan.TargetWorkspaceRoot, plan.TargetWorkspaceRoot, targetBoundary)
+		target, err = runtimewire.NewFilesystemContext(plan.TargetExecutionRoot, plan.TargetExecutionRoot, targetBoundary)
 	} else {
-		target, err = runtimewire.WithExecutionTarget(previous, plan.TargetWorkspaceRoot, plan.TargetWorkspaceRoot, nil)
+		managed := previous.ManagedWorktree
+		if managed != nil {
+			var currentRoot *string
+			if plan.TargetWorktreeID != nil {
+				currentRoot = &plan.TargetExecutionRoot
+			}
+			managed, err = managed.WithCurrentWorktreeRoot(currentRoot)
+			if err != nil {
+				return tools.FilesystemContext{}, err
+			}
+		}
+		target, err = runtimewire.WithExecutionTarget(previous, plan.TargetExecutionRoot, plan.TargetExecutionRoot, managed)
 	}
 	if err != nil {
 		return tools.FilesystemContext{}, err
 	}
-	if previous.ManagedWorktree != nil {
+	if previous.ManagedWorktree != nil && plan.TargetWorktreeID == nil {
 		target.ManagedWorktree, err = previous.ManagedWorktree.WithCurrentWorktreeRoot(nil)
 	}
 	return target, err

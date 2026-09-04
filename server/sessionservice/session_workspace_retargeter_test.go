@@ -23,6 +23,8 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/worktreecontract"
+
+	"github.com/google/uuid"
 )
 
 type retargetProcessSource []shelltool.Snapshot
@@ -470,10 +472,42 @@ func (c *queuedFailureRetargetRuntimeClient) request(index int) llm.Request {
 func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.T) {
 	fixture := newRealSessionRetargetFixture(t, false)
 	targetProjectID := fixture.targetProject.ProjectID
+	targetBinding, err := fixture.metadata.AttachWorkspaceToProject(
+		t.Context(),
+		targetProjectID,
+		fixture.targetWorkspaceRoot,
+	)
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject target: %v", err)
+	}
+	targetWorktreeRoot := filepath.Join(fixture.managedBase, "scheduled-target-worktree")
+	if err := os.MkdirAll(targetWorktreeRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll target worktree: %v", err)
+	}
+	targetWorktreeID := uuid.NewString()
+	if err := fixture.metadata.UpsertWorktreeRecord(t.Context(), metadata.WorktreeRecord{
+		ID:            targetWorktreeID,
+		WorkspaceID:   targetBinding.WorkspaceID,
+		CanonicalRoot: targetWorktreeRoot,
+		DisplayName:   "scheduled-target",
+		Managed:       true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord target: %v", err)
+	}
+	worktreeReminder := session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			WorktreePath:  targetWorktreeRoot,
+			WorkspaceRoot: fixture.targetWorkspaceRoot,
+			EffectiveCwd:  targetWorktreeRoot,
+		},
+	}
 	request := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Meta().SessionID,
-		WorkspaceRoot: fixture.targetWorkspaceRoot,
-		ProjectID:     &targetProjectID,
+		SessionID:        fixture.child.Meta().SessionID,
+		WorkspaceRoot:    fixture.targetWorkspaceRoot,
+		ProjectID:        &targetProjectID,
+		TargetWorktreeID: &targetWorktreeID,
+		WorktreeReminder: &worktreeReminder,
 	}
 	processes := retargetProcessSource{{
 		ID:             "still-running",
@@ -498,16 +532,18 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	)
 	client := &selfRetargetRuntimeClient{}
 	engine := fixture.openRuntimeWithClient(t, client)
+	completed := make(chan error, 1)
 	client.run = func() error {
 		active := engine.ActiveRun()
 		if active == nil {
 			return errors.New("active Agent Step is required")
 		}
-		_, err := retargeter.ScheduleWorkspaceRetarget(
+		_, err := retargeter.ScheduleWorkspaceRetargetWithCompletion(
 			t.Context(),
 			request,
 			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
 			worktreecontract.NewOperationID(),
+			func(err error) { completed <- err },
 		)
 		return err
 	}
@@ -536,6 +572,14 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	case <-time.After(3 * time.Second):
 		t.Fatal("moved Session identity was not published")
 	}
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatalf("scheduled retarget completion: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("scheduled retarget completion was not published")
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if !fixture.runtimeAvailable(t) {
@@ -559,8 +603,21 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 		t.Fatalf("persisted Session rebind reminder = %+v", reminder)
 	}
 	if reminder.WorkingDirectory == nil ||
-		canonicalRetargetTestPath(t, *reminder.WorkingDirectory) != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
-		t.Fatalf("persisted Session rebind Working Directory = %v, want %q", reminder.WorkingDirectory, fixture.targetWorkspaceRoot)
+		canonicalRetargetTestPath(t, *reminder.WorkingDirectory) != canonicalRetargetTestPath(t, targetWorktreeRoot) {
+		t.Fatalf("persisted Session rebind Working Directory = %v, want %q", reminder.WorkingDirectory, targetWorktreeRoot)
+	}
+	if reopened.Meta().WorktreeReminder == nil ||
+		reopened.Meta().WorktreeReminder.WorktreePath != targetWorktreeRoot {
+		t.Fatalf("persisted Worktree reminder = %+v, want %q", reopened.Meta().WorktreeReminder, targetWorktreeRoot)
+	}
+	target, err := fixture.metadata.ResolveSessionExecutionTarget(t.Context(), fixture.childID.String())
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.Worktree == nil ||
+		target.Worktree.ID != targetWorktreeID ||
+		canonicalRetargetTestPath(t, target.EffectiveWorkdir) != canonicalRetargetTestPath(t, targetWorktreeRoot) {
+		t.Fatalf("scheduled execution target = %+v, want Worktree %q at %q", target, targetWorktreeID, targetWorktreeRoot)
 	}
 }
 
