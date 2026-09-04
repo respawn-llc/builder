@@ -115,8 +115,19 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 }
 
 func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+	handoff, err := c.prepareDraftHandoff(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
 	conn, route, err := c.subscribeRPC(ctx, protocol.MethodSessionSubscribeTranscript, "subscribe-session-transcript", req, req.SessionID, true)
 	if err != nil {
+		if handoff != nil {
+			_ = handoff.remote.Close()
+		}
+		return nil, err
+	}
+	if err := c.installDraftHandoff(handoff); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 	return newRemoteSubscriptionWithError(conn, route, func(params protocol.SessionTranscriptEventParams) (clientui.TranscriptMessage, error) {
@@ -191,10 +202,10 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 	route := mustRemoteRoute(method)
 	var additionalAttachmentIntent *remoteAttachmentIntent
 	if attachSession {
-		if err := c.prepareDraftHandoff(ctx, sessionID); err != nil {
-			return nil, rpccontract.Route{}, err
-		}
-		attachedSessionID, attachedToSession := c.attachIntent.sessionID()
+		c.mu.Lock()
+		attachmentIntent := c.attachIntent
+		c.mu.Unlock()
+		attachedSessionID, attachedToSession := attachmentIntent.sessionID()
 		if attachedToSession && attachedSessionID != strings.TrimSpace(sessionID) {
 			return nil, rpccontract.Route{}, fmt.Errorf(
 				"remote is attached to session %q, cannot subscribe to session %q",

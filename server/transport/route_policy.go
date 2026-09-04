@@ -251,7 +251,12 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 		}
 		return nil
 	case rpccontract.ScopeAttachSession:
-		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
+		_, _, err := e.gateway.resolveSessionAttachmentTargetWithCapability(
+			ctx,
+			state,
+			scopeParams.sessionID,
+			scopeParams.sessionReattachCapability,
+		)
 		return err
 	case rpccontract.ScopeSessionActiveProject:
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
@@ -289,11 +294,12 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 }
 
 type routeScopeParams struct {
-	sessionID      string
-	processID      string
-	ownerSessionID string
-	projectID      string
-	workspaceID    string
+	sessionID                 string
+	sessionReattachCapability *string
+	processID                 string
+	ownerSessionID            string
+	projectID                 string
+	workspaceID               string
 }
 
 func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams, error) {
@@ -460,11 +466,16 @@ func (g *Gateway) activeProjectID(ctx context.Context, state *connectionState) (
 }
 
 func (g *Gateway) requireSessionInActiveProject(ctx context.Context, state *connectionState, sessionID string) error {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if state != nil &&
+		state.attachedSession != nil &&
+		state.attachedSession.String() == trimmedSessionID {
+		return nil
+	}
 	projectID, err := g.activeProjectID(ctx, state)
 	if err != nil {
 		return err
 	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
 	if trimmedSessionID == "" {
 		return fmt.Errorf("session id is required")
 	}

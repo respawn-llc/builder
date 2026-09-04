@@ -43,6 +43,7 @@ type Gateway struct {
 	deps                            GatewayDependencies
 	identity                        protocol.ServerIdentity
 	registration                    gatewayRegistration
+	sessionReattach                 *sessionReattachAuthority
 	sessionExecutionRequestContract serverjsoncontract.SessionExecutionEnvironmentRequest
 }
 
@@ -240,10 +241,15 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 	if err != nil {
 		return nil, err
 	}
+	sessionReattach, err := newSessionReattachAuthority()
+	if err != nil {
+		return nil, err
+	}
 	return &Gateway{
 		deps:                            deps,
 		identity:                        identity,
 		registration:                    registration,
+		sessionReattach:                 sessionReattach,
 		sessionExecutionRequestContract: sessionExecutionRequestContract,
 	}, nil
 }

@@ -57,6 +57,15 @@ func (g *Gateway) resolveAttachedProjectWorkspace(ctx context.Context, request *
 }
 
 func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *connectionState, sessionID string) (clientui.SessionExecutionTarget, metadata.Binding, error) {
+	return g.resolveSessionAttachmentTargetWithCapability(ctx, state, sessionID, nil)
+}
+
+func (g *Gateway) resolveSessionAttachmentTargetWithCapability(
+	ctx context.Context,
+	state *connectionState,
+	sessionID string,
+	reattachCapability *string,
+) (clientui.SessionExecutionTarget, metadata.Binding, error) {
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	if trimmedSessionID == "" {
 		return clientui.SessionExecutionTarget{}, metadata.Binding{}, errors.New("session id is required")
@@ -81,11 +90,13 @@ func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *con
 		}
 		return clientui.SessionExecutionTarget{}, metadata.Binding{}, err
 	}
-	activeProjectID := ""
-	if state != nil {
+	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
+	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
 		activeProjectID = strings.TrimSpace(state.attachedProject)
 	}
-	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
+	if activeProjectID != "" &&
+		strings.TrimSpace(binding.ProjectID) != activeProjectID &&
+		!g.sessionReattach.authorizes(trimmedSessionID, reattachCapability) {
 		return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
 	}
 	return target, binding, nil

@@ -83,8 +83,9 @@ type remoteControlResponse struct {
 }
 
 type remoteSessionControl struct {
-	sessionID string
-	control   *remoteControlConn
+	sessionID      string
+	remote         *Remote
+	initialControl *remoteControlConn
 }
 
 func configuredRemoteDialPlan(cfg config.App) (remoteDialPlan, error) {
@@ -150,6 +151,13 @@ func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport
 	if err != nil {
 		cleanup()
 		return nil, err
+	}
+	if state.attachment != nil && state.attachment.session != nil {
+		attachIntent, err = newRemoteSessionReattachmentIntent(*state.attachment.session)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
 	}
 	control := newRemoteControlConn(conn)
 	return &Remote{
@@ -226,6 +234,19 @@ func (c *Remote) openSetupRPCConn(
 	ctx context.Context,
 	additionalAttachmentIntent *remoteAttachmentIntent,
 ) (rpcwire.Conn, func(), remoteConnectionState, error) {
+	c.mu.Lock()
+	attachmentIntent := c.attachIntent
+	attachment := c.attachment
+	c.mu.Unlock()
+	return c.openSetupRPCConnForAttachment(ctx, additionalAttachmentIntent, attachmentIntent, attachment)
+}
+
+func (c *Remote) openSetupRPCConnForAttachment(
+	ctx context.Context,
+	additionalAttachmentIntent *remoteAttachmentIntent,
+	attachmentIntent *remoteAttachmentIntent,
+	attachment *remoteAttachment,
+) (rpcwire.Conn, func(), remoteConnectionState, error) {
 	if err := c.ensureOpen(); err != nil {
 		return nil, nil, remoteConnectionState{}, err
 	}
@@ -235,11 +256,11 @@ func (c *Remote) openSetupRPCConn(
 	}
 	cleanup := func() { _ = conn.Close() }
 	setup := remoteConnectionSetup{
-		attachmentIntent:           c.attachIntent,
+		attachmentIntent:           attachmentIntent,
 		additionalAttachmentIntent: additionalAttachmentIntent,
 		expectation: &remoteConnectionExpectation{
 			rootID:     c.rootID(),
-			attachment: c.attachment,
+			attachment: attachment,
 		},
 		acknowledgeNoAuth: c.acknowledgeNoAuthOnConn,
 	}
@@ -251,56 +272,93 @@ func (c *Remote) openSetupRPCConn(
 	return conn, cleanup, state, nil
 }
 
-func (c *Remote) prepareDraftHandoff(ctx context.Context, sessionID string) error {
+func (c *Remote) prepareDraftHandoff(ctx context.Context, sessionID string) (*remoteSessionControl, error) {
 	sessionID = strings.TrimSpace(sessionID)
-	attachedSessionID, attachedToSession := c.attachIntent.sessionID()
+	c.mu.Lock()
+	attachmentIntent := c.attachIntent
+	c.mu.Unlock()
+	attachedSessionID, attachedToSession := attachmentIntent.sessionID()
 	if attachedToSession {
 		if attachedSessionID != sessionID {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"remote is attached to session %q, cannot prepare draft handoff for session %q",
 				attachedSessionID,
 				sessionID,
 			)
 		}
-		return nil
+		return nil, nil
 	}
-	if _, attachedToProject := c.attachIntent.projectRequest(); !attachedToProject {
-		return nil
+	if _, attachedToProject := attachmentIntent.projectRequest(); !attachedToProject {
+		return nil, nil
 	}
 	// A Project-attached control connection loses access as soon as the Session
 	// moves. Establish the exact-Session control while the source Project still
 	// owns it so the composer draft can be persisted before TUI reattachment.
 	intent, err := newRemoteSessionAttachmentIntent(sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
-		return errors.New("remote client is closed")
+		return nil, errors.New("remote client is closed")
 	}
 	current := c.draftHandoff
-	if current != nil && current.sessionID == sessionID && !current.control.IsDone() {
+	if current != nil && current.sessionID == sessionID {
 		c.mu.Unlock()
-		return nil
-	}
-	conn, cleanup, _, err := c.openSetupRPCConn(ctx, intent)
-	if err != nil {
-		c.mu.Unlock()
-		return err
-	}
-	if c.closed.Load() {
-		c.mu.Unlock()
-		cleanup()
-		return errors.New("remote client is closed")
-	}
-	c.draftHandoff = &remoteSessionControl{
-		sessionID: sessionID,
-		control:   newRemoteControlConn(conn),
+		return nil, nil
 	}
 	c.mu.Unlock()
+	conn, cleanup, state, err := c.openSetupRPCConn(ctx, intent)
+	if err != nil {
+		return nil, err
+	}
+	if state.attachment == nil || state.attachment.session == nil {
+		cleanup()
+		return nil, errors.New("Session handoff attachment is required")
+	}
+	handoffIntent, err := newRemoteSessionReattachmentIntent(*state.attachment.session)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	handoffControl := newRemoteControlConn(conn)
+	handoffRemote := &Remote{
+		plan:                             c.plan,
+		transport:                        c.transport,
+		control:                          handoffControl,
+		identity:                         state.identity,
+		attachIntent:                     handoffIntent,
+		attachment:                       state.attachment,
+		sessionExecutionResponseContract: c.sessionExecutionResponseContract,
+	}
+	handoffRemote.expectedRootID.Store(c.rootID())
+	handoffRemote.noAuthAck.Store(c.noAuthAck.Load())
+	return &remoteSessionControl{
+		sessionID:      sessionID,
+		remote:         handoffRemote,
+		initialControl: handoffControl,
+	}, nil
+}
+
+func (c *Remote) installDraftHandoff(candidate *remoteSessionControl) error {
+	if candidate == nil {
+		return nil
+	}
+	c.mu.Lock()
+	if c.closed.Load() {
+		c.mu.Unlock()
+		return errors.Join(errors.New("remote client is closed"), candidate.remote.Close())
+	}
+	current := c.draftHandoff
+	if current != nil && current.sessionID == candidate.sessionID {
+		c.mu.Unlock()
+		return candidate.remote.Close()
+	}
+	c.draftHandoff = candidate
+	c.mu.Unlock()
 	if current != nil {
-		_ = current.control.Close()
+		_ = current.remote.Close()
 	}
 	return nil
 }
@@ -310,17 +368,54 @@ func (c *Remote) draftControl(ctx context.Context, sessionID string) (*remoteCon
 		return nil, err
 	}
 	sessionID = strings.TrimSpace(sessionID)
-	attachedSessionID, attachedToSession := c.attachIntent.sessionID()
+	c.mu.Lock()
+	attachmentIntent := c.attachIntent
+	handoff := c.draftHandoff
+	c.mu.Unlock()
+	attachedSessionID, attachedToSession := attachmentIntent.sessionID()
 	if attachedToSession && attachedSessionID == sessionID {
 		return c.ensureControl(ctx)
 	}
+	if handoff != nil && handoff.sessionID == sessionID {
+		return handoff.remote.ensureControl(ctx)
+	}
+	return c.ensureControl(ctx)
+}
+
+// TakeSessionHandoff promotes the exact-Session connection prepared by the
+// transcript subscription. The prepared socket predates any Session move, so
+// promotion refreshes it once unless an earlier draft operation already did.
+func (c *Remote) TakeSessionHandoff(ctx context.Context, sessionID string) (*Remote, bool, error) {
+	if err := c.ensureOpen(); err != nil {
+		return nil, false, err
+	}
+	sessionID = strings.TrimSpace(sessionID)
 	c.mu.Lock()
 	handoff := c.draftHandoff
 	c.mu.Unlock()
-	if handoff != nil && handoff.sessionID == sessionID {
-		return handoff.control, nil
+	if handoff == nil || handoff.sessionID != sessionID {
+		return nil, false, nil
 	}
-	return c.ensureControl(ctx)
+	handoff.remote.mu.Lock()
+	initialControl := handoff.remote.control
+	if initialControl == handoff.initialControl {
+		handoff.remote.control = nil
+	}
+	handoff.remote.mu.Unlock()
+	if initialControl == handoff.initialControl {
+		_ = initialControl.Close()
+	}
+	if _, err := handoff.remote.ensureControl(ctx); err != nil {
+		return nil, true, err
+	}
+	c.mu.Lock()
+	if c.draftHandoff != handoff {
+		c.mu.Unlock()
+		return nil, true, errors.New("Session handoff changed while reattaching")
+	}
+	c.draftHandoff = nil
+	c.mu.Unlock()
+	return handoff.remote, true, nil
 }
 
 func (c *Remote) callDedicated(ctx context.Context, requestID string, method string, params any, out any) error {

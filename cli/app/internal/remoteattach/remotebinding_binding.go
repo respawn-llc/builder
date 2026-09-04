@@ -43,6 +43,16 @@ func bindSession(ctx context.Context, current *client.Remote, sessionID, rootID 
 	if sessionID == "" {
 		return nil, errors.New("session id is required")
 	}
+	if current == nil {
+		return nil, errors.New("remote server is required")
+	}
+	handoff, found, err := current.TakeSessionHandoff(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return replaceWithEstablishedRemote(ctx, current, handoff, rootID)
+	}
 	return replaceRemoteAttachment(ctx, current, rootID, func(ctx context.Context) (*client.Remote, error) {
 		return dial(ctx, sessionID)
 	})
@@ -63,6 +73,18 @@ func replaceRemoteAttachment(
 	nextRemote, err := dial(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return replaceWithEstablishedRemote(ctx, current, nextRemote, rootID)
+}
+
+func replaceWithEstablishedRemote(
+	ctx context.Context,
+	current *client.Remote,
+	nextRemote *client.Remote,
+	rootID string,
+) (*client.Remote, error) {
+	if nextRemote == nil {
+		return nil, errors.New("replacement remote is required")
 	}
 	if err := nextRemote.RequireRoot(rootID); err != nil {
 		return nil, errors.Join(err, nextRemote.Close())

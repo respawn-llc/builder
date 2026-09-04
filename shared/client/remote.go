@@ -130,7 +130,7 @@ func (c *Remote) Close() error {
 	c.mu.Unlock()
 	var draftHandoffErr error
 	if draftHandoff != nil {
-		draftHandoffErr = draftHandoff.control.Close()
+		draftHandoffErr = draftHandoff.remote.Close()
 	}
 	if control == nil {
 		return draftHandoffErr
@@ -298,6 +298,8 @@ func (c *Remote) projectBinding() (ProjectAttachment, bool) {
 	if c == nil {
 		return ProjectAttachment{}, false
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return remoteAttachmentProjectBinding(c.attachment)
 }
 
@@ -965,7 +967,12 @@ func (c *Remote) ensureControl(ctx context.Context) (*remoteControlConn, error) 
 		_ = c.control.Close()
 		c.control = nil
 	}
-	conn, cleanup, state, err := c.openSetupRPCConn(ctx, nil)
+	conn, cleanup, state, err := c.openSetupRPCConnForAttachment(
+		ctx,
+		nil,
+		c.attachIntent,
+		c.attachment,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -976,6 +983,15 @@ func (c *Remote) ensureControl(ctx context.Context) (*remoteControlConn, error) 
 	control := newRemoteControlConn(conn)
 	c.control = control
 	c.identity = state.identity
+	c.attachment = state.attachment
+	if state.attachment != nil && state.attachment.session != nil {
+		c.attachIntent, err = newRemoteSessionReattachmentIntent(*state.attachment.session)
+		if err != nil {
+			_ = control.Close()
+			c.control = nil
+			return nil, err
+		}
+	}
 	return control, nil
 }
 
