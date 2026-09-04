@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useAppServices } from "./useAppServices";
+
+const WindowFocusContext = createContext<boolean | null | undefined>(undefined);
 
 export function useOpenExternalLink(): (url: string) => void {
   const { nativeBridge, logger } = useAppServices();
@@ -16,7 +26,20 @@ export function useOpenExternalLink(): (url: string) => void {
   );
 }
 
+export function WindowFocusProvider({ children }: Readonly<{ children: ReactNode }>) {
+  const focused = useWindowFocusSource();
+  return createElement(WindowFocusContext.Provider, { value: focused }, children);
+}
+
 export function useWindowFocus(): boolean | null {
+  const focused = useContext(WindowFocusContext);
+  if (focused === undefined) {
+    throw new Error("WindowFocusProvider is required.");
+  }
+  return focused;
+}
+
+function useWindowFocusSource(): boolean | null {
   const { logger, nativeBridge } = useAppServices();
   const [focused, setFocused] = useState<boolean | null>(null);
 

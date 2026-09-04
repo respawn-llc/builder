@@ -11,6 +11,7 @@ import type { AppServices } from "@/app-facade";
 import { AppServicesProvider } from "@/app-facade";
 import { StatusProvider } from "@/app-facade";
 import { TaskSearchMemoryProvider } from "@/app-facade";
+import { WindowFocusProvider } from "@/app-facade";
 import { WindowChromeTitleProvider } from "@/app-facade";
 
 void initializeI18n();
@@ -27,15 +28,17 @@ export function AppProviders({ services, children }: AppProvidersProps) {
     <I18nextProvider i18n={appI18n}>
       <QueryClientProvider client={queryClient}>
         <AppServicesProvider services={services}>
-          <WindowChromeTitleProvider>
-            <StatusProvider>
-              <TaskSearchMemoryProvider>
-                <ReconnectRefresh />
-                <NativeWindowGlassTintSync nativeBridge={services.nativeBridge} />
-                {children}
-              </TaskSearchMemoryProvider>
-            </StatusProvider>
-          </WindowChromeTitleProvider>
+          <WindowFocusProvider>
+            <WindowChromeTitleProvider>
+              <StatusProvider>
+                <TaskSearchMemoryProvider>
+                  <ReconnectRefresh />
+                  <NativeWindowGlassTintSync nativeBridge={services.nativeBridge} />
+                  {children}
+                </TaskSearchMemoryProvider>
+              </StatusProvider>
+            </WindowChromeTitleProvider>
+          </WindowFocusProvider>
         </AppServicesProvider>
       </QueryClientProvider>
     </I18nextProvider>
