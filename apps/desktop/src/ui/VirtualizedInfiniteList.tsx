@@ -630,7 +630,7 @@ function restoreLeadingAnchor({
   }
   const virtualIndex = itemStartIndex + currentIndex;
   if (orientation === "horizontal") {
-    const measuredOffset = virtualizer.getOffsetForIndex(virtualIndex, "start")?.[0];
+    const measuredOffset = resolveHorizontalAnchorOffset(virtualizer, virtualIndex);
     if (measuredOffset === undefined) {
       return;
     }
@@ -655,4 +655,14 @@ function restoreLeadingAnchor({
   if (!isFallbackRendering) {
     virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
   }
+}
+
+function resolveHorizontalAnchorOffset(
+  virtualizer: ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>,
+  virtualIndex: number,
+): number | undefined {
+  return (
+    virtualizer.getVirtualItems().find((item) => item.index === virtualIndex)?.start ??
+    virtualizer.getOffsetForIndex(virtualIndex, "start")?.[0]
+  );
 }

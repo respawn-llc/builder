@@ -202,6 +202,36 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
     expect(list.scrollLeft).toBe(361);
   });
 
+  it("uses the mounted anchor measurement when aligned offset is clamped", () => {
+    const initialItems = [
+      "workflow-before",
+      "workflow-anchor",
+      "workflow-2",
+      "workflow-3",
+      "workflow-4",
+      "workflow-5",
+      "workflow-6",
+      "workflow-7",
+    ];
+    const refreshedItems = ["workflow-new", ...initialItems];
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 140, index: 1, key: "workflow-anchor", lane: 0, size: 40, start: 100 },
+    ]);
+    virtualizer.getOffsetForIndex.mockReturnValue([40]);
+    const view = render(<List items={initialItems} orientation="horizontal" />);
+    const list = screen.getByRole("list");
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 100 });
+    list.scrollLeft = 120;
+    fireEvent.scroll(list);
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 140, index: 2, key: "workflow-anchor", lane: 0, size: 40, start: 100 },
+    ]);
+    view.rerender(<List items={refreshedItems} orientation="horizontal" />);
+
+    expect(list.scrollLeft).toBe(120);
+  });
+
   it("rearms both horizontal edge requests after each retained window leaves that edge", () => {
     const windowItems = (start: number, count: number) =>
       Array.from({ length: count }, (_value, index) => `workflow-${(start + index).toString()}`);
