@@ -178,10 +178,30 @@ func (s *Service) submitUserTurn(
 	if workflowErr != nil {
 		return response, workflowErr
 	}
-	if persistedWorkflow && s.reactivator == nil {
+	liveExecution, live := s.authority.SessionExecution(sessionID)
+	liveWorkflow := false
+	if live {
+		_, liveWorkflow = liveExecution.Scope().Workflow()
+	}
+	if persistedWorkflow && s.reactivator == nil && !liveWorkflow {
 		return response, errors.New("workflow Session reactivator is required")
 	}
-	if persistedWorkflow {
+	if live && liveWorkflow {
+		workflowExecutionRetiring := false
+		err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+			if engine.WorkflowTerminalState().Completed {
+				workflowExecutionRetiring = true
+				return nil
+			}
+			return runTurn(runCtx, engine, attempt.Accept)
+		})
+		if err == nil && workflowExecutionRetiring {
+			if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
+				return response, waitErr
+			}
+			err = executeTurn()
+		}
+	} else if persistedWorkflow {
 		err = sessionruntime.ErrSessionWorkflowActivationActive
 	} else {
 		if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
@@ -200,7 +220,16 @@ func (s *Service) submitUserTurn(
 			err = preparingErr
 		case preparing:
 			err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-				return runTurn(runCtx, engine, attempt.Accept)
+				queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(
+					runCtx,
+					projection.ExecutionText,
+					attempt.Accept,
+				)
+				if queueErr != nil {
+					return queueErr
+				}
+				response = queuedUserTurnResponse(false, queued.ID)
+				return nil
 			})
 		case s.reactivator != nil:
 			var reactivateErr error
