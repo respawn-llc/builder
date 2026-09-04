@@ -623,34 +623,32 @@ func (f *currentNodeRunnerFixture) onlyProjectSessionMeta(t *testing.T) session.
 }
 
 func (f *currentNodeRunnerFixture) workflowAssignmentRecordCount(
-	t *testing.T,
 	sessionID runtimeids.SessionID,
 	expected ...workflow.CurrentNodeReference,
-) int {
-	t.Helper()
+) (int, error) {
 	record, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID.String())
 	if err != nil {
-		t.Fatalf("resolve persisted Session %s: %v", sessionID, err)
+		return 0, fmt.Errorf("resolve persisted Session %s: %w", sessionID, err)
 	}
 	store, err := session.Open(record.SessionDir, f.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
-		t.Fatalf("open persisted Session %s: %v", sessionID, err)
+		return 0, fmt.Errorf("open persisted Session %s: %w", sessionID, err)
 	}
 	var count int
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		t.Fatalf("materialize event log for Session %s: %v", sessionID, err)
+		return 0, fmt.Errorf("materialize event log for Session %s: %w", sessionID, err)
 	}
 	const recordsPerWindow = 128
 	window, err := eventLog.ReadRecentRecords(recordsPerWindow)
 	if err != nil {
-		t.Fatalf("read workflow assignment records for Session %s: %v", sessionID, err)
+		return 0, fmt.Errorf("read workflow assignment records for Session %s: %w", sessionID, err)
 	}
 	for {
 		for _, event := range window.Records {
 			payload, payloadErr := event.Payload()
 			if payloadErr != nil {
-				t.Fatalf("read workflow assignment event for Session %s: %v", sessionID, payloadErr)
+				return 0, fmt.Errorf("read workflow assignment event for Session %s: %w", sessionID, payloadErr)
 			}
 			message, ok := payload.(session.MessageRecord)
 			if ok &&
@@ -672,10 +670,10 @@ func (f *currentNodeRunnerFixture) workflowAssignmentRecordCount(
 			return seen == recordsPerWindow
 		})
 		if err != nil {
-			t.Fatalf("read older workflow assignment records for Session %s: %v", sessionID, err)
+			return 0, fmt.Errorf("read older workflow assignment records for Session %s: %w", sessionID, err)
 		}
 	}
-	return count
+	return count, nil
 }
 
 func (f *currentNodeRunnerFixture) waitForModelRequests(t *testing.T, count int) []llm.Request {
@@ -1023,7 +1021,11 @@ func TestManualMoveToRetainedTargetAssignsBeforeResumingLockedSession(t *testing
 			nodes[0].Scheduling.Interruption != nil
 	})[0]
 	f.waitForTaskQuiescence(t, task.ID)
-	if count := f.workflowAssignmentRecordCount(t, *review.SessionID); count != 1 {
+	count, err := f.workflowAssignmentRecordCount(*review.SessionID)
+	if err != nil {
+		t.Fatalf("read workflow assignment records before Manual Move: %v", err)
+	}
+	if count != 1 {
 		t.Fatalf("workflow assignment records before Manual Move = %d, want initial Review assignment", count)
 	}
 
@@ -1130,7 +1132,11 @@ func TestManualMoveToRetainedTargetAssignsBeforeResumingLockedSession(t *testing
 		*moved.Mutation.Created[0].SessionID != *review.SessionID {
 		t.Fatalf("Manual Move target = %+v, want retained Session %s", moved.Mutation.Created, *review.SessionID)
 	}
-	if count := f.workflowAssignmentRecordCount(t, *review.SessionID); count != 2 {
+	count, err = f.workflowAssignmentRecordCount(*review.SessionID)
+	if err != nil {
+		t.Fatalf("read workflow assignment records after Manual Move: %v", err)
+	}
+	if count != 2 {
 		t.Fatalf("workflow assignment records after Manual Move = %d, want one appended target assignment", count)
 	}
 
@@ -1315,7 +1321,10 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 	if err != nil || before.Meta == nil {
 		t.Fatalf("resolve retained Session before Manual Move: %+v, %v", before, err)
 	}
-	beforeAssignments := f.workflowAssignmentRecordCount(t, sessionID)
+	beforeAssignments, err := f.workflowAssignmentRecordCount(sessionID)
+	if err != nil {
+		t.Fatalf("read retained Session assignments before rejected Manual Move: %v", err)
+	}
 	definition, _, err := f.store.GetDefinition(context.Background(), workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
@@ -1351,7 +1360,11 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 		!reflect.DeepEqual(before.Meta.Locked, after.Meta.Locked) {
 		t.Fatalf("retained Session prompt-facing metadata changed after rejected Manual Move:\nbefore=%+v\nafter=%+v", before.Meta, after.Meta)
 	}
-	if assignments := f.workflowAssignmentRecordCount(t, sessionID); assignments != beforeAssignments+2 {
+	assignments, err := f.workflowAssignmentRecordCount(sessionID)
+	if err != nil {
+		t.Fatalf("read retained Session assignments after rejected Manual Move: %v", err)
+	}
+	if assignments != beforeAssignments+2 {
 		t.Fatalf(
 			"retained Session assignments after rejected Manual Move = %d, want target plus origin restoration after %d existing",
 			assignments,

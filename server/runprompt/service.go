@@ -63,6 +63,9 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 	startedAt := time.Now()
 	response, runErr := runtimeHandle.submitUserMessage(runCtx, req.Prompt)
 	response.Duration = time.Since(startedAt)
+	if runErr == nil && historyErr != nil {
+		historyErr = errors.Join(historyErr, runtimeHandle.retainedWorkflowDiagnosticsError())
+	}
 	runErr = errors.Join(runErr, historyErr)
 	if runErr != nil {
 		return response, runErr

@@ -299,7 +299,6 @@
 - Resume starts a fresh Exact Execution Scope while retaining the Session Contract generation's effective completion mode.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
 - `shell_command` mode requires external structured completion rather than an ordinary assistant final answer.
-- `unstructured_output` mode requires the assistant's final answer to be exactly one raw JSON object.
 - Forced completion outside an agent Session applies only to one unambiguous idle executable Current Node. It does not create a lasting execution selection.
 - While its Workflow Node is incomplete, `unstructured_output` mode requires the assistant's final answer to be exactly one raw JSON object.
 - Any assistant answer that would otherwise complete an active workflow-controlled Node must pass through that Node's current completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.

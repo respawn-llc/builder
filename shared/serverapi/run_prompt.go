@@ -195,11 +195,19 @@ func (o RunPromptOverrides) NeedsAuthState() bool {
 }
 
 type RunPromptResponse struct {
-	SessionID   string
-	SessionName string
-	Result      string
-	Duration    time.Duration
-	Warnings    []string
+	SessionID                 string
+	SessionName               string
+	Result                    string
+	Duration                  time.Duration
+	Warnings                  []string
+	WorkflowResumeDiagnostics []RunPromptWorkflowResumeDiagnostic
+}
+
+type RunPromptWorkflowResumeDiagnostic struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey *string
+	Cause               string
 }
 
 type RunPromptProgress struct {

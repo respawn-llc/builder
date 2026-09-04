@@ -3,9 +3,28 @@ package clienterrors
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"core/shared/serverapi"
 )
+
+func WorkflowResumeDiagnosticMessages(
+	diagnostics []serverapi.RunPromptWorkflowResumeDiagnostic,
+) []string {
+	messages := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		reference := diagnostic.TaskID + "/" + diagnostic.NodeID
+		if diagnostic.TransitionBranchKey != nil {
+			reference += "/" + *diagnostic.TransitionBranchKey
+		}
+		messages = append(messages, fmt.Sprintf(
+			"resume current node %s: %s",
+			reference,
+			strings.TrimSpace(diagnostic.Cause),
+		))
+	}
+	return messages
+}
 
 func WorkflowTaskResumeConflictMessage(err error) (string, bool) {
 	var conflict *serverapi.WorkflowTaskResumeConflictError

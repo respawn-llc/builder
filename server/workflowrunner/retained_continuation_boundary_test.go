@@ -3,6 +3,7 @@ package workflowrunner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -59,7 +60,11 @@ type retainedAssignmentOrderClient struct {
 func (c *retainedAssignmentOrderClient) Generate(
 	ctx context.Context, request llm.Request, callbacks llm.StreamCallbacks,
 ) (llm.Response, error) {
-	if c.fixture.workflowAssignmentRecordCount(c.test, c.sessionID, c.expectedReference) == 0 {
+	count, err := c.fixture.workflowAssignmentRecordCount(c.sessionID, c.expectedReference)
+	if err != nil {
+		return llm.Response{}, fmt.Errorf("read retained Workflow assignment records: %w", err)
+	}
+	if count == 0 {
 		return llm.Response{}, errors.New("provider called before durable Workflow assignment")
 	}
 	return c.compactingScriptedClient.Generate(ctx, request, callbacks)
@@ -672,8 +677,9 @@ func runRetainedFanoutScenario(t *testing.T, scenario retainedFanoutScenario) {
 	if scenario.selectedFinal != "" && result.response.Result != scenario.selectedFinal {
 		t.Fatalf("selected result = %q, want %q", result.response.Result, scenario.selectedFinal)
 	}
-	if !scenario.tui && (len(result.response.Warnings) > 0) != scenario.wantWarnings {
-		t.Fatalf("warnings = %v, want=%t", result.response.Warnings, scenario.wantWarnings)
+	if !scenario.tui &&
+		(len(result.response.Warnings) > 0 || len(result.response.WorkflowResumeDiagnostics) > 0) != scenario.wantWarnings {
+		t.Fatalf("warnings = %v diagnostics = %v, want=%t", result.response.Warnings, result.response.WorkflowResumeDiagnostics, scenario.wantWarnings)
 	}
 	expectedKeys := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(branches))
 	for _, branch := range branches {

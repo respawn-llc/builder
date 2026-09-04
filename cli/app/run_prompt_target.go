@@ -86,10 +86,12 @@ func startRuntimeControlRemote(ctx context.Context, opts Options) (*client.Remot
 		return nil, nil, fmt.Errorf("%w: %v", errRunRequiresServer, err)
 	}
 	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
-		return nil, remote.Close, errRunServerRootMismatch
+		closeErr := remote.Close()
+		return nil, nil, errors.Join(errRunServerRootMismatch, closeErr)
 	}
 	if err := ensureRemoteAuthReady(ctx, remote, cfg.Settings, newHeadlessAuthInteractor(), false); err != nil {
-		return nil, remote.Close, err
+		closeErr := remote.Close()
+		return nil, nil, errors.Join(err, closeErr)
 	}
 	return remote, remote.Close, nil
 }

@@ -115,6 +115,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		if err := validateRetainedWorkflowAssertions(authoritativePlan, req.Overrides); err != nil {
 			return nil, err
 		}
+		launchReq.Overrides = serverapi.RunPromptOverrides{}
 	}
 	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)
 	if err != nil {
@@ -154,16 +155,9 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		if reactivateErr != nil {
 			var historyErr error
 			if continuationResult.Accepted() && l.boot.PromptHistory != nil {
-				historyText := req.Prompt
-				input := continuation.Input()
-				if steerInput, ok := input.(workflowexecution.WorkflowSessionSteerInput); ok &&
-					steerInput.Steer != nil &&
-					steerInput.Steer.Message().Content != nil {
-					historyText = *steerInput.Steer.Message().Content
-				}
 				_, historyErr = l.boot.PromptHistory.RecordPromptHistoryEntry(acceptedCtx, metadata.PromptHistoryEntry{
 					SessionID: selectedSessionID.String(),
-					Text:      historyText,
+					Text:      workflowSessionContinuationPromptHistoryText(continuation.Input(), req.Prompt),
 				})
 			}
 			attempt.Finish()
@@ -180,7 +174,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 			technicalContext:     acceptedCtx,
 			technicalCancel:      attempt.Finish,
 			sessionName:          sessionName,
-			warnings:             append(append([]string(nil), result.Warnings...), formatWorkflowResumeDiagnostics(continuationResult.SiblingDiagnostics)...),
+			warnings:             append([]string(nil), result.Warnings...),
 			progress:             progress,
 		}, nil
 	}
@@ -490,17 +484,31 @@ func (r *headlessPromptRuntime) promptHistoryText(prompt string) string {
 		return r.plan.PromptHistoryText(prompt)
 	}
 	if r != nil && r.retainedContinuation != nil {
-		input := r.retainedContinuation.Input()
-		switch value := input.(type) {
-		case workflowexecution.WorkflowSessionSteerInput:
-			if value.Steer != nil && value.Steer.Message().Content != nil {
-				return *value.Steer.Message().Content
-			}
-		case workflowexecution.WorkflowSessionTextInput:
-			return value.Text
-		}
+		return workflowSessionContinuationPromptHistoryText(r.retainedContinuation.Input(), prompt)
 	}
 	return prompt
+}
+
+func workflowSessionContinuationPromptHistoryText(
+	input workflowexecution.WorkflowSessionContinuationInput,
+	fallback string,
+) string {
+	switch value := input.(type) {
+	case workflowexecution.WorkflowSessionSteerInput:
+		if value.Steer != nil && value.Steer.Message().Content != nil {
+			return *value.Steer.Message().Content
+		}
+	case workflowexecution.WorkflowSessionTextInput:
+		return value.Text
+	}
+	return fallback
+}
+
+func (r *headlessPromptRuntime) retainedWorkflowDiagnosticsError() error {
+	if r == nil || r.retainedContinuation == nil {
+		return nil
+	}
+	return r.retainedAdmission.DiagnosticsError()
 }
 
 func (r *headlessPromptRuntime) closeWithFailure(failed bool) error {
@@ -567,10 +575,11 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 		err = errors.Join(err, r.retainedAdmission.DiagnosticsError())
 	}
 	return serverapi.RunPromptResponse{
-		SessionID:   r.retainedSessionID.String(),
-		SessionName: firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
-		Result:      content,
-		Warnings:    append([]string(nil), r.warnings...),
+		SessionID:                 r.retainedSessionID.String(),
+		SessionName:               firstNonBlank(r.retainedContinuation.SessionName(), r.sessionName),
+		Result:                    content,
+		Warnings:                  append([]string(nil), r.warnings...),
+		WorkflowResumeDiagnostics: workflowResumeDiagnostics(r.retainedAdmission.SiblingDiagnostics),
 	}, err
 }
 
@@ -581,12 +590,28 @@ func firstNonBlank(primary, fallback string) string {
 	return fallback
 }
 
-func formatWorkflowResumeDiagnostics(diagnostics []workflowexecution.WorkflowSessionResumeDiagnostic) []string {
-	formatted := make([]string, 0, len(diagnostics))
+func workflowResumeDiagnostics(
+	diagnostics []workflowexecution.WorkflowSessionResumeDiagnostic,
+) []serverapi.RunPromptWorkflowResumeDiagnostic {
+	projected := make([]serverapi.RunPromptWorkflowResumeDiagnostic, 0, len(diagnostics))
 	for _, diagnostic := range diagnostics {
-		formatted = append(formatted, diagnostic.Error())
+		var branchKey *string
+		if value, ok := diagnostic.Reference.TransitionBranchKey(); ok {
+			branch := string(value)
+			branchKey = &branch
+		}
+		cause := ""
+		if diagnostic.Cause != nil {
+			cause = diagnostic.Cause.Error()
+		}
+		projected = append(projected, serverapi.RunPromptWorkflowResumeDiagnostic{
+			TaskID:              string(diagnostic.Reference.TaskID),
+			NodeID:              string(diagnostic.Reference.NodeID),
+			TransitionBranchKey: branchKey,
+			Cause:               cause,
+		})
 	}
-	return formatted
+	return projected
 }
 
 func (r *headlessPromptRuntime) publishSessionStarted() {
