@@ -1,39 +1,45 @@
 import { z } from "zod";
 
 import { activateRuntime } from "./chatActivation";
+import { createChatMutationApi } from "./chatMutations";
 import { ContractError } from "./errors";
 import { parseRpcResponse } from "./clientParse";
-import {
-  committedRowSchema,
-  contextSchema,
-  mainViewSchema,
-  nonBlank,
-  pageSchema,
-  settingsSchema,
-} from "./chatSchemas";
+import { committedRowSchema, contextSchema, mainViewSchema, pageSchema, settingsSchema } from "./chatSchemas";
 import type { executionTargetSchema, runtimeActivitySchema, runtimeStatusSchema } from "./chatSchemas";
 import { transcriptEventSchema } from "./chatTranscriptSchemas";
 import { requireProjectAttachment } from "./chatAttachment";
 import { requireSessionAttachment } from "./jsonRpcSocket";
 import { SubscriptionErrorAlreadyReported } from "./jsonRpcSubscription";
+import {
+  chatContextSessionID,
+  isValidChatSessionID,
+  requireChatProjectTarget,
+  requireChatSessionID,
+} from "./chatTarget";
 import type {
   ChatApi,
-  ChatContextTarget,
   ChatMainView,
-  ChatProjectTarget,
   ChatRuntimeActivity,
   ChatRuntimeStatus,
-  ChatSessionTarget,
   ChatSettings,
   ChatSettingsTarget,
   ChatTranscriptMessage,
 } from "./chatTypes";
 export type {
   ChatApi,
+  ChatAcceptedDiagnostic,
+  ChatCompactionInvocation,
+  ChatCompactionResult,
   ChatContext,
   ChatContextTarget,
   ChatExecutionTarget,
+  ChatForkEditInput,
+  ChatInitialSettings,
+  ChatInputMutationResult,
   ChatMainView,
+  ChatActivation,
+  ChatMutationTarget,
+  ChatNotAcceptedReason,
   ChatProjectTarget,
   ChatRuntimeActivity,
   ChatRuntimeAttachment,
@@ -54,29 +60,6 @@ export type {
   ChatWorkspaceSelector,
 } from "./chatTypes";
 import type { RpcEventHandler, DescriptorRpcTransport } from "./transport";
-function projectTarget(target: ChatProjectTarget): void {
-  if (!nonBlank.safeParse(target.projectID).success) throw new TypeError("Project ID is required.");
-  const selector =
-    "workspaceID" in target.workspace ? target.workspace.workspaceID : target.workspace.workspaceRoot;
-  if (!nonBlank.safeParse(selector).success) throw new TypeError("Workspace selector is required.");
-}
-const exactSessionID = z
-  .string()
-  .min(1)
-  .refine((value) => value.trim() === value);
-
-function contextTarget(target: ChatContextTarget): string | undefined {
-  projectTarget(target);
-  if (target.sessionID !== undefined && !exactSessionID.safeParse(target.sessionID).success) {
-    throw new TypeError("Session ID is required.");
-  }
-  return target.sessionID;
-}
-function sessionTarget(target: ChatSessionTarget): string {
-  projectTarget(target);
-  if (!exactSessionID.safeParse(target.sessionID).success) throw new TypeError("Session ID is required.");
-  return target.sessionID;
-}
 class RecoverableTranscriptEventError extends Error {
   constructor(readonly contractError: ContractError) {
     super(contractError.message);
@@ -225,8 +208,9 @@ function validateSettingsTarget(input: z.output<typeof settingsSchema>, target: 
 
 export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
   return {
+    ...createChatMutationApi(transport),
     async getMainView(target) {
-      const requestedSessionID = sessionTarget(target);
+      const requestedSessionID = requireChatSessionID(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -252,7 +236,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
     },
     async getContext(target) {
-      const requestedSessionID = contextTarget(target);
+      const requestedSessionID = chatContextSessionID(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -280,8 +264,8 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
     },
     async getSettings(target) {
-      if (target.kind === "session") sessionTarget(target);
-      else projectTarget(target);
+      if (target.kind === "session") requireChatSessionID(target);
+      else requireChatProjectTarget(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -301,7 +285,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
             return {
               target: {
                 kind: "session",
-                session_id: sessionTarget(target),
+                session_id: requireChatSessionID(target),
               },
             };
           },
@@ -311,7 +295,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       return settingsFromWire(parseRpcResponse("chat.settings.read", settingsSchema, call.result), target);
     },
     async getTranscriptPage(target, cursor) {
-      const requestedSessionID = sessionTarget(target);
+      const requestedSessionID = requireChatSessionID(target);
       const call = await transport.callAttachedProject({
         projectID: target.projectID,
         selector: target.workspace,
@@ -347,7 +331,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       };
     },
     async activateRuntime(target) {
-      const requestedSessionID = sessionTarget(target);
+      const requestedSessionID = requireChatSessionID(target);
       return transport.runRuntimeOwner(requestedSessionID, { createIfMissing: true }, async (owner) => {
         requireSessionAttachment(owner.attachment, {
           projectID: target.projectID,
@@ -358,7 +342,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
     },
     async releaseRuntime(attachment) {
       if (
-        !exactSessionID.safeParse(attachment.sessionID).success ||
+        !isValidChatSessionID(attachment.sessionID) ||
         !Number.isInteger(attachment.generation) ||
         attachment.generation <= 0
       )
@@ -383,7 +367,7 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
       );
     },
     subscribeTranscript(target, handler) {
-      const requestedSessionID = sessionTarget(target);
+      const requestedSessionID = requireChatSessionID(target);
       const rpcHandler: RpcEventHandler = {
         ...(handler.onOpen === undefined ? {} : { onOpen: handler.onOpen }),
         onEvent(method, params) {
