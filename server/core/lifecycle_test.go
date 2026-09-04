@@ -65,6 +65,27 @@ func TestComposeBundlesClosesWorkflowExecutionBeforeAuthorityAndPersistence(t *t
 	}
 }
 
+func TestComposeBundlesClosesChatOperationsBeforeTheirDependencies(t *testing.T) {
+	bundles := composeBundles(bundleCompositionInput{})
+	registrationIndex := make(map[string]int, len(bundles.cleanup))
+	for index, resource := range bundles.cleanup {
+		registrationIndex[resource.name] = index
+	}
+
+	chatIndex, hasChat := registrationIndex["Chat operations"]
+	metadataIndex, hasMetadata := registrationIndex["metadata store"]
+	authorityIndex, hasAuthority := registrationIndex["session runtime authority"]
+	if !hasChat || !hasMetadata || !hasAuthority {
+		t.Fatalf("cleanup resources = %+v, want Chat operations, Runtime Authority, and metadata", registrationIndex)
+	}
+	if chatIndex <= authorityIndex || chatIndex <= metadataIndex {
+		t.Fatalf(
+			"cleanup registration = %+v, want reverse close order Chat operations before Runtime Authority and metadata",
+			registrationIndex,
+		)
+	}
+}
+
 func TestCoreCloseNamesFailedResources(t *testing.T) {
 	wantErr := errors.New("boom")
 	appCore := &Core{

@@ -41,17 +41,20 @@ type RuntimeAdmissionService interface {
 }
 
 type Service struct {
+	operations *OperationOwner
 	targets    TargetResolutionService
 	runtimes   RuntimeOpeningService
 	admissions RuntimeAdmissionService
 }
 
 func NewService(
+	operations *OperationOwner,
 	targets TargetResolutionService,
 	runtimes RuntimeOpeningService,
 	admissions RuntimeAdmissionService,
 ) *Service {
 	return &Service{
+		operations: operations,
 		targets:    targets,
 		runtimes:   runtimes,
 		admissions: admissions,
@@ -65,12 +68,7 @@ func (s *Service) Steer(
 	if err := protoapi.Validate(request); err != nil {
 		return nil, err
 	}
-	return s.mutateInput(
-		ctx,
-		request.Target,
-		request.Activation,
-		inputMutationSteer,
-	)
+	return s.runInputMutation(ctx, request.Target, request.Activation, inputMutationSteer)
 }
 
 func (s *Service) Queue(
@@ -80,12 +78,7 @@ func (s *Service) Queue(
 	if err := protoapi.Validate(request); err != nil {
 		return nil, err
 	}
-	return s.mutateInput(
-		ctx,
-		request.Target,
-		request.Activation,
-		inputMutationQueue,
-	)
+	return s.runInputMutation(ctx, request.Target, request.Activation, inputMutationQueue)
 }
 
 func (s *Service) Compact(
@@ -99,7 +92,32 @@ func (s *Service) Compact(
 	if err != nil {
 		return nil, err
 	}
-	target, attachment, err := s.prepareRuntime(ctx, request.Target, draft)
+	if s == nil || s.operations == nil {
+		return nil, errors.New("Chat operation owner is required")
+	}
+	var result *chatpb.CompactionMutationSuccess
+	operation, err := s.operations.Start(ctx, func(scope OperationScope) error {
+		var operationErr error
+		result, operationErr = s.compact(scope, request.Target, draft, admission)
+		return operationErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := operation.Await(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *Service) compact(
+	scope OperationScope,
+	targetRequest *chatpb.ChatTarget,
+	draft string,
+	admission runtimeinput.ManualCompactionAdmission,
+) (*chatpb.CompactionMutationSuccess, error) {
+	ctx := scope.Context()
+	target, attachment, err := s.prepareRuntime(ctx, targetRequest, draft)
 	if err != nil {
 		if target.SessionID.IsZero() {
 			return nil, err
@@ -107,7 +125,9 @@ func (s *Service) Compact(
 		return compactionNotAccepted(target.SessionID, err), nil
 	}
 	if s.admissions == nil {
-		releaseErr := attachment.Release(context.WithoutCancel(ctx), sessionruntime.RuntimeReleaseCloseIfIdle)
+		releaseErr := scope.FinalizeAttachment(func(finalizationCtx context.Context) error {
+			return attachment.Release(finalizationCtx, sessionruntime.RuntimeReleaseCloseIfIdle)
+		})
 		return compactionNotAcceptedInternal(
 			target.SessionID,
 			"release_chat_runtime",
@@ -124,7 +144,9 @@ func (s *Service) Compact(
 	if accepted {
 		releasePolicy = sessionruntime.RuntimeReleaseDetach
 	}
-	releaseErr := attachment.Release(context.WithoutCancel(ctx), releasePolicy)
+	releaseErr := scope.FinalizeAttachment(func(finalizationCtx context.Context) error {
+		return attachment.Release(finalizationCtx, releasePolicy)
+	})
 	if !accepted {
 		if releaseErr != nil {
 			return compactionNotAcceptedInternal(
@@ -161,11 +183,12 @@ const (
 )
 
 func (s *Service) mutateInput(
-	ctx context.Context,
+	scope OperationScope,
 	targetRequest *chatpb.ChatTarget,
 	activation *chatpb.Activation,
 	operation inputMutationOperation,
 ) (*chatpb.InputMutationSuccess, error) {
+	ctx := scope.Context()
 	draft, input, err := activationInput(activation)
 	if err != nil {
 		return nil, err
@@ -178,7 +201,9 @@ func (s *Service) mutateInput(
 		return inputNotAccepted(target.SessionID, operation, err), nil
 	}
 	if s.admissions == nil {
-		releaseErr := attachment.Release(context.WithoutCancel(ctx), sessionruntime.RuntimeReleaseCloseIfIdle)
+		releaseErr := scope.FinalizeAttachment(func(finalizationCtx context.Context) error {
+			return attachment.Release(finalizationCtx, sessionruntime.RuntimeReleaseCloseIfIdle)
+		})
 		return inputNotAccepted(
 			target.SessionID,
 			operation,
@@ -193,7 +218,9 @@ func (s *Service) mutateInput(
 	if accepted {
 		releasePolicy = sessionruntime.RuntimeReleaseDetach
 	}
-	releaseErr := attachment.Release(context.WithoutCancel(ctx), releasePolicy)
+	releaseErr := scope.FinalizeAttachment(func(finalizationCtx context.Context) error {
+		return attachment.Release(finalizationCtx, releasePolicy)
+	})
 	if !accepted {
 		if releaseErr != nil {
 			return inputNotAcceptedInternal(
@@ -227,6 +254,30 @@ func (s *Service) mutateInput(
 		Session: &chatpb.ExistingSessionTarget{SessionId: target.SessionID.String()},
 		Outcome: &chatpb.InputMutationSuccess_Accepted{Accepted: acceptedResult},
 	}, nil
+}
+
+func (s *Service) runInputMutation(
+	ctx context.Context,
+	target *chatpb.ChatTarget,
+	activation *chatpb.Activation,
+	kind inputMutationOperation,
+) (*chatpb.InputMutationSuccess, error) {
+	if s == nil || s.operations == nil {
+		return nil, errors.New("Chat operation owner is required")
+	}
+	var result *chatpb.InputMutationSuccess
+	operation, err := s.operations.Start(ctx, func(scope OperationScope) error {
+		var operationErr error
+		result, operationErr = s.mutateInput(scope, target, activation, kind)
+		return operationErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := operation.Await(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *Service) prepareRuntime(

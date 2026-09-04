@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/launch"
 	"core/server/session"
@@ -85,6 +86,22 @@ type steerAdmission struct {
 	onCompact          func()
 }
 
+func newTestService(
+	targets TargetResolutionService,
+	runtimes RuntimeOpeningService,
+	admissions RuntimeAdmissionService,
+) *Service {
+	return NewService(newTestOperationOwner(), targets, runtimes, admissions)
+}
+
+func newTestOperationOwner() *OperationOwner {
+	owner, err := NewOperationOwner(time.Second)
+	if err != nil {
+		panic(err)
+	}
+	return owner
+}
+
 func (a *steerAdmission) AdmitManualCompaction(
 	_ context.Context,
 	request serverapi.RuntimeCompactContextRequest,
@@ -129,7 +146,7 @@ func TestServiceSteerAcceptsExistingSessionInputAndDetachesItsRuntime(t *testing
 		Steered:     true,
 		QueueItemID: queueItemID.String(),
 	}}
-	service := NewService(resolver, planner, admission)
+	service := newTestService(resolver, planner, admission)
 	target := &chatpb.ChatTarget{
 		Target: &chatpb.ChatTarget_Session{
 			Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
@@ -175,7 +192,7 @@ func TestServiceQueueAcceptsExistingSessionInputAndDetachesItsRuntime(t *testing
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
 	planner := &steerRuntimePlanner{attachment: attachment}
 	admission := &steerAdmission{queueAccepted: true, queueItemID: queueItemID}
-	service := NewService(resolver, planner, admission)
+	service := newTestService(resolver, planner, admission)
 	target := &chatpb.ChatTarget{
 		Target: &chatpb.ChatTarget_Session{
 			Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
@@ -216,7 +233,7 @@ func TestServiceCompactAcceptsExactInvocationWithNormalizedGuidance(t *testing.T
 	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}}
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
 	admission := &steerAdmission{compactionAccepted: true}
-	service := NewService(
+	service := newTestService(
 		resolver,
 		&steerRuntimePlanner{attachment: attachment},
 		admission,
@@ -258,7 +275,7 @@ func TestServiceCompactAcceptsExactInvocationWithNormalizedGuidance(t *testing.T
 
 func TestServiceCompactRejectsMalformedInvocationBeforeTargetResolution(t *testing.T) {
 	resolver := &steerTargetResolver{}
-	service := NewService(resolver, &steerRuntimePlanner{}, &steerAdmission{})
+	service := newTestService(resolver, &steerRuntimePlanner{}, &steerAdmission{})
 
 	result, err := service.Compact(t.Context(), &chatpb.CompactRequest{
 		Target: &chatpb.ChatTarget{
@@ -289,7 +306,7 @@ func TestServiceCompactReturnsFreshNewChatSessionAndExactDraftWhenTooSoon(t *tes
 	}}
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
 	admission := &steerAdmission{compactionErr: serverapi.ErrManualCompactionTooSoon}
-	service := NewService(
+	service := newTestService(
 		resolver,
 		&steerRuntimePlanner{attachment: attachment},
 		admission,
@@ -328,7 +345,7 @@ func TestServiceCompactReturnsFreshNewChatSessionAndExactDraftWhenTooSoon(t *tes
 func TestServiceCompactCancellationBeforeAcceptanceClosesIdleRuntime(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{compactionErr: context.Canceled},
@@ -357,7 +374,9 @@ func TestServiceCompactAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	ctx, cancel := context.WithCancel(t.Context())
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	owner := newTestOperationOwner()
 	service := NewService(
+		owner,
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{
@@ -374,11 +393,14 @@ func TestServiceCompactAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 		},
 		Invocation: &chatpb.CompactionInvocation{Token: "/compact"},
 	})
-	if err != nil {
-		t.Fatalf("Compact: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Compact error = %v, want caller cancellation", err)
 	}
-	if result.GetAccepted().GetRequest().GetId() == "" {
-		t.Fatalf("Compact result = %+v, want accepted Compaction Request", result)
+	if result != nil {
+		t.Fatalf("Compact result = %+v, want delivery stopped", result)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatalf("close operation owner: %v", err)
 	}
 	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
 		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
@@ -427,7 +449,7 @@ func TestServiceCompactMapsTypedManualCompactionRejections(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			sessionID := runtimeids.NewSessionID()
 			attachment := &steerRuntimeAttachment{sessionID: sessionID}
-			service := NewService(
+			service := newTestService(
 				&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 				&steerRuntimePlanner{attachment: attachment},
 				&steerAdmission{compactionErr: test.cause},
@@ -489,7 +511,7 @@ func TestServiceSteerPreparesDormantExistingSessionAndNewChat(t *testing.T) {
 				runtimeAPI,
 			)
 			queueItemID := runtimeids.NewQueueItemID()
-			service := NewService(targets, runtimes, &steerAdmission{
+			service := newTestService(targets, runtimes, &steerAdmission{
 				accepted: true,
 				result: serverapi.RuntimeSubmitUserTurnResponse{
 					ResultKind:  "queued",
@@ -535,7 +557,7 @@ func TestServiceSteerReturnsCreatedSessionWhenPendingWorkCapacityRejectsAdmissio
 	sessionID := runtimeids.NewSessionID()
 	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}}
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
-	service := NewService(
+	service := newTestService(
 		resolver,
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{err: &serverapi.PendingWorkCapacityError{}},
@@ -563,7 +585,7 @@ func TestServiceQueueReturnsCreatedSessionWhenPendingWorkCapacityRejectsAdmissio
 	sessionID := runtimeids.NewSessionID()
 	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}}
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
-	service := NewService(
+	service := newTestService(
 		resolver,
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{queueErr: &serverapi.PendingWorkCapacityError{}},
@@ -597,7 +619,7 @@ func TestServiceSteerCreatesNewChatFromExactCommandDraftAndCanonicalInput(t *tes
 		Steered:     true,
 		QueueItemID: queueItemID.String(),
 	}}
-	service := NewService(resolver, &steerRuntimePlanner{attachment: attachment}, admission)
+	service := newTestService(resolver, &steerRuntimePlanner{attachment: attachment}, admission)
 	command := &chatpb.CommandInvocation{
 		CatalogIdentity:     "prompt:review",
 		Token:               "/review",
@@ -638,7 +660,7 @@ func TestServiceQueueCreatesNewChatFromExactCommandDraftAndCanonicalInput(t *tes
 	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}}
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
 	admission := &steerAdmission{queueAccepted: true, queueItemID: queueItemID}
-	service := NewService(resolver, &steerRuntimePlanner{attachment: attachment}, admission)
+	service := newTestService(resolver, &steerRuntimePlanner{attachment: attachment}, admission)
 	command := &chatpb.CommandInvocation{
 		CatalogIdentity:     "prompt:review",
 		Token:               "/review",
@@ -676,7 +698,7 @@ func TestServiceQueueCreatesNewChatFromExactCommandDraftAndCanonicalInput(t *tes
 func TestServiceSteerReturnsCommittedSessionWhenRuntimeOpeningFails(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}}
-	service := NewService(
+	service := newTestService(
 		resolver,
 		&steerRuntimePlanner{err: errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("open failed"))},
 		&steerAdmission{},
@@ -709,7 +731,7 @@ func TestServiceSteerCancellationDuringTargetResolutionCreatesNoResult(t *testin
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			service := NewService(
+			service := newTestService(
 				&steerTargetResolver{err: context.Canceled},
 				&steerRuntimePlanner{},
 				&steerAdmission{},
@@ -731,7 +753,7 @@ func TestServiceSteerCancellationDuringTargetResolutionCreatesNoResult(t *testin
 
 func TestServiceSteerReturnsCommittedSessionWhenRuntimePreparationIsCanceled(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}},
 		&steerRuntimePlanner{err: context.Canceled},
 		&steerAdmission{},
@@ -755,7 +777,7 @@ func TestServiceSteerReturnsCommittedSessionWhenRuntimePreparationIsCanceled(t *
 func TestServiceSteerCancellationDuringAdmissionClosesIdleRuntime(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{err: context.Canceled},
@@ -783,7 +805,7 @@ func TestServiceSteerCancellationDuringAdmissionClosesIdleRuntime(t *testing.T) 
 func TestServiceQueueCancellationDuringAdmissionClosesIdleRuntime(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{queueErr: context.Canceled},
@@ -822,7 +844,9 @@ func TestServiceSteerAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 		},
 		onAdmit: cancel,
 	}
+	owner := newTestOperationOwner()
 	service := NewService(
+		owner,
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		admission,
@@ -836,11 +860,14 @@ func TestServiceSteerAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 		},
 		Activation: &chatpb.Activation{Input: &chatpb.Activation_Text{Text: "ship it"}},
 	})
-	if err != nil {
-		t.Fatalf("Steer: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Steer error = %v, want caller cancellation", err)
 	}
-	if result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
-		t.Fatalf("Steer result = %+v, want accepted Queue Item", result)
+	if result != nil {
+		t.Fatalf("Steer result = %+v, want delivery stopped", result)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatalf("close operation owner: %v", err)
 	}
 	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
 		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
@@ -860,7 +887,9 @@ func TestServiceQueueAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 		queueItemID:   queueItemID,
 		onQueue:       cancel,
 	}
+	owner := newTestOperationOwner()
 	service := NewService(
+		owner,
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		admission,
@@ -874,11 +903,14 @@ func TestServiceQueueAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 		},
 		Activation: &chatpb.Activation{Input: &chatpb.Activation_Text{Text: "ship it"}},
 	})
-	if err != nil {
-		t.Fatalf("Queue: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Queue error = %v, want caller cancellation", err)
 	}
-	if result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
-		t.Fatalf("Queue result = %+v, want accepted Queue Item", result)
+	if result != nil {
+		t.Fatalf("Queue result = %+v, want delivery stopped", result)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatalf("close operation owner: %v", err)
 	}
 	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
 		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
@@ -895,7 +927,7 @@ func TestServiceSteerReturnsAcceptedReleaseFailureAsDiagnostic(t *testing.T) {
 		sessionID:  sessionID,
 		releaseErr: errors.New("release failed"),
 	}
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{
@@ -928,7 +960,7 @@ func TestServiceSteerReturnsAcceptedReleaseFailureAsDiagnostic(t *testing.T) {
 func TestServiceSteerRetainsAcceptedIdentityWithSynchronousDiagnostic(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	queueItemID := runtimeids.NewQueueItemID()
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: &steerRuntimeAttachment{sessionID: sessionID}},
 		&steerAdmission{
@@ -963,7 +995,7 @@ func TestServiceSteerRetainsAcceptedIdentityWithSynchronousDiagnostic(t *testing
 func TestServiceQueueRetainsAcceptedIdentityWithPromptHistoryDiagnostic(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	queueItemID := runtimeids.NewQueueItemID()
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: &steerRuntimeAttachment{sessionID: sessionID}},
 		&steerAdmission{
@@ -997,7 +1029,7 @@ func TestServiceSteerReturnsNonAcceptedReleaseFailureAsInternalDiagnostic(t *tes
 		sessionID:  sessionID,
 		releaseErr: errors.New("release failed"),
 	}
-	service := NewService(
+	service := newTestService(
 		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
 		&steerRuntimePlanner{attachment: attachment},
 		&steerAdmission{err: &serverapi.PendingWorkCapacityError{}},

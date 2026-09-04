@@ -402,7 +402,10 @@ func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {
 }
 
 func (s *Core) ChatMutationClient() apicontract.ChatMutationService {
-	return nil
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Chat.mutations
 }
 
 func (s *Core) ProjectID() string {

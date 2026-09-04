@@ -330,30 +330,7 @@ func callGatewayDescriptor(
 	result proto.Message,
 ) {
 	t.Helper()
-	operation, err := protoapi.OperationFromDescriptor(method)
-	if err != nil {
-		t.Fatalf("operation descriptor: %v", err)
-	}
-	if err := protoapi.Validate(request); err != nil {
-		t.Fatalf("validate %s request: %v", operation.Name, err)
-	}
-	payload, err := protoapi.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal %s request: %v", operation.Name, err)
-	}
-	encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
-		Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-			Operation:   operation.Name,
-			Correlation: &correlation,
-			Payload:     payload,
-		}},
-	})
-	if err != nil {
-		t.Fatalf("encode %s call: %v", operation.Name, err)
-	}
-	if err := websocket.Message.Send(conn, encoded); err != nil {
-		t.Fatalf("send %s: %v", operation.Name, err)
-	}
+	operation := sendGatewayDescriptor(t, conn, correlation, method, request)
 	var responseFrame []byte
 	if err := websocket.Message.Receive(conn, &responseFrame); err != nil {
 		t.Fatalf("receive %s: %v", operation.Name, err)
@@ -378,6 +355,41 @@ func callGatewayDescriptor(
 	if err := protoapi.Validate(result); err != nil {
 		t.Fatalf("validate %s result: %v", operation.Name, err)
 	}
+}
+
+func sendGatewayDescriptor(
+	t *testing.T,
+	conn *websocket.Conn,
+	correlation string,
+	method protoreflect.MethodDescriptor,
+	request proto.Message,
+) protoapi.Operation {
+	t.Helper()
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil {
+		t.Fatalf("operation descriptor: %v", err)
+	}
+	if err := protoapi.Validate(request); err != nil {
+		t.Fatalf("validate %s request: %v", operation.Name, err)
+	}
+	payload, err := protoapi.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal %s request: %v", operation.Name, err)
+	}
+	encoded, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+		Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
+			Operation:   operation.Name,
+			Correlation: &correlation,
+			Payload:     payload,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode %s call: %v", operation.Name, err)
+	}
+	if err := websocket.Message.Send(conn, encoded); err != nil {
+		t.Fatalf("send %s: %v", operation.Name, err)
+	}
+	return operation
 }
 
 func callGatewayDescriptorPayload(
