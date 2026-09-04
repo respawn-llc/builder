@@ -292,14 +292,9 @@ func TestUIProcessClientDoesNotBypassSharedControlBoundaryOnError(t *testing.T) 
 
 type allUIProjectSessionMembership struct{}
 
-func (allUIProjectSessionMembership) MatchingProjectSessionIDs(
+func (allUIProjectSessionMembership) ListProjectSessionIDs(
 	_ context.Context,
 	_ string,
-	sessionIDs []string,
-) (map[string]struct{}, error) {
-	matching := make(map[string]struct{}, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		matching[sessionID] = struct{}{}
-	}
-	return matching, nil
+) ([]string, error) {
+	return []string{"session-1"}, nil
 }

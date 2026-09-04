@@ -4245,45 +4245,6 @@ func (q *Queries) ListManagedWorktreeRoots(ctx context.Context) ([]string, error
 	return items, nil
 }
 
-const listMatchingProjectSessionIDs = `-- name: ListMatchingProjectSessionIDs :many
-SELECT sessions.id
-FROM sessions
-JOIN json_each(CAST(?1 AS TEXT)) selected
-  ON selected.type = 'text'
- AND selected.value = sessions.id
-WHERE sessions.project_id = ?2
-ORDER BY selected.key ASC
-`
-
-type ListMatchingProjectSessionIDsParams struct {
-	SessionIdsJson string
-	ProjectID      string
-}
-
-func (q *Queries) ListMatchingProjectSessionIDs(ctx context.Context, arg ListMatchingProjectSessionIDsParams) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listMatchingProjectSessionIDs, arg.SessionIdsJson, arg.ProjectID)
-	err = recordQueryError(ctx, err, listMatchingProjectSessionIDs, 2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := recordQueryError(ctx, rows.Scan(&id), listMatchingProjectSessionIDs, 2); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listMatchingProjectSessionIDs, 2); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listMatchingProjectSessionIDs, 2); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listMetadataSchemaDefinitions = `-- name: ListMetadataSchemaDefinitions :many
 SELECT
     type AS object_kind,

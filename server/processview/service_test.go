@@ -209,16 +209,11 @@ type stubKillProcessSource struct {
 
 type allProjectSessionMembership struct{}
 
-func (allProjectSessionMembership) MatchingProjectSessionIDs(
+func (allProjectSessionMembership) ListProjectSessionIDs(
 	_ context.Context,
 	_ string,
-	sessionIDs []string,
-) (map[string]struct{}, error) {
-	matching := make(map[string]struct{}, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		matching[sessionID] = struct{}{}
-	}
-	return matching, nil
+) ([]string, error) {
+	return []string{"session-1"}, nil
 }
 
 func (s *stubKillProcessSource) List() []shelltool.Snapshot { return nil }

@@ -17,7 +17,7 @@ type ProcessSource interface {
 }
 
 type ProjectSessionMembership interface {
-	MatchingProjectSessionIDs(ctx context.Context, projectID string, sessionIDs []string) (map[string]struct{}, error)
+	ListProjectSessionIDs(ctx context.Context, projectID string) ([]string, error)
 }
 
 type ProcessViewService struct {
@@ -36,26 +36,18 @@ func (s *ProcessViewService) ListProcesses(ctx context.Context, req serverapi.Pr
 	if s.membership == nil {
 		return serverapi.ProcessListResponse{}, fmt.Errorf("project session membership is required")
 	}
-	snapshots := s.processes.List()
-	ownerSessionIDs := make([]string, 0, len(snapshots))
-	seenOwnerSessionIDs := make(map[string]struct{}, len(snapshots))
-	for _, snapshot := range snapshots {
-		if snapshot.OwnerSessionID == "" {
-			continue
-		}
-		if _, seen := seenOwnerSessionIDs[snapshot.OwnerSessionID]; seen {
-			continue
-		}
-		seenOwnerSessionIDs[snapshot.OwnerSessionID] = struct{}{}
-		ownerSessionIDs = append(ownerSessionIDs, snapshot.OwnerSessionID)
-	}
-	matchingOwnerSessionIDs, err := s.membership.MatchingProjectSessionIDs(ctx, req.ProjectID, ownerSessionIDs)
+	projectSessionIDs, err := s.membership.ListProjectSessionIDs(ctx, req.ProjectID)
 	if err != nil {
 		return serverapi.ProcessListResponse{}, err
 	}
+	projectSessions := make(map[string]struct{}, len(projectSessionIDs))
+	for _, sessionID := range projectSessionIDs {
+		projectSessions[sessionID] = struct{}{}
+	}
+	snapshots := s.processes.List()
 	processes := make([]clientui.BackgroundProcess, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		if _, matchesProject := matchingOwnerSessionIDs[snapshot.OwnerSessionID]; !matchesProject {
+		if _, matchesProject := projectSessions[snapshot.OwnerSessionID]; !matchesProject {
 			continue
 		}
 		if req.OwnerSessionID != nil && snapshot.OwnerSessionID != *req.OwnerSessionID {

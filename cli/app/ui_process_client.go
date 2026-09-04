@@ -70,7 +70,6 @@ func (c backgroundUIProcessClient) KillProcess(ctx context.Context, id string) e
 }
 
 func (c backgroundUIProcessClient) InlineOutput(ctx context.Context, id string, maxChars int) (string, string, error) {
-	id = strings.TrimSpace(id)
 	if c.control != nil {
 		resp, err := c.control.GetInlineOutput(ctx, serverapi.ProcessInlineOutputRequest{ProcessID: id, MaxChars: maxChars})
 		if err != nil {

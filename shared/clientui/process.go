@@ -14,7 +14,7 @@ type BackgroundProcess struct {
 	Command                 string
 	Workdir                 string
 	StartedAt               time.Time
-	FinishedAt              *time.Time
+	FinishedAt              time.Time
 	ExitCode                *int
 	LogPath                 string
 	RecentOutput            string

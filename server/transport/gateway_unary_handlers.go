@@ -246,18 +246,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		generated, err := protoapi.ProcessListSuccessToProto(response)
 		return completeUnaryResponse(req.ID, generated, err, generatedJSONResponseEncoder)
 	},
-	protocol.MethodProcessGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
-		params, ok := prepared.(serverapi.ProcessGetRequest)
-		if !ok {
-			return completeUnaryResponse(req.ID, nil, fmt.Errorf("prepared request has type %T", prepared), nil)
-		}
-		response, err := g.deps.ProcessViewClient().GetProcess(ctx, params)
-		if err != nil {
-			return completeUnaryResponse(req.ID, nil, err, nil)
-		}
-		generated, err := protoapi.ProcessGetSuccessToProto(response)
-		return completeUnaryResponse(req.ID, generated, err, generatedJSONResponseEncoder)
-	},
+	protocol.MethodProcessGet:          gatewayClientCall[apicontract.ProcessViewService, serverapi.ProcessGetRequest, serverapi.ProcessGetResponse](GatewayDependencies.ProcessViewClient, apicontract.ProcessViewService.GetProcess),
 	protocol.MethodProcessKill:         gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.KillProcess),
 	protocol.MethodProcessInlineOutput: gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.GetInlineOutput),
 	protocol.MethodAskListPending:      gatewayClientCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, apicontract.AskViewService.ListPendingAsksBySession),

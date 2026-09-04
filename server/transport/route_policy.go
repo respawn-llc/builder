@@ -92,28 +92,31 @@ func (e routePolicyExecutor) decodeRouteParams(route rpccontract.Route, raw json
 			return nil, fmt.Errorf("decode params: %w", err)
 		}
 		return protoapi.ProcessListRequestFromProto(&message), nil
-	case protocol.MethodProcessGet:
-		var message processpb.GetRequest
-		if err := protoapi.DecodeJSON(raw, &message); err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-		return protoapi.ProcessGetRequestFromProto(&message), nil
 	case protocol.MethodProcessKill:
 		var message processpb.KillRequest
 		if err := protoapi.DecodeJSON(raw, &message); err != nil {
 			return nil, fmt.Errorf("decode params: %w", err)
 		}
 		return protoapi.ProcessKillRequestFromProto(&message), nil
-	case protocol.MethodProcessInlineOutput:
-		params, err := decodeRouteParams(route, raw)
-		if err != nil {
-			return nil, err
-		}
-		request := params.(serverapi.ProcessInlineOutputRequest)
-		request.ProcessID = strings.TrimSpace(request.ProcessID)
-		return request, nil
 	}
-	return decodeRouteParams(route, raw)
+	params, err := decodeRouteParams(route, raw)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeLegacyProcessRequest(params), nil
+}
+
+func normalizeLegacyProcessRequest(params any) any {
+	switch request := params.(type) {
+	case serverapi.ProcessGetRequest:
+		request.ProcessID = strings.TrimSpace(request.ProcessID)
+		return request
+	case serverapi.ProcessInlineOutputRequest:
+		request.ProcessID = strings.TrimSpace(request.ProcessID)
+		return request
+	default:
+		return params
+	}
 }
 
 type gatewayRouteError struct {

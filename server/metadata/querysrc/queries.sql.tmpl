@@ -2278,15 +2278,6 @@ FROM sessions
 WHERE project_id = sqlc.arg(project_id)
 ORDER BY rowid ASC;
 
--- name: ListMatchingProjectSessionIDs :many
-SELECT sessions.id
-FROM sessions
-JOIN json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) selected
-  ON selected.type = 'text'
- AND selected.value = sessions.id
-WHERE sessions.project_id = sqlc.arg(project_id)
-ORDER BY selected.key ASC;
-
 -- name: GetProjectDeleteBlockerCounts :one
 SELECT
     CAST((

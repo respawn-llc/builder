@@ -30,14 +30,6 @@ func ProcessListRequestFromProto(request *processpb.ListRequest) serverapi.Proce
 	}
 }
 
-func ProcessGetRequestToProto(request serverapi.ProcessGetRequest) *processpb.GetRequest {
-	return &processpb.GetRequest{ProcessId: strings.TrimSpace(request.ProcessID)}
-}
-
-func ProcessGetRequestFromProto(request *processpb.GetRequest) serverapi.ProcessGetRequest {
-	return serverapi.ProcessGetRequest{ProcessID: strings.TrimSpace(request.GetProcessId())}
-}
-
 func ProcessKillRequestToProto(request serverapi.ProcessKillRequest) *processpb.KillRequest {
 	return &processpb.KillRequest{ProcessId: strings.TrimSpace(request.ProcessID)}
 }
@@ -58,17 +50,6 @@ func ProcessListResponseFromProto(success *processpb.ListSuccess) (serverapi.Pro
 	return serverapi.ProcessListResponse{Processes: processes}, nil
 }
 
-func ProcessGetResponseFromProto(success *processpb.GetSuccess) (serverapi.ProcessGetResponse, error) {
-	if success.GetProcess() == nil {
-		return serverapi.ProcessGetResponse{}, nil
-	}
-	process, err := BackgroundProcessFromProto(success.GetProcess())
-	if err != nil {
-		return serverapi.ProcessGetResponse{}, err
-	}
-	return serverapi.ProcessGetResponse{Process: &process}, nil
-}
-
 func ProcessListSuccessToProto(response serverapi.ProcessListResponse) (*processpb.ListSuccess, error) {
 	processes := make([]*processpb.BackgroundProcess, 0, len(response.Processes))
 	for _, process := range response.Processes {
@@ -79,17 +60,6 @@ func ProcessListSuccessToProto(response serverapi.ProcessListResponse) (*process
 		processes = append(processes, converted)
 	}
 	return &processpb.ListSuccess{Processes: processes}, nil
-}
-
-func ProcessGetSuccessToProto(response serverapi.ProcessGetResponse) (*processpb.GetSuccess, error) {
-	if response.Process == nil {
-		return &processpb.GetSuccess{}, nil
-	}
-	process, err := BackgroundProcessToProto(*response.Process)
-	if err != nil {
-		return nil, err
-	}
-	return &processpb.GetSuccess{Process: process}, nil
 }
 
 func BackgroundProcessToProto(process clientui.BackgroundProcess) (*processpb.BackgroundProcess, error) {
@@ -118,8 +88,8 @@ func BackgroundProcessToProto(process clientui.BackgroundProcess) (*processpb.Ba
 		LastUpdatedAt:           timestamppb.New(process.LastUpdatedAt),
 		RecentOutput:            process.RecentOutput,
 	}
-	if process.FinishedAt != nil {
-		message.FinishedAt = timestamppb.New(*process.FinishedAt)
+	if !process.FinishedAt.IsZero() {
+		message.FinishedAt = timestamppb.New(process.FinishedAt)
 	}
 	return message, nil
 }
@@ -194,12 +164,12 @@ func requiredProcessTime(timestamp *timestamppb.Timestamp, field string) (time.T
 	return timestamp.AsTime(), nil
 }
 
-func optionalProcessTime(timestamp *timestamppb.Timestamp, field string) (*time.Time, error) {
+func optionalProcessTime(timestamp *timestamppb.Timestamp, field string) (time.Time, error) {
 	if timestamp == nil {
-		return nil, nil
+		return time.Time{}, nil
 	}
 	if err := timestamp.CheckValid(); err != nil {
-		return nil, fmt.Errorf("%s is invalid: %w", field, err)
+		return time.Time{}, fmt.Errorf("%s is invalid: %w", field, err)
 	}
-	return textutil.Value(timestamp.AsTime()), nil
+	return timestamp.AsTime(), nil
 }

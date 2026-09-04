@@ -886,23 +886,8 @@ func (c *Remote) ListProcesses(ctx context.Context, req serverapi.ProcessListReq
 }
 
 func (c *Remote) GetProcess(ctx context.Context, req serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error) {
-	encodedRequest, err := protoapi.EncodeJSON(protoapi.ProcessGetRequestToProto(req))
-	if err != nil {
-		return serverapi.ProcessGetResponse{}, err
-	}
-	var encodedResponse json.RawMessage
-	if err := c.call(ctx, protocol.MethodProcessGet, json.RawMessage(encodedRequest), &encodedResponse); err != nil {
-		return serverapi.ProcessGetResponse{}, err
-	}
-	var success processpb.GetSuccess
-	if err := protoapi.DecodeJSON(encodedResponse, &success); err != nil {
-		return serverapi.ProcessGetResponse{}, invalidResponseError(protocol.MethodProcessGet, err)
-	}
-	response, err := protoapi.ProcessGetResponseFromProto(&success)
-	if err != nil {
-		return serverapi.ProcessGetResponse{}, invalidResponseError(protocol.MethodProcessGet, err)
-	}
-	return response, nil
+	var resp serverapi.ProcessGetResponse
+	return resp, c.call(ctx, protocol.MethodProcessGet, req, &resp)
 }
 
 func (c *Remote) KillProcess(ctx context.Context, req serverapi.ProcessKillRequest) (serverapi.ProcessKillResponse, error) {

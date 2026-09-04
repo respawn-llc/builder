@@ -18,7 +18,7 @@ func ProcessFromSnapshot(snapshot shelltool.Snapshot) clientui.BackgroundProcess
 		Command:                 snapshot.Command,
 		Workdir:                 snapshot.Workdir,
 		StartedAt:               snapshot.StartedAt,
-		FinishedAt:              textutil.Pointer(snapshot.FinishedAt),
+		FinishedAt:              snapshot.FinishedAt,
 		ExitCode:                textutil.Pointer(snapshot.ExitCode),
 		LogPath:                 snapshot.LogPath,
 		RecentOutput:            strings.ToValidUTF8(snapshot.RecentOutput, "\uFFFD"),

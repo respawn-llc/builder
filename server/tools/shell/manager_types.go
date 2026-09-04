@@ -132,7 +132,7 @@ type Snapshot struct {
 	Command                 string
 	Workdir                 string
 	StartedAt               time.Time
-	FinishedAt              *time.Time
+	FinishedAt              time.Time
 	ExitCode                *int
 	LogPath                 string
 	RecentOutput            string
@@ -252,7 +252,7 @@ type processEntry struct {
 	postprocessor        *postprocess.Runner
 	preserveOutput       bool
 	startedAt            time.Time
-	finishedAt           *time.Time
+	finishedAt           time.Time
 	exitCode             *int
 	state                string
 	backgrounded         bool
@@ -328,7 +328,6 @@ func cloneExecutionCorrelation(correlation *runtimeids.ExecutionCorrelation) *ru
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
 	snapshot.ExecutionCorrelation = cloneExecutionCorrelation(snapshot.ExecutionCorrelation)
-	snapshot.FinishedAt = textutil.Pointer(snapshot.FinishedAt)
 	snapshot.ExitCode = textutil.Pointer(snapshot.ExitCode)
 	return snapshot
 }
@@ -393,9 +392,8 @@ func (p *processEntry) writeOutput(chunk []byte) error {
 func (p *processEntry) setExited(exitCode int, state string) {
 	p.mu.Lock()
 	p.running = false
-	finishedAt := time.Now().UTC()
-	p.finishedAt = &finishedAt
-	p.lastUpdatedAt = finishedAt
+	p.finishedAt = time.Now().UTC()
+	p.lastUpdatedAt = p.finishedAt
 	p.exitCode = &exitCode
 	p.state = state
 	stdin, log := p.detachResourcesLocked()
@@ -414,9 +412,8 @@ func (p *processEntry) isBackgrounded() bool {
 func (p *processEntry) closeOnExit(exitCode int, state string) Snapshot {
 	p.mu.Lock()
 	p.running = false
-	finishedAt := time.Now().UTC()
-	p.finishedAt = &finishedAt
-	p.lastUpdatedAt = finishedAt
+	p.finishedAt = time.Now().UTC()
+	p.lastUpdatedAt = p.finishedAt
 	p.exitCode = &exitCode
 	p.state = state
 	stdin, log := p.detachResourcesLocked()
