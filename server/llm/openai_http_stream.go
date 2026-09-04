@@ -926,7 +926,7 @@ func (a *passthroughOutputAccumulator) Upsert(item responses.ResponseOutputItemU
 		a.order = append(a.order, outputIndex)
 	}
 	copyRaw := append(json.RawMessage(nil), raw...)
-	a.byIndex[outputIndex] = ResponseItem{Type: ResponseItemTypeOther, OutputIndex: outputIndex, Raw: copyRaw}
+	a.byIndex[outputIndex] = ResponseItem{Type: ResponseItemTypeOther, ID: textutil.OptionalExactString(item.ID), OutputIndex: outputIndex, Raw: copyRaw}
 }
 
 func (a *passthroughOutputAccumulator) Items() []ResponseItem {
@@ -951,31 +951,30 @@ func mergePassthroughOutputItems(items []ResponseItem, passthrough []ResponseIte
 		return items
 	}
 	out := CloneResponseItems(items)
-	seen := make(map[string]struct{}, len(out))
-	completedCompactionIndexes := make(map[int64]struct{})
+	seenIDs := make(map[string]struct{}, len(out))
+	seenUnidentifiedIndexes := make(map[int64]struct{})
+	register := func(item ResponseItem) bool {
+		if item.ID != nil {
+			_, exists := seenIDs[*item.ID]
+			seenIDs[*item.ID] = struct{}{}
+			return exists
+		}
+		_, exists := seenUnidentifiedIndexes[item.OutputIndex]
+		seenUnidentifiedIndexes[item.OutputIndex] = struct{}{}
+		return exists
+	}
+	// Completed output owns the final payload. JSON bytes can change between
+	// output_item.done and response.completed without changing item identity.
 	for _, item := range out {
-		if item.Type == ResponseItemTypeCompaction {
-			completedCompactionIndexes[item.OutputIndex] = struct{}{}
-		}
-		if (item.Type != ResponseItemTypeOther && item.Type != ResponseItemTypeCompaction) || len(item.Raw) == 0 {
-			continue
-		}
-		seen[fmt.Sprintf("%d\x00%s", item.OutputIndex, string(item.Raw))] = struct{}{}
+		register(item)
 	}
 	for _, item := range passthrough {
-		if item.Type == ResponseItemTypeCompaction {
-			if _, exists := completedCompactionIndexes[item.OutputIndex]; exists {
-				continue
-			}
-		}
 		if (item.Type != ResponseItemTypeOther && item.Type != ResponseItemTypeCompaction) || len(item.Raw) == 0 {
 			continue
 		}
-		key := fmt.Sprintf("%d\x00%s", item.OutputIndex, string(item.Raw))
-		if _, exists := seen[key]; exists {
+		if register(item) {
 			continue
 		}
-		seen[key] = struct{}{}
 		copyItem := item
 		copyItem.Raw = append(json.RawMessage(nil), item.Raw...)
 		out = append(out, copyItem)

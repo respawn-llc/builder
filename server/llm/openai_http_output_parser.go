@@ -61,7 +61,7 @@ func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem
 		if !ok {
 			raw := json.RawMessage(item.RawJSON())
 			if len(raw) > 0 && json.Valid(raw) {
-				canonical = append(canonical, ResponseItem{Type: ResponseItemTypeOther, OutputIndex: int64(outputIndex), Raw: raw})
+				canonical = append(canonical, ResponseItem{Type: ResponseItemTypeOther, ID: textutil.OptionalExactString(item.ID), OutputIndex: int64(outputIndex), Raw: raw})
 			}
 			continue
 		}
