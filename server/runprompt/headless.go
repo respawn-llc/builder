@@ -199,18 +199,13 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 			attempt.Finish()
 			return nil, errors.Join(reactivateErr, historyErr)
 		}
-		sessionName, sessionNameErr := retainedSessionNameFallback(plan.SessionName)
-		if sessionNameErr != nil {
-			attempt.Finish()
-			return nil, sessionNameErr
-		}
 		return &headlessPromptRuntime{
 			retainedAdmission:    continuationResult,
 			retainedSessionID:    selectedSessionID,
 			retainedContinuation: continuation,
 			technicalContext:     acceptedCtx,
 			technicalCancel:      attempt.Finish,
-			sessionName:          sessionName,
+			sessionName:          textutil.Pointer(plan.SessionName),
 			warnings:             append([]string(nil), result.Warnings...),
 			progress:             progress,
 		}, nil
@@ -581,7 +576,7 @@ func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt st
 	}
 	return serverapi.RunPromptResponse{
 		SessionID:   r.plan.sessionID,
-		SessionName: r.plan.name,
+		SessionName: textutil.OptionalExactString(r.plan.name),
 		Result:      r.plan.content,
 		Warnings:    append([]string(nil), r.warnings...),
 	}, err
@@ -621,25 +616,11 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 	}, err
 }
 
-func sessionNameOrFallback(name *string, fallback *string) string {
+func sessionNameOrFallback(name *string, fallback *string) *string {
 	if name != nil {
-		return *name
+		return textutil.Pointer(name)
 	}
-	if fallback != nil {
-		return *fallback
-	}
-	return ""
-}
-
-func retainedSessionNameFallback(name *string) (*string, error) {
-	if name == nil {
-		return nil, nil
-	}
-	trimmed := strings.TrimSpace(*name)
-	if trimmed == "" {
-		return nil, errors.New("retained Workflow Session fallback name must not be empty")
-	}
-	return &trimmed, nil
+	return textutil.Pointer(fallback)
 }
 
 func workflowResumeDiagnostics(

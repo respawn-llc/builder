@@ -151,8 +151,8 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	if progresses[len(progresses)-1].Kind != serverapi.RunPromptProgressKindAssistantMessage || last == nil || last.Content != result.Result {
 		t.Fatalf("last progress event = %+v, want assistant result", progresses[len(progresses)-1])
 	}
-	if !strings.HasSuffix(result.SessionName, " "+subagentSessionSuffix) {
-		t.Fatalf("expected subagent session name, got %q", result.SessionName)
+	if result.SessionName == nil || !strings.HasSuffix(*result.SessionName, " "+subagentSessionSuffix) {
+		t.Fatalf("expected subagent session name, got %v", result.SessionName)
 	}
 
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{OpenAIBaseURL: server.URL})

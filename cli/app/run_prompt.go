@@ -16,7 +16,7 @@ const subagentSessionSuffix = "subagent"
 
 type RunPromptResult struct {
 	SessionID                 string
-	SessionName               string
+	SessionName               *string
 	Result                    string
 	Duration                  time.Duration
 	Warnings                  []string
@@ -38,7 +38,7 @@ func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Op
 	}, progress)
 	result := RunPromptResult{
 		SessionID:   response.SessionID,
-		SessionName: response.SessionName,
+		SessionName: textutil.Pointer(response.SessionName),
 		Result:      response.Result,
 		Duration:    response.Duration,
 		Warnings:    append([]string(nil), response.Warnings...),

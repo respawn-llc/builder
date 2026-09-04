@@ -11,6 +11,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
+	"core/shared/textutil"
 )
 
 type RunLiveSteerResult struct {
@@ -137,7 +138,7 @@ func runtimeLiveWaitResult(targetSessionID runtimeids.SessionID, resp serverapi.
 	}
 	result := RunPromptResult{
 		SessionID:   sessionID,
-		SessionName: resp.SessionName,
+		SessionName: textutil.OptionalExactString(resp.SessionName),
 		Result:      resultText,
 		Duration:    time.Duration(resp.DurationMillis) * time.Millisecond,
 		Warnings:    nil,

@@ -206,7 +206,7 @@ func (o RunPromptOverrides) NeedsAuthState() bool {
 
 type RunPromptResponse struct {
 	SessionID                 string
-	SessionName               string
+	SessionName               *string
 	Result                    string
 	Duration                  time.Duration
 	Warnings                  []string

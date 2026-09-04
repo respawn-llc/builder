@@ -114,10 +114,11 @@ func (s *Service) submitUserTurn(
 	if err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	runTurn := func(runCtx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) error {
+	runTurn := func(runCtx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+		var response serverapi.RuntimeSubmitUserTurnResponse
 		shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, projection.ExecutionText)
 		if err != nil {
-			return err
+			return response, err
 		}
 		compacted := false
 		compactionBusy := false
@@ -133,7 +134,7 @@ func (s *Service) submitUserTurn(
 				acceptedCompactionErr = compactErr
 			} else if compactErr != nil {
 				if !errors.Is(compactErr, runtime.ErrAgentBusy) {
-					return compactErr
+					return response, compactErr
 				}
 				compactionBusy = true
 			}
@@ -145,10 +146,10 @@ func (s *Service) submitUserTurn(
 				accept,
 			)
 			if queueErr != nil {
-				return errors.Join(acceptedCompactionErr, queueErr)
+				return response, errors.Join(acceptedCompactionErr, queueErr)
 			}
 			response = queuedUserTurnResponse(compacted, queued.ID)
-			return acceptedCompactionErr
+			return response, acceptedCompactionErr
 		}
 		outcome, queued, err := engine.SubmitUserMessageOrSteerWithAcceptance(
 			runCtx,
@@ -156,33 +157,40 @@ func (s *Service) submitUserTurn(
 			accept,
 		)
 		if err != nil {
-			return errors.Join(acceptedCompactionErr, err)
+			return response, errors.Join(acceptedCompactionErr, err)
 		}
 		if queued != nil {
 			response = queuedUserTurnResponse(compacted, queued.ID)
-			return acceptedCompactionErr
+			return response, acceptedCompactionErr
 		}
 		response = runtimeControlResponseFromUserTurn(outcome)
 		response.Compacted = compacted
-		return acceptedCompactionErr
+		return response, acceptedCompactionErr
 	}
-	executeTurn := func() error {
-		return s.authority.RunCurrentHumanTurn(
+	executeTurn := func() (serverapi.RuntimeSubmitUserTurnResponse, error) {
+		var response serverapi.RuntimeSubmitUserTurnResponse
+		err := s.authority.RunCurrentHumanTurn(
 			attempt.Context(),
 			descriptor,
 			attempt.Accept,
-			runTurn,
+			func(runCtx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) error {
+				var err error
+				response, err = runTurn(runCtx, engine, accept)
+				return err
+			},
 		)
+		return response, err
 	}
-	runLiveWorkflowTurn := func() (bool, error) {
+	runLiveWorkflowTurn := func() (bool, serverapi.RuntimeSubmitUserTurnResponse, error) {
 		liveExecution, live := s.authority.SessionExecution(sessionID)
 		if !live {
-			return false, nil
+			return false, serverapi.RuntimeSubmitUserTurnResponse{}, nil
 		}
 		if _, workflowScoped := liveExecution.Scope().Workflow(); !workflowScoped {
-			return false, nil
+			return false, serverapi.RuntimeSubmitUserTurnResponse{}, nil
 		}
 		workflowExecutionRetiring := false
+		var response serverapi.RuntimeSubmitUserTurnResponse
 		err := s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			if s.workflowTasks != nil {
 				workflowOwned, ownershipErr := s.workflowTaskSession(runCtx, request.SessionID, nil)
@@ -198,19 +206,21 @@ func (s *Service) submitUserTurn(
 				workflowExecutionRetiring = true
 				return nil
 			}
-			return runTurn(runCtx, engine, attempt.Accept)
+			var err error
+			response, err = runTurn(runCtx, engine, attempt.Accept)
+			return err
 		})
 		if err == nil && workflowExecutionRetiring {
 			if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
-				return true, waitErr
+				return true, response, waitErr
 			}
-			err = executeTurn()
+			response, err = executeTurn()
 		}
-		return true, err
+		return true, response, err
 	}
-	executeOrdinaryTurn := func() error {
+	executeOrdinaryTurn := func() (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
-			return waitErr
+			return serverapi.RuntimeSubmitUserTurnResponse{}, waitErr
 		}
 		return executeTurn()
 	}
@@ -230,18 +240,19 @@ func (s *Service) submitUserTurn(
 		return response, errors.New("workflow Session reactivator is required")
 	}
 	if live && liveWorkflow {
-		liveWorkflowHandled, liveWorkflowErr := runLiveWorkflowTurn()
+		liveWorkflowHandled, liveResponse, liveWorkflowErr := runLiveWorkflowTurn()
 		if liveWorkflowHandled {
+			response = liveResponse
 			err = liveWorkflowErr
 		} else if persistedWorkflow {
 			err = sessionruntime.ErrSessionWorkflowActivationActive
 		} else {
-			err = executeOrdinaryTurn()
+			response, err = executeOrdinaryTurn()
 		}
 	} else if persistedWorkflow {
 		err = sessionruntime.ErrSessionWorkflowActivationActive
 	} else {
-		err = executeOrdinaryTurn()
+		response, err = executeOrdinaryTurn()
 	}
 	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
 		preparing := false
@@ -257,7 +268,7 @@ func (s *Service) submitUserTurn(
 				case ownershipErr != nil:
 					err = ownershipErr
 				case !currentWorkflow:
-					err = executeOrdinaryTurn()
+					response, err = executeOrdinaryTurn()
 				default:
 					err = preparingErr
 				}
@@ -285,8 +296,9 @@ func (s *Service) submitUserTurn(
 				go s.releaseQueuedUserAutoDrainWhenWorkflowReady(sessionID, release)
 			}
 		case s.reactivator != nil:
-			liveWorkflowHandled, liveWorkflowErr := runLiveWorkflowTurn()
+			liveWorkflowHandled, liveResponse, liveWorkflowErr := runLiveWorkflowTurn()
 			if liveWorkflowHandled {
+				response = liveResponse
 				err = liveWorkflowErr
 				break
 			}
@@ -313,10 +325,27 @@ func (s *Service) submitUserTurn(
 					continuation,
 				)
 				var retainedErr error
+				historyRecorded := false
 				if continuationResult.Accepted() {
 					retainedErr = s.recordAcceptedUserTurnHistory(request, projection)
+					historyRecorded = true
 				}
 				if reactivateErr != nil {
+					var conflict *workflowexecution.TaskResumeConflictError
+					if errors.As(reactivateErr, &conflict) &&
+						conflict.State == workflowexecution.TaskResumeConflictNoResumableCurrentNode {
+						liveHandled, liveResponse, liveErr := runLiveWorkflowTurn()
+						if liveHandled {
+							if attempt.Accepted() && !historyRecorded {
+								retainedErr = errors.Join(retainedErr, s.recordAcceptedUserTurnHistory(request, projection))
+							}
+							resultCh <- retainedWorkflowResult{
+								response: liveResponse,
+								err:      errors.Join(liveErr, retainedErr),
+							}
+							return
+						}
+					}
 					resultCh <- retainedWorkflowResult{err: errors.Join(reactivateErr, retainedErr)}
 					return
 				}
@@ -364,13 +393,22 @@ func (s *Service) releaseQueuedUserAutoDrainWhenWorkflowReady(
 	for {
 		if handle, live := s.authority.SessionExecution(sessionID); live {
 			if _, workflowScoped := handle.Scope().Workflow(); workflowScoped {
-				release()
-				return
+				workflowTurnStarted := false
+				runtimeErr := s.withRuntime(context.Background(), sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
+					active := engine.ActiveRun()
+					workflowTurnStarted = active != nil && active.ActiveKind == runtime.ActiveKindWorkflowTurn
+					return nil
+				})
+				if runtimeErr == nil && workflowTurnStarted {
+					release()
+					return
+				}
 			}
 		}
 		if s.preparations != nil {
 			preparing, err := s.preparations.WorkflowSessionPreparing(context.Background(), sessionID)
-			if err != nil || !preparing {
+			_, live := s.authority.SessionExecution(sessionID)
+			if err != nil || (!preparing && !live) {
 				release()
 				return
 			}
