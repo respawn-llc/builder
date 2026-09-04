@@ -151,10 +151,11 @@ func captureSessionRequest(
 	activeSources := resolved.Source.Sources
 	workingDirectory := ""
 	var workflowPrompt *workflowruntime.PromptContract
-	workflowOwned, err := md.SessionHasWorkflowTask(ctx, sessionID)
+	workflowTaskID, err := md.WorkflowTaskIDForSession(ctx, sessionID)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve workflow session ownership: %w", err)
 	}
+	workflowOwned := workflowTaskID != nil
 	if workflowOwned {
 		workflowInspection, workflowErr := resolvePersistedWorkflowInspection(ctx, cfg, md, store)
 		if workflowErr != nil && !errors.Is(workflowErr, workflowstore.ErrSessionNotCurrentWorkflowNode) {
