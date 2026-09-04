@@ -755,6 +755,9 @@ func PrepareRunPromptOverridesWithContext(app config.App, overrides serverapi.Ru
 
 func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.RunPromptOverrides, authState auth.State, preparation RunPromptPreparationContext, applyBudget modelContextBudgetApplier) (PreparedRunPromptOverrides, error) {
 	if err := overrides.Validate(); err != nil {
+		if errors.Is(err, serverapi.ErrInvalidRunPromptAgentRole) {
+			return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
+		}
 		return PreparedRunPromptOverrides{}, err
 	}
 	roleOverride, err := overrides.AgentRoleOverride()
