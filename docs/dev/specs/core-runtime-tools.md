@@ -78,7 +78,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Before launching a command, Kent must resolve a non-empty selected Working Directory to a normalized absolute path and verify that the path exists and is a directory.
 - If a non-empty selected Working Directory does not exist, Kent must not launch the command and must return `<normalized absolute path> does not exist, so the shell command was not executed. Please select an existing working directory`.
 - If a non-empty selected Working Directory exists but is not a directory, Kent must not launch the command and must return `<normalized absolute path> is not a directory, so the shell command was not executed. Please select an existing working directory`.
-- An empty selected Working Directory retains the shell manager's existing validation behavior and never falls back to Kent's server process working directory.
+- An empty selected Working Directory is validated by the shell manager and never falls back to Kent's server process working directory.
 - An `exec_command` failure never adds the `exec_command failed:` prefix to its model-visible error.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
 - Kent does not limit concurrent command processes, including background processes visible through `/ps`.
@@ -117,13 +117,13 @@ To respond, run: kent run steer <source-session-id> "message"
 
 - Kent truncates large tool output for model context with standardized head/tail content and truncation metadata. The threshold is configurable and applies after command post-processing.
 - Foreground shell output is evaluated after sanitization, post-processing, warnings, truncation, and presentation trimming. Whitespace-only content is no output.
-- Each `shell` and `write_stdin` call independently applies the oversized-output guard after its existing output processing and ordinary truncation. The guard carries no state between calls.
+- Each `shell` and `write_stdin` call independently applies the oversized-output guard after output processing and ordinary truncation. The guard carries no state between calls.
 - The oversized-output threshold is half of the active Session's established context window.
 - The oversized-output guard is eligible only when the current call explicitly requests `max_output_tokens` above the threshold.
 - For an eligible call, Kent applies its standard token estimate to the final model-visible result. When that estimate exceeds the threshold, Kent omits all command output and returns a failed tool result.
 - An oversized-output failure must say `Command was executed but the output you requested exceeded 0.5 of your memory size. It was forcibly truncated still to prevent your memory overload, and the output written to ${command.output_path} . Next time be more careful with larger outputs.`, replacing `${command.output_path}` with the retained shell-log path.
 - An oversized-output failure never stops a running command or changes command execution, the complete shell log, or later independent polls.
-- An omitted `max_output_tokens`, a requested cap at or below the threshold, or an eligible call whose estimated final result is at or below the threshold retains existing behavior.
+- The oversized-output guard does not alter a call when `max_output_tokens` is omitted, the requested cap is at or below the threshold, or the estimated final result is at or below the threshold.
 - A successful foreground command with output returns only that plaintext. Any completed foreground command without output returns `Exit code N, no output.`. An unsuccessful foreground command with output returns `Exit code N, output:` followed by the output.
 - Background completion and polling always include the exit code. Completion with no output says `Exit code N, no output.`. Lifecycle facts remain separate from output summaries.
 - Concise background output may hide an inline preview, but completion must expose the exit code and output-file location when output exists and must not claim there was no output. Recoverable warnings remain visible and count as output, but do not imply command-log content.
@@ -164,12 +164,11 @@ To respond, run: kent run steer <source-session-id> "message"
 - A read or decode failure stops Question-history reading. Human output retains Questions already emitted; streaming JSON may remain partial and invalid.
 - Question-history delivery reuses the generic subscription transport. The server emits start metadata, zero or more Questions, and final omission metadata in that order; clients consume those typed events without a separate lifecycle-validation state machine. Generic transport completion is operation success, and a transport failure remains an operational failure even after final omission metadata.
 - Question-history reading ignores provider-history items carried by history replacements. It reads self-contained Question completion events only.
-- New Sessions store structured Question answers and their answer commit time in event-log schema v2.
+- Event-log schema v2 stores structured Question answers and their answer commit time.
 - Event-log schema v2 limits event-envelope field names, top-level event-payload field names, and tool names to 4,096 UTF-8 bytes. Writing or decoding an oversized discriminator fails visibly. This limit does not apply to Question text, answers, Commentary, provider history, or other payload content.
-- Event-log schema v1 Sessions remain openable, resumable, and writable without migration. Question history uses their normalized presented Question text and verbatim flattened completion output, and does not infer selected options, Commentary, or answer time.
-- Event-log schema v1 preserves existing discriminator lengths. If bounded Question-history inspection encounters a legacy discriminator that exceeds the v2 limit, the read stops with a visible decode failure instead of silently omitting the record.
+- Event-log schema v1 Sessions are openable, resumable, and writable. Question history uses their normalized presented Question text and verbatim flattened completion output, and does not infer selected options, Commentary, or answer time.
+- Event-log schema v1 discriminator lengths are not constrained by the v2 limit. If bounded Question-history inspection encounters a v1 discriminator that exceeds the v2 limit, the read stops with a visible decode failure instead of silently omitting the record.
 - A forked or cloned Session inherits its source Session's event-log schema version.
-- Kent 3.0 removes the event-log v1 Question-history fallback.
 
 ## Sessions, Location, And Transcript Bounds
 
@@ -182,12 +181,13 @@ To respond, run: kent run steer <source-session-id> "message"
 - Session activation and release identify the exact session resource generation. A stale release is a successful no-op and cannot close or detach a replacement generation.
 - Clients and servers using incompatible protocol generations refuse the connection; operators must upgrade and restart both before making requests.
 - Published custom protocol error codes are stable wire contracts.
-- Absent session lineage is `null`; empty or whitespace-only lineage values are invalid. A Session has separate optional previous-session provenance for human navigation and derived sessions, and parent-agent provenance for model-spawned subagent ancestry. Provenance can cross Projects. Derived Sessions retain the source parent-agent ancestry and record the immediate source as previous-session provenance. Existing generic parent provenance is previous-session provenance, never model-spawned ancestry.
-- Kent atomically converts legacy empty parent values to `null`.
+- Absent session lineage is `null`; empty or whitespace-only lineage values are invalid. A Session has separate optional previous-session provenance for human navigation and derived sessions, and parent-agent provenance for model-spawned subagent ancestry. Provenance can cross Projects. Derived Sessions retain the source parent-agent ancestry and record the immediate source as previous-session provenance. Generic parent provenance means previous-session provenance, never model-spawned ancestry.
 - Interactive startup is workspace-first. An unregistered workspace enters an explicit binding flow. Server browsing opens existing Projects and Workspaces only. Headless startup in an unregistered workspace fails without creating hidden state.
 - Rebinding is explicit; Kent never infers it.
-- A session selected for an interactive workspace prompts to rebind only when its attached workspace differs from the open workspace. Detached historical locations neither trigger nor supply a rebind. Attached location has one authority; a detached historical location is not an execution fallback.
+- A session selected for an interactive workspace prompts to rebind only when its attached workspace differs from the open workspace. Detached workspace-location records neither trigger nor supply a rebind. Attached location has one authority; a detached location record is not an execution fallback.
 - Interactive Sessions are created lazily, at the first trigger that needs model work.
+- A Session retains one unsent input draft for recovery. Clients restore the draft verbatim when opening the Session.
+- Session listings expose the first-prompt preview when available. Clients decide whether to display it.
 - Immediately before a Session's first model request, and after every compaction before subsequent model work, Kent locks or refreshes the model/provider setup, generation parameters, effective tool declarations and enabled tool set, system and developer context, skills, workspace information, current model-facing date/time, and conversation context for the current Session Contract. The main prompt-cache key remains the Kent Session ID throughout.
 - Transcript order is immutable for prompt-cache stability. A pre-commit Result Group persistence failure ends the Exact Execution Scope and makes no committed transcript change. Kent does not replay or reconcile a lost Session operation; a later explicit invocation is a new operation. Process death may lose the current Agent Step and process-local pending Steering as defined by the Runtime Steering specification.
 
@@ -275,7 +275,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - The compaction request uses the pre-compaction locked contract. After compaction completes, the next model request refreshes and locks effective model/provider settings, enabled tools, and system/reviewer prompts. Changed prompt-facing content naturally invalidates the changed request prefix while the prompt-cache key remains the Session ID.
 - Compaction alone emits no cache warning. `cache_warning_mode=default` records confirmed non-postfix invalidation and observed cache-reuse disappearance in Detail. `verbose` exposes the same warnings in Ongoing. `off` disables cache warnings.
 - Local compaction permits no tool calls. Each attempt that receives one records a model-visible and user-visible instruction not to call tools and to retry; Kent retries up to three times, then fails compaction and stops the model loop. Local summaries use automatic tool choice; post-compaction Workflow work uses the Node's ordinary generation policy.
-- If compaction both exceeds provider context length and receives the corresponding provider error, Kent retries the compaction request with cumulative supported historical tool-payload collapse targets of 10%, 20%, and 40% of the model context window. Shell output and patch input become exactly `<collapsed>`; calls and their output relationships remain, while reasoning and unsupported payloads remain unchanged. A successful repair records the collapse count and estimated omitted tokens for the operator.
+- If compaction both exceeds provider context length and receives the corresponding provider error, Kent retries the compaction request with cumulative supported earlier tool-payload collapse targets of 10%, 20%, and 40% of the model context window. Shell output and patch input become exactly `<collapsed>`; calls and their output relationships remain, while reasoning and unsupported payloads remain unchanged. A successful repair records the collapse count and estimated omitted tokens for the operator.
 - Completing compaction alone adds no UI-only transcript entry; transcript-visible summaries are ordinary transcript content.
 - Persisting the Context read's completed-compaction count or manual-Compact eligibility is best-effort. A failed metadata write does not fail an otherwise successful compaction or Agent Step; Kent reports the failure through its operational diagnostics and adds no retry or recovery flow for these facts.
 

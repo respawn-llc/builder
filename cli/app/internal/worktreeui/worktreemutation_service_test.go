@@ -180,7 +180,11 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	if setupIDErr != nil || gotCreate.SessionId != "session-1" || gotCreate.Spec.GetBranchName() != "feature/a" {
 		t.Fatalf("create request = %+v", gotCreate)
 	}
-	if got := client.enterRequests[0]; got.OperationId != testWorktreeOperationID(t).String() || got.SessionId != "session-1" || got.Selector != "feature/a" {
+	if got := client.enterRequests[0]; got.OperationId != testWorktreeOperationID(t).String() ||
+		got.SessionId != "session-1" ||
+		got.Selector != "feature/a" ||
+		got.TargetWorkspace.GetWorkspaceId() != "workspace-1" ||
+		got.TargetWorkspace.GetWorkspaceRoot() != "/repo" {
 		t.Fatalf("enter request = %+v", got)
 	}
 	if got := client.deleteRequests[0]; got.SessionId != "session-1" || got.Selector != "wt-3" || !got.ForceFolderRemoval || got.BranchCleanupPolicy != worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_DELETE_SAFE {
@@ -269,8 +273,10 @@ func TestResolveSelectorUsesBoundedSessionScopedRequest(t *testing.T) {
 
 func newTestService(client *testWorktreeClient) Service {
 	return Service{
-		Client:    client,
-		SessionID: "session-1",
+		Client:        client,
+		SessionID:     "session-1",
+		WorkspaceID:   "workspace-1",
+		WorkspaceRoot: "/repo",
 		Runtime: RuntimeControl{
 			Context: func() (context.Context, context.CancelFunc) {
 				return context.WithTimeout(context.Background(), time.Second)

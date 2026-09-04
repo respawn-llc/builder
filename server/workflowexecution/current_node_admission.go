@@ -11,6 +11,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 )
 
 const (
@@ -1124,6 +1125,43 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 			reference:          currentNode.Reference,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
 		})
+	}
+	return starts, nil
+}
+
+func currentNodeApprovalStarts(
+	applied workflowstore.PendingApprovalApplyResult,
+) ([]currentNodeQueuedStart, error) {
+	starts, err := currentNodeExplicitStarts(applied.Mutation.Created)
+	if err != nil {
+		return nil, err
+	}
+	targetKinds := make(map[workflow.CurrentNodeReferenceKey]workflow.NodeKind, len(applied.ResolvedApproval.Branches))
+	for index, branch := range applied.ResolvedApproval.Branches {
+		key, err := branch.Target.CurrentNode.Reference.Key()
+		if err != nil {
+			return nil, fmt.Errorf("approval target at index %d: %w", index, err)
+		}
+		if _, duplicate := targetKinds[key]; duplicate {
+			return nil, fmt.Errorf("approval target at index %d is duplicated", index)
+		}
+		targetKinds[key] = branch.Target.NodeKind
+	}
+	for index := range starts {
+		key, err := starts[index].reference.Key()
+		if err != nil {
+			return nil, err
+		}
+		nodeKind, exists := targetKinds[key]
+		if !exists {
+			return nil, fmt.Errorf("approval current node start at index %d has no frozen target", index)
+		}
+		switch nodeKind {
+		case workflow.NodeKindAgent, workflow.NodeKindScript:
+			starts[index].nodeKind = nodeKind
+		default:
+			return nil, fmt.Errorf("approval current node start at index %d has non-executable node kind %q", index, nodeKind)
+		}
 	}
 	return starts, nil
 }

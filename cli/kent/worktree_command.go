@@ -253,14 +253,53 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	targetWorkspace, err := resolveWorktreeTransitionWorkspace(context.Background())
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	origin, err := sessionRetargetRuntimeOrigin(sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var transitionOrigin *worktreepb.TransitionRuntimeStepOrigin
+	if origin != nil {
+		transitionOrigin = &worktreepb.TransitionRuntimeStepOrigin{
+			RunId:  origin.RunID,
+			StepId: origin.StepID,
+		}
+	}
 	operationID := worktreecontract.NewOperationID()
 	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "enter", func(ctx context.Context, remote apicontract.WorktreeService) (*worktreepb.ScheduledAcknowledgement, error) {
 		return remote.EnterWorktree(ctx, &worktreepb.EnterRequest{
-			OperationId: operationID.String(),
-			SessionId:   sessionID,
-			Selector:    strings.TrimSpace(fs.Args()[0]),
+			OperationId:     operationID.String(),
+			SessionId:       sessionID,
+			Selector:        strings.TrimSpace(fs.Args()[0]),
+			TargetWorkspace: targetWorkspace,
+			Origin:          transitionOrigin,
 		})
 	})
+}
+
+func resolveWorktreeTransitionWorkspace(ctx context.Context) (*worktreepb.TransitionWorkspace, error) {
+	configRoot, err := nearestCommandConfigRoot()
+	if err != nil {
+		return nil, err
+	}
+	cfg, remote, err := openBindingCommandRemote(ctx, configRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = remote.Close() }()
+	binding, err := resolveWorkspaceBinding(ctx, remote, cfg.WorkspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return &worktreepb.TransitionWorkspace{
+		WorkspaceId:   strings.TrimSpace(binding.WorkspaceID),
+		WorkspaceRoot: strings.TrimSpace(binding.CanonicalRoot),
+	}, nil
 }
 
 func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {

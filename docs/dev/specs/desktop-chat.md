@@ -29,7 +29,7 @@
 - `New Session` opens the outstanding lazy Chat draft for the Project default workspace, or a new empty Chat when none exists. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list and resumes that workspace's outstanding lazy draft when present.
 - Each Project workspace has at most one outstanding lazy Chat draft. Materializing its Session consumes that draft into the new Session; Desktop adds no Drafts destination or orphaned-draft list.
 - New Session creation does not select a worktree. Worktree control is available after Chat opens.
-- New Chat has no setup form for name, model, provider, Agent, worktree, or prompt. It starts with an empty composer; rename and settings remain available after Chat opens.
+- New Chat has no setup form for name, model, provider, Agent, worktree, or prompt. It starts with an empty composer; settings remain available after Chat opens.
 - Opening and abandoning untouched new Chat creates neither a durable Session nor a session-browser row. The first nonblank user message, or another action that enters the agent loop, creates the Session.
 
 ## Transcript
@@ -39,10 +39,10 @@
 - Expanded flat rows use the transcript width without a nested island. They are borderless and neutral except for the semantic color of their leading status icon. Their header shows icon, localized type, compact summary, and available status or actions. The header toggles expansion without taking row-specific actions.
 - Context rows start collapsed: loaded instructions with their source label, skill guidance, environment facts, Subagent context, handoff context, mode instructions and restoration, Workflow execution instructions, active-goal continuation, Compaction-Preserved User Messages, compaction summaries, context-pressure reminders, Goal feedback, and worktree changes. Worktree entry shows branch and path; return to the main workspace shows its destination. Full expansion shows the original complete content.
 - Assistant commentary is a full assistant message without a phase label.
-- Warnings, runtime errors, generic system notices, generic warnings, legacy notices, and reviewer errors start expanded. Runtime diagnostics start collapsed. Empty known developer context is omitted; empty unknown developer context is an expanded Diagnostic row that identifies the unknown source and integrity failure.
+- Warnings, runtime errors, generic system notices, generic warnings, untyped notices, and reviewer errors start expanded. Runtime diagnostics start collapsed. Empty known developer context is omitted; empty unknown developer context is an expanded Diagnostic row that identifies the unknown source and integrity failure.
 - Reasoning Traces are dedicated transcript items. Reviewer lifecycle appears only in Thinking Status and creates no transcript row. Nonempty Reviewer suggestions create exactly one collapsed Reviewer feedback row when they are issued, before the follow-up begins; the related model instruction is never another transcript row. Reviewer feedback preserves the ordered suggestion list losslessly, including each suggestion's Markdown and item boundaries. Its compact structured summary contains only the suggestion count; clients choose the localized collapsed-row wording.
 - A successful Reviewer follow-up creates a separate collapsed outcome row after its committed transcript output. The outcome reports whether Kent applied the suggestions or made no changes.
-- If Kent cannot apply issued Reviewer feedback in the follow-up turn, Kent preserves the feedback row and fails the engine and Session through the existing error path. It adds no retry, rollback, or recovery guarantee for that failure.
+- If Kent cannot apply issued Reviewer feedback in the follow-up turn, Kent preserves the feedback row and fails the engine and Session. It adds no retry, rollback, or recovery guarantee for that failure.
 - Pending Questions and Approvals appear only in their prompt controls. A completed Question creates exactly one expanded Ask Question row. Approval has no separate decision-history row: its associated tool item owns the request and outcome.
 - A tool-associated prompt has one prompt control and one associated tool item; it is never duplicated as another transcript row.
 - Runtime lifecycle, active-work changes, compaction lifecycle, Goal lifecycle, unavailable runtime, accepted or discarded Pending Work, Queue failure, and input-operation reconciliation do not create transcript rows. Their controls or notifications own feedback.
@@ -56,7 +56,7 @@
 - The server supplies one logical Thinking Status line. It may wrap to at most two visual lines, and the spinner aligns with the first line rather than the visual center of the wrapped block.
 - Thinking Status never presents steps, a timeline, or a Chain of Thought. Desktop does not parse text or manufacture work stages.
 - Thinking Status remains visible throughout the complete running active-work scope. For a main-agent Agent Step this includes assistant streaming and tool execution. As live or committed content arrives, it remains the final transient tail immediately before the composer.
-- Thinking Status disappears when its owning active work finishes or runtime activity leaves running. Its initial production exit combines a short downward slide with a fade; reduced motion removes the transition.
+- Thinking Status disappears when its owning active work finishes or runtime activity leaves running. Its exit combines a short downward slide with a fade; reduced motion removes the transition.
 - A later Agent Step starts fresh at `Working…`. Desktop does not morph Thinking Status into an assistant message.
 - Thinking Status is non-interactive. It has no disclosure, Copy action, hover detail, or link to a Reasoning Trace.
 - While the Reviewer model request is processing, the same transient presentation shows a spinner and `Reviewing…`. Reviewer completion removes it and creates no completed-review marker.
@@ -67,17 +67,17 @@
 - Expanding a Reasoning Trace reveals its complete selectable plain text in a muted tone. Desktop does not render Reasoning Trace content as Markdown.
 - The first nonempty progressive Reasoning Trace update creates one provisional collapsed item. Later updates change that same item in place. The operator may expand it while it streams, and its complete visible text continues updating in place.
 - If the server resets a provider attempt, Desktop removes every still-provisional Reasoning Trace created by that discarded attempt, retains committed Reasoning Traces, and retains the current Thinking Status. A later trace update creates fresh provisional trace content.
-- Reasoning Trace durability begins only when completed-response processing reaches reasoning reconciliation. Kent keeps its existing assistant, tool, edit, and Agent Step lifecycle ordering rather than gating those operations on trace persistence. If response processing fails before reconciliation, the server removes the still-provisional traces without durable rows even when an earlier response effect already completed. A trace that has already committed remains durable and is never removed by that cleanup.
+- Reasoning Trace durability begins only when completed-response processing reaches reasoning reconciliation. Kent does not gate assistant, tool, edit, or Agent Step lifecycle operations on trace persistence. If response processing fails before reconciliation, the server removes the still-provisional traces without durable rows even when an earlier response effect already completed. A trace that has already committed remains durable and is never removed by that cleanup.
 - A live Reasoning Trace does not auto-open or auto-close. A provider that supplies only a completed trace creates the collapsed item when that trace becomes available.
 - A live Reasoning Trace has no actions. After it commits, its expanded presentation shows an icon-only Copy action for the complete plain text.
 - The server's Reasoning Trace presentation projection independently removes at most one leading literal `**` and at most one trailing literal `**` when those markers occur at the absolute boundaries of the complete trace. It preserves interior asterisks, unmatched non-boundary markers, whitespace, line endings, and all other content. Desktop and the TUI display and copy that projected text without repeating the cleanup. Persisted and model-facing content remains unchanged.
 - Desktop represents every non-discarded Reasoning Trace supplied by the server in authoritative order. It never concatenates, groups, drops, or otherwise interprets separate traces.
-- Desktop shows no reasoning-duration copy until the server supplies an authoritative duration. It never estimates a duration from client observation. A future authoritative duration measures from the first nonempty update for that Reasoning Trace through its commit.
+- Desktop shows no reasoning-duration copy until the server supplies an authoritative duration. It never estimates a duration from client observation. An authoritative duration measures from the first nonempty update for that Reasoning Trace through its commit.
 - Malformed user, assistant, tool, or notice items are contract failures, not display variants: development builds fail immediately; production uses the transcript contract-failure recovery path. Chat never substitutes placeholder content or roles.
 - Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. The identity is a Session-scoped locator composed of the durable event sequence and a one-based ordinal among committed rows projected from that event, after filtering, in deterministic projection order.
 - Both locator components are positive and required on every committed row. Provisional and other non-committed row shapes omit the whole locator. Desktop does not infer row identity from display text, role, position, or transport order.
 - Kent assigns committed time to newly created user or assistant transcript content when the server commits its ordinary Session event.
-- Newly timestamped events committed together share one committed time. History copied into another Session preserves its source committed times instead of receiving the replay operation's time.
+- Events committed together share one committed time. History copied into another Session preserves its source committed times instead of receiving the replay operation's time.
 - Kent persists committed time as an absolute instant with each new event that commits user or assistant message rows.
 - Persisted and client/server transcript contracts represent a present committed time as Unix epoch milliseconds. Valid values range inclusively from `-8640000000000000` through `8640000000000000`; zero and pre-epoch values are valid, and only omission represents absence. An invalid present value is a transcript contract failure; Kent does not repair it or treat it as absent.
 - A compaction history-replacement event has one committed time when it projects at least one eligible user or assistant message row. Every user or assistant message row projected from that timestamped event shares its compaction commit time; Kent does not retain each row's pre-compaction time.
@@ -104,19 +104,19 @@
 ## Transcript History And Live Output
 
 - Transcript history uses server-authoritative infinite scroll. The desktop never loads or retains the complete transcript.
-- Bounded transcript pages, initial hydration, and live committed delivery carry the same committed time from its Session event on eligible user and assistant message rows. They do not derive, look up, sort by, or reconcile through time.
-- Historical Session events without committed time remain readable. Kent does not synthesize or migrate their missing time.
-- New eligible message events written to an existing historical Session include committed time; earlier events remain unchanged. Committed time is an optional fact only because those earlier events may lack it.
-- The client/server protocol introduces committed time as a hard version cutover. Mismatched older clients are rejected through the existing protocol handshake; Kent provides no timestamp capability negotiation or fallback.
+- Bounded transcript pages, hydration, and live committed delivery carry the same committed time from its Session event on eligible user and assistant message rows. They do not derive, look up, sort by, or reconcile through time.
+- A Session event without committed time remains readable. Kent does not synthesize its missing time.
+- Every eligible message event written by Kent includes committed time. Earlier events remain unchanged, so committed time remains optional in persisted and wire contracts.
+- Clients and servers must use matching protocol versions. Kent provides no timestamp capability negotiation or fallback.
 - The visible transcript retains the newest segment and at most one adjacent segment. Loading an adjacent segment occurs at that transcript edge without replacing visible content or the viewport. Failure replaces only that boundary row with an actionable Retry for the same opaque cursor. At the oldest edge, no start-of-session marker is shown.
 - Every Chat entry opens at the newest transcript content and composer, never at a specific message, Question, Approval, tool, or workflow event. Reopening a Chat begins at the newest content; Chat has no durable read state or saved scroll position.
 - When the operator has scrolled away from the tail, incoming content preserves the viewport. A `Jump to latest` control appears when a newer server segment exists or when the viewport is more than 80px from the end of the loaded newest segment. The control has no unseen count. Activating it fetches the newest segment in one request when necessary and never walks intermediate segments.
 - `Jump to latest` is a 40px circular glass control with a 24px downward arrow and 12px end and bottom spacing above the composer. It uses scale motion when it appears or disappears; reduced motion changes visibility immediately.
 - At the tail, new assistant content, committed rows, and composer-height changes keep the view at the tail. Reduced motion removes movement animation.
-- User, committed assistant, and live assistant content use the same approved rich Markdown presentation. It sanitizes raw HTML and applies the approved link behavior. Completed supported code is syntax-highlighted and selectable; incomplete code remains selectable plain text until the Markdown parser reports the fence complete. Diagrams, math, and built-in Markdown controls are unavailable.
-- A live assistant message appears only after its first nonempty content arrives. It presents live text with the approved character motion and no caret; completed messages use static presentation. Reduced motion shows characters immediately.
+- User, committed assistant, and live assistant content use the same rich Markdown presentation. It sanitizes raw HTML and applies the specified link behavior. Completed supported code is syntax-highlighted and selectable; incomplete code remains selectable plain text until the Markdown parser reports the fence complete. Diagrams, math, and built-in Markdown controls are unavailable.
+- A live assistant message appears only after its first nonempty content arrives. It presents live text with the specified character motion and no caret; completed messages use static presentation. Reduced motion shows characters immediately.
 - A live Chat opened mid-response may animate already received eligible text once, then only newly arriving text. Each assistant update immediately changes the one visible live message; Chat does not alter, repair, or buffer model text.
-- Live Markdown is available only when it meets the approved safety, scrolling, responsiveness, and product-review requirements for long output, incomplete Markdown, tables and lists, hostile links and HTML, and unfinished code. If it does not, streaming uses selectable plain text and the completed message uses the shared static Markdown presentation.
+- Live Markdown must preserve safe scrolling and responsive interaction for long output, incomplete Markdown, tables and lists, hostile links and HTML, and unfinished code. When it cannot satisfy those requirements, streaming uses selectable plain text and the completed message uses the shared static Markdown presentation.
 
 ## Chat Presentation
 
@@ -146,7 +146,7 @@
 - The server creates one durable main child Session whose copied history ends immediately before the selected user message. The selected message and all later parent history are absent from the child, and the parent Session remains unchanged.
 - Copied history preserves each source event's committed time. Source history without committed time remains without it, and copied compaction replacement history retains its compaction time. Only messages newly committed in the child receive a new committed time.
 - The child inherits the TUI fork contract: execution context, locked contract, continuation context, worktree-reminder state, previous-Session lineage, and parent-agent ancestry. Goal inheritance follows the Rollback Picker contract.
-- The server owns the child name using its existing `<parent name or Session ID> → edit u<N>` convention. Desktop adds no naming field.
+- The server names the child `<parent name or Session ID> → edit u<N>`. Desktop adds no naming field.
 - After creation, Chat navigates to the child Session at latest, places the selected original user-message text in its ordinary composer draft, and focuses the composer. Editing and submission then use the normal child-Session composer flow.
 - Fork failure leaves the operator in the unchanged parent Session and surfaces the authoritative diagnostic through Sonner. Desktop creates no optimistic child route or local fork state.
 - `To parent chat` follows the child's previous-Session lineage and opens the parent at latest. Parent-agent lineage remains omitted from ordinary Chat.
@@ -183,7 +183,7 @@
 ## Composer And Pending Work
 
 - Send starts a user turn while idle and Steers the active turn while work is running. A Steer takes effect at the next safe step boundary. Queue is a separate action that starts after active work completes; when idle, queued work starts immediately.
-- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
+- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation.
 - `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
 - `/compact` enters Pending Work in accepted Session mutation order.
 - Pending Work shows canonical `/compact` followed by normalized guidance when guidance is present.
@@ -195,8 +195,6 @@
 - Queue has no visible button. While work is running and an empty composer can queue work, its placeholder is `Ctrl+Enter to queue`.
 - While work runs, an icon-only Stop action is visible beside Send/Steer. Stop clears all Queue and Steer items.
 - The composer grows to one-third of available Chat height, then scrolls internally. Up and Down recall prompt history only at whole-buffer boundaries; returning below the newest history item restores the pre-history draft, and editing recalled text detaches it from history.
-- `@` path suggestions search the Session effective working directory. They include files, derived directories, and hidden paths; exclude `.git`; preserve server fuzzy order; and never scan the desktop filesystem or transfer the whole repository.
-- At most seven path suggestions are visible. Up and Down select them; Enter, Tab, or pointer activation inserts the exact `@`-prefixed repository-relative path, with `/` for a directory, without sending. Escape hides suggestions until the query changes.
 - Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in Queue order, then Steer items in server acceptance order across human messages, manual compaction, and Worktree transitions. Each item shows no more than two lines and has an accessible Discard action.
 - Normal human-message, manual-compaction, and Active-Runtime Worktree-transition admission rejects with a typed capacity failure when the server independently observes at least 100 combined pending Queue and Steer items. Rejection changes no Pending Work membership and leaves the initiating input unchanged.
 - Concurrent normal admissions may pass below the limit and temporarily exceed 100 items. Restoring definitely uncommitted human input may also exceed 100 items. Kent never evicts accepted work to enforce the limit, and later normal admission rejects while the independently observed total remains at least 100.
@@ -384,7 +382,7 @@
 - Deletion rechecks current state. The preview does not reserve the target, lock its state, or guarantee later deletion.
 - If a Clean preview races with the target becoming Dirty or Unknown, the server rejects that deletion. Desktop refreshes the preview in the same popup and requires a new informed confirmation.
 - If deletion fails before returning Completed or Scheduled for another reason, the popup stays open and shows the authoritative diagnostic in error-colored plain text.
-- After an immediate deletion failure, the existing confirmation actions become available again. Repeating Confirm is the retry after the operator addresses the failure.
+- After an immediate deletion failure, the confirmation actions become available again. Repeating Confirm is the retry after the operator addresses the failure.
 - Immediate deletion failure shows no separate Retry action and no Sonner while the popup remains open.
 - The delete popup remains dismissible while a Delete request is pending.
 - Dismissing the popup does not cancel the Delete request.
@@ -467,7 +465,7 @@
 - Outside the freeform field, Left/Right changes the visible prompt circularly and Up/Down changes the vertical radio selection. Inside the freeform field, arrow keys edit text normally.
 - While the freeform field is active, Enter confirms only when the current selection and freeform content form a valid answer. Otherwise Enter has no effect. Shift+Enter inserts a newline.
 - Previous/next navigation may visit prompts without confirming them and preserves each prompt's selected option and freeform/commentary draft.
-- Provisionally, changing an answered prompt's selected option or commentary marks it unanswered until it is confirmed again. The mandatory browser acceptance fixture owns the final verdict on this behavior.
+- Changing an answered prompt's selected option or commentary marks it unanswered until it is confirmed again.
 - Confirming an answer marks that prompt answered and moves to the next unresolved prompt in server order, wrapping when necessary. No answer RPC is sent while any prompt in the batch remains unresolved.
 - `Decline to answer` immediately marks the current prompt Declined in the local batch draft, makes its options and freeform field read-only, and moves to the next unresolved prompt. It has no confirmation or undo.
 - A declined prompt remains in the `Question X of Y` sequence and is visibly read-only when revisited.
@@ -492,30 +490,26 @@
 - Desktop removes prompts reported as Skipped and keeps the server result for prompts reported as Resolved. An all-Skipped response closes the picker without retrying or replaying local answers.
 - Stop interrupts the active run, cancels the complete pending prompt batch through runtime interrupt semantics, discards its transient answer drafts, closes the picker, and restores the ordinary hidden composer draft.
 - Ordinary-Session Questions and Approvals use the shared Desktop attention-notification behavior. The notification target opens the owning Session and picker. Desktop suppresses the duplicate in-app notification only while that Session Chat and picker are already the focused destination.
-- Desktop requires one typed batch-answer operation for this picker. It does not redesign the runtime's existing parallel prompt/tool-call architecture or submit each answer before the batch is complete.
-- The Desktop prompt picker has a mandatory browser acceptance fixture. The fixture is developer-only, uses synthetic generated prompt batches, and continuously presents new Questions and Approvals after each completed batch until its browser tab closes.
-- Agent QA uses the fixture first to verify layout, Markdown, navigation, selection versus confirmation, recommendation styling, freeform/commentary, keyboard and pointer behavior, scrolling, batch submission, and repeated-run stability.
-- After preliminary QA passes, the agent opens the fixture for the user and asks for an explicit Approve or Reject decision with concrete findings. Silence, indirect feedback, screenshots, and agent judgment are not acceptance.
-- A rejection keeps the implementation work incomplete. The findings are addressed, preliminary QA is repeated, and the browser acceptance request is presented again. The complete Questions/Approvals work cannot pass its acceptance gate without explicit user approval.
+- Desktop requires one typed batch-answer operation for this picker. It does not submit each answer before the batch is complete.
 
 ## Failure And Recovery
 
-- Desktop's existing global connection state owns server disconnection. Chat adds no banner, card, modal, or second reconnect indicator.
-- While disconnected, the existing persistent warning notice remains visible, Chat keeps its last committed authoritative content, and every server mutation is unavailable. Composer and form text remain present.
+- Desktop's global connection state owns server disconnection. Chat adds no banner, card, modal, or second reconnect indicator.
+- While disconnected, the persistent warning notice remains visible, Chat keeps its last committed authoritative content, and every server mutation is unavailable. Composer and form text remain present.
 - Reconnection dismisses the global warning, reissues visible owner reads, recreates the transcript subscription, and performs Scratch Rehydration. Success adds no notification.
 - Desktop never replays an ambiguous Session mutation after connection loss. A later explicit operator action is a new operation; reconnect reopens the ordered transcript subscription and independently reads the latest completed Pending Work, draft, runtime, prompt, Goal, Process, and Worktree projections from their owners.
 - A transcript sequence gap, subscription loss, or buffered-stream failure discards provisional live content and starts Scratch Rehydration. Already committed transcript content never becomes fake empty or idle state.
 - Scratch Rehydration uses the ordinary sequenced transcript hydration and independent owner reads. It adds no client transcript repair, duplicate suppression, history rewrite, freshness fence, or global snapshot/replay mechanism.
-- Initial existing-Session loading uses the compact centered Chat loading state already specified. Initial inspection, runtime activation, transcript hydration, or draft-load failure uses the matching compact Error state with Retry while chrome Back remains available.
-- Initial Retry repeats the complete ordinary Session open path. It does not retry only one guessed failing sub-operation and adds no target-repair behavior.
+- Loading a materialized Session uses the compact centered Chat loading state. Inspection, runtime activation, transcript hydration, or draft-load failure uses the matching compact Error state with Retry while chrome Back remains available.
+- Retry repeats the complete ordinary Session open path. It does not retry only one guessed failing sub-operation and adds no target-repair behavior.
 - A failed refresh after Chat is already hydrated preserves the last server-owned visible projections. Desktop surfaces the failure through the owning global connection or operation error presentation and never fabricates empty state.
 - Older/newer transcript page failure affects only that boundary row. Loaded content remains usable and Retry repeats the same opaque cursor request.
-- A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to that operation's existing contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
+- A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to the owning operation contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
 - Mutation controls other than Chat settings prevent duplicate activation while their request is pending. Chat settings follow the independent-request rule in Session Settings And Drafts. This is request presentation, not client-owned replay, reconciliation, or a second authoritative operation state.
-- If a server-owned Chat draft cannot load, existing-Session opening fails through the initial Error state. If a draft write fails while Chat is open, Desktop preserves the visible unsent text and settings and surfaces the failure.
+- If a server-owned Chat draft cannot load, opening a materialized Session fails through the initial Error state. If a draft write fails while Chat is open, Desktop preserves the visible unsent text and settings and surfaces the failure.
 - An in-app navigation, detach, pop-out transition, or other controlled disposal that requires draft persistence does not silently complete after that prerequisite fails. It keeps the current presentation and surfaces the authoritative diagnostic.
 - Navigation, detach, pop-out or window closure, subscription closure, request cancellation, transport loss, and application shutdown stop only Desktop observation or delivery; they never invoke Runtime Release or alter server-owned Runtime work.
-- Opening a native Chat pop-out failure leaves Chat in the main window and uses the existing native-window failure notice. Desktop does not create a fallback duplicate window or partially navigate the main window.
+- Opening a native Chat pop-out failure leaves Chat in the main window and uses the native-window failure notice. Desktop does not create a fallback duplicate window or partially navigate the main window.
 - Prompt-answer races follow the Question/Approval contract: externally resolved prompts disappear, stale results cannot replace current prompt state, and a failed still-pending submission preserves its local answer draft.
 - After a batch failure, Desktop reads the latest completed pending-prompt projection and preserves local drafts only for prompts that appear pending in that response. Desktop does not retry or replay the failed batch automatically.
 - Impossible typed payloads, transcript integrity violations, and reducer/lifecycle states fail immediately in development. Production uses the owning transcript or operation failure path without placeholder rows, swallowed errors, or fake successful state.
@@ -523,6 +517,6 @@
 ## Desktop Exceptions
 
 - Desktop replaces terminal interaction mechanics with desktop controls without removing the capability they exposed.
-- Dedicated accessibility support is outside this initiative. Desktop Chat adds no screen-reader transcript model, streaming announcements, ARIA-specific interaction architecture, blind-user acceptance flow, or accessibility-only task.
+- Desktop Chat provides no screen-reader transcript model, streaming announcements, ARIA-specific interaction architecture, or blind-user interaction flow.
 - Shared UI-kit components keep their ordinary incidental semantics. Keyboard shortcuts, functional focus transitions, Copy/select behavior, resizable-window layouts, and explicitly specified reduced-motion behavior remain product mechanics rather than a separate accessibility program.
-- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment. `@` workspace references are paths, not attachments.
+- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment.

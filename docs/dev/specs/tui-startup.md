@@ -38,8 +38,8 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 ## Session Picker
 
 - The picker shows recent Sessions and a new-Session action. Infinite Scroll provides older Sessions. An empty state opens new-Session setup.
-- The picker has `Sessions` and `Subagents` tabs and opens on `Sessions`. Ordinary interactive sessions and interactive forks start in `Sessions`; sessions created for headless or workflow-agent execution start in `Subagents`. Every interactive open of a Subagent session, including opening by explicit session ID, permanently promotes it to `Sessions`. Picker selection alone does not promote: workspace lookup failure returns to the picker with a generic retry error in the shared status line, and declining a workspace change returns to the picker; neither changes the session artifact, recency, or category. An accepted retarget completes before open and promotion. Automated headless/workflow resumes and renames never change category. Legacy sessions without a recorded category appear in `Sessions`; category is never guessed from a session's name, parent, or current activity.
-- The tabs appear directly below the status header using the existing horizontal bracketed button-row treatment. The selected tab uses the primary bold treatment, the other tab is muted, and incremental lists do not show total counts.
+- The picker has `Sessions` and `Subagents` tabs and opens on `Sessions`. Ordinary interactive sessions and interactive forks start in `Sessions`; sessions created for headless or workflow-agent execution start in `Subagents`. Every interactive open of a Subagent session, including opening by explicit session ID, permanently promotes it to `Sessions`. Picker selection alone does not promote: workspace lookup failure returns to the picker with a generic retry error in the shared status line, and declining a workspace change returns to the picker; neither changes the session artifact, recency, or category. An accepted retarget completes before open and promotion. Automated headless/workflow resumes and renames never change category. Sessions without a recorded category appear in `Sessions`; category is never guessed from a session's name, parent, or current activity.
+- The tabs appear directly below the status header using the horizontal bracketed button-row treatment. The selected tab uses the primary bold treatment, the other tab is muted, and incremental lists do not show total counts.
 - When both full labels do not fit horizontally, the same buttons stack on adjacent lines rather than clipping or changing labels.
 - The picker opens immediately on `Sessions` and loads both tabs' first windows concurrently. A tab shows its own loading spinner until its first window arrives. If both first windows are empty, startup advances to new-session setup.
 - The picker requests update status without delaying Session loading.
@@ -74,12 +74,12 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 - Loading or failure at an older or newer edge keeps resident rows, selection, and viewport visible. The picker shows a spinner while loading or retry text after failure at the affected edge and blocks only movement across that edge.
 - The picker prefetches an adjacent page when selection enters the first or last visible screenful of the resident window.
 - Up/Down and `j`/`k` move by one row. PgUp/PgDn move by one visible screenful. Row movement across a loaded boundary selects the first row of the next page or the last row of the previous page. PgUp/PgDn movement across a loaded boundary lands one visible screenful into the loaded page.
-- Adjacent-page loading or failure does not move selection. Loading adds no copy beyond the existing spinner. The shared startup status line shows the operation failure, and the affected list edge shows retry text.
+- Adjacent-page loading or failure does not move selection. Loading adds no copy beyond the spinner. The shared startup status line shows the operation failure, and the affected list edge shows retry text.
 - `Enter` retries a failed first-page request. When valid resident Workspaces remain visible after an adjacent-page failure, `Enter` selects the current Workspace and moving toward the failed edge retries that page automatically.
 - A successful adjacent-page request with no rows leaves the resident information visible without an additional read or special status.
 - A successful retry immediately clears that operation's failure cause and retry affordance, then shows the loaded rows or the normal catalog boundary.
 - `Esc` returns to Project selection. Ctrl+C exits startup. The Workspace picker has no `q` binding.
-- Workspace catalog loads use the existing client request lifecycle without a picker-specific timeout or automatic retry.
+- Workspace catalog loads use the shared client request lifecycle without a picker-specific timeout or automatic retry.
 - An empty Workspace catalog shows `no workspace is attached to this project.` followed by `Please attach workspace before continuing.` Both lines use the normal foreground treatment without warning or error color. `Enter` reloads the catalog. `Esc` returns to Project selection.
 - Returning from the Workspace picker preserves the Project picker's selection and scroll. Entering a Project's Workspace picker again starts a fresh first-page load.
 - Server-browsing mode can open existing Projects and workspaces but cannot create or attach them.
@@ -90,7 +90,7 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 
 - If a selected Session has an available attached workspace root different from the current root, startup shows `Workspace changed`.
 - `Yes` retargets the Session. `No` returns to the picker.
-- A detached historical workspace path cannot trigger or supply the retarget.
+- A detached workspace-location record cannot trigger or supply the retarget.
 - Retargeting always requires explicit user action.
 
 ## Multi-Client Attach

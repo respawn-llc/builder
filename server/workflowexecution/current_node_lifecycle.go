@@ -1156,7 +1156,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, nil, err
 			}
-			starts, err := currentNodeExplicitStarts(applied.Mutation.Created)
+			starts, err := currentNodeApprovalStarts(applied)
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, nil, err
 			}

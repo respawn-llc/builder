@@ -636,9 +636,15 @@ func (m *uiModel) worktreeMutationService() worktreeui.Service {
 	if m == nil {
 		return worktreeui.Service{}
 	}
+	target := m.worktrees.target
+	if clientui.SessionExecutionTargetIsZero(target) {
+		target = m.currentExecutionTarget()
+	}
 	service := worktreeui.Service{
-		Client:    m.worktreeClient,
-		SessionID: m.sessionID,
+		Client:        m.worktreeClient,
+		SessionID:     m.sessionID,
+		WorkspaceID:   target.WorkspaceID,
+		WorkspaceRoot: target.WorkspaceRoot,
 		ResolveContext: func() (context.Context, context.CancelFunc) {
 			return context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 		},

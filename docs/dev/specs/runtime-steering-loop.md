@@ -192,7 +192,7 @@
 - Worktree and foreground-shell operations already running continue under their own owners after Stop.
 - When Stop races a durable human-message append, Kent does not promise one commit-or-restore outcome.
 - Text involved in that race may commit, be returned for restoration, be duplicated, or be lost.
-- Kent broadcasts removed human text once in an ephemeral interruption event with the existing item identities and text in server acceptance order.
+- Kent broadcasts removed human text once in an ephemeral interruption event with its item identities and text in server acceptance order.
 - Each observing live client restores that text in order and then appends any text already in its composer.
 - Kent does not persist, replay, acknowledge, or target the interruption event.
 - A client or server that misses the interruption event loses the removed text.

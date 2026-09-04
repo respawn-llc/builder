@@ -815,6 +815,24 @@ message EnterRequest {
   ];
   string session_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   string selector = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  TransitionWorkspace target_workspace = 4 [(buf.validate.field).required = true];
+  optional TransitionRuntimeStepOrigin origin = 5;
+}
+
+message TransitionWorkspace {
+  string workspace_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string workspace_root = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+}
+
+message TransitionRuntimeStepOrigin {
+  string run_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message LeaveRequest {

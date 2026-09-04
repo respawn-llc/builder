@@ -1,7 +1,7 @@
 # Product Specs
 
 These docs are the authoritative, searchable product-decision source for Kent agents.
-Implementation can drift from them.
+When product behavior and a specification disagree, the specification governs.
 
 Before writing, rewriting, reviewing, or validating a spec, follow the
 [spec-writing skill](../../../.kent/skills/spec-writing/SKILL.md).
@@ -24,4 +24,5 @@ Area specs:
 - `desktop-gui.md`: desktop navigation, projects, workflow boards, task detail, connection loss, and native capabilities.
 - `workflow-editor.md`: workflow editor, draft editing, library/linking, sidebar, and save/conflict decisions.
 - `release-distribution.md`: supported releases, installers, update channels, and compatibility behavior.
+- `server-api-contract.md`: Protobuf API authority, transport framing, operation identity, validation, errors, and protocol compatibility.
 - `terminology.md`: domain terms used consistently across specs, product surfaces, and public contracts.

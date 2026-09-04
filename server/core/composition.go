@@ -188,8 +188,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		metadataStore: metadataStore,
 	})
 	gitInspector := worktree.NewGitInspector(nil)
+	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{
-		BaseDir: cfg.Settings.Worktrees.BaseDir,
+		BaseDir:           cfg.Settings.Worktrees.BaseDir,
+		SessionRetargeter: sessionWorkspaceRetargeter,
 		ResolveSetup: func(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
 			return config.LoadWorktreeSetupSettings(sourceWorkspaceRoot, cfg.PersistenceRoot)
 		},
@@ -206,7 +208,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithChatContextWorkspaceResolver(workspaceConfigResolver).
 		WithChatContextAuthReader(authSupport.AuthManager).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
-	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
 		WithPersistedSessionResolver(metadataStore).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
