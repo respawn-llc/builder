@@ -16,5 +16,5 @@
 - [x] Commit and push `8380120a2`.
 - [x] Confirm the CI run for `8380120a2` completes successfully: run `33838648524` passed build, desktop_bundle, docs, gui, gui-native, lint, test, and windows-installer; CodeRabbit reported pass/rate limited.
 - [x] Address the follow-up review round: close failed runtime-control remotes, preserve typed retained-Workflow diagnostics through the Run Prompt API for client-owned warning rendering, reuse the canonical prompt-history projection, ignore non-contract retained launch overrides after assertion validation, retain sibling diagnostics when history persistence fails, remove the contradictory unconditional spec sentence, fix test-goroutine fatal calls, and raise protocol version `146` to `147`.
-- [ ] Confirm CI for the follow-up review commit completes successfully.
+- [x] Confirm CI for the follow-up review commit completes successfully: run `33839982193` passed build, desktop_bundle, docs, gui, gui-native, lint, test, and windows-installer; CodeRabbit reported pass/rate limited.
 - [ ] Run `kent task complete --commentary ... --pr_url ... --worktree_session_id ...`.
