@@ -1059,7 +1059,9 @@ func (c *CurrentNodeController) resumeTask(
 		starts := make([]currentNodeQueuedStart, 0, len(eligible))
 		resumeCtx := ctx
 		for index, currentNode := range eligible {
+			commitCalled := false
 			commit := func() (bool, error) {
+				commitCalled = true
 				projection, found, err := c.store.ResumeCurrentNode(resumeCtx, currentNode.Reference)
 				if err != nil {
 					return false, err
@@ -1082,11 +1084,17 @@ func (c *CurrentNodeController) resumeTask(
 				if err != nil {
 					diagnostic := WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: err}
 					recordDiagnostic(diagnostic)
+					if commitCalled {
+						continue
+					}
 					return resumed.result, nil
 				}
 				if !committed {
 					diagnostic := WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: errors.New("resume was not accepted")}
 					recordDiagnostic(diagnostic)
+					if commitCalled {
+						continue
+					}
 					return resumed.result, nil
 				}
 				resumeState.accepted = true
