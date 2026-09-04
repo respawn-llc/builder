@@ -258,8 +258,44 @@ func TestRetainedRunPromptThinkingOverridePersistsAndAffectsExecution(t *testing
 				mustRetained(t, binding.Close(), "close live retained Thinking Session: %v")
 			}
 			level := "high"
-			err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(callbackCtx context.Context, engine *agentruntime.Engine) error {
-				return engine.SetThinkingLevel(callbackCtx, level)
+			err := f.authority.WithSessionChatSettings(context.Background(), sessionID.String(), func(
+				_ context.Context,
+				store *session.Store,
+				engine *agentruntime.Engine,
+			) (bool, error) {
+				if engine == nil {
+					return false, errors.New("retained Thinking test requires an active runtime")
+				}
+				state, err := session.ChatSettingsStateFromMeta(store.Meta())
+				if err != nil {
+					return false, err
+				}
+				effective, err := session.ResolveEffectiveChatSettings(
+					&session.ChatSettingsOverrides{Thinking: &level},
+					state.Settings,
+					session.ChatSettings{
+						Supervisor:     engine.ReviewerFrequency(),
+						Thinking:       engine.ThinkingLevel(),
+						Fast:           engine.FastModeEnabled(),
+						Questions:      engine.QuestionsEnabled(),
+						AutoCompaction: engine.AutoCompactionEnabled(),
+					},
+				)
+				if err != nil {
+					return false, err
+				}
+				target, err := session.ChatSettingsStateFromCompleteSettings(state.Agent, effective)
+				if err != nil {
+					return false, err
+				}
+				committed, err := store.CommitChatSettingsState(target)
+				if err != nil {
+					return false, err
+				}
+				if !committed.Committed {
+					return false, errors.New("retained Thinking settings were not committed")
+				}
+				return false, engine.ApplyPreparedChatSettings(effective)
 			})
 			mustRetained(t, err, "set retained Thinking: %v")
 			var progress []serverapi.RunPromptProgress
