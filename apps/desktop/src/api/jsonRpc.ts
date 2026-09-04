@@ -90,8 +90,20 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   }
 
   async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
-    const socket = await this.#open();
-    return this.#send(socket, method, params, options);
+    const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
+    const deadline = timeoutMs === null ? null : Date.now() + timeoutMs;
+    const socket = await awaitRpcDeadline(this.#open(), deadline, method);
+    if (deadline !== null && deadline <= Date.now()) {
+      throw new TransportError(`${method} request timed out.`);
+    }
+    const requestOptions =
+      deadline === null
+        ? options
+        : {
+            ...options,
+            timeoutMs: deadline - Date.now(),
+          };
+    return this.#send(socket, method, params, requestOptions);
   }
 
   async callDescriptor<Method extends DescMethod>(
@@ -554,6 +566,35 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       socket.close();
     }
   }
+}
+
+async function awaitRpcDeadline<Result>(
+  request: Promise<Result>,
+  deadline: number | null,
+  label: string,
+): Promise<Result> {
+  if (deadline === null) {
+    return request;
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    throw new TransportError(`${label} request timed out.`);
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new TransportError(`${label} request timed out.`));
+    }, remaining);
+    request.then(
+      (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new TransportError(`${label} request failed.`));
+      },
+    );
+  });
 }
 
 function abortSignalWasRequested(signal: AbortSignal): boolean {

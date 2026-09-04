@@ -337,6 +337,24 @@ describe("JsonRpcWebSocketTransport", () => {
     await expect(mutation).resolves.toEqual({});
   });
 
+  it("bounds a control call across socket setup and request delivery", async () => {
+    vi.useFakeTimers();
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const request = transport.call("workflow.list", {});
+    const socket = sockets[0] ?? failTest("control socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    expect(frame(socket, 1)).toMatchObject({ method: "workflow.list" });
+
+    const rejection = expect(request).rejects.toThrow("workflow.list request timed out");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+  });
+
   it("installs subscription event listener before subscribe ack can race with first event", async () => {
     const events: string[] = [];
     const opens: string[] = [];

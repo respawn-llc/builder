@@ -542,23 +542,46 @@ function useVirtualizedLeadingAnchor<TItem>({
       pixelOffsetAppliedKeyRef.current,
       pixelOffsetRequestKey,
     );
-    if (previousEntries.length > 0 && anchor !== null && scrollRef.current !== null) {
-      restoreLeadingAnchor({
-        anchor,
-        currentEntries,
-        element: scrollRef.current,
-        estimateSize,
-        isFallbackRendering,
-        itemStartIndex,
-        orientation,
-        paddingStart,
-        previousEntries,
-        virtualizer,
-      });
+    const element = scrollRef.current;
+    const canRestoreAnchor =
+      previousEntries.length > 0 &&
+      anchor !== null &&
+      element !== null &&
+      resolveAnchorEntryIndex(previousEntries, anchor) >= 0 &&
+      resolveAnchorEntryIndex(currentEntries, anchor) >= 0;
+    if (canRestoreAnchor) {
+      const restore = () => {
+        restoreLeadingAnchor({
+          anchor,
+          currentEntries,
+          element,
+          estimateSize,
+          isFallbackRendering,
+          itemStartIndex,
+          orientation,
+          paddingStart,
+          previousEntries,
+          virtualizer,
+        });
+      };
+      restore();
+      if (orientation === "horizontal") {
+        const window = element.ownerDocument.defaultView;
+        if (window !== null) {
+          const frame = window.requestAnimationFrame(restore);
+          previousAnchorEntriesRef.current = currentEntries;
+          pixelOffsetAppliedKeyRef.current = null;
+          return () => {
+            window.cancelAnimationFrame(frame);
+          };
+        }
+      }
     }
     previousAnchorEntriesRef.current = currentEntries;
     pixelOffsetAppliedKeyRef.current = null;
-    captureLeadingAnchor();
+    if (!canRestoreAnchor || orientation !== "horizontal") {
+      captureLeadingAnchor();
+    }
   }, [
     behavior,
     captureLeadingAnchor,

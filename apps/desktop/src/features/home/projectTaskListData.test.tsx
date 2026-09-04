@@ -531,6 +531,7 @@ describe("Project Task-list data ownership", () => {
       .mockImplementation(async (...args) => {
         invalidations.push(args[0]?.queryKey ?? []);
       });
+    const resetSpy = vi.spyOn(harness.queryClient, "resetQueries");
     const { unmount } = renderHook(
       () => {
         useProjectTaskListEvents({ enabled: true, projectID: "project-1" });
@@ -603,9 +604,19 @@ describe("Project Task-list data ownership", () => {
     });
     expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
 
+    invalidations.length = 0;
+    resetSpy.mockClear();
+    act(() => {
+      state.handlers[0]?.onError(new Error("subscription unavailable"));
+    });
+    await Promise.resolve();
+    expect(invalidations).toEqual([]);
+    expect(resetSpy).not.toHaveBeenCalled();
+
     unmount();
     expect(state.subscriptionCloses).toBe(1);
     invalidateSpy.mockRestore();
+    resetSpy.mockRestore();
   });
 });
 
