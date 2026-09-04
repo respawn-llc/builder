@@ -364,6 +364,7 @@ export function useProjectTaskListEvents({
       },
       onError(error) {
         reportBackgroundError(error);
+        run(refreshBoundary());
       },
     });
     return () => {

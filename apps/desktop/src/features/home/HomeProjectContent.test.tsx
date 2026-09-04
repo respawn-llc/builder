@@ -76,7 +76,7 @@ beforeEach(() => {
   };
 });
 
-it("renders the Task surface while selected Project metadata is pending", () => {
+it("shows the generic loading state until the selected Project resolves", () => {
   fixture.projectQuery = {
     data: undefined,
     error: null,
@@ -85,9 +85,11 @@ it("renders the Task surface while selected Project metadata is pending", () => 
 
   render(<HomeProjectContent projectID="project-1" sessionsVisible={false} sidebarMode="shift" />);
 
+  expect(screen.getByTestId("loading-state")).toBeInTheDocument();
+  expect(screen.getByText(appI18n.t("states.loading"))).toBeInTheDocument();
   expect(
-    screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
-  ).toBeInTheDocument();
+    screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+  ).not.toBeInTheDocument();
 });
 
 it("restores Task-grid pixels after visiting another Project tab", () => {

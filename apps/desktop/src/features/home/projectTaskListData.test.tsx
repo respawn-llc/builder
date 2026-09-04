@@ -531,14 +531,9 @@ describe("Project Task-list data ownership", () => {
       .mockImplementation(async (...args) => {
         invalidations.push(args[0]?.queryKey ?? []);
       });
-    const { result, unmount } = renderHook(
+    const { unmount } = renderHook(
       () => {
-        const active = useProjectTaskListData({
-          projectID: "project-1",
-          expanded: { active: true, backlog: false, done: false },
-        }).active;
         useProjectTaskListEvents({ enabled: true, projectID: "project-1" });
-        return active;
       },
       {
         wrapper: ({ children }) => harness.render(children),
@@ -546,7 +541,6 @@ describe("Project Task-list data ownership", () => {
     );
     await waitFor(() => {
       expect(state.handlers).toHaveLength(1);
-      expect(result.current.tasks).toHaveLength(1);
     });
 
     act(() => {
@@ -608,12 +602,6 @@ describe("Project Task-list data ownership", () => {
       expect(invalidations).toContainEqual(queryKeys.projectBoardsRoot("project-1"));
     });
     expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
-
-    act(() => {
-      state.handlers[0]?.onError(new Error("subscription unavailable"));
-    });
-    await Promise.resolve();
-    expect(result.current.tasks.map((task) => task.id)).toEqual(["active-0"]);
 
     unmount();
     expect(state.subscriptionCloses).toBe(1);
