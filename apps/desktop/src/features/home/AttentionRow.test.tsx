@@ -111,18 +111,18 @@ const questionAttention = {
 } satisfies AttentionItem;
 
 it.each([
-  ["interrupted Session", interruptedWithSession, true],
-  ["interrupted attention without Session", interruptedWithoutSession, false],
-  ["Task Approval", approval, false],
-] as const)("keeps the typed Chat affordance for %s", (_name, item, hasChat) => {
+  ["interrupted Session", interruptedWithSession, { projectID: "project-1", sessionID: "session-2" }],
+  ["interrupted attention without Session", interruptedWithoutSession, null],
+  ["Task Approval", approval, null],
+] as const)("keeps the typed Chat affordance for %s", (_name, item, expectedTarget) => {
   const { openSidebar } = renderAttention(item);
   const chatHeader = screen.queryByTestId("attention-chat-header");
 
-  expect(chatHeader !== null).toBe(hasChat);
-  if (hasChat) {
+  expect(chatHeader !== null).toBe(expectedTarget !== null);
+  if (expectedTarget !== null) {
     if (chatHeader === null) throw new Error("Expected Chat header.");
     fireEvent.click(chatHeader);
-    expect(fixture.openSessionChat).toHaveBeenCalledOnce();
+    expect(fixture.openSessionChat).toHaveBeenCalledWith(expectedTarget);
   } else {
     const row = screen.getByTestId("attention-row");
     expect(screen.getAllByRole("button")).toHaveLength(1);
