@@ -164,3 +164,10 @@ func TestRunPromptOverridesRejectReservedNonDefaultRoles(t *testing.T) {
 		})
 	}
 }
+
+func TestRunPromptOverridesRejectsBlankTheme(t *testing.T) {
+	theme := "  "
+	if err := (RunPromptOverrides{Theme: &theme}).Validate(); err == nil {
+		t.Fatal("expected blank Theme to be invalid")
+	}
+}

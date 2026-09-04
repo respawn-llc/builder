@@ -172,6 +172,30 @@ func (s *Service) submitUserTurn(
 			runTurn,
 		)
 	}
+	runLiveWorkflowTurn := func() (bool, error) {
+		liveExecution, live := s.authority.SessionExecution(sessionID)
+		if !live {
+			return false, nil
+		}
+		if _, workflowScoped := liveExecution.Scope().Workflow(); !workflowScoped {
+			return false, nil
+		}
+		workflowExecutionRetiring := false
+		err := s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+			if engine.WorkflowTerminalState().Completed {
+				workflowExecutionRetiring = true
+				return nil
+			}
+			return runTurn(runCtx, engine, attempt.Accept)
+		})
+		if err == nil && workflowExecutionRetiring {
+			if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
+				return true, waitErr
+			}
+			err = executeTurn()
+		}
+		return true, err
+	}
 	workflowHistoryRecorded := false
 	var historyErr error
 	persistedWorkflow, workflowErr := s.workflowTaskSession(attempt.Context(), request.SessionID, nil)
@@ -187,20 +211,7 @@ func (s *Service) submitUserTurn(
 		return response, errors.New("workflow Session reactivator is required")
 	}
 	if live && liveWorkflow {
-		workflowExecutionRetiring := false
-		err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			if engine.WorkflowTerminalState().Completed {
-				workflowExecutionRetiring = true
-				return nil
-			}
-			return runTurn(runCtx, engine, attempt.Accept)
-		})
-		if err == nil && workflowExecutionRetiring {
-			if waitErr := s.waitForWorkflowExecutionRetirement(attempt.Context(), sessionID); waitErr != nil {
-				return response, waitErr
-			}
-			err = executeTurn()
-		}
+		_, err = runLiveWorkflowTurn()
 	} else if persistedWorkflow {
 		err = sessionruntime.ErrSessionWorkflowActivationActive
 	} else {
@@ -232,6 +243,11 @@ func (s *Service) submitUserTurn(
 				return nil
 			})
 		case s.reactivator != nil:
+			liveWorkflowHandled, liveWorkflowErr := runLiveWorkflowTurn()
+			if liveWorkflowHandled {
+				err = liveWorkflowErr
+				break
+			}
 			var reactivateErr error
 			continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuation(projection.ExecutionText, nil)
 			if continuationErr != nil {

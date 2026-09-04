@@ -115,7 +115,7 @@ func (r RunPromptRequest) Validate() error {
 	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
 		return err
 	}
-	return r.Overrides.ValidateAgentRoleOverride()
+	return r.Overrides.Validate()
 }
 
 type RunPromptOverrides struct {
@@ -162,6 +162,13 @@ func (o RunPromptOverrides) AgentRoleOverride() (RunPromptAgentRoleOverride, err
 func (o RunPromptOverrides) ValidateAgentRoleOverride() error {
 	_, err := o.AgentRoleOverride()
 	return err
+}
+
+func (o RunPromptOverrides) Validate() error {
+	if err := o.ValidateAgentRoleOverride(); err != nil {
+		return err
+	}
+	return ValidateOptionalIdentifier("theme", o.Theme)
 }
 
 func (o RunPromptOverrides) HasAgentRoleOverride() bool {

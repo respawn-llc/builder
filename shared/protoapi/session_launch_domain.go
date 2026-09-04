@@ -236,7 +236,7 @@ func sessionCreateOriginFromProto(message *sessionlaunchpb.SessionCreateOrigin) 
 }
 
 func RunPromptOverridesToProto(overrides serverapi.RunPromptOverrides) (*sessionlaunchpb.RunPromptOverrides, error) {
-	if err := overrides.ValidateAgentRoleOverride(); err != nil {
+	if err := overrides.Validate(); err != nil {
 		return nil, err
 	}
 	message := &sessionlaunchpb.RunPromptOverrides{AgentRole: clonePointer(overrides.AgentRole)}
@@ -272,7 +272,7 @@ func RunPromptOverridesFromProto(message *sessionlaunchpb.RunPromptOverrides) (s
 	if message.ModelTimeoutSeconds != nil {
 		overrides.ModelTimeoutSeconds = int(*message.ModelTimeoutSeconds)
 	}
-	return overrides, overrides.ValidateAgentRoleOverride()
+	return overrides, overrides.Validate()
 }
 
 func setOptionalNonblank(target **string, value string) {
