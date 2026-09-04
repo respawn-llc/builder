@@ -36,6 +36,7 @@
 - Each Chat mutation identifies either New Chat with its Project/workspace and initial settings or an existing Session. New Chat Steer, Queue, and manual compaction derive the exact initial draft from their single typed activation value. Goal Set supplies the composer draft independently because its Goal objective is a different fact.
 - When a Chat mutation targets New Chat, the server creates the ordinary Session, initializes its draft and settings, prepares its runtime when required, and then performs the requested mutation.
 - Desktop invokes no separate Session-create, runtime-activate, runtime-attach, or runtime-release prerequisite.
+- Each Chat mutation starts one server-owned Chat Operation. Closing or canceling Desktop's request stops only Desktop waiting and result delivery; the Chat Operation continues until it completes or server shutdown cancels it.
 - Before service execution, one target-aware policy authorizes New Chat against the exact active Project/workspace binding. An authenticated existing-Session request may be projectless; when its connection has an attached Project, the Session must belong to that Project.
 - Goal Set and `/compact` use the same server-owned New Chat target resolution before their ordinary domain mutation.
 - Once creation succeeds, the Session remains ordinarily discoverable even when the following operation fails or its response is lost. Desktop never rolls it back, infers the later outcome, replays it, or reconciles it.
@@ -356,7 +357,7 @@
 - After reconnection, Desktop reissues the current-target and open Worktree-list reads.
 - Desktop does not reconstruct, retain, or retry a pending Worktree target change that the server lost during shutdown or restart.
 - Reconnection shows no speculative warning for an absent pending Worktree operation. Mutation admission remains authoritative if the operator acts on a stale Worktree projection.
-- If connection loss ends delivery for an already-started New Chat mutation or setup, Desktop stops waiting, keeps its local New Chat text, and does not retry or infer that request's outcome. A Session already committed before cancellation remains ordinarily discoverable.
+- If connection loss ends delivery for an already-started New Chat mutation or setup, Desktop stops waiting, keeps its local New Chat text, and does not retry or infer that operation's outcome. The server-owned Chat Operation continues, and any Session it commits remains ordinarily discoverable.
 - After reconnection, an open Worktree surface returns to its list and performs another server-owned read. A worktree retained by the interrupted operation appears when a read or update observes it.
 - Desktop performs the automatic Switch only after it receives a successful Create result. An interrupted Create request does not infer success from list topology.
 - The list contains the server's complete worktree topology in authoritative order without pagination.

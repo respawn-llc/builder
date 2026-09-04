@@ -364,6 +364,10 @@ Recovery that erases the Mutable Band, reopens the Session, and appends the acti
 
 ## Runtime Steering And Goals
 
+### Chat Operation
+
+A server-owned operation that resolves a Chat target, optionally creates a Session, prepares an Active Session Runtime when required, requests the selected Chat mutation, and finalizes its Runtime attachment. A client request may wait for and receive the result, but client connection and request lifecycles do not own or cancel the Chat Operation.
+
 ### Active Session Runtime
 
 The shared process-local resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An Active Session Runtime may be Idle, with no live Exact Execution Scope, or Executing, with one live Exact Execution Scope and Run. A durable Session may have no Active Session Runtime.

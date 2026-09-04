@@ -35,9 +35,7 @@
 - Subscription, progress, and notification connection behavior derives from operation kind.
 - A dedicated unary call owns one WebSocket and performs the applicable handshake, authentication, and attachment steps on that connection.
 - Caller cancellation closes a dedicated unary connection and stops that caller's waiting and delivery.
-- For a request-scoped interactive Chat mutation, caller cancellation may also terminate target resolution, optional Session creation, Runtime preparation, or admission before work is accepted.
-- A Session committed before cancellation remains authoritative.
-- Caller cancellation never changes accepted work, the client's multiplexed control connection, or another operation.
+- Caller cancellation never terminates a Chat Operation, rolls back a committed Session, changes accepted work, changes the client's multiplexed control connection, or changes another operation.
 - The transport must not add a cancel-frame variant for server-owned work.
 - Call, notification, subscription, progress, authentication, attachment, and cancellation semantics remain owned by their operation specifications.
 - Subscription and progress operations use the terminal completion and failure behavior defined by their owning operation specifications. Transport framing adds no generic terminal product outcome.

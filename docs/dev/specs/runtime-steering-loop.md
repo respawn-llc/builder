@@ -14,8 +14,7 @@
 - Acceptance order governs operations that share the same boundary owner.
 - Acceptance order does not promise the same order for later provider, tool, process, Worktree, Reviewer, or Workflow execution.
 - Accepted mutations belong to the Session, not to one client connection.
-- Caller cancellation after acceptance stops only that caller's wait.
-- Client disconnection after acceptance does not cancel the accepted mutation.
+- Caller cancellation or disconnection stops only that caller's wait and delivery. It does not cancel a Chat Operation before or after mutation acceptance.
 - Pending mutations are process-local and may be lost on server exit.
 - A server exit may lose an in-progress Agent Step while already committed Session state remains authoritative.
 
@@ -69,9 +68,10 @@
 - The server owns Runtime preparation; clients never activate or release it.
 - If Chat admission definitely does not accept work, Kent releases its preparation attachment through the existing close-if-idle policy.
 - After Chat admission accepts work, Kent releases its preparation attachment through the existing detach-and-retain policy so the accepted work remains Session-owned.
+- The Chat Operation outcome selects the attachment-release policy. Caller cancellation, disconnection, timeout, or response-delivery failure never selects or changes that policy.
 - If Runtime replacement wins before acceptance, Kent resolves the replacement and retries admission without requiring another user submission.
 - Authentication, metadata, execution-target, filesystem, tool, validation, Runtime-opening, or Runtime-publication failure before acceptance is terminal for that submission and creates no Pending Work or Queue Item.
-- Cancellation before acceptance creates no Pending Work or Queue Item. A Session already committed during New Chat target resolution remains discoverable.
+- Core shutdown may cancel a Chat Operation before acceptance. That cancellation creates no Pending Work or Queue Item. A Session already committed during New Chat target resolution remains discoverable.
 
 ## Pending Work
 
