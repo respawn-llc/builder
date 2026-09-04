@@ -94,12 +94,25 @@ func binaryChatFailure[Request protoapi.ChatTargetRequest](
 	request Request,
 	err error,
 ) proto.Message {
+	var agentPreparationErr *serverapi.ChatSettingsAgentPreparationError
 	switch {
 	case errors.Is(err, serverapi.ErrServerAuthRequired):
 		return &authpb.AuthRequiredDetails{}
 	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered),
 		errors.Is(err, errActiveProjectRequired):
 		return &chatsettingspb.WorkspaceNotRegisteredDetails{}
+	case errors.As(err, &agentPreparationErr):
+		if validationErr := agentPreparationErr.Validate(); validationErr != nil {
+			return binaryInternalFailure(errors.Join(err, validationErr))
+		}
+		category, conversionErr := binaryChatAgentPreparationCategory(agentPreparationErr.Category)
+		if conversionErr != nil {
+			return binaryInternalFailure(errors.Join(err, conversionErr))
+		}
+		return &chatsettingspb.AgentPreparationDetails{
+			Agent:    agentPreparationErr.Agent,
+			Category: category,
+		}
 	case errors.Is(err, session.ErrSessionNotFound),
 		errors.Is(err, errSessionOutsideActiveProject):
 		target, targetErr := protoapi.ChatTargetFromRequest(request)
@@ -108,4 +121,20 @@ func binaryChatFailure[Request protoapi.ChatTargetRequest](
 		}
 	}
 	return binaryInternalFailure(err)
+}
+
+func binaryChatAgentPreparationCategory(
+	category serverapi.ChatSettingsAgentPreparationCategory,
+) (chatsettingspb.AgentPreparationCategory, error) {
+	switch category {
+	case serverapi.ChatSettingsAgentInvalidConfiguration:
+		return chatsettingspb.AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_INVALID_CONFIGURATION, nil
+	case serverapi.ChatSettingsAgentProviderUnavailable:
+		return chatsettingspb.AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_PROVIDER_UNAVAILABLE, nil
+	case serverapi.ChatSettingsAgentInternalPreparation:
+		return chatsettingspb.AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_INTERNAL_PREPARATION, nil
+	default:
+		return chatsettingspb.AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_UNSPECIFIED,
+			errors.New("Chat settings Agent preparation category is invalid")
+	}
 }

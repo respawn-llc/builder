@@ -54,6 +54,7 @@ type steerRuntimeAttachment struct {
 	policy            sessionruntime.RuntimeReleasePolicy
 	releaseErr        error
 	releaseContextErr error
+	releaseTimed      bool
 }
 
 func (a *steerRuntimeAttachment) SessionID() runtimeids.SessionID {
@@ -66,6 +67,7 @@ func (a *steerRuntimeAttachment) Release(
 ) error {
 	a.policy = policy
 	a.releaseContextErr = context.Cause(ctx)
+	_, a.releaseTimed = ctx.Deadline()
 	return a.releaseErr
 }
 
@@ -182,6 +184,40 @@ func TestServiceSteerAcceptsExistingSessionInputAndDetachesItsRuntime(t *testing
 	}
 	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
 		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
+	}
+}
+
+func TestServiceFinalizesMismatchedRuntimeAttachmentWithBoundedScope(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	attachment := &steerRuntimeAttachment{sessionID: runtimeids.NewSessionID()}
+	service := newTestService(
+		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
+		&steerRuntimePlanner{attachment: attachment},
+		&steerAdmission{},
+	)
+
+	result, err := service.Steer(t.Context(), &chatpb.SteerRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+			},
+		},
+		Activation: &chatpb.Activation{
+			Input: &chatpb.Activation_Text{Text: "continue"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	if result.GetNotAccepted().GetInternalFailure() == nil {
+		t.Fatalf("Steer result = %+v, want typed non-acceptance", result)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseCloseIfIdle || !attachment.releaseTimed {
+		t.Fatalf(
+			"mismatched attachment finalization = policy %v, timed=%v",
+			attachment.policy,
+			attachment.releaseTimed,
+		)
 	}
 }
 

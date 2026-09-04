@@ -2468,6 +2468,29 @@ func TestServiceAdmitManualCompactionQueuesBehindActiveAgentStep(t *testing.T) {
 	}
 }
 
+func TestServiceCompactContextPreservesOrdinaryAgentExecutionAdmission(t *testing.T) {
+	client := &blockingRuntimeControlClient{}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model: "gpt-5",
+	})
+	if _, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "active-ordinary-compaction", "keep working"),
+	); err != nil {
+		t.Fatalf("start user turn: %v", err)
+	}
+	waitForRuntimeControlActiveRun(t, engine)
+
+	err := service.CompactContext(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: runtimeids.NewCompactionRequestID(),
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if !errors.Is(err, serverapi.ErrSessionRunStarting) {
+		t.Fatalf("CompactContext during active Agent execution error = %v, want Session run starting", err)
+	}
+}
+
 func TestServiceAdmitManualCompactionRejectsFreshIdleRuntimeAsTooSoon(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		Model: "gpt-5",

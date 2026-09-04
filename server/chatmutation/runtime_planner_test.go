@@ -15,6 +15,7 @@ import (
 	"core/server/sessionruntime"
 	"core/shared/apicontract"
 	"core/shared/config"
+	chatpb "core/shared/protoapi/gen/kent/api/chat"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -161,7 +162,9 @@ type runtimePlannerRuntimeAPI struct {
 	activate      serverapi.SessionRuntimeActivateRequest
 	activateCalls int
 	activateErr   error
+	activateReply *serverapi.SessionRuntimeActivateResponse
 	release       serverapi.SessionRuntimeReleaseRequest
+	releaseTimed  bool
 	releaseErr    error
 }
 
@@ -174,6 +177,9 @@ func (a *runtimePlannerRuntimeAPI) ActivateSessionRuntime(
 	if a.activateErr != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, a.activateErr
 	}
+	if a.activateReply != nil {
+		return *a.activateReply, nil
+	}
 	return serverapi.SessionRuntimeActivateResponse{
 		Attachment: serverapi.SessionRuntimeAttachment{
 			SessionID:  request.SessionID,
@@ -183,10 +189,11 @@ func (a *runtimePlannerRuntimeAPI) ActivateSessionRuntime(
 }
 
 func (a *runtimePlannerRuntimeAPI) ReleaseSessionRuntime(
-	_ context.Context,
+	ctx context.Context,
 	request serverapi.SessionRuntimeReleaseRequest,
 ) (serverapi.SessionRuntimeReleaseResponse, error) {
 	a.release = request
+	_, a.releaseTimed = ctx.Deadline()
 	return serverapi.SessionRuntimeReleaseResponse{Released: true}, a.releaseErr
 }
 
@@ -239,6 +246,64 @@ func TestRuntimePlannerPlansDormantPersistedSessionThenOpensIt(t *testing.T) {
 		runtimeAPI.release.OwnerID != runtimeAPI.activate.OwnerID ||
 		runtimeAPI.release.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
 		t.Fatalf("Runtime release = %+v", runtimeAPI.release)
+	}
+}
+
+func TestServiceFinalizesActivatedRuntimeWhenResponseTargetsAnotherSession(t *testing.T) {
+	fixture := newRuntimePlannerFixture(t)
+	settings := config.DefaultOnboardingSettings()
+	settings.Model = "gpt-5"
+	launchService := &runtimePlannerSessionLaunch{
+		result: sessionlaunch.PlanResult{Plan: launch.SessionPlan{
+			Descriptor:            mustRuntimePlannerDescriptor(t, fixture.sessionID),
+			ActiveSettings:        settings,
+			QuestionsEnabled:      true,
+			AutoCompactionEnabled: true,
+		}},
+	}
+	otherSessionID := runtimeids.NewSessionID()
+	runtimeAPI := &runtimePlannerRuntimeAPI{
+		activateReply: &serverapi.SessionRuntimeActivateResponse{
+			Attachment: serverapi.SessionRuntimeAttachment{
+				SessionID:  otherSessionID.String(),
+				Generation: 7,
+			},
+		},
+	}
+	planner := NewRuntimePlanner(
+		fixture.authority,
+		func(context.Context, runtimeids.SessionID) (PersistedSessionPlanner, error) {
+			return launchService, nil
+		},
+		runtimeAPI,
+	)
+	service := newTestService(
+		&steerTargetResolver{resolved: ResolvedTarget{SessionID: fixture.sessionID}},
+		planner,
+		&steerAdmission{},
+	)
+
+	result, err := service.Steer(t.Context(), &chatpb.SteerRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.sessionID.String()},
+			},
+		},
+		Activation: &chatpb.Activation{
+			Input: &chatpb.Activation_Text{Text: "continue"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	if result.GetNotAccepted().GetInternalFailure() == nil {
+		t.Fatalf("Steer result = %+v, want typed non-acceptance", result)
+	}
+	if runtimeAPI.release.Attachment.SessionID != otherSessionID.String() ||
+		runtimeAPI.release.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle ||
+		!runtimeAPI.release.DropOwner ||
+		!runtimeAPI.releaseTimed {
+		t.Fatalf("invalid Runtime response finalization = %+v, timed=%v", runtimeAPI.release, runtimeAPI.releaseTimed)
 	}
 }
 

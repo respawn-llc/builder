@@ -92,15 +92,16 @@ func (p *RuntimePlanner) Open(
 	if err != nil {
 		return nil, err
 	}
-	if err := response.ValidateForSession(sessionID.String()); err != nil {
-		return nil, err
-	}
-	return serviceRuntimeAttachment{
+	serviceAttachment := serviceRuntimeAttachment{
 		sessionID:  sessionID,
 		attachment: response.Attachment,
 		ownerID:    ownerID,
 		runtimeAPI: p.runtimeAPI,
-	}, nil
+	}
+	if err := response.ValidateForSession(sessionID.String()); err != nil {
+		return serviceAttachment, err
+	}
+	return serviceAttachment, nil
 }
 
 type authorityRuntimeAttachment struct {

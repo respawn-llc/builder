@@ -117,7 +117,7 @@ func (s *Service) compact(
 	admission runtimeinput.ManualCompactionAdmission,
 ) (*chatpb.CompactionMutationSuccess, error) {
 	ctx := scope.Context()
-	target, attachment, err := s.prepareRuntime(ctx, targetRequest, draft)
+	target, attachment, err := s.prepareRuntime(scope, targetRequest, draft)
 	if err != nil {
 		if target.SessionID.IsZero() {
 			return nil, err
@@ -193,7 +193,7 @@ func (s *Service) mutateInput(
 	if err != nil {
 		return nil, err
 	}
-	target, attachment, err := s.prepareRuntime(ctx, targetRequest, draft)
+	target, attachment, err := s.prepareRuntime(scope, targetRequest, draft)
 	if err != nil {
 		if target.SessionID.IsZero() {
 			return nil, err
@@ -281,10 +281,11 @@ func (s *Service) runInputMutation(
 }
 
 func (s *Service) prepareRuntime(
-	ctx context.Context,
+	scope OperationScope,
 	targetRequest *chatpb.ChatTarget,
 	initialDraft string,
 ) (ResolvedTarget, RuntimeAttachment, error) {
+	ctx := scope.Context()
 	if s == nil || s.targets == nil {
 		return ResolvedTarget{}, nil, errors.New("Chat target resolver is required")
 	}
@@ -300,16 +301,21 @@ func (s *Service) prepareRuntime(
 	}
 	attachment, err := s.runtimes.Open(ctx, target.SessionID)
 	if err != nil {
-		return target, nil, err
+		if attachment == nil {
+			return target, nil, err
+		}
+		releaseErr := scope.FinalizeAttachment(func(finalizationCtx context.Context) error {
+			return attachment.Release(finalizationCtx, sessionruntime.RuntimeReleaseCloseIfIdle)
+		})
+		return target, nil, errors.Join(err, releaseErr)
 	}
 	if attachment == nil {
 		return target, nil, errors.New("Session Runtime attachment is required")
 	}
 	if attachment.SessionID() != target.SessionID {
-		releaseErr := attachment.Release(
-			context.WithoutCancel(ctx),
-			sessionruntime.RuntimeReleaseCloseIfIdle,
-		)
+		releaseErr := scope.FinalizeAttachment(func(finalizationCtx context.Context) error {
+			return attachment.Release(finalizationCtx, sessionruntime.RuntimeReleaseCloseIfIdle)
+		})
 		return target, nil, errors.Join(
 			errors.New("Session Runtime attachment targets another Session"),
 			releaseErr,
