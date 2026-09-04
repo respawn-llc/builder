@@ -1082,12 +1082,12 @@ func (c *CurrentNodeController) resumeTask(
 				if err != nil {
 					diagnostic := WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: err}
 					recordDiagnostic(diagnostic)
-					continue
+					return resumed.result, nil
 				}
 				if !committed {
 					diagnostic := WorkflowSessionResumeDiagnostic{Reference: currentNode.Reference, Cause: errors.New("resume was not accepted")}
 					recordDiagnostic(diagnostic)
-					continue
+					return resumed.result, nil
 				}
 				resumeState.accepted = true
 				if resumeState.acceptance.AcceptedCtx != nil {

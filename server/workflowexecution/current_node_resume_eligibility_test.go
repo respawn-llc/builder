@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/server/runtime"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
@@ -134,6 +135,80 @@ func TestCurrentNodeControllerRetainedResumeRejectsInvalidSelectedNodeBeforeSibl
 	}
 	if len(store.resumed) != 0 {
 		t.Fatalf("resumed Current Nodes = %v, want none before selected validation succeeds", store.resumed)
+	}
+}
+
+func TestCurrentNodeControllerRetainedResumeAcceptanceRejectsBeforeSiblingMutation(t *testing.T) {
+	tests := []struct {
+		name       string
+		acceptance runtime.CommandAcceptance
+	}{
+		{
+			name: "not committed",
+			acceptance: func(func() (bool, error)) (bool, error) {
+				return false, nil
+			},
+		},
+		{
+			name: "returns error",
+			acceptance: func(func() (bool, error)) (bool, error) {
+				return false, errors.New("acceptance rejected")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			taskID := workflow.TaskID("task-selected-resume-acceptance")
+			selected := currentNodeReferenceForControllerTest(t, string(taskID), "node-selected")
+			sibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-sibling")
+			sessionID, err := runtimeids.ParseSessionID("550e8400-e29b-41d4-a716-446655440303")
+			if err != nil {
+				t.Fatalf("ParseSessionID: %v", err)
+			}
+			store := &currentNodeControllerStore{
+				interrupted: []workflow.CurrentNode{
+					{Reference: selected},
+					{Reference: sibling},
+				},
+				resumeClassifications: []workflowstore.CurrentNodeResumeClassification{
+					{CurrentNode: workflow.CurrentNode{Reference: selected}},
+					{CurrentNode: workflow.CurrentNode{Reference: sibling}},
+				},
+				sessionTaskID: &taskID,
+				sessionAssociation: &workflowstore.TaskSessionAssociation{
+					SessionID:   sessionID,
+					CurrentNode: selected,
+				},
+			}
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 2)
+			t.Cleanup(func() {
+				if err := controller.Close(); err != nil {
+					t.Errorf("close controller: %v", err)
+				}
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
+			continuation, err := NewWorkflowSessionContinuation("continue", nil)
+			if err != nil {
+				t.Fatalf("NewWorkflowSessionContinuation: %v", err)
+			}
+
+			_, err = controller.ReactivateWorkflowSessionWithAcceptance(
+				context.Background(),
+				sessionID,
+				test.acceptance,
+				context.Background(),
+				continuation,
+			)
+			if err == nil {
+				t.Fatal("retained Resume acceptance unexpectedly succeeded")
+			}
+			if len(store.resumed) != 0 {
+				t.Fatalf("resumed Current Nodes = %v, want none after selected acceptance rejection", store.resumed)
+			}
+		})
 	}
 }
 
