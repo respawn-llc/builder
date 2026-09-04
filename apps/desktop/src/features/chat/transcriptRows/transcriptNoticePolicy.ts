@@ -11,9 +11,9 @@ import {
 } from "lucide-react";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
+import { firstPresent } from "@/shared/text";
 
 import type { TranscriptFlatRowIconTone } from "./TranscriptFlatRow";
-import { firstPresent } from "./firstPresent";
 
 export type TranscriptNotice = NonNullable<ChatTranscriptCommittedRow["Notice"]>;
 
@@ -89,7 +89,7 @@ function shouldOmitNotice(row: ChatTranscriptCommittedRow, notice: TranscriptNot
     isKnownDeveloperContext(notice) &&
     notice.Reason !== "compaction" &&
     !hasWorktreeFacts(notice) &&
-    noticeRawText(notice).trim().length === 0
+    noticeRawText(notice) === undefined
   );
 }
 
@@ -125,18 +125,19 @@ function isKnownDeveloperContext(notice: TranscriptNotice): boolean {
 }
 
 function noticeOriginalText(notice: TranscriptNotice): string {
-  return firstPresent(
-    notice.Compaction?.Detail,
-    notice.Diagnostic?.Detail,
-    notice.LegacyText,
-    notice.CondensedText,
-    notice.CompactLabel,
-    notice.SourcePath,
-    notice.Reason,
+  return (
+    firstPresent(
+      notice.Compaction?.Detail,
+      notice.Diagnostic?.Detail,
+      notice.LegacyText,
+      notice.CondensedText,
+      notice.CompactLabel,
+      notice.SourcePath,
+    ) ?? notice.Reason
   );
 }
 
-function noticeRawText(notice: TranscriptNotice): string {
+function noticeRawText(notice: TranscriptNotice): string | undefined {
   return firstPresent(
     notice.Compaction?.Detail,
     notice.Diagnostic?.Detail,
@@ -154,8 +155,8 @@ function noticeCompactText(notice: TranscriptNotice, compactText: string): strin
     notice.LegacyText,
     notice.SourcePath,
   );
-  if (typedText !== "") return typedText;
-  return firstPresent(compactText, notice.Reason);
+  if (typedText !== undefined) return typedText;
+  return firstPresent(compactText, notice.Reason) ?? notice.Reason;
 }
 
 function noticeDefaultExpanded(

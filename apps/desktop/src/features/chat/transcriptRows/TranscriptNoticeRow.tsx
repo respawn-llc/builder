@@ -3,8 +3,8 @@ import { StaticMarkdown } from "@/ui";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
 import { basename } from "@/app-facade";
+import { firstPresent } from "@/shared/text";
 
-import { firstPresent } from "./firstPresent";
 import { projectNotice, type TranscriptNotice, type TranscriptNoticeProse } from "./transcriptNoticePolicy";
 import { TranscriptFlatRow } from "./TranscriptFlatRow";
 
@@ -54,22 +54,22 @@ function structuredNoticeText(notice: TranscriptNotice, t: Translate, expanded: 
     return t("chatTranscript.notice.sessionRebind");
   }
   return expanded
-    ? firstPresent(
+    ? (firstPresent(
         notice.Diagnostic?.Detail,
         notice.LegacyText,
         notice.CondensedText,
         notice.CompactLabel,
         notice.SourcePath,
         notice.Reason,
-      )
-    : firstPresent(
+      ) ?? notice.Reason)
+    : (firstPresent(
         notice.CondensedText,
         notice.LegacyText,
         notice.CompactLabel,
         notice.SourcePath,
         notice.Diagnostic?.Detail,
         notice.Reason,
-      );
+      ) ?? notice.Reason);
 }
 
 function reasonNoticeText(notice: TranscriptNotice, t: Translate, expanded: boolean): string | undefined {
@@ -165,7 +165,7 @@ function worktreeNoticeText(notice: TranscriptNotice, t: Translate, expanded: bo
   }
   if (notice.MessageType === "worktree_mode") {
     const name =
-      firstPresent(worktree.Branch, basename(worktree.WorktreePath)) || t("chatTranscript.notice.worktree");
+      firstPresent(worktree.Branch, basename(worktree.WorktreePath)) ?? t("chatTranscript.notice.worktree");
     return worktree.EffectiveCwd.trim().length === 0
       ? t("chatTranscript.notice.worktreeEnter", { name })
       : t("chatTranscript.notice.worktreeEnterCwd", { cwd: worktree.EffectiveCwd, name });

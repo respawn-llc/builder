@@ -1,6 +1,5 @@
 import type { ChatTranscriptCommittedRow } from "@/api";
-
-import { firstPresent } from "./firstPresent";
+import { firstPresent } from "@/shared/text";
 
 export type TranscriptTool = NonNullable<ChatTranscriptCommittedRow["Tool"]>;
 export type TranscriptToolPresentation = NonNullable<TranscriptTool["Presentation"]>;
@@ -19,7 +18,10 @@ export function isAskQuestionToolRow(row: ChatTranscriptCommittedRow): row is Tr
 }
 
 export function askQuestionSummary(row: TranscriptAskQuestionToolRow): string {
-  return firstPresent(row.Tool.Presentation.CompactText, row.Tool.Presentation.Question);
+  return (
+    firstPresent(row.Tool.Presentation.CompactText, row.Tool.Presentation.Question) ??
+    row.Tool.Presentation.Question
+  );
 }
 
 export function askQuestionCopyText(row: TranscriptAskQuestionToolRow): string {

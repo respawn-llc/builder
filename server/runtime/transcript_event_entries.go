@@ -102,7 +102,12 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		if evt.CacheWarning == nil {
 			return nil
 		}
-		entries = []ChatEntry{{Role: cacheWarningTranscriptRole, Text: transcript.CacheWarningText(*evt.CacheWarning), Visibility: evt.CacheWarningVisibility}}
+		entries = []ChatEntry{{
+			Role:         cacheWarningTranscriptRole,
+			Text:         transcript.CacheWarningText(*evt.CacheWarning),
+			Visibility:   evt.CacheWarningVisibility,
+			CacheWarning: copyCacheWarning(evt.CacheWarning),
+		}}
 	case EventLocalEntryAdded:
 		if evt.LocalEntry == nil {
 			return nil

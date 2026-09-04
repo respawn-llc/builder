@@ -176,6 +176,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 			Visibility:          cacheWarningEntryVisibility(s.cacheWarningMode),
 			Role:                cacheWarningTranscriptRole,
 			Text:                transcript.CacheWarningText(warning),
+			CacheWarning:        copyCacheWarning(&warning),
 			CommittedProvenance: &provenance,
 		})
 	case session.HistoryReplacementRecord:

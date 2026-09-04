@@ -529,6 +529,9 @@ func transcriptNoticeRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptC
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
 	}
+	if entry.CacheWarning != nil {
+		return transcriptCacheWarningFact(*entry.CacheWarning, visibility), true
+	}
 	role := transcript.EntryRole(strings.TrimSpace(entry.Role))
 	if role == transcript.EntryRoleReviewerSuggestions || role == transcript.EntryRoleReviewerError {
 		return legacyReviewerNoticeRowFactFromChatEntry(entry)

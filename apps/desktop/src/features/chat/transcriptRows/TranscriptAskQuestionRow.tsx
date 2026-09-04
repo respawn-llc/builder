@@ -83,7 +83,7 @@ function QuestionOptions({
   selectedOptionNumber: number | null;
   suggestions: readonly string[];
 }>) {
-  if (suggestions.length === 0) return null;
+  if (selectedOptionNumber === null || suggestions.length === 0) return null;
   return (
     <div className="chat-transcript-question-options">
       {suggestions.map((suggestion, index) => {

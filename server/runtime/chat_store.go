@@ -39,6 +39,7 @@ type ChatEntry struct {
 	BackgroundActivityID  string
 	BackgroundProcessID   string
 	BackgroundExitCode    *int
+	CacheWarning          *transcript.CacheWarning
 	ToolOutputRepair      *transcript.ToolOutputRepairNotice
 	ProviderModelMismatch *transcript.ProviderModelMismatchNotice
 	ToolCall              *transcript.ToolCallMeta
@@ -537,12 +538,13 @@ func cloneTranscriptStreamID(streamID *uuid.UUID) *uuid.UUID {
 }
 
 func (s *chatStore) appendLocalEntryRecord(entry ChatEntry, afterToolCallID *string, provenances ...*TranscriptCommittedRowProvenance) {
-	if strings.TrimSpace(entry.Text) == "" && entry.ToolOutputRepair == nil && entry.ProviderModelMismatch == nil && entry.ReviewerFeedback == nil && entry.ReviewerError == nil {
+	if strings.TrimSpace(entry.Text) == "" && entry.CacheWarning == nil && entry.ToolOutputRepair == nil && entry.ProviderModelMismatch == nil && entry.ReviewerFeedback == nil && entry.ReviewerError == nil {
 		return
 	}
 	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
+	entry.CacheWarning = copyCacheWarning(entry.CacheWarning)
 	entry.ToolOutputRepair = textutil.Pointer(entry.ToolOutputRepair)
 	entry.ProviderModelMismatch = textutil.Pointer(entry.ProviderModelMismatch)
 	if entry.ReviewerFeedback != nil {
