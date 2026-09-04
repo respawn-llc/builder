@@ -74,14 +74,16 @@ it.each([
   renderTaskDetailHost(<StandaloneTaskRoute taskId="task-1" />);
 
   const flow = await screen.findByTestId("task-detail-action-flow");
-  const openInCli = within(flow).getByRole("button", {
+  const openInCli = within(flow).queryByRole("button", {
     name: appI18n.t("task.openInCli", { name: "Review chat" }),
   });
-  expect(openInCli).toBeInTheDocument();
-  fireEvent.click(openInCli);
-  await waitFor(() => {
-    expect(fixture.copyText).toHaveBeenCalledWith("kent --session=session-1");
-  });
+  expect(openInCli !== null).toBe(!hasChat);
+  if (openInCli !== null) {
+    fireEvent.click(openInCli);
+    await waitFor(() => {
+      expect(fixture.copyText).toHaveBeenCalledWith("kent --session=session-1");
+    });
+  }
 
   const openChat = within(flow).queryByRole("button", {
     name: appI18n.t("task.openChat", { name: "Review chat" }),

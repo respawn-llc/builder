@@ -357,20 +357,6 @@ function TaskOpenButtons({
         const chatLabel = t("task.openChat", { name: target });
         return (
           <span className="contents" key={session.sessionID}>
-            <Button
-              aria-label={fullLabel}
-              disabled={disabled}
-              onClick={() => {
-                setOpenError("");
-                void openInCli(session.sessionID).catch((cause: unknown) => {
-                  setOpenError(errorMessage(cause));
-                });
-              }}
-              title={fullLabel}
-              variant="secondary"
-            >
-              {t("task.openInCli", { name: ellipsizeActionTarget(target) })}
-            </Button>
             {openSessionChat === undefined ? null : (
               <Button
                 aria-label={chatLabel}
@@ -389,6 +375,22 @@ function TaskOpenButtons({
                 {t("task.openChat", { name: ellipsizeActionTarget(target) })}
               </Button>
             )}
+            {openSessionChat === undefined ? (
+              <Button
+                aria-label={fullLabel}
+                disabled={disabled}
+                onClick={() => {
+                  setOpenError("");
+                  void openInCli(session.sessionID).catch((cause: unknown) => {
+                    setOpenError(errorMessage(cause));
+                  });
+                }}
+                title={fullLabel}
+                variant="secondary"
+              >
+                {t("task.openInCli", { name: ellipsizeActionTarget(target) })}
+              </Button>
+            ) : null}
           </span>
         );
       })}

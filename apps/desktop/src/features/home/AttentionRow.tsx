@@ -31,16 +31,6 @@ export const AttentionRow = memo(function AttentionRow({
       ? t("app.attention.approvalFallback")
       : t("app.attention.interruptedCurrentNodeFallback"));
   const chatTarget = desktopChatEnabled ? attentionChatTarget(item) : null;
-  if (!desktopChatEnabled) {
-    return (
-      <ProductionAttentionRow
-        item={item}
-        message={message}
-        openSidebar={openSidebar}
-        sidebarMode={sidebarMode}
-      />
-    );
-  }
   if (chatTarget === null) {
     return (
       <button
@@ -90,46 +80,6 @@ export const AttentionRow = memo(function AttentionRow({
     </article>
   );
 }, attentionRowPropsEqual);
-
-function ProductionAttentionRow({
-  item,
-  message,
-  openSidebar,
-  sidebarMode,
-}: Readonly<{
-  item: AttentionItem;
-  message: string;
-  openSidebar: SidebarRootController["open"];
-  sidebarMode: SidebarMode;
-}>) {
-  return (
-    <button
-      className={cx(
-        "grid w-full min-w-0 gap-[var(--space-2)] rounded-[var(--radius-l)] p-[var(--space-3)] text-left text-[var(--color-on-island)]",
-        islandSurfaceClassName(1),
-      )}
-      data-testid="attention-row"
-      onClick={() => {
-        openTaskDetail(item, openSidebar, sidebarMode);
-      }}
-      type="button"
-    >
-      <div
-        className="flex min-w-0 flex-wrap items-center gap-[var(--space-2)]"
-        data-testid="attention-row-meta"
-      >
-        {item.taskShortID.length > 0 ? (
-          <span className="min-w-0 truncate font-mono text-sm text-[var(--color-muted)]">
-            {item.taskShortID}
-          </span>
-        ) : null}
-      </div>
-      {item.taskTitle.length > 0 ? <strong className="min-w-0 truncate">{item.taskTitle}</strong> : null}
-      <span className="min-w-0 line-clamp-5 text-sm break-words">{message}</span>
-      <span className="text-sm text-[var(--color-muted)]">{formatRelativeTime(item.occurredAt)}</span>
-    </button>
-  );
-}
 
 function AttentionHeader({ item, showChat = false }: Readonly<{ item: AttentionItem; showChat?: boolean }>) {
   return (

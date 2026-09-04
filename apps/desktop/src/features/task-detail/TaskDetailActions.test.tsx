@@ -92,7 +92,7 @@ it("keeps Interrupt generic when a Script is the live target", async () => {
   expect(within(flow).getAllByRole("button").at(-1)).toBe(interrupt);
 });
 
-it("adds adjacent Open Chat actions for every live Session while preserving Open in CLI", async () => {
+it("replaces Open in CLI with Open Chat for every live Session", async () => {
   const targets: Parameters<TaskDetailSessionChatEntry>[0][] = [];
   mountTaskDetailSurface(taskDetailResponse, {
     openSessionChat: async (target) => {
@@ -110,15 +110,15 @@ it("adds adjacent Open Chat actions for every live Session while preserving Open
     }),
   ];
   expect(
-    within(flow).getByRole("button", {
+    within(flow).queryByRole("button", {
       name: appI18n.t("task.openInCli", { name: "Review chat" }),
     }),
-  ).toBeInTheDocument();
+  ).not.toBeInTheDocument();
   expect(
-    within(flow).getByRole("button", {
+    within(flow).queryByRole("button", {
       name: appI18n.t("task.openInCli", { name: "Implementation" }),
     }),
-  ).toBeInTheDocument();
+  ).not.toBeInTheDocument();
   const user = userEvent.setup();
   for (const openChat of openChatButtons) {
     await user.click(openChat);
