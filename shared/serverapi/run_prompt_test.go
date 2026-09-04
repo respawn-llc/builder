@@ -96,7 +96,7 @@ func TestRunPromptOverridesMarshalUsesSnakeCaseAndNullableSelector(t *testing.T)
 		Model:               "gpt-5",
 		ProviderOverride:    "openai",
 		ThinkingLevel:       "medium",
-		Theme:               "dark",
+		Theme:               runPromptStringPtr("dark"),
 		ModelTimeoutSeconds: 30,
 		Tools:               "shell",
 		OpenAIBaseURL:       "https://example.test",

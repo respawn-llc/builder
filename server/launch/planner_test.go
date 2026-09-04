@@ -1007,7 +1007,7 @@ func TestApplyRunPromptOverridesOverridesHeadlessSettingsWithoutMutatingBasePlan
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{
 		Model:               "gpt-5-mini",
 		ThinkingLevel:       "medium",
-		Theme:               "light",
+		Theme:               launchTestStringPtr("light"),
 		ModelTimeoutSeconds: 12,
 		Tools:               "shell,patch",
 		OpenAIBaseURL:       "http://override.local/v1",

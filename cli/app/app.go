@@ -64,9 +64,6 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 		}
 	}()
 	runOptions := workspaceConfig.Options
-	if strings.TrimSpace(opts.SessionID) != "" {
-		runOptions.Theme = ""
-	}
 	if strings.TrimSpace(opts.SessionID) != "" && strings.TrimSpace(opts.ThinkingLevel) != "" {
 		sessionID, sessionIDErr := runtimeids.ParseSessionID(strings.TrimSpace(opts.SessionID))
 		if sessionIDErr != nil {

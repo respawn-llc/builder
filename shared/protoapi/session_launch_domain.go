@@ -243,7 +243,7 @@ func RunPromptOverridesToProto(overrides serverapi.RunPromptOverrides) (*session
 	setOptionalNonblank(&message.Model, overrides.Model)
 	setOptionalNonblank(&message.ProviderOverride, overrides.ProviderOverride)
 	setOptionalNonblank(&message.ThinkingLevel, overrides.ThinkingLevel)
-	setOptionalNonblank(&message.Theme, overrides.Theme)
+	setOptionalString(&message.Theme, overrides.Theme)
 	setOptionalNonblank(&message.Tools, overrides.Tools)
 	setOptionalNonblank(&message.OpenaiBaseUrl, overrides.OpenAIBaseURL)
 	if overrides.ModelTimeoutSeconds != 0 {
@@ -265,7 +265,7 @@ func RunPromptOverridesFromProto(message *sessionlaunchpb.RunPromptOverrides) (s
 		Model:            dereference(message.Model),
 		ProviderOverride: dereference(message.ProviderOverride),
 		ThinkingLevel:    dereference(message.ThinkingLevel),
-		Theme:            dereference(message.Theme),
+		Theme:            clonePointer(message.Theme),
 		Tools:            dereference(message.Tools),
 		OpenAIBaseURL:    dereference(message.OpenaiBaseUrl),
 	}
@@ -280,6 +280,14 @@ func setOptionalNonblank(target **string, value string) {
 		return
 	}
 	copied := value
+	*target = &copied
+}
+
+func setOptionalString(target **string, value *string) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return
+	}
+	copied := strings.TrimSpace(*value)
 	*target = &copied
 }
 

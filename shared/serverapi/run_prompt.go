@@ -58,7 +58,7 @@ type RunPromptOverridesKey struct {
 	Model               string
 	ProviderOverride    string
 	ThinkingLevel       string
-	Theme               string
+	Theme               OptionalStringKey
 	ModelTimeoutSeconds int
 	Tools               string
 	OpenAIBaseURL       string
@@ -73,7 +73,7 @@ func (o RunPromptOverrides) CanonicalKey() (RunPromptOverridesKey, error) {
 		Model:               strings.TrimSpace(o.Model),
 		ProviderOverride:    strings.TrimSpace(o.ProviderOverride),
 		ThinkingLevel:       strings.TrimSpace(o.ThinkingLevel),
-		Theme:               strings.TrimSpace(o.Theme),
+		Theme:               CanonicalOptionalString(o.Theme),
 		ModelTimeoutSeconds: o.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(o.Tools),
 		OpenAIBaseURL:       strings.TrimSpace(o.OpenAIBaseURL),
@@ -123,7 +123,7 @@ type RunPromptOverrides struct {
 	Model               string  `json:"model"`
 	ProviderOverride    string  `json:"provider_override"`
 	ThinkingLevel       string  `json:"thinking_level"`
-	Theme               string  `json:"theme"`
+	Theme               *string `json:"theme,omitempty"`
 	ModelTimeoutSeconds int     `json:"model_timeout_seconds"`
 	Tools               string  `json:"tools"`
 	OpenAIBaseURL       string  `json:"openai_base_url"`
@@ -173,7 +173,7 @@ func (o RunPromptOverrides) HasAny() bool {
 		strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
 		strings.TrimSpace(o.ThinkingLevel) != "" ||
-		strings.TrimSpace(o.Theme) != "" ||
+		o.Theme != nil ||
 		o.ModelTimeoutSeconds > 0 ||
 		strings.TrimSpace(o.Tools) != "" ||
 		strings.TrimSpace(o.OpenAIBaseURL) != ""
@@ -183,7 +183,7 @@ func (o RunPromptOverrides) HasConfigOverrides() bool {
 	return strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
 		strings.TrimSpace(o.ThinkingLevel) != "" ||
-		strings.TrimSpace(o.Theme) != "" ||
+		o.Theme != nil ||
 		o.ModelTimeoutSeconds > 0 ||
 		strings.TrimSpace(o.Tools) != "" ||
 		strings.TrimSpace(o.OpenAIBaseURL) != ""

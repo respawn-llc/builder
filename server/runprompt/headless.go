@@ -64,11 +64,6 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		return nil, errors.New("headless session launch service is required")
 	}
 	selectedSessionID, openingExisting := req.Intent.SessionID()
-	if openingExisting && l.boot.RuntimeAuthority != nil {
-		if _, active := l.boot.RuntimeAuthority.SessionExecution(selectedSessionID); active {
-			return nil, ErrSessionRunning
-		}
-	}
 	retained := false
 	if openingExisting && l.boot.WorkflowSessionOwnership != nil {
 		owned, ownershipErr := l.boot.WorkflowSessionOwnership.SessionHasCurrentWorkflowTask(ctx, selectedSessionID.String())
@@ -79,6 +74,35 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	}
 	if retained && l.boot.WorkflowSessionReactivator == nil {
 		return nil, errors.New("headless workflow Session reactivator is required")
+	}
+	if openingExisting && l.boot.RuntimeAuthority != nil {
+		handle, active := l.boot.RuntimeAuthority.SessionExecution(selectedSessionID)
+		if active {
+			_, workflowScoped := handle.Scope().Workflow()
+			if !workflowScoped {
+				return nil, ErrSessionRunning
+			}
+			terminal := false
+			runtimeErr := l.boot.RuntimeAuthority.WithLiveExecutionRuntime(
+				ctx,
+				selectedSessionID,
+				func(_ context.Context, engine *runtime.Engine) error {
+					terminal = engine.WorkflowTerminalState().Completed
+					return nil
+				},
+			)
+			if runtimeErr != nil &&
+				!errors.Is(runtimeErr, serverapi.ErrRuntimeNoActiveRun) {
+				return nil, runtimeErr
+			}
+			if terminal {
+				if err := sessionruntime.WaitForWorkflowExecutionRetirement(ctx, l.boot.RuntimeAuthority, selectedSessionID); err != nil {
+					return nil, err
+				}
+			} else if runtimeErr == nil {
+				return nil, ErrSessionRunning
+			}
+		}
 	}
 	if openingExisting && l.boot.WorkflowSessionReactivator != nil && l.boot.RuntimeAuthority != nil {
 		retainedErr := l.boot.RuntimeAuthority.WithRetainedWorkflowRuntime(

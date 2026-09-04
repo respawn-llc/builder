@@ -943,7 +943,7 @@ func applyPreparedConfigOverrides(settings config.Settings, source config.Source
 	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
 		settings.ThinkingLevel = overrideConfig.Settings.ThinkingLevel
 	}
-	if strings.TrimSpace(overrides.Theme) != "" {
+	if overrides.Theme != nil && strings.TrimSpace(*overrides.Theme) != "" {
 		settings.Theme = overrideConfig.Settings.Theme
 	}
 	if overrides.ModelTimeoutSeconds > 0 {
@@ -1169,10 +1169,15 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 
 func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOptions {
 	return config.LoadOptions{
-		Model:               strings.TrimSpace(overrides.Model),
-		ProviderOverride:    strings.TrimSpace(overrides.ProviderOverride),
-		ThinkingLevel:       strings.TrimSpace(overrides.ThinkingLevel),
-		Theme:               strings.TrimSpace(overrides.Theme),
+		Model:            strings.TrimSpace(overrides.Model),
+		ProviderOverride: strings.TrimSpace(overrides.ProviderOverride),
+		ThinkingLevel:    strings.TrimSpace(overrides.ThinkingLevel),
+		Theme: func() string {
+			if overrides.Theme == nil {
+				return ""
+			}
+			return strings.TrimSpace(*overrides.Theme)
+		}(),
 		ModelTimeoutSeconds: overrides.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(overrides.Tools),
 		OpenAIBaseURL:       strings.TrimSpace(overrides.OpenAIBaseURL),

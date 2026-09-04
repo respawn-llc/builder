@@ -9,6 +9,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 const subagentSessionSuffix = "subagent"
@@ -92,7 +93,7 @@ func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {
 		Model:               strings.TrimSpace(opts.Model),
 		ProviderOverride:    strings.TrimSpace(opts.ProviderOverride),
 		ThinkingLevel:       strings.TrimSpace(opts.ThinkingLevel),
-		Theme:               strings.TrimSpace(opts.Theme),
+		Theme:               textutil.OptionalTrimmedString(opts.Theme),
 		ModelTimeoutSeconds: opts.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(opts.Tools),
 		OpenAIBaseURL:       strings.TrimSpace(opts.OpenAIBaseURL),

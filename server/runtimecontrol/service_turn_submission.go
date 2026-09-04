@@ -277,22 +277,7 @@ func (s *Service) submitUserTurn(
 }
 
 func (s *Service) waitForWorkflowExecutionRetirement(ctx context.Context, sessionID runtimeids.SessionID) error {
-	for {
-		handle, live := s.authority.SessionExecution(sessionID)
-		if !live {
-			return nil
-		}
-		if _, workflowScoped := handle.Scope().Workflow(); !workflowScoped {
-			return nil
-		}
-		// Durable Current Node completion can precede retirement while the
-		// Workflow execution finishes post-completion work.
-		if _, err := handle.Wait(ctx); err != nil {
-			if context.Cause(ctx) != nil {
-				return err
-			}
-		}
-	}
+	return sessionruntime.WaitForWorkflowExecutionRetirement(ctx, s.authority, sessionID)
 }
 
 func (s *Service) recordAcceptedUserTurnHistory(
