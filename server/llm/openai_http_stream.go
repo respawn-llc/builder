@@ -953,7 +953,16 @@ func mergePassthroughOutputItems(items []ResponseItem, passthrough []ResponseIte
 	out := CloneResponseItems(items)
 	seenIDs := make(map[string]struct{}, len(out))
 	seenUnidentifiedIndexes := make(map[int64]struct{})
+	seenCompactionIndexes := make(map[int64]struct{})
 	register := func(item ResponseItem) bool {
+		if item.Type == ResponseItemTypeCompaction {
+			_, exists := seenCompactionIndexes[item.OutputIndex]
+			seenCompactionIndexes[item.OutputIndex] = struct{}{}
+			return exists
+		}
+		if item.Type != ResponseItemTypeOther {
+			return false
+		}
 		if item.ID != nil {
 			_, exists := seenIDs[*item.ID]
 			seenIDs[*item.ID] = struct{}{}

@@ -629,6 +629,45 @@ func TestOAuthCompactRequestUsesStreamedCompactionWhenCompletedOutputIsEmpty(t *
 	}
 }
 
+func TestOAuthCompactRequestUsesCompletedCheckpointAtStreamedPosition(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		streamedID  *string
+		completedID *string
+	}{
+		{name: "different IDs", streamedID: textutil.Value("cmp_streamed"), completedID: textutil.Value("cmp_completed")},
+		{name: "streamed ID absent", completedID: textutil.Value("cmp_completed")},
+		{name: "completed ID absent", streamedID: textutil.Value("cmp_streamed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			checkpoint := func(id *string, encrypted string) string {
+				t.Helper()
+				data, err := json.Marshal(struct {
+					Type             string  `json:"type"`
+					ID               *string `json:"id,omitempty"`
+					EncryptedContent string  `json:"encrypted_content"`
+				}{Type: "compaction", ID: id, EncryptedContent: encrypted})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			server := newOAuthCompactStreamServer(t, []string{
+				fmt.Sprintf(`{"type":"response.output_item.done","output_index":0,"item":%s}`, checkpoint(test.streamedID, "enc_streamed")),
+				fmt.Sprintf(`{"type":"response.completed","response":{"output":[%s]}}`, checkpoint(test.completedID, "enc_completed")),
+			})
+			resp, err := newCanonicalOAuthTestTransport(t, server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !textutil.EqualOptional(resp.Checkpoint.ID, test.completedID) ||
+				!textutil.EqualOptional(resp.Checkpoint.EncryptedContent, textutil.Value("enc_completed")) {
+				t.Fatalf("checkpoint = %+v, want completed checkpoint", resp.Checkpoint)
+			}
+		})
+	}
+}
+
 func TestOAuthCompactRequestRejectsStreamWithoutResponseCompleted(t *testing.T) {
 	server := newOAuthCompactStreamServer(t, []string{
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}}`,
