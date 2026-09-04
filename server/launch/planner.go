@@ -1175,20 +1175,10 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 
 func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOptions {
 	return config.LoadOptions{
-		Model:            strings.TrimSpace(overrides.Model),
-		ProviderOverride: strings.TrimSpace(overrides.ProviderOverride),
-		ThinkingLevel: func() string {
-			if overrides.ThinkingLevel == nil {
-				return ""
-			}
-			return strings.TrimSpace(*overrides.ThinkingLevel)
-		}(),
-		Theme: func() string {
-			if overrides.Theme == nil {
-				return ""
-			}
-			return strings.TrimSpace(*overrides.Theme)
-		}(),
+		Model:               strings.TrimSpace(overrides.Model),
+		ProviderOverride:    strings.TrimSpace(overrides.ProviderOverride),
+		ThinkingLevel:       textutil.Pointer(overrides.ThinkingLevel),
+		Theme:               textutil.Pointer(overrides.Theme),
 		ModelTimeoutSeconds: overrides.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(overrides.Tools),
 		OpenAIBaseURL:       strings.TrimSpace(overrides.OpenAIBaseURL),

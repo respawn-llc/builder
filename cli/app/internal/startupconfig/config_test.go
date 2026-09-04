@@ -104,12 +104,14 @@ func TestResolveSessionConfigAppliesLoadOptions(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
+	thinkingLevel := "high"
 
 	resolved, err := ResolveSessionConfig(Request{
 		WorkspaceRoot: workspace,
 		LoadOptions: config.LoadOptions{
+			ConfigRoot:    t.TempDir(),
 			Model:         "gpt-5",
-			ThinkingLevel: "high",
+			ThinkingLevel: &thinkingLevel,
 		},
 	})
 	if err != nil {

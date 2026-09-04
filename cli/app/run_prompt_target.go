@@ -13,6 +13,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
 var dialConfiguredRemote = client.DialConfiguredRemoteForProjectWorkspaceID
@@ -138,8 +139,8 @@ func startupConfigRequest(opts Options) startupconfig.Request {
 		LoadOptions: config.LoadOptions{
 			Model:               opts.Model,
 			ProviderOverride:    opts.ProviderOverride,
-			ThinkingLevel:       opts.ThinkingLevel,
-			Theme:               opts.Theme,
+			ThinkingLevel:       textutil.OptionalTrimmedString(opts.ThinkingLevel),
+			Theme:               textutil.OptionalTrimmedString(opts.Theme),
 			ModelTimeoutSeconds: opts.ModelTimeoutSeconds,
 			Tools:               opts.Tools,
 			ConfigRoot:          opts.ConfigRoot,

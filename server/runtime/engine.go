@@ -749,6 +749,13 @@ func (e *Engine) submitUserMessageWithOutcome(ctx context.Context, text string, 
 	if e.closed.Load() {
 		return UserTurnResult{}, ErrEngineClosed
 	}
+	locked, err := e.ensureLocked()
+	if err != nil {
+		return UserTurnResult{}, err
+	}
+	if err := e.rejectCompletedStructuredWorkflowContinuation(locked); err != nil {
+		return UserTurnResult{}, err
+	}
 
 	e.ensureOrchestrationCollaborators()
 	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {

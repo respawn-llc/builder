@@ -363,7 +363,8 @@ func TestLoadAppliesWorkspaceConfigBeforeEnvBeforeCLI(t *testing.T) {
 		t.Fatalf("write workspace config: %v", err)
 	}
 
-	cfg, err := Load(workspace, LoadOptions{ThinkingLevel: "low"})
+	thinkingLevel := "low"
+	cfg, err := Load(workspace, LoadOptions{ThinkingLevel: &thinkingLevel})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

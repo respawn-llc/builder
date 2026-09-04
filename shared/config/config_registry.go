@@ -192,7 +192,7 @@ func newSettingsRegistry() settingsRegistry {
 			func(state *settingsState, value string) { state.Settings.ThinkingLevel = value },
 			func(state settingsState) string { return state.Settings.ThinkingLevel },
 			"KENT_THINKING_LEVEL",
-			func(opts LoadOptions) (string, bool, error) { return trimmedCLIString(opts.ThinkingLevel) },
+			func(opts LoadOptions) (string, bool, error) { return optionalTrimmedCLIString(opts.ThinkingLevel) },
 			nil,
 			settingDocOptions{allowEmptyString: true}),
 		newStringSetting("model_verbosity", defaultModelVerbosity,
@@ -225,7 +225,7 @@ func newSettingsRegistry() settingsRegistry {
 			func(state *settingsState, value string) { state.Settings.Theme = value },
 			func(state settingsState) string { return state.Settings.Theme },
 			"KENT_THEME",
-			func(opts LoadOptions) (string, bool, error) { return trimmedCLIString(opts.Theme) },
+			func(opts LoadOptions) (string, bool, error) { return optionalTrimmedCLIString(opts.Theme) },
 			theme.Normalize,
 			settingDocOptions{}),
 		newStringSetting("notification_method", "auto",
@@ -1823,6 +1823,13 @@ func trimmedCLIString(raw string) (string, bool, error) {
 		return "", false, nil
 	}
 	return trimmed, true, nil
+}
+
+func optionalTrimmedCLIString(raw *string) (string, bool, error) {
+	if raw == nil {
+		return "", false, nil
+	}
+	return strings.TrimSpace(*raw), true, nil
 }
 
 func renderTOMLValue(value any) string {

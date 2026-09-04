@@ -847,7 +847,8 @@ model_request_seconds = 45
 	t.Setenv("KENT_THINKING_LEVEL", "medium")
 	t.Setenv("KENT_TOOLS", "shell,patch")
 
-	cfg, err := Load(workspace, LoadOptions{Model: "gpt-cli", ThinkingLevel: "xhigh"})
+	thinkingLevel := "xhigh"
+	cfg, err := Load(workspace, LoadOptions{Model: "gpt-cli", ThinkingLevel: &thinkingLevel})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

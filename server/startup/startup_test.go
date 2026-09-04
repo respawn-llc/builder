@@ -6,7 +6,6 @@ import (
 
 	"core/server/auth"
 	"core/server/authservice"
-	"core/shared/config"
 )
 
 type stubAuthHandler struct {
@@ -30,6 +29,8 @@ func (h stubAuthHandler) LookupEnv(key string) string {
 
 func TestBuildRequestMapsStartupOptionsAndLookupEnv(t *testing.T) {
 	handler := stubAuthHandler{lookupEnv: func(string) string { return "lookup-value" }}
+	thinkingLevel := "high"
+	theme := "dark"
 	req := buildRequest(Request{
 		WorkspaceRoot:         "/tmp/workspace",
 		WorkspaceRootExplicit: true,
@@ -50,14 +51,14 @@ func TestBuildRequestMapsStartupOptionsAndLookupEnv(t *testing.T) {
 	if req.OpenAIBaseURL != "http://example.test/v1" || !req.OpenAIBaseURLExplicit {
 		t.Fatalf("unexpected base URL mapping: %+v", req)
 	}
-	if req.LoadOptions != (config.LoadOptions{
-		Model:               "gpt-5",
-		ProviderOverride:    "openai",
-		ThinkingLevel:       "high",
-		Theme:               "dark",
-		ModelTimeoutSeconds: 45,
-		Tools:               "shell,patch",
-	}) {
+	if req.LoadOptions.Model != "gpt-5" ||
+		req.LoadOptions.ProviderOverride != "openai" ||
+		req.LoadOptions.ThinkingLevel == nil ||
+		*req.LoadOptions.ThinkingLevel != thinkingLevel ||
+		req.LoadOptions.Theme == nil ||
+		*req.LoadOptions.Theme != theme ||
+		req.LoadOptions.ModelTimeoutSeconds != 45 ||
+		req.LoadOptions.Tools != "shell,patch" {
 		t.Fatalf("unexpected load options: %+v", req.LoadOptions)
 	}
 	if got := req.LookupEnv("KENT_LOOKUP_TEST"); got != "lookup-value" {

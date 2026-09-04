@@ -77,8 +77,8 @@ const (
 type LoadOptions struct {
 	Model               string
 	ProviderOverride    string
-	ThinkingLevel       string
-	Theme               string
+	ThinkingLevel       *string
+	Theme               *string
 	ModelTimeoutSeconds int
 	Tools               string
 	OpenAIBaseURL       string

@@ -109,8 +109,15 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 				if ownershipErr != nil {
 					return nil, ownershipErr
 				}
-			} else if runtimeErr == nil {
-				return nil, ErrSessionRunning
+			}
+			if !terminal {
+				retained, ownershipErr = resolveRetained()
+				if ownershipErr != nil {
+					return nil, ownershipErr
+				}
+				if !retained && runtimeErr == nil {
+					return nil, ErrSessionRunning
+				}
 			}
 		}
 	}
