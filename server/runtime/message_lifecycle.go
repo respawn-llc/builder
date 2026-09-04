@@ -507,19 +507,27 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 	if claim == nil {
 		return userInjectionCommitResult{}, nil
 	}
-	return m.commitPendingUserInjections(stepID, claim)
+	return m.commitPendingUserInjections(stepID, selection, claim)
 }
 
-func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, claim *queuedUserMessageClaim) (userInjectionCommitResult, error) {
+func (m *defaultMessageLifecycle) commitPendingUserInjections(
+	stepID string,
+	selection userInjectionSelection,
+	claim *queuedUserMessageClaim,
+) (userInjectionCommitResult, error) {
 	e := m.engine
 	result := userInjectionCommitResult{}
-	defer m.queue.ReleaseClaim(claim)
+	defer func() {
+		e.removeStoppedLiveRunQueueItems(func() []QueuedUserMessage {
+			return m.queue.ReleaseClaim(claim)
+		})
+	}()
 
 	groups, err := queuedUserMessageFlushGroups(claim.items)
 	if err != nil {
 		return result, err
 	}
-	for _, group := range groups {
+	for index, group := range groups {
 		receipt, err := e.steerWithCommitReceipt(
 			stepID,
 			steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems),
@@ -530,6 +538,10 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, cla
 		if !receipt.Committed {
 			if err == nil {
 				err = errors.New("queued user message flush completed without a durable commit")
+			}
+			if _, steerOnly := selection.(steerUserInjectionSelection); steerOnly {
+				err = errors.Join(err, m.failDefinitelyUncommittedSteerClaim(claim, groups[index:]))
+				return result, &resultGroupFatal{Committed: false, Cause: err}
 			}
 			return result, err
 		}
@@ -551,6 +563,36 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, cla
 		}
 	}
 	return result, nil
+}
+
+func (m *defaultMessageLifecycle) failDefinitelyUncommittedSteerClaim(
+	claim *queuedUserMessageClaim,
+	groups []queuedUserMessageFlushGroup,
+) error {
+	queueItems := make([]QueuedUserMessage, 0)
+	for _, group := range groups {
+		queueItems = append(queueItems, group.queueItems...)
+	}
+	ids := queuedUserMessageIDSet(queueItems)
+	e := m.engine
+	e.outputMutationMu.Lock()
+	technical, stopped := m.queue.FailClaimItems(claim, ids)
+	e.emitInterruptedHumanInputs(stopped)
+	var restorationErr error
+	for _, pending := range technical {
+		item, err := pendingWorkMessage(pending)
+		if err == nil {
+			err = e.publishPendingWorkTechnicalRestoration(item)
+		}
+		restorationErr = errors.Join(restorationErr, err)
+	}
+	e.outputMutationMu.Unlock()
+	if len(technical)+len(stopped) == 0 {
+		return restorationErr
+	}
+	e.publishPendingWorkChanged()
+	e.liveRun.clearStoppedQueueItems(typedQueueItemIDSet(queuedUserMessageIDSet(stopped)))
+	return restorationErr
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {

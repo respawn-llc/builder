@@ -404,17 +404,27 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 		return
 	}
 	stringIDs := stringQueueItemIDSet(ids)
+	e.removeStoppedLiveRunQueueItems(func() []QueuedUserMessage {
+		return e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
+	})
+}
+
+func (e *Engine) removeStoppedLiveRunQueueItems(remove func() []QueuedUserMessage) {
+	if e == nil || remove == nil {
+		return
+	}
 	e.outputMutationMu.Lock()
-	failed := map[runtimeids.QueueItemID]struct{}{}
-	removed := e.messageFlow.DrainPendingUserInjectionsByID(stringIDs)
+	removed := remove()
+	e.emitInterruptedHumanInputs(removed)
+	e.outputMutationMu.Unlock()
+	if len(removed) == 0 {
+		return
+	}
+	failed := make(map[runtimeids.QueueItemID]struct{}, len(removed))
 	for _, item := range removed {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
 	}
-	e.emitInterruptedHumanInputs(removed)
-	e.outputMutationMu.Unlock()
-	if len(removed) != 0 {
-		e.publishPendingWorkChanged()
-	}
+	e.publishPendingWorkChanged()
 	e.liveRun.clearStoppedQueueItems(failed)
 }
 

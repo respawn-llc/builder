@@ -562,6 +562,9 @@ func (s *defaultStepExecutor) buildActiveTurnRequestAtBoundary(
 	mismatchWarningCommitted *bool,
 ) (llm.Request, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return llm.Request{}, err
+		}
 		if err := s.commitPendingUserSteer(stepID, options, mismatchWarningCommitted); err != nil {
 			return llm.Request{}, err
 		}

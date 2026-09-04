@@ -22,9 +22,10 @@ type queuedUserMessageStore struct {
 }
 
 type queuedUserMessage struct {
-	message        QueuedUserMessage
-	steerAdmission *pendingWorkSteerAdmission
-	claimID        *queuedUserMessageClaimID
+	message         QueuedUserMessage
+	steerAdmission  *pendingWorkSteerAdmission
+	claimID         *queuedUserMessageClaimID
+	removeOnRelease bool
 }
 
 type queuedUserMessageClaimID uint64
@@ -174,18 +175,57 @@ func (s *queuedUserMessageStore) FinalizeClaimItems(claim *queuedUserMessageClai
 	return finalized
 }
 
-func (s *queuedUserMessageStore) ReleaseClaim(claim *queuedUserMessageClaim) {
-	if s == nil || claim == nil {
-		return
+func (s *queuedUserMessageStore) FailClaimItems(
+	claim *queuedUserMessageClaim,
+	ids map[string]struct{},
+) (technical []queuedUserMessage, stopped []QueuedUserMessage) {
+	if s == nil || claim == nil || len(ids) == 0 {
+		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for index := range s.items {
-		pending := &s.items[index]
-		if pending.claimID != nil && *pending.claimID == claim.id {
-			pending.claimID = nil
+	remaining := s.items[:0]
+	for _, pending := range s.items {
+		_, selected := ids[strings.TrimSpace(pending.message.ID)]
+		if !selected || pending.claimID == nil || *pending.claimID != claim.id {
+			remaining = append(remaining, pending)
+			continue
+		}
+		if pending.removeOnRelease {
+			stopped = append(stopped, pending.message)
+		} else {
+			technical = append(technical, pending)
 		}
 	}
+	s.items = remaining
+	if len(technical)+len(stopped) != len(ids) {
+		panic("queued user message claim lost an owned item before failure")
+	}
+	return technical, stopped
+}
+
+func (s *queuedUserMessageStore) ReleaseClaim(claim *queuedUserMessageClaim) []QueuedUserMessage {
+	if s == nil || claim == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := make([]QueuedUserMessage, 0)
+	remaining := s.items[:0]
+	for _, pending := range s.items {
+		if pending.claimID == nil || *pending.claimID != claim.id {
+			remaining = append(remaining, pending)
+			continue
+		}
+		if pending.removeOnRelease {
+			removed = append(removed, pending.message)
+			continue
+		}
+		pending.claimID = nil
+		remaining = append(remaining, pending)
+	}
+	s.items = remaining
+	return removed
 }
 
 func (s *queuedUserMessageStore) Drain() []queuedUserMessage {
@@ -216,11 +256,16 @@ func (s *queuedUserMessageStore) DrainByID(ids map[string]struct{}) []queuedUser
 	matched := make([]queuedUserMessage, 0, len(ids))
 	remaining := s.items[:0]
 	for _, pending := range s.items {
-		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; ok && pending.claimID == nil {
-			matched = append(matched, pending)
+		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; !ok {
+			remaining = append(remaining, pending)
 			continue
 		}
-		remaining = append(remaining, pending)
+		if pending.claimID != nil {
+			pending.removeOnRelease = true
+			remaining = append(remaining, pending)
+			continue
+		}
+		matched = append(matched, pending)
 	}
 	s.items = remaining
 	return matched
