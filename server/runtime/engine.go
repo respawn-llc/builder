@@ -781,15 +781,6 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (result WorkflowTurnRes
 	return e.submitWorkflowTurn(ctx, nil, "", nil)
 }
 
-func (e *Engine) SubmitWorkflowTurnWithInput(
-	ctx context.Context,
-	currentNode workflow.CurrentNodeReference,
-	text string,
-	steer *AgentSteer,
-) (result WorkflowTurnResult, err error) {
-	return e.submitWorkflowTurnWithStepHook(ctx, &currentNode, text, steer, nil)
-}
-
 func (e *Engine) SubmitWorkflowTurnWithInputAndStepHook(
 	ctx context.Context,
 	currentNode workflow.CurrentNodeReference,

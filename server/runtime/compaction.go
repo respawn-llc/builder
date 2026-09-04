@@ -137,15 +137,6 @@ func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (WorkflowTu
 	return e.submitWorkflowContinuationTurn(ctx, nil, "", nil)
 }
 
-func (e *Engine) SubmitWorkflowContinuationTurnWithInput(
-	ctx context.Context,
-	currentNode workflow.CurrentNodeReference,
-	text string,
-	steer *AgentSteer,
-) (WorkflowTurnResult, error) {
-	return e.submitWorkflowContinuationTurn(ctx, &currentNode, text, steer)
-}
-
 func (e *Engine) SubmitWorkflowContinuationTurnWithInputAndStepHook(
 	ctx context.Context,
 	currentNode workflow.CurrentNodeReference,
@@ -184,7 +175,7 @@ func (e *Engine) submitWorkflowContinuationTurnWithStepHook(
 	var result WorkflowTurnResult
 	var err error
 	if currentNode == nil {
-		result, err = e.SubmitWorkflowTurn(ctx)
+		result, err = e.submitWorkflowTurn(ctx, nil, "", nil)
 	} else {
 		result, err = e.submitWorkflowTurnWithStepHook(ctx, currentNode, text, steer, onStepStarted)
 	}
