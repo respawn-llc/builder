@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/shared/clientui"
@@ -24,10 +25,6 @@ type runtimeControlFakeClient struct {
 	cachedMainView        clientui.RuntimeMainView
 	hasCachedMainView     bool
 	setSessionNameArg     string
-	setThinkingLevelArg   string
-	setFastModeArg        bool
-	setFastModeCalls      int
-	setAutoCompactCalls   int
 	goal                  *clientui.RuntimeGoal
 	showGoalCalls         int
 	setGoalArg            string
@@ -107,62 +104,96 @@ func (f *runtimeControlFakeClient) SetSessionName(name string) error {
 	f.setSessionNameArg = name
 	return f.err
 }
-func (f *runtimeControlFakeClient) SetThinkingLevel(level string) error {
-	f.setThinkingLevelArg = level
-	return f.err
+func (f *runtimeControlFakeClient) ReadChatSettings() (serverapi.ChatSettings, error) {
+	return runtimeControlFakeChatSettings(), f.err
 }
-func (f *runtimeControlFakeClient) SetFastModeEnabled(enabled bool) (bool, error) {
-	f.setFastModeArg = enabled
-	f.setFastModeCalls++
-	f.status.FastModeEnabled = enabled
-	return true, f.err
+func (f *runtimeControlFakeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {
+	settings := runtimeControlFakeChatSettings()
+	switch operation.Kind {
+	case serverapi.ChatSettingsMutationThinking:
+		settings.SelectedAgent.Thinking = *operation.Value
+		f.status.ThinkingLevel = settings.SelectedAgent.Thinking
+	case serverapi.ChatSettingsMutationSupervisor:
+		settings.Supervisor.Value = serverapi.ChatSettingsSupervisorValue(*operation.Value)
+	case serverapi.ChatSettingsMutationFast:
+		settings.Fast = &serverapi.ChatSettingsFast{Value: *operation.Enabled}
+	case serverapi.ChatSettingsMutationQuestions:
+		settings.Questions.Enabled = *operation.Enabled
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		settings.AutoCompaction.Stored = *operation.Enabled
+		settings.AutoCompaction.Effective = *operation.Enabled
+	}
+	return serverapi.ChatSettingsMutationResponse{
+		Result:   serverapi.NewChatSettingsMutationApplied(true),
+		Settings: settings,
+	}, f.err
 }
-func (f *runtimeControlFakeClient) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	return true, "edits", f.err
-}
-func (f *runtimeControlFakeClient) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	f.setAutoCompactCalls++
-	return true, enabled, f.err
-}
-func (f *runtimeControlFakeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
-	return true, f.err
+
+func runtimeControlFakeChatSettings() serverapi.ChatSettings {
+	return serverapi.ChatSettings{
+		SelectedAgent: serverapi.ChatSettingsAgentSummary{
+			Role:     "default",
+			Model:    "gpt-5",
+			Thinking: "medium",
+		},
+		Supervisor: serverapi.ChatSettingsSupervisor{
+			Value:    serverapi.ChatSettingsSupervisorOff,
+			Baseline: serverapi.ChatSettingsSupervisorAfterEdits,
+		},
+		Questions: serverapi.ChatSettingsQuestions{Enabled: true},
+		AutoCompaction: serverapi.ChatSettingsAutoCompaction{
+			Stored:    true,
+			Effective: true,
+		},
+	}
 }
 func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	f.showGoalCalls++
 	return cloneRuntimeGoal(f.goal), f.err
 }
-func (f *runtimeControlFakeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
+func (f *runtimeControlFakeClient) SetGoal(objective string) (clientui.GoalMutationResult, error) {
 	f.setGoalArg = objective
-	f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: objective, Status: "active"}}
-	return cloneRuntimeGoal(f.goal), f.err
+	f.goal = runtimeControlTestGoal(objective, clientui.RuntimeGoalStatusActive)
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
-func (f *runtimeControlFakeClient) PauseGoal() (*clientui.RuntimeGoal, error) {
+func (f *runtimeControlFakeClient) PauseGoal() (clientui.GoalMutationResult, error) {
 	f.pauseGoalCalls++
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}}
+		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
 	}
 	f.goal.Status = "paused"
-	return cloneRuntimeGoal(f.goal), f.err
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
-func (f *runtimeControlFakeClient) ResumeGoal() (*clientui.RuntimeGoal, error) {
+func (f *runtimeControlFakeClient) ResumeGoal() (clientui.GoalMutationResult, error) {
 	f.resumeGoalCalls++
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}}
+		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
 	}
 	f.goal.Status = "active"
-	return cloneRuntimeGoal(f.goal), f.err
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
-func (f *runtimeControlFakeClient) CompleteGoal() (*clientui.RuntimeGoal, error) {
+func (f *runtimeControlFakeClient) CompleteGoal() (clientui.GoalMutationResult, error) {
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}}
+		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
 	}
 	f.goal.Status = "complete"
-	return cloneRuntimeGoal(f.goal), f.err
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
-func (f *runtimeControlFakeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
+func (f *runtimeControlFakeClient) ClearGoal() (clientui.GoalMutationResult, error) {
 	f.clearGoalCalls++
 	f.goal = nil
-	return nil, f.err
+	return clientui.GoalMutationResult{}, f.err
+}
+
+func runtimeControlTestGoal(objective string, status clientui.RuntimeGoalStatus) *clientui.RuntimeGoal {
+	now := time.Unix(1, 0)
+	return &clientui.RuntimeGoal{Goal: &clientui.Goal{
+		ID:        "goal-1",
+		Objective: objective,
+		Status:    status,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}}
 }
 func (f *runtimeControlFakeClient) AppendCommittedEntry(role, text string) error {
 	return f.AppendCommittedEntryWithNoticeID(role, text, "")
@@ -209,11 +240,11 @@ func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string
 }
 func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
 	f.compactRequest = req
-	args := ""
-	if req.Admission.Guidance != nil {
-		args = *req.Admission.Guidance
+	input, err := req.Admission.CanonicalInput()
+	if err != nil {
+		return err
 	}
-	return f.compactContext(ctx, args)
+	return f.compactContext(ctx, input)
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
@@ -222,7 +253,7 @@ func (f *runtimeControlFakeClient) Interrupt() error {
 	}
 	return f.err
 }
-func (f *runtimeControlFakeClient) RemovePendingWork(queueItemID string) bool {
+func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	f.discardQueuedCalls++
 	f.discardQueuedID = queueItemID
 	if f.discardQueuedResult {
@@ -256,10 +287,11 @@ func TestGoalShowSupersededByMutationDoesNotOverwriteMutationResult(t *testing.T
 		Goal: &clientui.Goal{ID: "goal-1", Objective: "latest", Status: clientui.RuntimeGoalStatusPaused},
 	}
 	m.applyGoalRuntimeDone(goalRuntimeDoneMsg{
-		token:     mutationToken,
-		sessionID: m.sessionID,
-		operation: goalRuntimePause,
-		goal:      paused,
+		token:          mutationToken,
+		sessionID:      m.sessionID,
+		mutationSerial: m.goalRuntimeMutationSerial,
+		operation:      goalRuntimePause,
+		mutation:       clientui.GoalMutationResult{Goal: paused.Goal},
 	})
 	stale := &clientui.RuntimeGoal{
 		Goal: &clientui.Goal{ID: "goal-1", Objective: "stale", Status: clientui.RuntimeGoalStatusActive},
@@ -272,8 +304,8 @@ func TestGoalShowSupersededByMutationDoesNotOverwriteMutationResult(t *testing.T
 		goal:           stale,
 	})
 
-	if m.goal.goal == nil || m.goal.goal.Goal == nil ||
-		m.goal.goal.Goal.Objective != "latest" ||
+	if m.goal.goal == nil ||
+		m.goal.goal.Objective != "latest" ||
 		m.goal.goal.Status != clientui.RuntimeGoalStatusPaused {
 		t.Fatalf("Goal projection = %+v, want latest paused mutation result", m.goal.goal)
 	}
@@ -334,6 +366,59 @@ func TestInterruptedHumanInputRestoresServerOrderBeforeComposer(t *testing.T) {
 	}
 }
 
+func TestPendingWorkTechnicalRestorationMergesBeforeComposer(t *testing.T) {
+	m := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	testSetMainInput(m, "composer")
+
+	m.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkRestored{
+			Restoration: runtimeinput.PendingWorkTechnicalRestoration{
+				ItemID:         runtimeids.NewQueueItemID(),
+				Kind:           runtimeinput.PendingWorkItemKindWorktreeTransition,
+				CanonicalInput: "/wt leave",
+			},
+		})),
+		runtimeTupleMergeResult{},
+	)
+	if got, want := testMainInput(m), "/wt leave\n\ncomposer"; got != want {
+		t.Fatalf("composer = %q, want %q", got, want)
+	}
+}
+
+func TestTranscriptSessionSettingFeedbackUsesTransientStatusWithoutTranscriptRows(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	client := &runtimeControlFakeClient{}
+	model := newProjectedClosedUIModel(client)
+	enabled := true
+	cmd := model.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptSessionSettingFeedback{
+			Kind: clientui.SessionSettingFastMode, Changed: true, FastMode: &enabled,
+		})),
+		runtimeTupleMergeResult{},
+	)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ := model.Update(msg)
+		model = next.(*uiModel)
+	}
+	if model.transientStatus == "" || model.transientStatusKind != uiStatusNoticeSuccess {
+		t.Fatalf("setting feedback status = %q kind=%v, want success notice", model.transientStatus, model.transientStatusKind)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("setting feedback appended %d transcript rows", client.appendCalls)
+	}
+
+	model.transientStatus = ""
+	model.applyAdmittedTranscriptMessageState(
+		clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptSessionSettingFeedback{
+			Kind: clientui.SessionSettingFastMode, Changed: false, FastMode: &enabled,
+		})),
+		runtimeTupleMergeResult{},
+	)
+	if model.transientStatus != "" {
+		t.Fatalf("unchanged setting emitted success notice %q", model.transientStatus)
+	}
+}
+
 func TestThinkingQueryUsesStatusOnly(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
@@ -355,10 +440,10 @@ func TestThinkingQueryUsesStatusOnly(t *testing.T) {
 	}
 }
 
-func TestThinkingSetWithoutRuntimeUsesStatusOnly(t *testing.T) {
+func TestThinkingSetUsesChatSettingsService(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
-	m := newProjectedStaticUIModel()
+	m := newProjectedTestUIModel(&runtimeControlFakeClient{})
 
 	next, cmd := m.inputController().handleThinkingLevelCommand("low")
 	updated := next.(*uiModel)
@@ -380,12 +465,12 @@ func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
 
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client)
-	cmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "high", false, "")
+	cmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{Kind: serverapi.ChatSettingsMutationThinking, Value: textutil.Value("high")})
 	msgs := collectCmdMessages(t, cmd)
 
-	var done runtimeControlDoneMsg
+	var done chatSettingsDoneMsg
 	for _, msg := range msgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+		if typed, ok := msg.(chatSettingsDoneMsg); ok {
 			done = typed
 		}
 	}
@@ -413,7 +498,7 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 	m.startupCmds = nil
 
 	sessionCmd := m.runtimeControlCommand(runtimeControlSetSessionName, "incident triage", false, "")
-	thinkingCmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "high", false, "")
+	thinkingCmd := m.chatSettingsMutationCommand(serverapi.ChatSettingsMutationOperation{Kind: serverapi.ChatSettingsMutationThinking, Value: textutil.Value("high")})
 	sessionMsgs := collectCmdMessages(t, sessionCmd)
 	thinkingMsgs := collectCmdMessages(t, thinkingCmd)
 
@@ -423,9 +508,9 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 			sessionDone = typed
 		}
 	}
-	var thinkingDone runtimeControlDoneMsg
+	var thinkingDone chatSettingsDoneMsg
 	for _, msg := range thinkingMsgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+		if typed, ok := msg.(chatSettingsDoneMsg); ok {
 			thinkingDone = typed
 		}
 	}
@@ -438,47 +523,6 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 		t.Fatalf("expected independent completions to apply, session=%q thinking=%q", updated.sessionName, updated.thinkingLevel)
 	}
 }
-func TestRuntimeControlStaleSessionCompletionClearsPendingToggle(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client)
-	m.startupCmds = nil
-	m.sessionID = "session-old"
-	m.fastModeAvailable = true
-
-	cmd := m.runtimeControlCommand(runtimeControlSetFastMode, "", true, "")
-	msgs := collectCmdMessages(t, cmd)
-	var done runtimeControlDoneMsg
-	for _, msg := range msgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
-			done = typed
-		}
-	}
-
-	m.sessionID = "session-new"
-	_, blockedCmd := m.inputController().handleFastModeCommand("on")
-	if blockedCmd == nil {
-		t.Fatal("expected new-session fast toggle to start even while old-session command is in flight")
-	}
-	_ = collectCmdMessages(t, blockedCmd)
-	if client.setFastModeArg != true {
-		t.Fatalf("new-session bare fast toggle should target true from cached state, got %t", client.setFastModeArg)
-	}
-
-	next, _ := m.Update(done)
-	updated := next.(*uiModel)
-	pending, exists := updated.runtimeControlPending[runtimeControlSetFastMode]
-	if !exists || pending.sessionID != "session-new" {
-		t.Fatalf("expected stale-session completion to preserve new-session pending toggle, got %+v", updated.runtimeControlPending)
-	}
-	_, nextCmd := updated.inputController().handleFastModeCommand("off")
-	if nextCmd != nil {
-		t.Fatal("expected new-session follow-up target to coalesce without a concurrent command")
-	}
-	if pending := updated.runtimeControlPending[runtimeControlSetFastMode]; pending.desiredEnabled {
-		t.Fatalf("expected coalesced new-session desired target to be false, got %+v", pending)
-	}
-}
-
 func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 

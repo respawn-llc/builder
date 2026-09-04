@@ -30,11 +30,17 @@ import {
   ConnectionStore,
   type DescriptorRpcTransport,
   type DescriptorSubscriptionInput,
+  type AttachedProjectCall,
+  type ChatSubscriptionInput,
   type JsonValue,
+  type ProjectAttachment,
   type RpcCallOptions,
   type RpcDedicatedCallOptions,
   type RpcEventHandler,
   type RpcSubscription,
+  type SessionAttachment,
+  type RuntimeOwnerContext,
+  type RuntimeOwnerOptions,
 } from "@/api/composition";
 
 type FakeJsonRoute = Readonly<{
@@ -69,7 +75,7 @@ export function worktreeQueryFixtureRoutes(): readonly FakeRoute[] {
           branchName: "feature",
           detached: false,
           bare: false,
-          isMain: false,
+          isMainWorktree: false,
           pathAvailable: true,
         },
       },
@@ -200,6 +206,13 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     params: JsonValue;
     options?: RpcDedicatedCallOptions;
   }>[] = [];
+  readonly attachedProjectCalls: Readonly<{
+    projectID: string;
+    selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
+    method: string;
+    params: JsonValue;
+    options?: RpcDedicatedCallOptions;
+  }>[] = [];
   readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
   readonly descriptorSubscriptionStarts: Readonly<{
     descriptor: DescMethod;
@@ -209,6 +222,7 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
   #descriptorRoutes = new Map<string, FakeDescriptorRoute>();
   #descriptorSubscriptionRoutes = new Map<string, FakeDescriptorSubscriptionRoute>();
   #callCounts = new Map<string, number>();
+  #runtimeOwner: SessionAttachment | null = null;
   #subscribers: Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] = [];
   #descriptorSubscribers: Readonly<{
     descriptor: DescMethod;
@@ -318,6 +332,36 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     return this.#dispatch(method, params);
   }
 
+  async callAttachedProject(
+    input: AttachedProjectCall,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<Readonly<{ result: unknown; attachment: ProjectAttachment }>> {
+    const { projectID, selector, method, request } = input;
+    const attachment = {
+      projectID,
+      workspaceID: "workspaceID" in selector ? selector.workspaceID : "workspace-1",
+      workspaceRoot: "workspaceRoot" in selector ? selector.workspaceRoot : "/workspace",
+      workspaceSelection:
+        "workspaceID" in selector
+          ? { kind: "workspaceID" as const, workspaceID: selector.workspaceID }
+          : {
+              kind: "workspaceRoot" as const,
+              requestedRoot: selector.workspaceRoot,
+              canonicalRoot: selector.workspaceRoot,
+            },
+    };
+    const params = request.kind === "factory" ? request.create(attachment) : request.value;
+    this.attachedProjectCalls.push(
+      options === undefined
+        ? { projectID, selector, method, params }
+        : { projectID, selector, method, params, options },
+    );
+    return {
+      result: this.#dispatch(method, params),
+      attachment,
+    };
+  }
+
   async callAttachedSession(
     sessionID: string,
     method: string,
@@ -328,6 +372,43 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
       options === undefined ? { sessionID, method, params } : { sessionID, method, params, options },
     );
     return this.#dispatch(method, params);
+  }
+
+  async runRuntimeOwner<Result>(
+    sessionID: string,
+    options: RuntimeOwnerOptions,
+    run: (context: RuntimeOwnerContext) => Promise<Result>,
+  ): Promise<Result> {
+    if (!options.createIfMissing && this.#runtimeOwner === null) {
+      throw new Error("Runtime owner connection is unavailable.");
+    }
+    if (this.#runtimeOwner !== null && this.#runtimeOwner.sessionID !== sessionID) {
+      throw new Error("Runtime owner connection is bound to another Session.");
+    }
+    this.#runtimeOwner ??= {
+      projectID: "project-1",
+      workspaceID: "workspace-1",
+      workspaceRoot: "/workspace",
+      sessionID,
+    };
+    const context: RuntimeOwnerContext = {
+      attachment: this.#runtimeOwner,
+      call: async (method, params) => this.#dispatch(method, params),
+      callDescriptor: async (descriptor, request) => this.callDescriptor(descriptor, request),
+      poison: () => {
+        this.#runtimeOwner = null;
+      },
+    };
+    return run(context).then((result) => {
+      if (options.closeAfter) {
+        this.#runtimeOwner = null;
+      }
+      return result;
+    });
+  }
+
+  subscribeChatSession(input: ChatSubscriptionInput): RpcSubscription {
+    return this.subscribe(input.method, input.params, input.handler);
   }
 
   #dispatch(method: string, params: JsonValue): unknown {
@@ -366,7 +447,14 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
 
   emit(method: string, params: unknown): void {
     for (const subscriber of [...this.#subscribers]) {
-      subscriber.handler.onEvent(method, params);
+      try {
+        subscriber.handler.onEvent(method, params);
+      } catch (cause) {
+        const error = cause instanceof Error ? cause : new Error("Subscription event failed.");
+        if (!subscriber.handler.onEventFailure?.(error)) {
+          subscriber.handler.onError(error);
+        }
+      }
     }
   }
 
@@ -376,9 +464,9 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     }
   }
 
-  complete(subscriptionMethod: string, code: number, message: string): void {
+  complete(subscriptionMethod: string, code: number, message: string, reason: string | null = null): void {
     for (const subscriber of this.#subscribersFor(subscriptionMethod)) {
-      subscriber.handler.onComplete(code, message);
+      subscriber.handler.onComplete(code, message, reason);
     }
   }
 

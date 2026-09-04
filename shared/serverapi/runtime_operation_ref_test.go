@@ -8,7 +8,7 @@ import (
 	"core/shared/runtimeinput"
 )
 
-func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
+func TestRuntimeInputRequestsUseTypedInputsWithoutOperationRefs(t *testing.T) {
 	requests := []struct {
 		name      string
 		request   interface{ Validate() error }
@@ -35,7 +35,7 @@ func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 			request: RuntimeCompactContextRequest{
 				SessionID: "session-1",
 				RequestID: runtimeids.NewCompactionRequestID(),
-				Admission: ManualCompactionAdmission{RestorationInput: "/compact"},
+				Admission: ManualCompactionAdmission{},
 			},
 			forbidden: []string{"operation_ref"},
 		},
@@ -69,9 +69,14 @@ func TestRuntimeInputRequestsHaveNoOperationRefs(t *testing.T) {
 	}
 }
 
-func TestRuntimeCompactContextRequiresRequestIdentity(t *testing.T) {
-	err := (RuntimeCompactContextRequest{SessionID: "session-1"}).Validate()
-	if err == nil {
-		t.Fatal("RuntimeCompactContextRequest accepted a missing request identity")
+func TestRuntimeSubmitUserShellCommandRequestRejectsBlankCommand(t *testing.T) {
+	request := RuntimeSubmitUserShellCommandRequest{
+		SessionID: "session-1",
+	}
+	for _, command := range []string{"", " \t\n"} {
+		request.Command = command
+		if err := request.Validate(); err == nil {
+			t.Fatalf("accepted blank shell command %q", command)
+		}
 	}
 }

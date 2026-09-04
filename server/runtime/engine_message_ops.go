@@ -734,7 +734,7 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true, nil)
 	}
 	if len(pending) != 0 {
-		e.publishPendingWorkSnapshot()
+		e.publishPendingWorkChanged()
 	}
 	return messages
 }

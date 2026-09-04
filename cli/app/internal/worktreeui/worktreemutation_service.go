@@ -8,6 +8,7 @@ import (
 
 	"core/shared/apicontract"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 )
@@ -85,7 +86,17 @@ func (s Service) Enter(selector string) (*worktreepb.ScheduledAcknowledgement, e
 		return s.Client.EnterWorktree(ctx, &worktreepb.EnterRequest{
 			OperationId: operationID.String(),
 			SessionId:   s.SessionID,
-			Selector:    strings.TrimSpace(selector),
+			Selector:    runtimeinput.NormalizePendingWorkArgument(selector),
+		})
+	})
+}
+
+func (s Service) Leave() (*worktreepb.ScheduledAcknowledgement, error) {
+	operationID := s.operationID()
+	return runMutation(s, func(ctx context.Context) (*worktreepb.ScheduledAcknowledgement, error) {
+		return s.Client.LeaveWorktree(ctx, &worktreepb.LeaveRequest{
+			OperationId: operationID.String(),
+			SessionId:   s.SessionID,
 		})
 	})
 }

@@ -36,8 +36,13 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.applyTranscriptUserMessageFlushed(message.Payload().(clientui.TranscriptUserMessageFlushed))
 	case clientui.TranscriptMessageQueuedMessageState:
 		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
-	case clientui.TranscriptMessagePendingWorkReplaced:
-		return m.applyPendingWorkReplacement(message.Payload().(clientui.TranscriptPendingWorkReplaced).PendingWork)
+	case clientui.TranscriptMessagePendingWorkChanged:
+		return m.requestPendingWorkRefresh(m.pendingWorkRefresh.sessionID)
+	case clientui.TranscriptMessagePendingWorkRestored:
+		restoration := message.Payload().(clientui.TranscriptPendingWorkRestored).Restoration
+		m.inputController().restoreServerOrderedTextBeforeComposer(restoration.CanonicalInput)
+	case clientui.TranscriptMessageSessionSettingFeedback:
+		return m.applySessionSettingFeedback(message.Payload().(clientui.TranscriptSessionSettingFeedback))
 	case clientui.TranscriptMessageHumanInputInterrupted:
 		return m.applyTranscriptHumanInputInterrupted(message.Payload().(clientui.TranscriptHumanInputInterrupted))
 	case clientui.TranscriptMessageStepState:
@@ -91,6 +96,7 @@ func (m *uiModel) applyTranscriptHydration(
 	admission runtimeTupleMergeResult,
 ) tea.Cmd {
 	var cmds []tea.Cmd
+	cmds = append(cmds, m.advancePendingWorkRefreshScope(hydration.SessionIdentity.SessionID))
 	cmds = append(cmds, m.applyTranscriptSessionIdentity(hydration.SessionIdentity))
 	m.applyTranscriptSessionStatus(hydration.SessionStatus)
 	cmds = append(cmds, m.applyTranscriptRuntimeReadModelUpdate(admission))
@@ -103,7 +109,6 @@ func (m *uiModel) applyTranscriptHydration(
 		m.applyTranscriptStepState(*hydration.ActiveStep)
 	}
 
-	m.pendingWork = hydration.PendingWork
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
 	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
 	currentSessionID := strings.TrimSpace(m.sessionID)

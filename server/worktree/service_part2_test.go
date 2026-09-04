@@ -459,7 +459,7 @@ func worktreeViewFromListEntryForTest(entry *worktreepb.ListEntry) serviceTestWo
 		view.BranchRef = git.GetBranchRef()
 		view.BranchName = git.GetBranchName()
 		view.Detached = git.GetDetached()
-		view.IsMain = git.GetIsMain()
+		view.IsMain = git.GetIsMainWorktree()
 		view.Managed = kent.GetManaged()
 		view.CreatedBranch = kent.GetCreatedBranch()
 		view.OriginSessionID = kent.GetOriginSessionId()
@@ -470,7 +470,7 @@ func worktreeViewFromListEntryForTest(entry *worktreepb.ListEntry) serviceTestWo
 		view.BranchRef = git.GetBranchRef()
 		view.BranchName = git.GetBranchName()
 		view.Detached = git.GetDetached()
-		view.IsMain = git.GetIsMain()
+		view.IsMain = git.GetIsMainWorktree()
 	} else if missing := entry.GetTopology().GetMissing(); missing != nil {
 		kent := missing.GetKent()
 		view.WorktreeID = kent.GetWorktreeId()

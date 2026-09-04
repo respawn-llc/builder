@@ -263,18 +263,121 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
 }
 
+func (s *Service) MutateWorkspaceChatSettingsAggregate(
+	ctx context.Context,
+	operation serverapi.ChatSettingsMutationOperation,
+) (PreparedChatSettingsOperationResult, bool, error) {
+	owner, workspaceID, err := s.workspaceChatDraftOwner()
+	if err != nil {
+		return PreparedChatSettingsOperationResult{}, false, err
+	}
+	return owner.MutateWorkspaceChatSettings(ctx, workspaceID, s.workspaceChatDraftResolverInput, operation)
+}
+
+func (s *Service) PrepareMaterializedChatSettingsOperation(
+	ctx context.Context,
+	store *session.Store,
+) (PreparedChatSettingsOperationInput, error) {
+	input, _, err := s.prepareMaterializedChatSettings(ctx, store.Meta())
+	return input, err
+}
+
+func (s *Service) prepareMaterializedChatSettings(
+	ctx context.Context,
+	meta session.Meta,
+) (PreparedChatSettingsOperationInput, *string, error) {
+	planner := s.planner
+	if planner.ReloadConfig != nil {
+		var err error
+		planner.Config, err = planner.ReloadConfig()
+		if err != nil {
+			return PreparedChatSettingsOperationInput{}, nil, err
+		}
+	}
+	authState := auth.EmptyState()
+	var err error
+	if s.authStates != nil {
+		authState, err = s.authStates.StoredState(ctx)
+		if err != nil {
+			return PreparedChatSettingsOperationInput{}, nil, err
+		}
+	}
+	catalog, err := launch.PrepareChatAgentCatalog(planner.Config, authState, false)
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, nil, err
+	}
+	raw, err := session.ChatSettingsStateFromMeta(meta)
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, nil, err
+	}
+	entry, selectedAvailable := catalog.Lookup(raw.Agent)
+	if !selectedAvailable {
+		var defaultAvailable bool
+		entry, defaultAvailable = catalog.Lookup(config.DefaultSubagentRole)
+		if !defaultAvailable {
+			return PreparedChatSettingsOperationInput{}, nil, errors.New("default Chat Agent baseline is missing")
+		}
+	}
+	effective, err := session.ResolveEffectiveChatSettings(raw.Settings, nil, entry.Settings.Baseline)
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, nil, err
+	}
+	if meta.Locked != nil {
+		entry.Settings, err = lockedPreparedChatSettings(*meta.Locked, entry.Settings, effective)
+		if err != nil {
+			return PreparedChatSettingsOperationInput{}, nil, err
+		}
+	}
+	effective = normalizeProjectedChatSettings(effective, entry.Settings)
+	persistedQuestions := effective.Questions
+	var persistedThinking *string
+	if !selectedAvailable {
+		persistedQuestions = entry.Settings.Baseline.Questions
+		persistedThinking = textutil.Value(entry.Settings.Baseline.Thinking)
+	} else if raw.Settings != nil {
+		if raw.Settings.Questions != nil {
+			persistedQuestions = *raw.Settings.Questions
+		}
+		if raw.Settings.Thinking != nil {
+			thinking := strings.TrimSpace(*raw.Settings.Thinking)
+			if thinking == "" {
+				return PreparedChatSettingsOperationInput{}, nil, errors.New("persisted Session Chat settings Thinking is required when present")
+			}
+			persistedThinking = &thinking
+		}
+	}
+	taskID, err := s.workflowTaskID(ctx, meta.SessionID)
+	if err != nil {
+		return PreparedChatSettingsOperationInput{}, nil, err
+	}
+	return PreparedChatSettingsOperationInput{
+		Raw:                raw,
+		Effective:          effective,
+		PersistedQuestions: persistedQuestions,
+		PersistedThinking:  persistedThinking,
+		Catalog:            catalog,
+		Locked:             meta.Locked,
+		WorkflowLocked:     taskID != nil,
+		CompactionMode:     planner.Config.Settings.CompactionMode,
+	}, taskID, nil
+}
+
 func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
 	resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
 	draft := resolved.Draft
+	thinking := draft.Thinking
+	if resolved.PersistedThinking != nil {
+		thinking = *resolved.PersistedThinking
+	}
 	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
 		Catalog: resolved.Catalog,
 		Agent:   draft.Agent,
 		Settings: session.ChatSettings{
 			Supervisor:     draft.Supervisor,
-			Thinking:       resolved.PersistedThinking,
+			Thinking:       thinking,
 			Fast:           draft.Fast,
 			Questions:      resolved.PersistedQuestionsPolicy,
 			AutoCompaction: draft.AutoCompaction,
@@ -295,56 +398,17 @@ func (s *Service) MaterializedChatSettings(
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	planner := s.planner
-	if planner.ReloadConfig != nil {
-		planner.Config, err = planner.ReloadConfig()
-		if err != nil {
-			return serverapi.ChatSettingsReadResponse{}, err
-		}
-	}
-	authState := auth.EmptyState()
-	if s.authStates != nil {
-		authState, err = s.authStates.StoredState(ctx)
-		if err != nil {
-			return serverapi.ChatSettingsReadResponse{}, err
-		}
-	}
-	catalog, err := launch.PrepareChatAgentCatalog(
-		planner.Config,
-		authState,
-		false,
-	)
+	input, taskID, err := s.prepareMaterializedChatSettings(ctx, *record.Meta)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	state, err := session.ChatSettingsStateFromMeta(*record.Meta)
-	if err != nil {
-		return serverapi.ChatSettingsReadResponse{}, err
-	}
-	baselineEntry, ok := catalog.Lookup(state.Agent)
-	if !ok {
-		baselineEntry, _ = catalog.Lookup(config.DefaultSubagentRole)
-	}
-	effective, err := session.ResolveEffectiveChatSettings(
-		state.Settings,
-		nil,
-		baselineEntry.Settings.Baseline,
-	)
-	if err != nil {
-		return serverapi.ChatSettingsReadResponse{}, err
-	}
-	taskID, err := s.workflowTaskID(ctx, sessionID.String())
-	if err != nil {
-		return serverapi.ChatSettingsReadResponse{}, err
-	}
-	workflowLocked := taskID != nil
 	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog:        catalog,
-		Agent:          state.Agent,
-		Settings:       effective,
-		WorkflowLocked: workflowLocked,
-		CompactionMode: planner.Config.Settings.CompactionMode,
-		Locked:         record.Meta.Locked,
+		Catalog:        input.Catalog,
+		Agent:          input.Raw.Agent,
+		Settings:       input.Effective,
+		WorkflowLocked: input.WorkflowLocked,
+		CompactionMode: input.CompactionMode,
+		Locked:         input.Locked,
 	})
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
@@ -629,7 +693,7 @@ func applyPreparedAgentChatSettings(
 	roleOverride serverapi.RunPromptAgentRoleOverride,
 	preparedOverrides launch.PreparedRunPromptOverrides,
 	meta session.Meta,
-) (session.Meta, bool, *session.ChatAgentSelection, error) {
+) (session.Meta, bool, *session.ChatSettingsState, error) {
 	state, err := session.ChatSettingsStateFromMeta(meta)
 	if err != nil {
 		return session.Meta{}, false, nil, err
@@ -683,20 +747,24 @@ func applyPreparedAgentChatSettings(
 	if err != nil {
 		return session.Meta{}, false, nil, err
 	}
-	selection := session.ChatAgentSelection{Agent: targetAgent, Baseline: prepared.Baseline}
-	projected, result, err := session.ProjectChatSettingsMutation(meta, session.ChatSettingsMutation{
-		Agent: &selection,
-	})
+	if targetAgent == state.Agent {
+		return meta, true, nil, nil
+	}
+	target, err := session.ChatSettingsStateFromCompleteSettings(targetAgent, prepared.Baseline)
+	if err != nil {
+		return session.Meta{}, false, nil, err
+	}
+	projected, changed, err := session.ProjectChatSettingsState(meta, target)
 	if errors.Is(err, session.ErrChatAgentLocked) {
 		return meta, false, nil, nil
 	}
 	if err != nil {
 		return session.Meta{}, false, nil, err
 	}
-	if !result.Changed {
+	if !changed {
 		return projected, true, nil, nil
 	}
-	return projected, true, &selection, nil
+	return projected, true, &target, nil
 }
 
 func preparePromptFacingTarget(
@@ -812,14 +880,15 @@ func sessionPlanSuccessFromResult(result PlanResult) (*sessionlaunchpb.SessionPl
 	}
 	if result.Plan.ActivationAgentSelection != nil {
 		selection := result.Plan.ActivationAgentSelection
+		settings := selection.Settings
 		plan.ActivationAgentSelection = &sessionlaunchpb.SessionRuntimeAgentSelection{
 			Agent: selection.Agent,
 			Baseline: &sessionlaunchpb.SessionRuntimeChatSettings{
-				Supervisor:     selection.Baseline.Supervisor,
-				Thinking:       selection.Baseline.Thinking,
-				Fast:           selection.Baseline.Fast,
-				Questions:      selection.Baseline.Questions,
-				AutoCompaction: selection.Baseline.AutoCompaction,
+				Supervisor:     *settings.Supervisor,
+				Thinking:       *settings.Thinking,
+				Fast:           *settings.Fast,
+				Questions:      *settings.Questions,
+				AutoCompaction: *settings.AutoCompaction,
 			},
 		}
 	}

@@ -637,8 +637,8 @@ func TestGatewayCloseCancelsAndDrainsHandlersBeforeRuntimeCleanup(t *testing.T) 
 		if release.request.Attachment.SessionID != store.Meta().SessionID || release.request.Attachment.Generation != 1 {
 			t.Fatalf("cleanup attachment = %+v, want session %q generation 1", release.request.Attachment, store.Meta().SessionID)
 		}
-		if !release.request.DropOwner || release.request.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle {
-			t.Fatalf("cleanup release request = %+v, want owner drop close-if-idle", release.request)
+		if !release.request.DropOwner || release.request.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
+			t.Fatalf("cleanup release request = %+v, want owner drop detach-only", release.request)
 		}
 		if release.active != 0 {
 			t.Fatalf("cleanup started with %d active handler(s), want 0", release.active)

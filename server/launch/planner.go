@@ -100,7 +100,7 @@ type SessionPlan struct {
 	QuestionsEnabled                    bool
 	AutoCompactionEnabled               bool
 	ThinkingOverrideExplicit            bool
-	ActivationAgentSelection            *session.ChatAgentSelection
+	ActivationAgentSelection            *session.ChatSettingsState
 }
 
 // ApplyContextPolicy resolves Context policy only after the plan's final Agent

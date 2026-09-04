@@ -123,8 +123,10 @@ func TestWorktreeListControllerQueuesStableSwitchTarget(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("queued switch returned a command while another switch is pending")
 	}
-	if fixture.model.worktrees.queuedSwitch.TargetToken != "wt-feature" {
-		t.Fatalf("queued switch = %+v, want stable worktree ID", fixture.model.worktrees.queuedSwitch)
+	if fixture.model.worktrees.queuedTransition == nil ||
+		fixture.model.worktrees.queuedTransition.Selector == nil ||
+		*fixture.model.worktrees.queuedTransition.Selector != "wt-feature" {
+		t.Fatalf("queued transition = %+v, want stable worktree ID", fixture.model.worktrees.queuedTransition)
 	}
 }
 
@@ -145,6 +147,79 @@ func TestWorktreeListControllerDeleteKeysSetIntent(t *testing.T) {
 		target.identity != wantIdentity ||
 		!fixture.model.worktrees.intent.PreferDeleteBranch {
 		t.Fatalf("intent = %+v, want delete+branch for selected worktree identity", fixture.model.worktrees.intent)
+	}
+}
+
+func TestWorktreeListControllerGitMainRowHasNoDeleteActions(t *testing.T) {
+	listResponse := testLinkedWorktreeListResponse()
+	gitMain := &worktreepb.ListEntry{
+		Topology: &worktreepb.TopologyEntry{
+			Topology: &worktreepb.TopologyEntry_External{
+				External: &worktreepb.ExternalFacts{
+					Git: &worktreepb.GitFacts{
+						CanonicalRoot:  "/repo/git-main",
+						HeadObject:     "deadbeef",
+						BranchName:     appStringPointer("main"),
+						IsMainWorktree: true,
+						PathAvailable:  true,
+					},
+				},
+			},
+		},
+		Projection: &worktreepb.ListProjection{
+			Selector: "main",
+			Switch: &worktreepb.SwitchOperation{
+				Kind:     worktreepb.SwitchOperationKind_WORKTREE_SWITCH_OPERATION_ENTER,
+				Selector: appStringPointer("main"),
+			},
+		},
+	}
+	listResponse.Worktrees = append(listResponse.Worktrees, gitMain)
+	client := &worktreeCommandTestClient{}
+	fixture := newWorktreeListFixture(t, client)
+	fixture.model.worktrees.entries = make([]worktreeui.Item, 0, len(listResponse.Worktrees))
+	for _, entry := range listResponse.Worktrees {
+		fixture.model.worktrees.entries = append(fixture.model.worktrees.entries, mustProjectWorktreeItem(t, entry))
+	}
+	fixture.model.worktrees.selection = len(fixture.model.worktrees.entries)
+	target, ok := fixture.model.selectedWorktreeRow()
+	if !ok || worktreeDeleteActionsAvailableForSelection(fixture.model) {
+		t.Fatalf("selected Git main row = %+v, want no projected delete action", target)
+	}
+	for _, key := range []rune{'d', 'x'} {
+		cmd := fixture.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if cmd != nil ||
+			fixture.model.worktrees.intent.OpenDelete ||
+			fixture.model.worktrees.phase != uiWorktreeOverlayPhaseList ||
+			fixture.model.transientStatus != "" ||
+			len(client.deleteRequests) != 0 {
+			t.Fatalf("Git main key %q changed deletion state: cmd=%v intent=%+v phase=%q status=%q requests=%d",
+				key, cmd, fixture.model.worktrees.intent, fixture.model.worktrees.phase, fixture.model.transientStatus, len(client.deleteRequests))
+		}
+	}
+}
+
+func TestWorktreeListControllerMainWorkspaceDeleteKeysShowNotice(t *testing.T) {
+	listResponse := testMainWorktreeListResponse()
+	fixture := newWorktreeListFixture(t, nil)
+	fixture.model.worktrees.entries = []worktreeui.Item{
+		mustProjectWorktreeItem(t, listResponse.Worktrees[0]),
+	}
+	fixture.model.worktrees.selection = 1
+
+	for _, key := range []rune{'d', 'x'} {
+		fixture.model.transientStatus = ""
+		fixture.model.transientStatusKind = uiStatusNoticeInfo
+		fixture.model.worktrees.intent = uiWorktreeOpenIntent{}
+
+		cmd := fixture.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if fixture.model.worktrees.intent.OpenDelete ||
+			fixture.model.worktrees.phase != uiWorktreeOverlayPhaseList ||
+			fixture.model.transientStatus == "" ||
+			fixture.model.transientStatusKind != uiStatusNoticeError {
+			t.Fatalf("Main Workspace key %q did not show deletion error: cmd=%v intent=%+v phase=%q status=%q kind=%v",
+				key, cmd, fixture.model.worktrees.intent, fixture.model.worktrees.phase, fixture.model.transientStatus, fixture.model.transientStatusKind)
+		}
 	}
 }
 

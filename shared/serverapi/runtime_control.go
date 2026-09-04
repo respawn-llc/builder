@@ -15,50 +15,6 @@ type RuntimeSetSessionNameRequest struct {
 	Name      string `json:"name"`
 }
 
-type RuntimeSetThinkingLevelRequest struct {
-	SessionID string `json:"session_id"`
-	Level     string `json:"level"`
-}
-
-type RuntimeSetFastModeEnabledRequest struct {
-	SessionID string `json:"session_id"`
-	Enabled   bool   `json:"enabled"`
-}
-
-type RuntimeSetFastModeEnabledResponse struct {
-	Changed bool `json:"changed"`
-}
-
-type RuntimeSetReviewerEnabledRequest struct {
-	SessionID string `json:"session_id"`
-	Enabled   bool   `json:"enabled"`
-}
-
-type RuntimeSetReviewerEnabledResponse struct {
-	Changed bool   `json:"changed"`
-	Mode    string `json:"mode"`
-}
-
-type RuntimeSetAutoCompactionEnabledRequest struct {
-	SessionID string `json:"session_id"`
-	Enabled   bool   `json:"enabled"`
-}
-
-type RuntimeSetAutoCompactionEnabledResponse struct {
-	Changed bool `json:"changed"`
-	Enabled bool `json:"enabled"`
-}
-
-type RuntimeSetQuestionsEnabledRequest struct {
-	SessionID string `json:"session_id"`
-	Enabled   bool   `json:"enabled"`
-}
-
-type RuntimeSetQuestionsEnabledResponse struct {
-	Changed bool `json:"changed"`
-	Enabled bool `json:"enabled"`
-}
-
 type RuntimeAppendCommittedEntryRequest struct {
 	SessionID  string `json:"session_id"`
 	Role       string `json:"role"`
@@ -215,24 +171,11 @@ type RuntimeGoalShowRequest struct {
 }
 
 type RuntimeGoalShowResponse struct {
-	Goal *clientui.Goal `json:"goal"`
+	clientui.GoalEnvelope
 }
 
 func (r RuntimeGoalShowResponse) Validate() error {
-	if r.Goal == nil {
-		return nil
-	}
-	return r.Goal.Validate()
-}
-
-type RuntimeGoalMutationResponse struct {
-	Goal         *clientui.Goal             `json:"goal,omitempty"`
-	Pending      *clientui.GoalPreview      `json:"pending,omitempty"`
-	Availability *clientui.GoalAvailability `json:"availability,omitempty"`
-}
-
-func (r RuntimeGoalMutationResponse) Validate() error {
-	return clientui.GoalMutationResult(r).Validate()
+	return r.GoalEnvelope.Validate()
 }
 
 type RuntimeGoalSetRequest struct {
@@ -279,21 +222,6 @@ func validateRuntimeControlRequest(sessionID string) error {
 func (r RuntimeSetSessionNameRequest) Validate() error {
 	return validateRuntimeControlRequest(r.SessionID)
 }
-func (r RuntimeSetThinkingLevelRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
-}
-func (r RuntimeSetFastModeEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
-}
-func (r RuntimeSetReviewerEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
-}
-func (r RuntimeSetAutoCompactionEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
-}
-func (r RuntimeSetQuestionsEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
-}
 func (r RuntimeAppendCommittedEntryRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.SessionID); err != nil {
 		return err
@@ -319,7 +247,7 @@ func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
 		return err
 	}
 	if strings.TrimSpace(r.Command) == "" {
-		return errors.New("command is required")
+		return errors.New("shell command is required")
 	}
 	return nil
 }

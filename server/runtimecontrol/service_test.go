@@ -42,6 +42,25 @@ type sequenceRuntimeActivityResolver struct {
 	calls     int
 }
 
+type runtimeControlSettingPublisher struct {
+	feedback []clientui.TranscriptSessionSettingFeedback
+}
+
+func (p *runtimeControlSettingPublisher) RuntimeReadModelFeedSnapshot(
+	context.Context,
+	string,
+) (clientui.RuntimeReadModelUpdate, error) {
+	return clientui.RuntimeReadModelUpdate{}, nil
+}
+
+func (p *runtimeControlSettingPublisher) PublishSessionSettingFeedback(
+	_ string,
+	feedback clientui.TranscriptSessionSettingFeedback,
+) error {
+	p.feedback = append(p.feedback, feedback)
+	return nil
+}
+
 type runtimeControlPromptFeed struct {
 	mu            sync.Mutex
 	pending       chan struct{}
@@ -1030,6 +1049,31 @@ func TestServiceLiveWaitUnavailableRuntimeStaysUnavailable(t *testing.T) {
 	}
 }
 
+func TestServiceListPendingWorkReturnsEmptyCollectionForUnavailableRuntime(t *testing.T) {
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	response, err := service.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{
+		SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("ListPendingWork unavailable runtime: %v", err)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal ListPendingWork response: %v", err)
+	}
+	var payload struct {
+		PendingWork struct {
+			Items []json.RawMessage `json:"items"`
+		} `json:"pending_work"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode ListPendingWork response: %v", err)
+	}
+	if payload.PendingWork.Items == nil || len(payload.PendingWork.Items) != 0 {
+		t.Fatalf("Pending Work items = %#v, want encoded empty collection", payload.PendingWork.Items)
+	}
+}
+
 func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
@@ -1711,62 +1755,6 @@ func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
 	if _, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID}); err != nil {
 		t.Fatalf("ShowGoal for workflow task session = %v, want allowed", err)
-	}
-}
-
-func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
-
-	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		SessionID: store.Meta().SessionID,
-		Enabled:   false,
-	})
-	if !errors.Is(err, errWorkflowTaskSessionAutoCompactionDisable) {
-		t.Fatalf("SetAutoCompactionEnabled error = %v, want workflow auto-compaction rejection", err)
-	}
-	if !engine.AutoCompactionEnabled() {
-		t.Fatal("auto-compaction disabled despite durable workflow session marker")
-	}
-}
-
-func TestServiceSetThinkingLevelAcceptsProviderSpecificValue(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{Model: "gpt-5"})
-
-	err := service.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{
-		SessionID: store.Meta().SessionID,
-		Level:     " provider-specific-depth ",
-	})
-	if err != nil {
-		t.Fatalf("SetThinkingLevel: %v", err)
-	}
-	if got := engine.ThinkingLevel(); got != "provider-specific-depth" {
-		t.Fatalf("live Thinking = %q, want provider-specific-depth", got)
-	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
-		t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
-	}
-}
-
-func TestServiceSetAutoCompactionEnabledPropagatesClosedRuntime(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	if err := engine.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
-	}
-
-	resp, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		SessionID: store.Meta().SessionID,
-		Enabled:   false,
-	})
-	if !errors.Is(err, runtime.ErrEngineClosed) {
-		t.Fatalf("SetAutoCompactionEnabled error = %v, want ErrEngineClosed", err)
-	}
-	if resp.Changed || resp.Enabled {
-		t.Fatalf("SetAutoCompactionEnabled response = %+v, want zero response on failure", resp)
-	}
-	if !engine.AutoCompactionEnabled() {
-		t.Fatal("auto-compaction changed after Runtime admission failure")
 	}
 }
 
@@ -2507,7 +2495,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if err := service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
 		SessionID: store.Meta().SessionID,
 		RequestID: runtimeids.NewCompactionRequestID(),
-		Admission: serverapi.ManualCompactionAdmission{RestorationInput: "/compact"},
+		Admission: serverapi.ManualCompactionAdmission{},
 	}); err != nil {
 		t.Fatalf("CompactContext scheduling: %v", err)
 	}
@@ -2630,7 +2618,8 @@ func TestServiceRemovePendingWorkIsRuntimeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemovePendingWork: %v", err)
 	}
-	if removed.Restoration.Message == nil || removed.Restoration.Message.Text != "discard runtime only" {
+	if removed.Restoration.Kind != serverapi.PendingWorkItemKindMessage ||
+		removed.Restoration.CanonicalInput != "discard runtime only" {
 		t.Fatalf("restoration = %+v", removed.Restoration)
 	}
 	if engine.HasQueuedUserWork() {
@@ -2638,6 +2627,35 @@ func TestServiceRemovePendingWorkIsRuntimeOnly(t *testing.T) {
 	}
 	if got := countPromptHistoryEvents(t, sessionStore, "discard runtime only"); got != 0 {
 		t.Fatalf("prompt history count after runtime-only discard = %d, want 0", got)
+	}
+}
+
+func TestSetSessionNamePublishesChangedAndUnchangedFeedback(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	publisher := &runtimeControlSettingPublisher{}
+	service.WithRuntimeActivityResolver(publisher)
+	request := serverapi.RuntimeSetSessionNameRequest{
+		SessionID: store.Meta().SessionID,
+		Name:      "renamed",
+	}
+	if err := service.SetSessionName(t.Context(), request); err != nil {
+		t.Fatalf("SetSessionName changed: %v", err)
+	}
+	if err := service.SetSessionName(t.Context(), request); err != nil {
+		t.Fatalf("SetSessionName unchanged: %v", err)
+	}
+	if len(publisher.feedback) != 2 {
+		t.Fatalf("published feedback = %+v, want changed and unchanged events", publisher.feedback)
+	}
+	if !publisher.feedback[0].Changed || publisher.feedback[1].Changed {
+		t.Fatalf("published change facts = %+v, want true then false", publisher.feedback)
+	}
+	for _, feedback := range publisher.feedback {
+		if feedback.Kind != clientui.SessionSettingSessionName ||
+			feedback.SessionName == nil ||
+			*feedback.SessionName != "renamed" {
+			t.Fatalf("published Session Name feedback = %+v", feedback)
+		}
 	}
 }
 

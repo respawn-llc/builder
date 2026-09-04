@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/server/tools"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -22,15 +23,22 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	})
 	guidance := "keep details"
 	admission := runtimeinput.ManualCompactionAdmission{
-		Guidance:         &guidance,
-		RestorationInput: "/compact   keep details",
+		Guidance: &guidance,
 	}
+	requestID := runtimeids.NewCompactionRequestID()
 	if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
 		context.Background(),
-		runtimeids.NewCompactionRequestID(),
+		requestID,
 		admission,
 		nil,
 	); err != nil {
+		t.Fatal(err)
+	}
+	selector := "feature/pending-work"
+	operationID := clientui.NewWorktreeTransitionID()
+	worktree := runtimeinput.PendingWorkWorktreeTransition{
+		Transition: runtimeinput.PendingWorkWorktreeTransitionEnter, Selector: &selector}
+	if _, err := engine.ScheduleWorktreeTransition(context.Background(), operationID, worktree, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	secondSteer := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
@@ -41,23 +49,19 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	})
 
 	snapshot := pendingWorkTestSnapshot(t, engine)
-	if len(snapshot.Items) != 4 {
+	if len(snapshot.Items) != 5 {
 		t.Fatalf("Pending Work = %+v", snapshot.Items)
 	}
-	if snapshot.Items[0].ID.String() != firstSteer.ID ||
-		snapshot.Items[1].Kind != runtimeinput.PendingWorkItemKindManualCompaction ||
-		snapshot.Items[2].ID.String() != secondSteer.ID ||
-		snapshot.Items[3].ID.String() != queued.ID {
+	if snapshot.Items[0].ID.String() != queued.ID ||
+		snapshot.Items[1].ID.String() != firstSteer.ID ||
+		snapshot.Items[2].ID.String() != requestID.String() ||
+		snapshot.Items[3].ID.String() != operationID.String() ||
+		snapshot.Items[4].ID.String() != secondSteer.ID {
 		t.Fatalf("Pending Work order = %+v", snapshot.Items)
 	}
-	if snapshot.Items[1].ManualCompaction == nil ||
-		snapshot.Items[1].ManualCompaction.Guidance == nil ||
-		*snapshot.Items[1].ManualCompaction.Guidance != guidance ||
-		snapshot.Items[1].ManualCompaction.RestorationInput != admission.RestorationInput {
-		t.Fatalf("manual compaction = %+v", snapshot.Items[1])
-	}
-	if snapshot.Items[3].Lane != runtimeinput.PendingWorkLaneQueue {
-		t.Fatalf("post-turn item lane = %q", snapshot.Items[3].Lane)
+	if snapshot.Items[2].CanonicalInput != "/compact keep details" ||
+		snapshot.Items[3].CanonicalInput != "/wt switch feature/pending-work" {
+		t.Fatalf("Pending Work projection = %+v", snapshot.Items)
 	}
 
 	releaseMaintenance()
@@ -65,6 +69,7 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 
 func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
+	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 	for index := range runtimeinput.PendingWorkCapacity {
 		if _, err := engine.messageFlow.QueueUserMessage(fmt.Sprintf("pending %d", index)); err != nil {
 			t.Fatal(err)
@@ -86,6 +91,37 @@ func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 			t.Fatalf("item %d changed from %s to %s", index, before.Items[index].ID, after.Items[index].ID)
 		}
 	}
+	_, err = engine.RemovePendingWork(t.Context(), before.Items[0].ID)
+	pendingWorkTestNoError(t, err)
+	leave := runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionLeave}
+	run := func(context.Context) error { return nil }
+	admittedID := clientui.NewWorktreeTransitionID()
+	_, err = engine.ScheduleWorktreeTransition(t.Context(), admittedID, leave, run)
+	pendingWorkTestNoError(t, err)
+	admittedQueueID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
+		return runtimeids.ParseQueueItemID(admittedID.String())
+	})
+	_, err = engine.RemovePendingWork(t.Context(), admittedQueueID)
+	pendingWorkTestNoError(t, err)
+	reached, unblock, results := make(chan struct{}, 2), make(chan struct{}), make(chan error, 2)
+	accept := CommandAcceptance(func(commit func() (bool, error)) (bool, error) { reached <- struct{}{}; <-unblock; return commit() })
+	for range 2 {
+		go func() {
+			_, err := engine.ScheduleWorktreeTransitionWithAcceptance(
+				t.Context(), clientui.NewWorktreeTransitionID(), leave, accept, run)
+			results <- err
+		}()
+	}
+	pendingWorkTestWait(t, reached, "first acceptance")
+	pendingWorkTestWait(t, reached, "second acceptance")
+	close(unblock)
+	pendingWorkTestNoError(t, <-results)
+	pendingWorkTestNoError(t, <-results)
+	concurrent := pendingWorkTestSnapshot(t, engine)
+	if len(concurrent.Items) != runtimeinput.PendingWorkCapacity+1 {
+		t.Fatalf("concurrent Pending Work = %+v", concurrent.Items)
+	}
+	releaseMaintenance()
 }
 
 func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
@@ -99,18 +135,19 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 		return runtimeids.ParseQueueItemID(message.ID)
 	})
 	restoration, err := engine.RemovePendingWork(context.Background(), messageID)
-	if err != nil || restoration.Message == nil || restoration.Message.Text != "restore message" {
+	if err != nil || restoration.Kind != runtimeinput.PendingWorkItemKindMessage ||
+		restoration.CanonicalInput != "restore message" {
 		t.Fatalf("message removal = %+v/%v", restoration, err)
 	}
 
-	guidance := "tighten  spacing"
+	guidance := "tighten spacing"
 	admission := runtimeinput.ManualCompactionAdmission{
-		Guidance:         &guidance,
-		RestorationInput: "/compact   tighten  spacing",
+		Guidance: &guidance,
 	}
+	requestID := runtimeids.NewCompactionRequestID()
 	if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
 		context.Background(),
-		runtimeids.NewCompactionRequestID(),
+		requestID,
 		admission,
 		nil,
 	); err != nil {
@@ -125,13 +162,9 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	if compaction.ID.IsZero() {
 		t.Fatal("manual compaction is absent from Pending Work")
 	}
-	hydrated := hydrationSnapshot(t, engine).PendingWork
-	if len(hydrated.Items) != 1 || hydrated.Items[0].ID != compaction.ID {
-		t.Fatalf("hydrated Pending Work = %+v", hydrated.Items)
-	}
 	restoration, err = engine.RemovePendingWork(context.Background(), compaction.ID)
-	if err != nil || restoration.ManualCompaction == nil ||
-		restoration.ManualCompaction.Input != admission.RestorationInput {
+	if err != nil || restoration.Kind != runtimeinput.PendingWorkItemKindManualCompaction ||
+		restoration.CanonicalInput != "/compact tighten spacing" {
 		t.Fatalf("compaction removal = %+v/%v", restoration, err)
 	}
 	if _, err := engine.RemovePendingWork(context.Background(), compaction.ID); !errors.Is(err, runtimeinput.ErrPendingWorkNotPending) {
@@ -141,9 +174,9 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	releaseMaintenance()
 }
 
-func TestStoppedHumanInputPublishesCapturedPendingWorkReplacement(t *testing.T) {
+func TestStoppedHumanInputPublishesPendingWorkChangedWithoutBlockingList(t *testing.T) {
 	var interruption *HumanInputInterruptedEvent
-	var replacement *runtimeinput.PendingWork
+	changed, unblock, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 	first := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
@@ -156,30 +189,29 @@ func TestStoppedHumanInputPublishesCapturedPendingWorkReplacement(t *testing.T) 
 		switch event.Kind {
 		case EventHumanInputInterrupted:
 			interruption = event.HumanInputInterrupted
-			if _, err := engine.messageFlow.QueueUserMessage("admitted by interruption observer"); err != nil {
-				t.Fatal(err)
-			}
-		case EventPendingWorkReplaced:
-			replacement = event.PendingWork
+		case EventPendingWorkChanged:
+			close(changed)
+			<-unblock
+			close(delivered)
 		}
 	}
 
-	engine.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{
+	go engine.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{
 		pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 			return runtimeids.ParseQueueItemID(first.ID)
 		}): {},
 	})
+	pendingWorkTestWait(t, changed, "Pending Work Changed")
 
 	if interruption == nil || len(interruption.Items) != 1 || interruption.Items[0].QueueItemID != first.ID {
 		t.Fatalf("interruption = %+v", interruption)
 	}
-	if replacement == nil || len(replacement.Items) != 1 || replacement.Items[0].ID.String() != second.ID {
-		t.Fatalf("captured replacement = %+v", replacement)
-	}
 	current := pendingWorkTestSnapshot(t, engine)
-	if len(current.Items) != 2 {
+	if len(current.Items) != 1 || current.Items[0].ID.String() != second.ID {
 		t.Fatalf("current Pending Work = %+v", current.Items)
 	}
+	close(unblock)
+	pendingWorkTestWait(t, delivered, "Pending Work Changed delivery")
 
 	releaseMaintenance()
 }
@@ -190,6 +222,10 @@ func pendingWorkTestEngine(t *testing.T, cfg Config) *Engine {
 }
 
 func pendingWorkTestHoldMaintenance(t *testing.T, engine *Engine) func() {
+	return pendingWorkTestHoldStep(t, engine, ActiveKindRuntimeMaintenance)
+}
+
+func pendingWorkTestHoldStep(t *testing.T, engine *Engine, kind ActiveKind) func() {
 	t.Helper()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -197,7 +233,7 @@ func pendingWorkTestHoldMaintenance(t *testing.T, engine *Engine) func() {
 	go func() {
 		done <- engine.stepLifecycle.Run(
 			context.Background(),
-			exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance},
+			exclusiveStepOptions{ActiveKind: kind},
 			func(context.Context, string) error {
 				close(started)
 				<-release
@@ -223,6 +259,15 @@ func pendingWorkTestSnapshot(t *testing.T, engine *Engine) runtimeinput.PendingW
 	return snapshot
 }
 
+func pendingWorkTestContains(pending runtimeinput.PendingWork, id runtimeids.QueueItemID) bool {
+	for _, item := range pending.Items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func pendingWorkTestMust[T any](t *testing.T, operation func() (T, error)) T {
 	t.Helper()
 	value, err := operation()
@@ -230,6 +275,13 @@ func pendingWorkTestMust[T any](t *testing.T, operation func() (T, error)) T {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func pendingWorkTestNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func pendingWorkTestWait(t *testing.T, signal <-chan struct{}, name string) {

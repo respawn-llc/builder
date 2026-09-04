@@ -88,6 +88,13 @@ import type {
 } from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
+import type {
+  CompactionRequestID,
+  PendingWork,
+  PendingWorkIdentity,
+  PendingWorkRestoration,
+} from "./pendingWork";
+import type { ChatApi } from "./chat";
 
 export type ApiConnectionSource = Readonly<{
   snapshot(): ConnectionSnapshot;
@@ -100,6 +107,7 @@ export type ApiSubscription = Readonly<{
 
 export interface ApiService {
   readonly connection: ApiConnectionSource;
+  readonly chat: ChatApi;
 
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string | null): Promise<ProjectPage>;
@@ -187,6 +195,9 @@ export interface ApiService {
   deleteComment(commentID: string): Promise<void>;
   answerPromptBatch(input: PromptAnswerBatchInput): Promise<PromptAnswerBatchResponse>;
   listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]>;
+  submitManualCompaction(sessionID: string, guidance: string | null): Promise<CompactionRequestID>;
+  listPendingWork(sessionID: string): Promise<PendingWork>;
+  removePendingWork(sessionID: string, itemID: PendingWorkIdentity): Promise<PendingWorkRestoration>;
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): ApiSubscription;

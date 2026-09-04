@@ -617,7 +617,6 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 		CanonicalRoot: worktreeRoot,
 		DisplayName:   "feature-a",
 		Availability:  "available",
-		IsMain:        false,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
@@ -683,7 +682,6 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		CanonicalRoot: worktreeRoot,
 		DisplayName:   "feature-a",
 		Availability:  "available",
-		IsMain:        false,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}

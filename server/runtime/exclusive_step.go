@@ -74,6 +74,12 @@ func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiv
 	if s.reservationPendingLocked(reservation) {
 		return ErrExclusiveStepReservationPending
 	}
+	if reservation.pendingWork != nil {
+		if reservation.pendingWork.order != 0 {
+			return errors.New("operational Pending Work admission order is already assigned")
+		}
+		reservation.pendingWork.order = *s.engine.nextPendingWorkSteerAdmission()
+	}
 	waiter := &exclusiveStepWaiter{ready: make(chan struct{}), reservation: reservation}
 	if s.reservationWaiters == nil {
 		s.reservationWaiters = make(map[*exclusiveStepReservation]*exclusiveStepWaiter)
@@ -107,15 +113,18 @@ func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiv
 }
 
 func (s *defaultExclusiveStepLifecycle) ReleaseReservation(reservation *exclusiveStepReservation) {
+	if s == nil || s.engine == nil {
+		panic("exclusive step reservation release requires an Engine")
+	}
 	s.mu.Lock()
 	if reservation == nil || s.reservations == nil {
-		s.mu.Unlock()
 		panic("exclusive step reservation release does not match the held reservation")
 	}
 	if _, known := s.reservations[reservation]; !known {
-		s.mu.Unlock()
 		panic("exclusive step reservation release does not match the held reservation")
 	}
+	pending := reservation.pendingWork != nil
+	reservation.pendingWork = nil
 	if waiter := s.reservationWaiters[reservation]; waiter != nil {
 		index := slices.Index(s.nextWaiters, waiter)
 		if index >= 0 {
@@ -135,6 +144,9 @@ func (s *defaultExclusiveStepLifecycle) ReleaseReservation(reservation *exclusiv
 	}
 	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
+	if pending {
+		s.engine.publishPendingWorkChanged()
+	}
 	s.engine.surfaceRunError(s.scheduleIdleWork(true))
 }
 
@@ -543,15 +555,42 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 			return nil, "", context.Cause(ctx)
 		}
 
+		stepCtx, stepID, retry, err := s.claimNextWaiter(ctx, options, waiter)
+		if err != nil {
+			return nil, "", err
+		}
+		if retry {
+			continue
+		}
+		return s.publishStepBegan(options, stepCtx, stepID)
+	}
+}
+
+func (s *defaultExclusiveStepLifecycle) claimNextWaiter(
+	ctx context.Context,
+	options exclusiveStepOptions,
+	waiter *exclusiveStepWaiter,
+) (context.Context, string, bool, error) {
+	var stepCtx context.Context
+	var stepID string
+	retry := false
+	claim := func() (bool, error) {
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter {
-			s.mu.Unlock()
-			return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
+			return false, errors.New("exclusive step next-boundary reservation invariant violated")
+		}
+		if err := ctx.Err(); err != nil {
+			return false, context.Cause(ctx)
 		}
 		if s.suspended != nil || (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 {
 			waiter.ready = make(chan struct{})
-			s.mu.Unlock()
-			continue
+			retry = true
+			return false, nil
+		}
+		pending := waiter.reservation != nil && waiter.reservation.pendingWork != nil
+		if pending {
+			waiter.reservation.pendingWork = nil
 		}
 		s.nextWaiters = s.nextWaiters[1:]
 		if s.active != nil {
@@ -565,10 +604,18 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 		if options.Reservation != nil {
 			delete(s.reservationWaiters, options.Reservation)
 		}
-		stepCtx, stepID := s.activateLocked(ctx, options)
-		s.mu.Unlock()
-		return s.publishStepBegan(options, stepCtx, stepID)
+		stepCtx, stepID = s.activateLocked(ctx, options)
+		return pending, nil
 	}
+	if waiter.reservation == nil {
+		_, err := claim()
+		return stepCtx, stepID, retry, err
+	}
+	changed, err := claim()
+	if changed {
+		s.engine.publishPendingWorkChanged()
+	}
+	return stepCtx, stepID, retry, err
 }
 
 func validateExclusiveStepStart(ctx context.Context, options exclusiveStepOptions) error {
@@ -657,18 +704,28 @@ func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *ex
 }
 
 func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
+	idle := false
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if waiter.reservation != nil && waiter.reservation == s.heldReservation {
+		s.mu.Unlock()
 		return false
 	}
 	index := slices.Index(s.nextWaiters, waiter)
 	removed := index >= 0
+	pending := removed && waiter.reservation != nil && waiter.reservation.pendingWork != nil
+	if pending {
+		waiter.reservation.pendingWork = nil
+	}
 	if removed {
 		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
 	}
 	s.notifyNextWaiterLocked()
-	return removed && s.active == nil && s.publicationDepth == 0 && len(s.nextWaiters) == 0
+	idle = removed && s.active == nil && s.publicationDepth == 0 && len(s.nextWaiters) == 0
+	s.mu.Unlock()
+	if pending {
+		s.engine.publishPendingWorkChanged()
+	}
+	return idle
 }
 
 func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {

@@ -389,7 +389,7 @@ function retainedSetupError() {
             bare: false,
             locked_reason: null,
             prunable_reason: null,
-            is_main: false,
+            is_main_worktree: false,
             path_available: true,
           },
           kent: {

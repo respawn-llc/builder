@@ -76,6 +76,18 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	}
 }
 
+func TestWorktreeTransitionFailureProjectsPendingWorkCapacity(t *testing.T) {
+	for _, request := range []proto.Message{
+		&worktreepb.EnterRequest{},
+		&worktreepb.LeaveRequest{},
+	} {
+		detail := worktreeTransitionFailure(request, &serverapi.PendingWorkCapacityError{})
+		if _, ok := detail.(*worktreepb.PendingWorkCapacityDetails); !ok {
+			t.Fatalf("capacity detail = %T, want PendingWorkCapacityDetails", detail)
+		}
+	}
+}
+
 func newGatewayTestServer(t *testing.T) (*core.Core, *httptest.Server) {
 	t.Helper()
 	appCore, server, _ := newGatewayTestServerWithAuth(t, true)

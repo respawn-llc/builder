@@ -36,7 +36,6 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveThinkingStatus = transcriptThinkingStatusFromRuntime(runtimeSnapshot.ActiveThinkingStatus)
 	hydration.ActiveReasoningTraces = transcriptReasoningTracesFromRuntime(runtimeSnapshot.ActiveReasoningTraces)
 	hydration.InFlightTools = transcriptToolStartsFromRuntime(runtimeSnapshot.InFlightTools)
-	hydration.PendingWork = runtimeSnapshot.PendingWork
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
 	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
@@ -204,12 +203,16 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptToolAbortMessages(evt)
 	case runtime.EventQueuedUserMessageStatus:
 		return transcriptQueuedMessageStateMessages(evt)
-	case runtime.EventPendingWorkReplaced:
-		if evt.PendingWork == nil {
+	case runtime.EventPendingWorkChanged:
+		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptPendingWorkChanged{})}
+	case runtime.EventPendingWorkRestored:
+		if evt.PendingWorkRestoration == nil {
 			return nil
 		}
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(
-			clientui.TranscriptPendingWorkReplaced{PendingWork: *evt.PendingWork},
+			clientui.TranscriptPendingWorkRestored{
+				Restoration: *evt.PendingWorkRestoration,
+			},
 		)}
 	case runtime.EventHumanInputInterrupted:
 		return transcriptHumanInputInterruptedMessages(evt)

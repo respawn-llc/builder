@@ -97,12 +97,15 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 		WithUITerminalCursorState(newUITerminalCursorState()),
 	), 48, 10)
 	testSetMainInputAtRuneCursor(m, "hello", 2)
+	m.pendingWorkRefresh.collection = runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
+		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "server pending"),
+	}}
 	surface := &ongoingSurfaceSpy{}
 	controller := newTestOngoingTranscriptController(surface, m.ongoingFrameInput)
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingWorkReplaced)); err != nil {
+	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingWorkChanged)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 
@@ -129,13 +132,16 @@ func TestOngoingTranscriptControllerPreservesWrappedDisplayCursorTargetWithPrepe
 	if !projected.Visible {
 		t.Fatal("shared editor cursor projection is absent")
 	}
+	m.pendingWorkRefresh.collection = runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{
+		pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "server pending"),
+	}}
 
 	surface := &ongoingSurfaceSpy{}
 	controller := newTestOngoingTranscriptController(surface, m.ongoingFrameInput)
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingWorkReplaced)); err != nil {
+	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingWorkChanged)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 
@@ -243,7 +249,7 @@ func TestOngoingFrameInputKeepsServerBackedQueuedStateTranscriptOwned(t *testing
 func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
 	m.queueInput("queued before server acceptance")
-	m.pendingWork = runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "server pending")}}
+	m.pendingWorkRefresh.collection = runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "server pending")}}
 
 	frame := m.ongoingFrameInput()
 

@@ -226,36 +226,6 @@ message SetSessionNameRequest {
   string name = 2;
 }
 
-message SetThinkingLevelRequest {
-  string session_id = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.(kent.api.shared.nonblank) = true
-  ];
-  string level = 2 [(buf.validate.field).string.min_len = 1];
-}
-
-message ToggleRequest {
-  string session_id = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.(kent.api.shared.nonblank) = true
-  ];
-  bool enabled = 2;
-}
-
-message ToggleSuccess {
-  bool changed = 1;
-}
-
-message ReviewerToggleSuccess {
-  bool changed = 1;
-  string mode = 2 [(buf.validate.field).string.min_len = 1];
-}
-
-message EffectiveToggleSuccess {
-  bool changed = 1;
-  bool enabled = 2;
-}
-
 message ShouldCompactRequest {
   string session_id = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -380,10 +350,11 @@ message ManualCompactionAdmission {
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.(kent.api.shared.nonblank) = true
   ];
-  string restoration_input = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.(kent.api.shared.nonblank) = true
-  ];
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.manual_compaction_guidance_normalized"
+    message: "guidance must be normalized"
+    expression: "!has(this.guidance) || this.guidance == this.guidance.trim()"
+  };
 }
 
 message InterruptRequest {
@@ -535,6 +506,18 @@ enum PendingWorkItemKind {
   PENDING_WORK_ITEM_KIND_UNSPECIFIED = 0;
   PENDING_WORK_ITEM_KIND_MESSAGE = 1;
   PENDING_WORK_ITEM_KIND_MANUAL_COMPACTION = 2;
+  PENDING_WORK_ITEM_KIND_WORKTREE_TRANSITION = 3;
+}
+
+enum PendingWorkItemState {
+  PENDING_WORK_ITEM_STATE_UNSPECIFIED = 0;
+  PENDING_WORK_ITEM_STATE_PENDING = 1;
+}
+
+enum PendingWorkWorktreeTransitionKind {
+  PENDING_WORK_WORKTREE_TRANSITION_KIND_UNSPECIFIED = 0;
+  PENDING_WORK_WORKTREE_TRANSITION_KIND_ENTER = 1;
+  PENDING_WORK_WORKTREE_TRANSITION_KIND_LEAVE = 2;
 }
 
 message PendingWorkMessage {
@@ -542,6 +525,21 @@ message PendingWorkMessage {
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.(kent.api.shared.nonblank) = true
   ];
+}
+
+message PendingWorkWorktreeTransition {
+  PendingWorkWorktreeTransitionKind transition = 1 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  optional string selector = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.pending_work_worktree_transition_payload"
+    message: "Worktree enter requires a normalized selector and leave forbids one"
+    expression:
+      "(this.transition == 1 && has(this.selector) && this.selector == this.selector.trim()) || "
+      "(this.transition == 2 && !has(this.selector))"
+  };
 }
 
 message PendingWorkItem {
@@ -555,11 +553,30 @@ message PendingWorkItem {
     option (buf.validate.oneof).required = true;
     PendingWorkMessage message = 4;
     ManualCompactionAdmission manual_compaction = 5;
+    PendingWorkWorktreeTransition worktree_transition = 8;
   }
+  PendingWorkItemState state = 6 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  string canonical_input = 7 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.pending_work_item_payload"
+    message: "Pending Work kind, lane, payload, and canonical input must agree"
+    expression:
+      "(this.kind == 1 && has(this.message) && this.canonical_input == this.message.text) || "
+      "(this.kind == 2 && this.lane == 1 && has(this.manual_compaction) && this.canonical_input == (has(this.manual_compaction.guidance) ? '/compact ' + this.manual_compaction.guidance : '/compact')) || "
+      "(this.kind == 3 && this.lane == 1 && has(this.worktree_transition) && this.canonical_input == (this.worktree_transition.transition == 1 ? '/wt switch ' + this.worktree_transition.selector : '/wt leave'))"
+  };
 }
 
 message PendingWork {
   repeated PendingWorkItem items = 1 [(buf.validate.field).repeated.items.required = true];
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.pending_work_unique_ids"
+    message: "Pending Work item identities must be unique"
+    expression: "this.items.map(item, item.id).unique()"
+  };
 }
 
 message ListPendingWorkRequest {
@@ -584,20 +601,12 @@ message RemovePendingWorkRequest {
   ];
 }
 
-message PendingWorkManualCompactionRestoration {
-  string input = 1 [
+message PendingWorkRestoration {
+  PendingWorkItemKind kind = 1 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
+  string canonical_input = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.(kent.api.shared.nonblank) = true
   ];
-}
-
-message PendingWorkRestoration {
-  PendingWorkItemKind kind = 1 [(buf.validate.field).enum = { defined_only: true not_in: [0] }];
-  oneof payload {
-    option (buf.validate.oneof).required = true;
-    PendingWorkMessage message = 2;
-    PendingWorkManualCompactionRestoration manual_compaction = 3;
-  }
 }
 
 message RemovePendingWorkSuccess {
@@ -747,11 +756,6 @@ message SetSessionNameError {
   }
 }
 
-message SetThinkingLevelError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
-message SetFastModeEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
-message SetReviewerEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
-message SetAutoCompactionEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
-message SetQuestionsEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
 message ShouldCompactError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
 message ListPendingWorkError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
 message RemovePendingWorkError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
@@ -915,7 +919,6 @@ message SetSessionNameResult {
   }
 }
 
-message SetThinkingLevelResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; SetThinkingLevelError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
 message SubmitUserShellCommandResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
@@ -931,32 +934,6 @@ message CompactContextResult {
     CompactContextError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
-
-message SetFastModeEnabledResult {
-  oneof outcome {
-    option (buf.validate.oneof).required = true;
-    ToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    SetFastModeEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
-  }
-}
-
-message ReviewerToggleResult {
-  oneof outcome {
-    option (buf.validate.oneof).required = true;
-    ReviewerToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    SetReviewerEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
-  }
-}
-
-message SetAutoCompactionEnabledResult {
-  oneof outcome {
-    option (buf.validate.oneof).required = true;
-    EffectiveToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    SetAutoCompactionEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
-  }
-}
-
-message SetQuestionsEnabledResult { oneof outcome { option (buf.validate.oneof).required = true; EffectiveToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; SetQuestionsEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
 
 message ShouldCompactResult {
   oneof outcome {
@@ -1052,56 +1029,6 @@ service SettingsService {
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
       legacy_wire_name: "runtime.setSessionName"
-    };
-  }
-  rpc SetThinkingLevel(SetThinkingLevelRequest) returns (SetThinkingLevelResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setThinkingLevel"
-    };
-  }
-  rpc SetFastModeEnabled(ToggleRequest) returns (SetFastModeEnabledResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setFastModeEnabled"
-    };
-  }
-  rpc SetReviewerEnabled(ToggleRequest) returns (ReviewerToggleResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setReviewerEnabled"
-    };
-  }
-  rpc SetAutoCompactionEnabled(ToggleRequest) returns (SetAutoCompactionEnabledResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setAutoCompactionEnabled"
-    };
-  }
-  rpc SetQuestionsEnabled(ToggleRequest) returns (SetQuestionsEnabledResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_UNARY
-      authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
-      direction: DIRECTION_CLIENT_TO_SERVER
-      unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "runtime.setQuestionsEnabled"
     };
   }
 }

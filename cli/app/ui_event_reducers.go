@@ -208,10 +208,18 @@ func (m *uiModel) reduceInputAsyncMessage(msg tea.Msg) uiFeatureUpdateResult {
 		cmd := m.applyRuntimeControlDone(msg)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
+	case chatSettingsDoneMsg:
+		cmd := m.applyChatSettingsDone(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, cmd)
 	case goalRuntimeDoneMsg:
 		cmd := m.applyGoalRuntimeDone(msg)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
+	case pendingWorkRefreshDoneMsg:
+		cmd := m.applyPendingWorkRefreshDone(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(cmd))
 	case injectedQueueCreateDoneMsg:
 		next, cmd := m.inputController().handleInjectedQueueCreateDone(msg)
 		nextModel := next.(*uiModel)

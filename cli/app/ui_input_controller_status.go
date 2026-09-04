@@ -5,9 +5,9 @@ import (
 )
 
 func (m *uiModel) reviewerInvocationState() (bool, string) {
-	mode := strings.ToLower(strings.TrimSpace(m.cachedRuntimeStatus().ReviewerFrequency))
+	mode := strings.ToLower(strings.TrimSpace(m.reviewerMode))
 	if mode == "" {
-		mode = strings.ToLower(strings.TrimSpace(m.reviewerMode))
+		mode = strings.ToLower(strings.TrimSpace(m.cachedRuntimeStatus().ReviewerFrequency))
 	}
 	if mode == "" {
 		mode = "off"
@@ -16,9 +16,5 @@ func (m *uiModel) reviewerInvocationState() (bool, string) {
 }
 
 func (m *uiModel) fastModeState() (bool, bool) {
-	status := m.cachedRuntimeStatus()
-	if !status.FastModeAvailable && m.fastModeAvailable {
-		status.FastModeAvailable = true
-	}
-	return status.FastModeAvailable, status.FastModeEnabled
+	return m.fastModeAvailable, m.fastModeEnabled
 }

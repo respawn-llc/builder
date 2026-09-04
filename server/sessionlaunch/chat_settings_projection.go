@@ -83,6 +83,7 @@ func ProjectChatSettings(input ChatSettingsProjectionInput) (serverapi.ChatSetti
 		AgentEditability: agentEditability,
 		Supervisor: serverapi.ChatSettingsSupervisor{
 			Value:       serverapi.ChatSettingsSupervisorValue(effective.Supervisor),
+			Baseline:    serverapi.ChatSettingsSupervisorValue(selectedSettings.Baseline.Supervisor),
 			Editability: serverapi.ChatSettingsEditable,
 		},
 		Thinking: thinking,

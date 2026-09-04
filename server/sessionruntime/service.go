@@ -69,11 +69,11 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	return err
 }
 
-func applyAgentSelection(store *session.Store, selection *session.ChatAgentSelection) (bool, error) {
-	if selection == nil {
+func applyAgentSelection(store *session.Store, target *session.ChatSettingsState) (bool, error) {
+	if target == nil {
 		return false, nil
 	}
-	result, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: selection})
+	result, err := store.CommitChatSettingsState(*target)
 	return result.Changed, err
 }
 
@@ -101,20 +101,22 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		}
 		agentSelectionChanged := false
 		if req.AgentSelection != nil {
-			selection := session.ChatAgentSelection{
-				Agent: req.AgentSelection.Agent,
-				Baseline: session.ChatSettings{
+			target, targetErr := session.ChatSettingsStateFromCompleteSettings(
+				req.AgentSelection.Agent,
+				session.ChatSettings{
 					Supervisor:     req.AgentSelection.Baseline.Supervisor,
 					Thinking:       req.AgentSelection.Baseline.Thinking,
 					Fast:           req.AgentSelection.Baseline.Fast,
 					Questions:      req.AgentSelection.Baseline.Questions,
 					AutoCompaction: req.AgentSelection.Baseline.AutoCompaction,
 				},
+			)
+			if targetErr != nil {
+				return nil, nil, targetErr
 			}
-			var selectionErr error
-			agentSelectionChanged, selectionErr = applyAgentSelection(store, &selection)
-			if selectionErr != nil {
-				return nil, nil, selectionErr
+			agentSelectionChanged, targetErr = applyAgentSelection(store, &target)
+			if targetErr != nil {
+				return nil, nil, targetErr
 			}
 		}
 		persisted := store.Meta().ChatSettings

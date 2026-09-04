@@ -8,12 +8,14 @@ import (
 	"core/cli/app/commands"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
 
 type submitDoneMsg struct {
 	token         uint64
+	sessionID     runtimeids.SessionID
 	message       string
 	submittedText string
 	resultKind    *clientui.UserTurnResultKind
@@ -74,36 +76,35 @@ type goalRuntimeDoneMsg struct {
 	operation      goalRuntimeOperation
 	objective      string
 	goal           *clientui.RuntimeGoal
+	mutation       clientui.GoalMutationResult
 	err            error
 }
 
 type runtimeControlOperation string
 
 const (
-	runtimeControlSetSessionName    runtimeControlOperation = "set_session_name"
-	runtimeControlSetThinkingLevel  runtimeControlOperation = "set_thinking_level"
-	runtimeControlSetFastMode       runtimeControlOperation = "set_fast_mode"
-	runtimeControlSetReviewer       runtimeControlOperation = "set_reviewer"
-	runtimeControlSetAutoCompaction runtimeControlOperation = "set_auto_compaction"
-	runtimeControlSetQuestions      runtimeControlOperation = "set_questions"
-	runtimeControlInterrupt         runtimeControlOperation = "interrupt"
+	runtimeControlSetSessionName runtimeControlOperation = "set_session_name"
+	runtimeControlInterrupt      runtimeControlOperation = "interrupt"
 )
 
 type runtimeControlDoneMsg struct {
-	token          uint64
-	sessionID      string
-	operation      runtimeControlOperation
-	text           string
-	enabled        bool
-	changed        bool
-	mode           string
-	compactionMode string
-	runtimeTuple   *runtimeTupleCandidate
-	err            error
+	token        uint64
+	sessionID    string
+	operation    runtimeControlOperation
+	text         string
+	runtimeTuple *runtimeTupleCandidate
+	err          error
+}
+
+type chatSettingsDoneMsg struct {
+	operation serverapi.ChatSettingsMutationOperationKind
+	response  serverapi.ChatSettingsMutationResponse
+	err       error
 }
 
 type injectedQueueCreateDoneMsg struct {
 	token                    uint64
+	sessionID                runtimeids.SessionID
 	localID                  string
 	item                     clientui.QueuedUserMessage
 	completed                bool
@@ -113,6 +114,7 @@ type injectedQueueCreateDoneMsg struct {
 
 type injectedQueueDiscardDoneMsg struct {
 	token     uint64
+	sessionID runtimeids.SessionID
 	localID   string
 	serverID  string
 	discarded bool
@@ -120,7 +122,9 @@ type injectedQueueDiscardDoneMsg struct {
 
 type compactDoneMsg struct {
 	requestID     runtimeids.CompactionRequestID
+	sessionID     runtimeids.SessionID
 	submittedText string
+	invoked       bool
 	err           error
 }
 

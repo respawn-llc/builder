@@ -13,14 +13,6 @@ import (
 
 const operatorErrorFeedbackRole = string(transcript.EntryRoleDeveloperErrorFeedback)
 
-func (c uiInputController) appendSystemFeedbackWithMirroredStatus(text string, kind uiStatusNoticeKind) tea.Cmd {
-	noticeID := c.model.nextLocalNoticeID()
-	return sequenceCmds(
-		c.model.appendLocalEntryWithNoticeID("system", text, noticeID),
-		c.model.sendTransientStatusWithNoticeID(text, kind, transientStatusDuration, uiStatusNoticeReplace, noticeID),
-	)
-}
-
 type uiInputController struct {
 	model *uiModel
 }

@@ -255,14 +255,20 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	return result.item, result.accepted, err
 }
 
-func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
+func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Context, message llm.Message, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if operationCtx == nil {
+		operationCtx = context.Background()
 	}
-	if err := ctx.Err(); err != nil {
+	if callerCtx == nil {
+		callerCtx = context.Background()
+	}
+	if err := operationCtx.Err(); err != nil {
+		return QueuedUserMessage{}, false, err
+	}
+	if err := callerCtx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
 	if message.Content == nil || strings.TrimSpace(*message.Content) == "" {
@@ -285,7 +291,10 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx c
 			e.liveRun.rollbackAdmission(admission)
 		}
 	}()
-	if err := ctx.Err(); err != nil {
+	if err := operationCtx.Err(); err != nil {
+		return QueuedUserMessage{}, false, err
+	}
+	if err := callerCtx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
 	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Message: message}
@@ -295,7 +304,10 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx c
 				return false, err
 			}
 		}
-		if err := ctx.Err(); err != nil {
+		if err := operationCtx.Err(); err != nil {
+			return false, err
+		}
+		if err := callerCtx.Err(); err != nil {
 			return false, err
 		}
 		stepID, finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
@@ -305,12 +317,17 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx c
 			return false, context.Canceled
 		}
 		committed = true
+		admission := e.nextPendingWorkSteerAdmission()
 		e.outputMutationMu.Lock()
 		queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
-			admission: runtimeOperationSequence(operationCtx),
+			steerAdmission: admission,
 		})
+		if queueErr == nil {
+			item = queuedItem
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false, nil)
+		}
+		e.outputMutationMu.Unlock()
 		if queueErr != nil {
-			e.outputMutationMu.Unlock()
 			queueItemID := mustQueueItemID(item.ID)
 			e.liveRun.finishQueueItemPublication(queueItemID)
 			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
@@ -324,6 +341,7 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx c
 		}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false, statusStepID)
 		e.outputMutationMu.Unlock()
+		e.publishPendingWorkChanged()
 		return true, nil
 	})
 	if err := commandAcceptanceResult(accepted, err); err != nil {
@@ -335,7 +353,6 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx context.Context, ctx c
 	} else {
 		e.scheduleQueuedUserInjectionsIfIdle()
 	}
-	e.publishPendingWorkSnapshot()
 	return item, true, nil
 }
 
@@ -409,13 +426,10 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 	for _, item := range removed {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
 	}
-	pendingWork, pendingWorkErr := e.PendingWorkSnapshot()
 	e.emitInterruptedHumanInputs(removed)
 	e.outputMutationMu.Unlock()
-	if pendingWorkErr != nil {
-		e.surfaceRunError(pendingWorkErr)
-	} else if len(removed) != 0 {
-		e.publishPendingWork(pendingWork)
+	if len(removed) != 0 {
+		e.publishPendingWorkChanged()
 	}
 	e.liveRun.clearStoppedQueueItems(failed)
 }
@@ -444,14 +458,8 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queue
 		}
 		filtered = append(filtered, item)
 	}
-	pendingWork, pendingWorkErr := e.PendingWorkSnapshot()
 	e.emitInterruptedHumanInputs(removed)
 	e.outputMutationMu.Unlock()
-	if pendingWorkErr != nil {
-		e.surfaceRunError(pendingWorkErr)
-	} else if len(removed) != 0 {
-		e.publishPendingWork(pendingWork)
-	}
 	return filtered
 }
 

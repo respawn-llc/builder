@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"buf.build/go/protovalidate"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/worktreecontract"
 	"github.com/google/uuid"
 )
@@ -84,6 +86,7 @@ const (
 
 type WorktreeTransitionFailure struct {
 	Diagnostic         string
+	SelectorError      *worktreepb.SelectorErrorDetails
 	DeletePrecondition *WorktreeDirtyState
 }
 
@@ -115,7 +118,15 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 		if strings.TrimSpace(outcome.Failure.Diagnostic) == "" {
 			return errors.New("worktree transition failure diagnostic is required")
 		}
+		if outcome.Failure.SelectorError != nil {
+			if err := protovalidate.Validate(outcome.Failure.SelectorError); err != nil {
+				return err
+			}
+		}
 		if outcome.Failure.DeletePrecondition != nil {
+			if outcome.Failure.SelectorError != nil {
+				return errors.New("worktree transition selector error cannot carry delete precondition")
+			}
 			precondition := outcome.Failure.DeletePrecondition
 			if err := worktreecontract.ValidateDeleteTransitionPrecondition(
 				worktreecontract.TransitionKind(outcome.Transition),

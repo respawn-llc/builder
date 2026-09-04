@@ -539,19 +539,6 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 		}
 	})
 
-	t.Run("provider-specific thinking level", func(t *testing.T) {
-		if err := eng.SetThinkingLevel(t.Context(), " provider-specific-depth "); err != nil {
-			t.Fatalf("set provider-specific thinking level: %v", err)
-		}
-		if got := eng.ThinkingLevel(); got != "provider-specific-depth" {
-			t.Fatalf("thinking level = %q, want provider-specific-depth", got)
-		}
-		meta := eng.store.Meta()
-		if meta.ChatSettings == nil || meta.ChatSettings.Thinking == nil || *meta.ChatSettings.Thinking != "provider-specific-depth" {
-			t.Fatalf("provider-specific Thinking override = %+v", meta.ChatSettings)
-		}
-	})
-
 	t.Run("unsupported fast mode", func(t *testing.T) {
 		changed, err := eng.SetFastModeEnabled(true)
 		if err == nil {
@@ -715,26 +702,6 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	restarted := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, cfg)
 	if restarted.FastModeEnabled() {
 		t.Fatal("expected fast mode disabled after restart")
-	}
-}
-
-func TestSetAutoCompactionEnabledPersistsSessionSetting(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-
-	changed, enabled, err := eng.SetAutoCompactionEnabled(t.Context(), false)
-	if err != nil {
-		t.Fatalf("disable auto-compaction: %v", err)
-	}
-	if !changed || enabled {
-		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
-	}
-	if got := eng.AutoCompactionEnabled(); got {
-		t.Fatalf("expected runtime auto-compaction disabled, got %v", got)
-	}
-	meta := store.Meta()
-	if meta.ChatSettings == nil || meta.ChatSettings.AutoCompaction == nil || *meta.ChatSettings.AutoCompaction {
-		t.Fatalf("Session Auto-compaction override = %+v, want false", meta.ChatSettings)
 	}
 }
 

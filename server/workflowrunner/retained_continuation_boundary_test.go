@@ -244,7 +244,6 @@ func TestRetainedRunPromptThinkingOverridePersistsAndAffectsExecution(t *testing
 				currentNodeLinearTransition{id: "next", mode: workflow.ContextModeCompactAndContinueSession, requiresApproval: true})
 			sessionID, reference, _ := prepareRetainedSessionForWorkflow(t, f, workflowID, client)
 			setupCompactions := len(client.CompactionCalls())
-			service := runtimecontrol.NewService(f.authority)
 			if live {
 				var binding *agentruntime.CurrentNodeExecutionBinding
 				err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *agentruntime.Engine) error {
@@ -259,7 +258,9 @@ func TestRetainedRunPromptThinkingOverridePersistsAndAffectsExecution(t *testing
 				mustRetained(t, binding.Close(), "close live retained Thinking Session: %v")
 			}
 			level := "high"
-			err := service.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{SessionID: sessionID.String(), Level: level})
+			err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(callbackCtx context.Context, engine *agentruntime.Engine) error {
+				return engine.SetThinkingLevel(callbackCtx, level)
+			})
 			mustRetained(t, err, "set retained Thinking: %v")
 			var progress []serverapi.RunPromptProgress
 			_, err = runPromptClientForCurrentNodeFixture(f, f.controller).RunPrompt(context.Background(),

@@ -124,8 +124,12 @@ func currentGoalExecutionRequired() (CurrentGoalOperationOutcome, error) {
 }
 
 func (e *Engine) currentGoalDisposition(disposition GoalCommandDisposition, goal session.GoalState, cleared bool) (CurrentGoalOperationOutcome, error) {
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return CurrentGoalOperationOutcome{}, err
+	}
 	result := goalCommandResult(disposition, goal, cleared, session.CommitReceipt{}, session.CommitReceipt{})
-	result.Availability = e.GoalMutationAvailability()
+	result.Availability = &availability
 	return currentGoalHandled(result, nil)
 }
 
@@ -304,10 +308,13 @@ func (e *Engine) setGoalRaw(provenance steeringProvenance, objective string, act
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
 	objective = strings.TrimSpace(objective)
-	availability := e.GoalMutationAvailability()
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return GoalCommandResult{}, err
+	}
 	goal, metadataReceipt, err := e.store.SetGoal(objective, actor)
 	result := goalCommandResult(GoalCommandApplied, goal, false, metadataReceipt, session.CommitReceipt{})
-	result.Availability = availability
+	result.Availability = &availability
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
 	}
@@ -316,7 +323,7 @@ func (e *Engine) setGoalRaw(provenance steeringProvenance, objective string, act
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(goal, availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(goal, &availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -363,11 +370,14 @@ func (e *Engine) setGoalStatusRaw(provenance steeringProvenance, status session.
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
-	availability := e.GoalMutationAvailability()
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return GoalCommandResult{}, err
+	}
 	if current := e.Goal(); current != nil && current.Status == status {
 		if status != session.GoalStatusActive || e.GoalLoopContinuationEnforced() {
 			result := goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{})
-			result.Availability = availability
+			result.Availability = &availability
 			return result, nil
 		}
 	}
@@ -382,7 +392,7 @@ func (e *Engine) setGoalStatusRaw(provenance steeringProvenance, status session.
 		disposition = GoalCommandNoop
 	}
 	result := goalCommandResult(disposition, goal, false, metadataReceipt, session.CommitReceipt{})
-	result.Availability = availability
+	result.Availability = &availability
 	if err != nil || !transitioned || !metadataReceipt.Committed {
 		return result, err
 	}
@@ -391,7 +401,7 @@ func (e *Engine) setGoalStatusRaw(provenance steeringProvenance, status session.
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(goal, availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(goal, &availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -670,10 +680,13 @@ func (e *Engine) clearGoalRaw(provenance steeringProvenance, actor session.GoalA
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
-	availability := e.GoalMutationAvailability()
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return GoalCommandResult{}, err
+	}
 	goal, metadataReceipt, err := e.store.ClearGoal(actor)
 	result := goalCommandResult(GoalCommandApplied, goal, true, metadataReceipt, session.CommitReceipt{})
-	result.Availability = availability
+	result.Availability = &availability
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
 	}
@@ -682,7 +695,7 @@ func (e *Engine) clearGoalRaw(provenance steeringProvenance, actor session.GoalA
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusClearUpdate(availability))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusClearUpdate(&availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -709,7 +722,11 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID string) {
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
 		}))
 	}
-	availability := e.GoalMutationAvailability()
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		reportErr(err)
+		return
+	}
 	completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
 	if err != nil {
 		reportErr(err)
@@ -724,7 +741,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID string) {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(completed, availability)); err != nil {
+	if _, err := e.steerGoalNoticeAndStatusRaw(provenance, msg, goalStatusUpdateFromState(completed, &availability)); err != nil {
 		reportErr(err)
 	}
 }

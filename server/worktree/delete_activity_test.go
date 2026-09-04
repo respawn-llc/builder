@@ -105,6 +105,7 @@ func deleteActivityRuntimePlan(
 	client llm.Client,
 	reviewerFrequency string,
 	reviewerClientFactory runtimewire.RuntimeClientFactory,
+	onEvent ...func(runtime.Event),
 ) sessionruntime.AgentRuntimePlan {
 	t.Helper()
 	settings := env.cfg.Settings
@@ -113,6 +114,10 @@ func deleteActivityRuntimePlan(
 	settings.Reviewer.Frequency = reviewerFrequency
 	settings.Reviewer.Model = "gpt-5"
 	settings.Reviewer.ThinkingLevel = "low"
+	var eventObserver func(runtime.Event)
+	if len(onEvent) > 0 {
+		eventObserver = onEvent[0]
+	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings:              settings,
 		QuestionsEnabled:      textutil.Value(true),
@@ -126,6 +131,7 @@ func deleteActivityRuntimePlan(
 		}(),
 		Client:                client,
 		ReviewerClientFactory: reviewerClientFactory,
+		OnEvent:               eventObserver,
 	})
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)

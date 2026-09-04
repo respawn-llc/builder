@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"core/server/metadata"
 	"core/server/runtime"
@@ -25,12 +26,8 @@ type RuntimeActivityResolver interface {
 	RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error)
 }
 
-type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string) error
-}
-
-type sessionStatusPublisher interface {
-	PublishSessionStatus(sessionID string) error
+type sessionSettingPublisher interface {
+	PublishSessionSettingFeedback(sessionID string, feedback clientui.TranscriptSessionSettingFeedback) error
 }
 
 type PromptHistoryStore interface {
@@ -199,121 +196,92 @@ func (s *Service) withRuntime(ctx context.Context, sessionID string, fn func(con
 	return s.authority.WithCurrentRuntime(ctx, id, fn)
 }
 
-func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSessionNameRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		if err := engine.SetSessionName(callbackCtx, req.Name); err != nil {
-			return err
-		}
-		if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-			return publisher.PublishSessionIdentity(req.SessionID)
-		}
-		return nil
-	})
+type runtimeCommandAttempt struct {
+	caller     context.Context
+	ctx        context.Context
+	cancel     context.CancelCauseFunc
+	stopCaller func() bool
+
+	mu       sync.Mutex
+	accepted bool
+	finished bool
 }
 
-func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSetThinkingLevelRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
+func newRuntimeCommandAttempt(caller context.Context) *runtimeCommandAttempt {
+	if caller == nil {
+		caller = context.Background()
 	}
-	if strings.TrimSpace(req.Level) == "" {
-		return errors.New("thinking level is required")
-	}
-	if err := s.authority.WithSessionChatSettings(ctx, req.SessionID, func(callbackCtx context.Context, store *session.Store, engine *runtime.Engine) error {
-		if engine != nil {
-			return engine.SetThinkingLevel(callbackCtx, req.Level)
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(caller))
+	attempt := &runtimeCommandAttempt{caller: caller, ctx: ctx, cancel: cancel}
+	attempt.stopCaller = context.AfterFunc(caller, func() {
+		attempt.mu.Lock()
+		defer attempt.mu.Unlock()
+		if !attempt.accepted && !attempt.finished {
+			attempt.cancel(context.Cause(caller))
 		}
-		level := strings.TrimSpace(req.Level)
-		_, err := store.MutateChatSettings(session.ChatSettingsMutation{Thinking: &level})
-		return err
-	}); err != nil {
-		return err
-	}
-	return s.publishSessionStatus(req.SessionID)
-}
-
-func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetFastModeEnabledResponse{}, err
-	}
-	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(callbackCtx context.Context, engine *runtime.Engine) (serverapi.RuntimeSetFastModeEnabledResponse, session.CommitReceipt, error) {
-		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(callbackCtx, req.Enabled, func(changed bool) string {
-			return serverapi.FastModeToggleStatusMessage(req.Enabled, changed)
-		})
-		return serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}, receipt, err
 	})
+	if cause := context.Cause(caller); cause != nil {
+		attempt.cancel(cause)
+	}
+	return attempt
 }
 
-func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetReviewerEnabledResponse{}, err
+func (a *runtimeCommandAttempt) Context() context.Context {
+	if a == nil {
+		return context.Background()
 	}
-	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(callbackCtx context.Context, engine *runtime.Engine) (serverapi.RuntimeSetReviewerEnabledResponse, session.CommitReceipt, error) {
-		changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(callbackCtx, req.Enabled, func(enabled bool, mode string, changed bool) string {
-			return serverapi.ReviewerToggleStatusMessage(enabled, mode, changed)
-		})
-		return serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}, receipt, err
-	})
+	return a.ctx
 }
 
-func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, err
+func (a *runtimeCommandAttempt) Accept(commit func() (bool, error)) (bool, error) {
+	if a == nil {
+		return false, errors.New("runtime command attempt is required")
 	}
-	var resp serverapi.RuntimeSetAutoCompactionEnabledResponse
-	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		if !req.Enabled {
-			if err := s.rejectWorkflowAutoCompactionDisable(callbackCtx, req.SessionID, engine); err != nil {
-				return err
-			}
+	if commit == nil {
+		return false, errors.New("runtime command acceptance mutation is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.finished {
+		return false, errors.New("runtime command attempt already finished")
+	}
+	if a.accepted {
+		return false, errors.New("runtime command was accepted more than once")
+	}
+	if cause := context.Cause(a.caller); cause != nil {
+		a.cancel(cause)
+		return false, cause
+	}
+	committed, err := commit()
+	if committed {
+		a.accepted = true
+		if a.stopCaller != nil {
+			a.stopCaller()
 		}
-		changed, enabled, err := engine.SetAutoCompactionEnabled(callbackCtx, req.Enabled)
-		if err != nil {
-			return err
-		}
-		resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
-		return s.publishSessionStatus(req.SessionID)
-	})
-	return resp, err
+	}
+	return committed, err
 }
 
-func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
+func (a *runtimeCommandAttempt) Accepted() bool {
+	if a == nil {
+		return false
 	}
-	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(callbackCtx context.Context, engine *runtime.Engine) (serverapi.RuntimeSetQuestionsEnabledResponse, session.CommitReceipt, error) {
-		changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(callbackCtx, req.Enabled, func(enabled bool, changed bool) string {
-			return serverapi.QuestionsToggleStatusMessage(enabled, changed)
-		})
-		return serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}, receipt, err
-	})
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.accepted
 }
 
-func committedRuntimeMutation[Resp any](
-	service *Service,
-	ctx context.Context,
-	sessionID string,
-	run func(context.Context, *runtime.Engine) (Resp, session.CommitReceipt, error),
-) (Resp, error) {
-	var zero Resp
-	var response Resp
-	var resultErr error
-	err := service.withRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		var receipt session.CommitReceipt
-		var mutationErr error
-		response, receipt, mutationErr = run(callbackCtx, engine)
-		if !receipt.Committed {
-			return mutationErr
-		}
-		resultErr = errors.Join(mutationErr, service.publishSessionStatus(sessionID))
-		return nil
-	})
-	if err != nil {
-		return zero, err
+func (a *runtimeCommandAttempt) Finish() {
+	if a == nil {
+		return
 	}
-	return response, resultErr
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.finished = true
+	if a.stopCaller != nil {
+		a.stopCaller()
+	}
+	a.cancel(context.Canceled)
 }
 
 func runRuntimeCommand[Resp any](
@@ -323,26 +291,36 @@ func runRuntimeCommand[Resp any](
 	var zero Resp
 	response, accepted, err := run(ctx)
 	if !accepted {
-		return zero, runtimeCommandNotAccepted(err)
+		if errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+			return zero, err
+		}
+		if err == nil {
+			err = errors.New("runtime command completed without accepting a mutation")
+		}
+		return zero, serverapi.NewRuntimeCommandNotAcceptedError(err)
 	}
 	return response, err
 }
 
-func runtimeCommandNotAccepted(cause error) error {
-	if errors.Is(cause, serverapi.ErrRuntimeCommandNotAccepted) {
-		return cause
+func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSessionNameRequest) error {
+	if err := req.Validate(); err != nil {
+		return err
 	}
-	if cause == nil {
-		cause = errors.New("runtime command completed without accepting a mutation")
-	}
-	return serverapi.NewRuntimeCommandNotAcceptedError(cause)
-}
-
-func (s *Service) publishSessionStatus(sessionID string) error {
-	if publisher, ok := s.activity.(sessionStatusPublisher); ok {
-		return publisher.PublishSessionStatus(sessionID)
-	}
-	return nil
+	return s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		changed, err := engine.SetSessionName(callbackCtx, req.Name)
+		if err != nil {
+			return err
+		}
+		if publisher, ok := s.activity.(sessionSettingPublisher); ok {
+			name := strings.TrimSpace(req.Name)
+			return publisher.PublishSessionSettingFeedback(req.SessionID, clientui.TranscriptSessionSettingFeedback{
+				Kind:        clientui.SessionSettingSessionName,
+				Changed:     changed,
+				SessionName: &name,
+			})
+		}
+		return nil
+	})
 }
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
@@ -400,7 +378,7 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 		return err
 	}
 	_, err := runRuntimeCommand(ctx, func(ctx context.Context) (struct{}, bool, error) {
-		attempt := runtime.NewCommandAttempt(ctx)
+		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			_, err := engine.SubmitUserShellCommandWithAcceptance(runCtx, req.Command, attempt.Accept)
@@ -416,7 +394,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return err
 	}
 	_, err := runRuntimeCommand(ctx, func(ctx context.Context) (struct{}, bool, error) {
-		attempt := runtime.NewCommandAttempt(ctx)
+		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			_, compactErr := engine.CompactContextAdmissionForRequestWithAcceptance(runCtx, req.RequestID, req.Admission, attempt.Accept)
@@ -497,7 +475,9 @@ func (s *Service) ListPendingWork(ctx context.Context, req serverapi.RuntimeList
 		return snapshotErr
 	})
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return serverapi.RuntimeListPendingWorkResponse{}, nil
+		return serverapi.RuntimeListPendingWorkResponse{
+			PendingWork: serverapi.PendingWork{Items: []serverapi.PendingWorkItem{}},
+		}, nil
 	}
 	return response, err
 }

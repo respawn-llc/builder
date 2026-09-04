@@ -499,7 +499,7 @@ func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
 		_, _ = client.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
 			Attachment:  attachment,
 			DropOwner:   true,
-			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 			OwnerID:     ownerID,
 		})
 		cancel()

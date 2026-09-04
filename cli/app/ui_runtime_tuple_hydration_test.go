@@ -10,6 +10,7 @@ import (
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 )
@@ -24,6 +25,12 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 	current.Session.SessionName = "current"
 	runtimeClient.storeMainView(current)
 	m := newProjectedTestUIModel(runtimeClient)
+	m.pendingWorkRefresh = pendingWorkRefreshOwner{
+		sessionID:       ongoingTestSessionID(),
+		generation:      7,
+		collection:      runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{pendingWorkMessageForTest(runtimeinput.PendingWorkLaneSteer, "existing Pending Work")}},
+		successfulFetch: true,
+	}
 	m.queued = []queuedInputItem{{ID: "existing", Text: "existing"}}
 	m.reasoningStatusHeader = "existing reasoning"
 	surface := &ongoingSurfaceSpy{}
@@ -39,6 +46,7 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 	beforeReasoning := m.reasoningStatusHeader
 	beforeLifecycle := m.runtimeLifecycle
 	beforeAsk := m.ask
+	beforePendingWorkRefresh := m.pendingWorkRefresh
 
 	hydration := runtimeTupleTestRichHydration(10)
 	_, cmd, err := controller.Accept(hydration)
@@ -52,6 +60,7 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 	assertUnchanged(t, "UI reasoning", m.reasoningStatusHeader, beforeReasoning)
 	assertUnchanged(t, "UI lifecycle", m.runtimeLifecycle, beforeLifecycle)
 	assertUnchanged(t, "ask controller", m.ask, beforeAsk)
+	assertUnchanged(t, "Pending Work refresh", m.pendingWorkRefresh, beforePendingWorkRefresh)
 	if controller.hydrated || controller.lastSequence != 0 || len(controller.liveReadModel.sections) != 0 {
 		t.Fatalf(
 			"stale hydration changed controller state: hydrated=%t sequence=%d sections=%+v",
