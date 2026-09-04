@@ -291,10 +291,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
-				if err := s.commitPendingUserSteer(stepID, options, &mismatchWarningCommitted); err != nil {
-					return llm.Request{}, err
-				}
-				return e.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
+				return s.buildActiveTurnRequestAtBoundary(ctx, stepID, options, &mismatchWarningCommitted)
 			},
 			func(delta llm.AssistantDelta) {
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
@@ -556,6 +553,31 @@ func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options step
 		*mismatchWarningCommitted = false
 	}
 	return nil
+}
+
+func (s *defaultStepExecutor) buildActiveTurnRequestAtBoundary(
+	ctx context.Context,
+	stepID string,
+	options stepLoopOptions,
+	mismatchWarningCommitted *bool,
+) (llm.Request, error) {
+	for {
+		if err := s.commitPendingUserSteer(stepID, options, mismatchWarningCommitted); err != nil {
+			return llm.Request{}, err
+		}
+		request, err := s.engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
+		if err != nil {
+			return llm.Request{}, err
+		}
+		// Request preparation may persist contract state. Reopen the boundary
+		// when mutations arrived during that work, then rebuild from their result.
+		if !s.engine.HasPendingRuntimeOperations() {
+			return request, nil
+		}
+		if err := s.engine.stepLifecycle.BeginAgentStepBoundary(ctx); err != nil {
+			return llm.Request{}, err
+		}
+	}
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response, options stepLoopOptions) (preparedCompletedResponse, error) {

@@ -2670,6 +2670,13 @@ func TestPendingPromptKeepsExactExecutionInterruptibleWithoutActiveRuntimeStep(t
 			if pending := <-feed; pending.scopeID != handle.Scope().ID() || pending.requestID != request.ID || pending.resolved {
 				t.Fatalf("pending prompt = %+v", pending)
 			}
+			var engine *runtime.Engine
+			if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+				engine = current
+				return nil
+			}); err != nil {
+				t.Fatalf("capture Runtime before interruption: %v", err)
+			}
 
 			interrupted, err := test.interrupt(context.Background(), authority, sessionID)
 			if err != nil || !interrupted {
@@ -2680,6 +2687,19 @@ func TestPendingPromptKeepsExactExecutionInterruptibleWithoutActiveRuntimeStep(t
 			}
 			if resolved := <-feed; resolved.requestID != request.ID || !resolved.resolved {
 				t.Fatalf("resolved prompt = %+v", resolved)
+			}
+			page, err := engine.TranscriptNewestSegmentPage()
+			if err != nil {
+				t.Fatalf("read interrupted transcript: %v", err)
+			}
+			var interruptionCount int
+			for _, entry := range page.Snapshot.Entries {
+				if entry.MessageType == llm.MessageTypeInterruption {
+					interruptionCount++
+				}
+			}
+			if interruptionCount != 1 {
+				t.Fatalf("interruption entries = %d, want 1", interruptionCount)
 			}
 			if _, err := handle.Wait(context.Background()); !errors.Is(err, context.Canceled) {
 				t.Fatalf("wait interrupted execution = %v, want context canceled", err)

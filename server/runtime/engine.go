@@ -686,6 +686,19 @@ func (e *Engine) Interrupt() error {
 	return nil
 }
 
+func (e *Engine) PersistInterruption() error {
+	return e.steerInterruption(steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeInterruption),
+			Content:     textutil.Value(interruptMessage),
+		}},
+	))
+}
+
 func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant llm.Message, err error) {
 	return e.submitUserMessage(ctx, text, nil, nil, nil)
 }

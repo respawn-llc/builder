@@ -8,9 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"core/server/llm"
-	"core/shared/textutil"
-
 	"github.com/google/uuid"
 )
 
@@ -415,7 +412,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(afterPersist f
 }
 
 func (s *defaultExclusiveStepLifecycle) persistInterruption() error {
-	return s.engine.steerInterruption(steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}}))
+	return s.engine.PersistInterruption()
 }
 
 func (s *defaultExclusiveStepLifecycle) runCurrentLocked(run *exclusiveRunState) bool {

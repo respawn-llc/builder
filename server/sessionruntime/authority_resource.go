@@ -1305,7 +1305,8 @@ func (a *Authority) interruptCurrentAgentExecution(
 			var err error
 			interrupted, err = interrupt(engine)
 			if err == nil && !interrupted && promptPending {
-				interrupted = true
+				err = engine.PersistInterruption()
+				interrupted = err == nil
 			}
 			if err == nil && interrupted {
 				execution.cancel()

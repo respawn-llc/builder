@@ -12,6 +12,8 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -181,6 +183,171 @@ func TestAgentStepBoundaryDrainsEveryAcceptedSteerBeforeNextRequest(t *testing.T
 	}
 	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 0 {
 		t.Fatalf("Pending Work after next request = %+v, want empty", pending.Items)
+	}
+}
+
+func TestAgentStepBoundaryDrainsSteersAcceptedWhileFollowingRequestIsPreparing(t *testing.T) {
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	first := commentaryResponse("working", llm.ToolCall{
+		ID:    "live-tail-boundary-tool",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"true"}`),
+	})
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	followingRequestStarted := make(chan struct{})
+	releaseFollowingRequest := make(chan struct{})
+	client := &hookClient{response: first}
+	client.beforeReturn = func() error {
+		close(requestStarted)
+		<-releaseRequest
+		client.mu.Lock()
+		client.response = finalTextResponse("done")
+		client.beforeReturn = func() error {
+			client.mu.Lock()
+			client.beforeReturn = nil
+			client.mu.Unlock()
+			close(followingRequestStarted)
+			<-releaseFollowingRequest
+			return nil
+		}
+		client.mu.Unlock()
+		return nil
+	}
+	var releaseRequestOnce sync.Once
+	releaseInitialRequest := func() {
+		releaseRequestOnce.Do(func() { close(releaseRequest) })
+	}
+	var releaseFollowingRequestOnce sync.Once
+	releaseNextRequest := func() {
+		releaseFollowingRequestOnce.Do(func() { close(releaseFollowingRequest) })
+	}
+	t.Cleanup(releaseInitialRequest)
+	t.Cleanup(releaseNextRequest)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		client,
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{Model: "gpt-5"},
+	)
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(t.Context(), "start")
+		runDone <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("initial Agent Step did not start")
+	}
+
+	queueSteer := func(text string, beforeQueue func() error) (<-chan error, string) {
+		t.Helper()
+		done := make(chan error, 1)
+		steer, err := NewAgentSteer(runtimeids.NewSessionID(), text)
+		if err != nil {
+			t.Fatalf("create Agent Steer %q: %v", text, err)
+		}
+		go func() {
+			_, accepted, queueErr := engine.QueueAgentSteerForActiveRun(t.Context(), steer, beforeQueue)
+			if queueErr == nil && !accepted {
+				queueErr = errors.New("Agent Steer was not accepted")
+			}
+			done <- queueErr
+		}()
+		return done, messageContent(steer.Message())
+	}
+
+	type persistenceBlock struct {
+		entered <-chan struct{}
+		release func()
+	}
+	persistenceBlockReady := make(chan persistenceBlock, 1)
+	firstSteerDone, firstSteerMessage := queueSteer("first steer", func() error {
+		persistenceObservations := 0
+		entered, release := gate.BlockWhen(func(session.PersistedStoreSnapshot) bool {
+			persistenceObservations++
+			// The first observation commits the tool result and first Steer.
+			// The second prepares durable state for the following request.
+			return persistenceObservations == 2
+		})
+		persistenceBlockReady <- persistenceBlock{entered: entered, release: release}
+		return nil
+	})
+	waitForAcceptedRuntimeOperationCount(t, engine, 1)
+	releaseInitialRequest()
+	block := <-persistenceBlockReady
+	t.Cleanup(block.release)
+	if err := <-firstSteerDone; err != nil {
+		t.Fatalf("accept first Agent Steer: %v", err)
+	}
+	select {
+	case <-block.entered:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for following-request preparation to enter persistence")
+	}
+
+	secondSteerDone, secondSteerMessage := queueSteer("second steer", nil)
+	waitForAcceptedRuntimeOperationCount(t, engine, 1)
+	thirdSteerDone, thirdSteerMessage := queueSteer("third steer", nil)
+	waitForAcceptedRuntimeOperationCount(t, engine, 2)
+	block.release()
+	select {
+	case <-followingRequestStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("following provider request did not start")
+	}
+	var secondSteerErr, thirdSteerErr error
+	select {
+	case secondSteerErr = <-secondSteerDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for the second Steer to be accepted")
+	}
+	select {
+	case thirdSteerErr = <-thirdSteerDone:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for the third Steer to be accepted")
+	}
+
+	client.mu.Lock()
+	requests := append([]llm.Request(nil), client.calls...)
+	client.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("provider requests at following boundary = %d, want 2", len(requests))
+	}
+	var actualSteers []string
+	for _, message := range requestMessages(requests[1]) {
+		if message.Role == llm.RoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == llm.MessageTypeAgentSteer {
+			actualSteers = append(actualSteers, messageContent(message))
+		}
+	}
+	expectedSteers := []string{firstSteerMessage, secondSteerMessage, thirdSteerMessage}
+	if !slices.Equal(actualSteers, expectedSteers) {
+		t.Fatalf("following provider request Steers = %+v, want %+v", actualSteers, expectedSteers)
+	}
+
+	releaseNextRequest()
+	if secondSteerErr != nil {
+		t.Fatalf("accept second Agent Steer: %v", secondSteerErr)
+	}
+	if thirdSteerErr != nil {
+		t.Fatalf("accept third Agent Steer: %v", thirdSteerErr)
+	}
+	if err := <-runDone; err != nil {
+		t.Fatalf("Agent Turn: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 0 {
+		t.Fatalf("Pending Work after following request = %+v, want empty", pending.Items)
 	}
 }
 
