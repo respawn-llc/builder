@@ -173,6 +173,7 @@ func (s *Service) submitUserTurn(
 		)
 	}
 	workflowHistoryRecorded := false
+	var historyErr error
 	err = executeTurn()
 	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
 		preparing := false
@@ -204,8 +205,8 @@ func (s *Service) submitUserTurn(
 			)
 			if reactivateErr == nil {
 				if attempt.Accepted() {
-					s.recordAcceptedUserTurnHistory(request, projection)
 					workflowHistoryRecorded = true
+					historyErr = s.recordAcceptedUserTurnHistory(request, projection)
 				}
 				_, admissionErr := continuationResult.WaitAdmission(attempt.Caller())
 				if admissionErr != nil {
@@ -226,21 +227,26 @@ func (s *Service) submitUserTurn(
 		}
 	}
 	if attempt.Accepted() && !workflowHistoryRecorded {
-		s.recordAcceptedUserTurnHistory(request, projection)
+		workflowHistoryRecorded = true
+		historyErr = s.recordAcceptedUserTurnHistory(request, projection)
 	}
-	return response, err
+	return response, errors.Join(err, historyErr)
 }
 
 func (s *Service) recordAcceptedUserTurnHistory(
 	request sessionUserTurnRequest,
 	projection userTurnProjection,
-) {
+) error {
 	if _, err := s.recordPromptHistory(context.Background(), request.SessionID, projection.HistoryText); err != nil {
-		_ = s.withRuntime(context.Background(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		reportErr := s.withRuntime(context.Background(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			engine.ReportPromptHistoryPersistError(err.Error())
 			return nil
 		})
+		if reportErr != nil {
+			return errors.Join(err, reportErr)
+		}
 	}
+	return nil
 }
 
 func (s *Service) runPreSubmitCompaction(
