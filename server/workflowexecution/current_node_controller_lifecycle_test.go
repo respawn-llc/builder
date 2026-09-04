@@ -727,17 +727,24 @@ func TestCurrentNodeControllerRejectsProtocolViolationsAfterScopeRetires(t *test
 
 func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer", "node-target")
+	targetNode := workflow.CurrentNode{
+		Reference:  target,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
 		Source: currentNodeReferenceForControllerTest(t, "task-approval-steer", "node-source"),
+		Branches: []workflow.PendingApprovalBranch{{
+			Target: workflow.PendingApprovalTarget{
+				CurrentNode: targetNode,
+				NodeKind:    workflow.NodeKindAgent,
+			},
+		}},
 	}
 	store := &currentNodeControllerStore{
 		pendingApproval: approval,
 		approvalApplied: workflowstore.PendingApprovalApplyResult{
-			Mutation: workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{{
-				Reference:  target,
-				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-			}}},
+			Mutation:         workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{targetNode}},
 			ResolvedApproval: approval,
 		},
 	}
@@ -770,17 +777,24 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 
 func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-target")
+	targetNode := workflow.CurrentNode{
+		Reference:  target,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
 		Source: currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-source"),
+		Branches: []workflow.PendingApprovalBranch{{
+			Target: workflow.PendingApprovalTarget{
+				CurrentNode: targetNode,
+				NodeKind:    workflow.NodeKindAgent,
+			},
+		}},
 	}
 	store := &currentNodeControllerStore{
 		pendingApproval: approval,
 		approvalApplied: workflowstore.PendingApprovalApplyResult{
-			Mutation: workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{{
-				Reference:  target,
-				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-			}}},
+			Mutation:         workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{targetNode}},
 			ResolvedApproval: approval,
 		},
 	}
