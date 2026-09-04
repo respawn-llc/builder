@@ -218,6 +218,15 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	); err == nil {
 		t.Fatal("attach foreign session unexpectedly allowed")
 	}
+	if err := executor.authorizeScopeFacts(
+		ctx,
+		&connectionState{},
+		rpccontract.ScopeAttachSession,
+		"AttachSession",
+		routeScopeParams{sessionID: fixture.foreignSessionID},
+	); err != nil {
+		t.Fatalf("fresh connection attach after cross-Project move: %v", err)
+	}
 }
 
 func TestRoutePolicyAllowsRuntimeReleaseAfterSessionMovesProjects(t *testing.T) {

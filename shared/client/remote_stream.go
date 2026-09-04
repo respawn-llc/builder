@@ -191,6 +191,9 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 	route := mustRemoteRoute(method)
 	var additionalAttachmentIntent *remoteAttachmentIntent
 	if attachSession {
+		if err := c.prepareDraftHandoff(ctx, sessionID); err != nil {
+			return nil, rpccontract.Route{}, err
+		}
 		attachedSessionID, attachedToSession := c.attachIntent.sessionID()
 		if attachedToSession && attachedSessionID != strings.TrimSpace(sessionID) {
 			return nil, rpccontract.Route{}, fmt.Errorf(

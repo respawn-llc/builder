@@ -81,8 +81,8 @@ func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *con
 		}
 		return clientui.SessionExecutionTarget{}, metadata.Binding{}, err
 	}
-	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
-	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
+	activeProjectID := ""
+	if state != nil {
 		activeProjectID = strings.TrimSpace(state.attachedProject)
 	}
 	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {

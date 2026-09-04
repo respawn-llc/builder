@@ -8,6 +8,7 @@ import (
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	remoteclient "core/shared/client"
+	"core/shared/clientui"
 	"core/shared/config"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
@@ -60,6 +61,121 @@ func registerGatewayTestBinding(t *testing.T, cfg config.App) metadata.Binding {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
 	return binding
+}
+
+func TestGatewayProjectRemotePreservesAttachedSessionDraftAfterCrossProjectMove(t *testing.T) {
+	home := t.TempDir()
+	sourceWorkspace := t.TempDir()
+	targetWorkspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureGatewayTestServerPort(t)
+
+	sourceConfig := resolveGatewayTestConfig(t, sourceWorkspace)
+	sourceBinding := registerGatewayTestBinding(t, sourceConfig.Config)
+	targetConfig := resolveGatewayTestConfig(t, targetWorkspace)
+	targetBinding := registerGatewayTestBinding(t, targetConfig.Config)
+
+	appCore, server := newGatewayTestServerForConfig(t, sourceConfig.Config)
+	movedSession := createGatewayAuthoritativeSession(t, appCore)
+	runtimeAttachment := activateGatewayController(t, appCore, movedSession.Meta().SessionID)
+	defer releaseGatewayController(t, appCore, runtimeAttachment)
+	foreignSession, err := session.Create(
+		filepath.Join(targetConfig.Config.PersistenceRoot, "projects", targetBinding.ProjectID, "sessions"),
+		"target",
+		targetConfig.Config.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create foreign: %v", err)
+	}
+	if err := foreignSession.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable foreign: %v", err)
+	}
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		sourceBinding.ProjectID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	transcript, err := remote.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: movedSession.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionTranscript: %v", err)
+	}
+	defer func() { _ = transcript.Close() }()
+	hydration, err := transcript.Next(context.Background())
+	if err != nil {
+		t.Fatalf("receive transcript hydration: %v", err)
+	}
+	if hydration.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("first transcript message kind = %q, want hydration", hydration.Kind())
+	}
+
+	if _, err := appCore.SessionLifecycleClient().RetargetSessionWorkspace(
+		context.Background(),
+		serverapi.SessionRetargetWorkspaceRequest{
+			SessionID:     movedSession.Meta().SessionID,
+			WorkspaceRoot: targetConfig.Config.WorkspaceRoot,
+			ProjectID:     &targetBinding.ProjectID,
+		},
+	); err != nil {
+		t.Fatalf("RetargetSessionWorkspace: %v", err)
+	}
+	identityContext, cancelIdentity := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelIdentity()
+	for {
+		identityMessage, err := transcript.Next(identityContext)
+		if err != nil {
+			t.Fatalf("receive moved Session identity: %v", err)
+		}
+		if identityMessage.Kind() != clientui.TranscriptMessageSessionIdentity {
+			continue
+		}
+		identity, ok := identityMessage.Payload().(clientui.TranscriptSessionIdentity)
+		if !ok || identity.ExecutionTarget == nil || identity.ExecutionTarget.WorkspaceID != targetBinding.WorkspaceID {
+			t.Fatalf("moved Session identity = %#v, want target Workspace %q", identityMessage.Payload(), targetBinding.WorkspaceID)
+		}
+		break
+	}
+
+	const draft = "survives the handoff"
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+		SessionID: movedSession.Meta().SessionID,
+		Input:     draft,
+	}); err != nil {
+		t.Fatalf("PersistInputDraft after cross-Project move: %v", err)
+	}
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+		SessionID: foreignSession.Meta().SessionID,
+		Input:     "must remain inaccessible",
+	}); err == nil {
+		t.Fatal("unrelated target-Project Session draft mutation unexpectedly allowed")
+	}
+
+	destination, err := remoteclient.DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		movedSession.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession after move: %v", err)
+	}
+	defer func() { _ = destination.Close() }()
+	initialInput, err := destination.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
+		SessionID: movedSession.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("GetInitialInput after reattach: %v", err)
+	}
+	if initialInput.Input != draft {
+		t.Fatalf("reattached draft = %q, want %q", initialInput.Input, draft)
+	}
 }
 
 func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *testing.T) {
