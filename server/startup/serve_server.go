@@ -623,6 +623,12 @@ func (d *startupGatewayDependencies) ChatSettingsClient() apicontract.ChatSettin
 	}
 	return nil
 }
+func (d *startupGatewayDependencies) ChatMutationClient() apicontract.ChatMutationService {
+	if c := d.activeCore(); c != nil {
+		return c.ChatMutationClient()
+	}
+	return nil
+}
 func (d *startupGatewayDependencies) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLifecycleClient()

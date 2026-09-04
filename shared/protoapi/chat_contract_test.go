@@ -464,6 +464,43 @@ func TestChatMutationRequestsRequireTypedTargetAndInput(t *testing.T) {
 	}
 }
 
+func TestChatTargetFromRequestReturnsTheSelectedTarget(t *testing.T) {
+	target := &chatpb.ChatTarget{
+		Target: &chatpb.ChatTarget_Session{
+			Session: &chatpb.ExistingSessionTarget{
+				SessionId: "8b0a92d4-18f8-4b5f-9b66-b8ac0f3f987e",
+			},
+		},
+	}
+	activation := &chatpb.Activation{
+		Input: &chatpb.Activation_Text{Text: "exact text"},
+	}
+	for name, request := range map[string]protoapi.ChatTargetRequest{
+		"Steer": &chatpb.SteerRequest{
+			Target:     target,
+			Activation: activation,
+		},
+		"Queue": &chatpb.QueueRequest{
+			Target:     target,
+			Activation: activation,
+		},
+		"Compact": &chatpb.CompactRequest{
+			Target:     target,
+			Invocation: &chatpb.CompactionInvocation{Token: "/compact"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			selected, err := protoapi.ChatTargetFromRequest(request)
+			if err != nil {
+				t.Fatalf("Chat target from request: %v", err)
+			}
+			if !proto.Equal(selected, target) {
+				t.Fatalf("selected target = %v, want %v", selected, target)
+			}
+		})
+	}
+}
+
 func TestChatOperationErrorsRequireMatchingTypedDetails(t *testing.T) {
 	sessionID := "8b0a92d4-18f8-4b5f-9b66-b8ac0f3f987e"
 	valid := &chatpb.SteerResult{

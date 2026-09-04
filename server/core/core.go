@@ -429,6 +429,10 @@ func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {
 	return chatSettingsService{core: s}
 }
 
+func (s *Core) ChatMutationClient() apicontract.ChatMutationService {
+	return nil
+}
+
 func (s *Core) ProjectID() string {
 	if s == nil {
 		return ""

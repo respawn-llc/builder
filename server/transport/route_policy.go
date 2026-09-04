@@ -11,6 +11,7 @@ import (
 	"core/server/auth"
 	rpccontract "core/shared/apicontract"
 	"core/shared/protoapi"
+	chatpb "core/shared/protoapi/gen/kent/api/chat"
 	processpb "core/shared/protoapi/gen/kent/api/process"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
@@ -264,24 +265,12 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 		_, err := e.gateway.activeProjectID(ctx, state)
 		return err
 	case rpccontract.ScopeProjectWorkspaceBinding:
-		activeProjectID, err := e.gateway.activeProjectID(ctx, state)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(scopeParams.projectID) != strings.TrimSpace(activeProjectID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		if strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(scopeParams.workspaceID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		binding, err := e.gateway.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, scopeParams.workspaceID)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(activeProjectID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		return nil
+		return e.gateway.requireProjectWorkspaceBinding(
+			ctx,
+			state,
+			scopeParams.projectID,
+			scopeParams.workspaceID,
+		)
 	case rpccontract.ScopeAttachSession:
 		_, _, err := e.gateway.resolveSessionAttachmentTargetWithCapability(
 			ctx,
@@ -315,6 +304,8 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 	case rpccontract.ScopeProcessActiveProject:
 		_, err := e.gateway.processInActiveProject(ctx, state, scopeParams.processID)
 		return err
+	case rpccontract.ScopeChatTarget:
+		return e.gateway.requireChatTargetAccess(ctx, state, scopeParams.chatTarget)
 	default:
 		return fmt.Errorf("unsupported route scope %q for method %q", scope, method)
 	}
@@ -326,6 +317,7 @@ type routeScopeParams struct {
 	processID                 string
 	projectID                 string
 	workspaceID               string
+	chatTarget                *chatpb.ChatTarget
 }
 
 func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams, error) {
@@ -509,6 +501,60 @@ func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectio
 		return nil
 	}
 	return g.requireSessionInActiveProject(ctx, state, sessionID)
+}
+
+func (g *Gateway) requireChatTargetAccess(ctx context.Context, state *connectionState, target *chatpb.ChatTarget) error {
+	switch selected := target.GetTarget().(type) {
+	case *chatpb.ChatTarget_Session:
+		if strings.TrimSpace(state.attachedProject) != "" || strings.TrimSpace(g.deps.ProjectID()) != "" {
+			return g.requireSessionInActiveProject(ctx, state, selected.Session.SessionId)
+		}
+		metadataStore := g.deps.MetadataStore()
+		if metadataStore == nil {
+			return errors.New("metadata store is required")
+		}
+		_, err := metadataStore.ResolvePersistedSession(ctx, selected.Session.SessionId)
+		return err
+	case *chatpb.ChatTarget_NewChat:
+		return g.requireProjectWorkspaceBinding(
+			ctx,
+			state,
+			selected.NewChat.ProjectId,
+			selected.NewChat.WorkspaceId,
+		)
+	default:
+		return errors.New("Chat target selection is required")
+	}
+}
+
+func (g *Gateway) requireProjectWorkspaceBinding(
+	ctx context.Context,
+	state *connectionState,
+	projectID string,
+	workspaceID string,
+) error {
+	activeProjectID, err := g.activeProjectID(ctx, state)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(projectID) != strings.TrimSpace(activeProjectID) {
+		return serverapi.ErrWorkspaceNotRegistered
+	}
+	if strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(workspaceID) {
+		return serverapi.ErrWorkspaceNotRegistered
+	}
+	metadataStore := g.deps.MetadataStore()
+	if metadataStore == nil {
+		return errors.New("metadata store is required")
+	}
+	binding, err := metadataStore.LookupWorkspaceBindingByID(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(activeProjectID) {
+		return serverapi.ErrWorkspaceNotRegistered
+	}
+	return nil
 }
 
 func (g *Gateway) requireRuntimeLiveSession(ctx context.Context, sessionID string) error {

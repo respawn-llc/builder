@@ -56,6 +56,7 @@ type GatewayDependencies interface {
 	GatewayOnboardingDependencies
 	GatewayProjectDependencies
 	GatewaySessionDependencies
+	GatewayChatDependencies
 	GatewayRuntimeDependencies
 	GatewayPromptDependencies
 	GatewayPromptCommandDependencies
@@ -108,6 +109,10 @@ type GatewaySessionDependencies interface {
 	SessionChatContextOwner() chatcontext.SessionOwner
 	RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error)
 	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error)
+}
+
+type GatewayChatDependencies interface {
+	ChatMutationClient() apicontract.ChatMutationService
 }
 
 type GatewayRuntimeDependencies interface {
