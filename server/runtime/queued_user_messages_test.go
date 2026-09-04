@@ -71,7 +71,8 @@ func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 func TestQueuedUserMessageStoreRejectsDuplicatePendingIdentity(t *testing.T) {
 	store := &queuedUserMessageStore{}
 	item := QueuedUserMessage{
-		ID: runtimeids.NewQueueItemID().String(),
+		ID:                    runtimeids.NewQueueItemID().String(),
+		CanonicalPresentation: "first",
 		Message: llm.Message{
 			Role:    llm.RoleUser,
 			Content: textutil.Value("first"),

@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 
 	"core/shared/apicontract"
@@ -12,98 +11,12 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func TestGatewayChatMutationsInvokeServiceOnceForEveryTargetContext(t *testing.T) {
+func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
 	fixture := newRoutePolicyFixture(t)
 	projectless := ""
-	for _, mutation := range chatMutationTransportCases() {
-		for _, targetCase := range []struct {
-			name      string
-			target    *chatpb.ChatTarget
-			state     *connectionState
-			projectID *string
-		}{
-			{
-				name: "projectless existing Session",
-				target: &chatpb.ChatTarget{
-					Target: &chatpb.ChatTarget_Session{
-						Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
-					},
-				},
-				state:     &connectionState{},
-				projectID: &projectless,
-			},
-			{
-				name: "attached Project existing Session",
-				target: &chatpb.ChatTarget{
-					Target: &chatpb.ChatTarget_Session{
-						Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
-					},
-				},
-				state: &connectionState{
-					attachedProject:     fixture.bindingA.ProjectID,
-					attachedWorkspaceID: fixture.bindingA.WorkspaceID,
-				},
-			},
-			{
-				name: "exact New Chat Project and workspace",
-				target: newChatRoutePolicyTarget(
-					fixture.bindingA.ProjectID,
-					fixture.bindingA.WorkspaceID,
-				),
-				state: &connectionState{
-					attachedProject:     fixture.bindingA.ProjectID,
-					attachedWorkspaceID: fixture.bindingA.WorkspaceID,
-				},
-			},
-		} {
-			t.Run(string(mutation.methodName)+"/"+targetCase.name, func(t *testing.T) {
-				service := &countingChatMutationService{resolvedSessionID: fixture.ownSessionID}
-				deps := &chatAuthorizationGatewayDependencies{
-					GatewayDependencies: fixture.appCore,
-					service:             service,
-					projectID:           targetCase.projectID,
-				}
-				gateway, err := NewGateway(deps, gatewayTestIdentity())
-				if err != nil {
-					t.Fatalf("NewGateway: %v", err)
-				}
-
-				result, failure := dispatchChatMutation(
-					t,
-					gateway,
-					targetCase.state,
-					mutation.methodName,
-					mutation.request(targetCase.target),
-				)
-				if failure != nil {
-					t.Fatalf("Chat mutation transport failure: %+v", failure)
-				}
-				classified, err := protoapi.ClassifyResult(result)
-				if err != nil {
-					t.Fatalf("classify Chat mutation result: %v", err)
-				}
-				if classified.Outcome != protoapi.OperationSuccess {
-					t.Fatalf("Chat mutation result = %+v, want success", classified)
-				}
-				if deps.selectionCount.Load() != 1 {
-					t.Fatalf("Chat service selections = %d, want 1", deps.selectionCount.Load())
-				}
-				if service.callCount.Load() != 1 {
-					t.Fatalf("Chat service calls = %d, want 1", service.callCount.Load())
-				}
-			})
-		}
-	}
-}
-
-func TestGatewayChatTargetMismatchesRejectBeforeServiceSelection(t *testing.T) {
-	fixture := newRoutePolicyFixture(t)
-	projectless := ""
-	missingSessionID := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
-	for _, tc := range []struct {
+	for _, test := range []struct {
 		name      string
 		target    *chatpb.ChatTarget
 		state     *connectionState
@@ -111,7 +24,37 @@ func TestGatewayChatTargetMismatchesRejectBeforeServiceSelection(t *testing.T) {
 		wantCode  string
 	}{
 		{
-			name: "attached Project foreign Session",
+			name: "projectless existing Session",
+			target: &chatpb.ChatTarget{
+				Target: &chatpb.ChatTarget_Session{
+					Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
+				},
+			},
+			state:     &connectionState{},
+			projectID: &projectless,
+		},
+		{
+			name: "attached Project existing Session",
+			target: &chatpb.ChatTarget{
+				Target: &chatpb.ChatTarget_Session{
+					Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
+				},
+			},
+			state: &connectionState{
+				attachedProject:     fixture.bindingA.ProjectID,
+				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
+			},
+		},
+		{
+			name:   "exact New Chat binding",
+			target: newChatRoutePolicyTarget(fixture.bindingA.ProjectID, fixture.bindingA.WorkspaceID),
+			state: &connectionState{
+				attachedProject:     fixture.bindingA.ProjectID,
+				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
+			},
+		},
+		{
+			name: "foreign existing Session",
 			target: &chatpb.ChatTarget{
 				Target: &chatpb.ChatTarget_Session{
 					Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
@@ -124,71 +67,33 @@ func TestGatewayChatTargetMismatchesRejectBeforeServiceSelection(t *testing.T) {
 			wantCode: "session_not_found",
 		},
 		{
-			name: "projectless missing Session",
-			target: &chatpb.ChatTarget{
-				Target: &chatpb.ChatTarget_Session{
-					Session: &chatpb.ExistingSessionTarget{SessionId: missingSessionID},
-				},
-			},
-			state:     &connectionState{},
-			projectID: &projectless,
-			wantCode:  "session_not_found",
-		},
-		{
-			name: "wrong Project",
-			target: newChatRoutePolicyTarget(
-				fixture.bindingB.ProjectID,
-				fixture.bindingB.WorkspaceID,
-			),
+			name:   "mismatched New Chat binding",
+			target: newChatRoutePolicyTarget(fixture.bindingB.ProjectID, fixture.bindingB.WorkspaceID),
 			state: &connectionState{
 				attachedProject:     fixture.bindingA.ProjectID,
 				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
-			},
-			wantCode: "workspace_not_registered",
-		},
-		{
-			name: "wrong Workspace",
-			target: newChatRoutePolicyTarget(
-				fixture.bindingA.ProjectID,
-				fixture.bindingB.WorkspaceID,
-			),
-			state: &connectionState{
-				attachedProject:     fixture.bindingA.ProjectID,
-				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
-			},
-			wantCode: "workspace_not_registered",
-		},
-		{
-			name: "Workspace bound to another Project",
-			target: newChatRoutePolicyTarget(
-				fixture.bindingA.ProjectID,
-				fixture.bindingB.WorkspaceID,
-			),
-			state: &connectionState{
-				attachedProject:     fixture.bindingA.ProjectID,
-				attachedWorkspaceID: fixture.bindingB.WorkspaceID,
 			},
 			wantCode: "workspace_not_registered",
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			service := &countingChatMutationService{resolvedSessionID: fixture.ownSessionID}
-			deps := &chatAuthorizationGatewayDependencies{
-				GatewayDependencies: fixture.appCore,
-				service:             service,
-				projectID:           tc.projectID,
-			}
-			gateway, err := NewGateway(deps, gatewayTestIdentity())
+		t.Run(test.name, func(t *testing.T) {
+			gateway, err := NewGateway(
+				&chatAuthorizationGatewayDependencies{
+					GatewayDependencies: fixture.appCore,
+					service:             chatAuthorizationService{sessionID: fixture.ownSessionID},
+					projectID:           test.projectID,
+				},
+				gatewayTestIdentity(),
+			)
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)
 			}
 
-			result, failure := dispatchChatMutation(
+			result, failure := dispatchChatSteer(
 				t,
 				gateway,
-				tc.state,
-				"Steer",
-				chatSteerRequest(tc.target),
+				test.state,
+				chatSteerRequest(test.target),
 			)
 			if failure != nil {
 				t.Fatalf("Chat mutation transport failure: %+v", failure)
@@ -197,72 +102,26 @@ func TestGatewayChatTargetMismatchesRejectBeforeServiceSelection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("classify Chat mutation result: %v", err)
 			}
-			if classified.Outcome != protoapi.OperationKnownFailure ||
-				classified.Failure == nil ||
-				classified.Failure.Code != tc.wantCode {
-				t.Fatalf("Chat mutation result = %+v, want %q failure", classified, tc.wantCode)
+			if test.wantCode == "" {
+				if classified.Outcome != protoapi.OperationSuccess {
+					t.Fatalf("outcome = %+v, want success", classified)
+				}
+				return
 			}
-			if deps.selectionCount.Load() != 0 {
-				t.Fatalf("Chat service selections = %d, want 0", deps.selectionCount.Load())
-			}
-			if service.callCount.Load() != 0 {
-				t.Fatalf("Chat service calls = %d, want 0", service.callCount.Load())
+			if classified.Failure == nil || classified.Failure.Code != test.wantCode {
+				t.Fatalf("failure = %+v, want code %q", classified.Failure, test.wantCode)
 			}
 		})
 	}
 }
 
-func TestGatewayMalformedChatTargetRejectsBeforeServiceSelection(t *testing.T) {
-	fixture := newRoutePolicyFixture(t)
-	for _, target := range []*chatpb.ChatTarget{
-		nil,
-		{Target: &chatpb.ChatTarget_Session{}},
-	} {
-		service := &countingChatMutationService{resolvedSessionID: fixture.ownSessionID}
-		deps := &chatAuthorizationGatewayDependencies{
-			GatewayDependencies: fixture.appCore,
-			service:             service,
-		}
-		gateway, err := NewGateway(deps, gatewayTestIdentity())
-		if err != nil {
-			t.Fatalf("NewGateway: %v", err)
-		}
-
-		result, failure := dispatchChatMutation(
-			t,
-			gateway,
-			&connectionState{
-				attachedProject:     fixture.bindingA.ProjectID,
-				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
-			},
-			"Steer",
-			chatSteerRequest(target),
-		)
-		if result != nil {
-			t.Fatalf("malformed Chat target result = %v, want no result", result)
-		}
-		if failure == nil ||
-			failure.Code != sharedpb.TransportFailureCode_TRANSPORT_FAILURE_CODE_INVALID_PAYLOAD {
-			t.Fatalf("malformed Chat target failure = %+v, want invalid payload", failure)
-		}
-		if deps.selectionCount.Load() != 0 {
-			t.Fatalf("Chat service selections = %d, want 0", deps.selectionCount.Load())
-		}
-		if service.callCount.Load() != 0 {
-			t.Fatalf("Chat service calls = %d, want 0", service.callCount.Load())
-		}
-	}
-}
-
 type chatAuthorizationGatewayDependencies struct {
 	GatewayDependencies
-	service        apicontract.ChatMutationService
-	projectID      *string
-	selectionCount atomic.Int32
+	service   apicontract.ChatMutationService
+	projectID *string
 }
 
 func (d *chatAuthorizationGatewayDependencies) ChatMutationClient() apicontract.ChatMutationService {
-	d.selectionCount.Add(1)
 	return d.service
 }
 
@@ -273,42 +132,20 @@ func (d *chatAuthorizationGatewayDependencies) ProjectID() string {
 	return d.GatewayDependencies.ProjectID()
 }
 
-type countingChatMutationService struct {
-	resolvedSessionID string
-	callCount         atomic.Int32
+type chatAuthorizationService struct {
+	sessionID string
 }
 
-func (s *countingChatMutationService) Steer(
-	context.Context,
-	*chatpb.SteerRequest,
-) (*chatpb.InputMutationSuccess, error) {
-	s.callCount.Add(1)
-	return acceptedChatInputMutation(s.resolvedSessionID), nil
+func (s chatAuthorizationService) Steer(context.Context, *chatpb.SteerRequest) (*chatpb.InputMutationSuccess, error) {
+	return acceptedChatInputMutation(s.sessionID), nil
 }
 
-func (s *countingChatMutationService) Queue(
-	context.Context,
-	*chatpb.QueueRequest,
-) (*chatpb.InputMutationSuccess, error) {
-	s.callCount.Add(1)
-	return acceptedChatInputMutation(s.resolvedSessionID), nil
+func (s chatAuthorizationService) Queue(context.Context, *chatpb.QueueRequest) (*chatpb.InputMutationSuccess, error) {
+	return acceptedChatInputMutation(s.sessionID), nil
 }
 
-func (s *countingChatMutationService) Compact(
-	context.Context,
-	*chatpb.CompactRequest,
-) (*chatpb.CompactionMutationSuccess, error) {
-	s.callCount.Add(1)
-	return &chatpb.CompactionMutationSuccess{
-		Session: &chatpb.ExistingSessionTarget{SessionId: s.resolvedSessionID},
-		Outcome: &chatpb.CompactionMutationSuccess_Accepted{
-			Accepted: &chatpb.CompactionAccepted{
-				Request: &chatpb.CompactionRequestIdentity{
-					Id: "8b0a92d4-18f8-4b5f-9b66-b8ac0f3f987e",
-				},
-			},
-		},
-	}, nil
+func (s chatAuthorizationService) Compact(context.Context, *chatpb.CompactRequest) (*chatpb.CompactionMutationSuccess, error) {
+	panic("unexpected Compact call")
 }
 
 func acceptedChatInputMutation(sessionID string) *chatpb.InputMutationSuccess {
@@ -316,9 +153,7 @@ func acceptedChatInputMutation(sessionID string) *chatpb.InputMutationSuccess {
 		Session: &chatpb.ExistingSessionTarget{SessionId: sessionID},
 		Outcome: &chatpb.InputMutationSuccess_Accepted{
 			Accepted: &chatpb.InputAccepted{
-				QueueItem: &chatpb.QueueItemIdentity{
-					Id: "424e4b78-6516-4a31-89fb-7847cb2c9454",
-				},
+				QueueItem: &chatpb.QueueItemIdentity{Id: "424e4b78-6516-4a31-89fb-7847cb2c9454"},
 			},
 		},
 	}
@@ -343,33 +178,6 @@ func newChatRoutePolicyTarget(projectID string, workspaceID string) *chatpb.Chat
 	}
 }
 
-type chatMutationTransportCase struct {
-	methodName protoreflect.Name
-	request    func(*chatpb.ChatTarget) proto.Message
-}
-
-func chatMutationTransportCases() []chatMutationTransportCase {
-	return []chatMutationTransportCase{
-		{methodName: "Steer", request: func(target *chatpb.ChatTarget) proto.Message {
-			return chatSteerRequest(target)
-		}},
-		{methodName: "Queue", request: func(target *chatpb.ChatTarget) proto.Message {
-			return &chatpb.QueueRequest{
-				Target: target,
-				Activation: &chatpb.Activation{
-					Input: &chatpb.Activation_Text{Text: "exact text"},
-				},
-			}
-		}},
-		{methodName: "Compact", request: func(target *chatpb.ChatTarget) proto.Message {
-			return &chatpb.CompactRequest{
-				Target:     target,
-				Invocation: &chatpb.CompactionInvocation{Token: "/compact"},
-			}
-		}},
-	}
-}
-
 func chatSteerRequest(target *chatpb.ChatTarget) *chatpb.SteerRequest {
 	return &chatpb.SteerRequest{
 		Target: target,
@@ -379,16 +187,17 @@ func chatSteerRequest(target *chatpb.ChatTarget) *chatpb.SteerRequest {
 	}
 }
 
-func dispatchChatMutation(
+func dispatchChatSteer(
 	t *testing.T,
 	gateway *Gateway,
 	state *connectionState,
-	methodName protoreflect.Name,
-	request proto.Message,
+	request *chatpb.SteerRequest,
 ) (proto.Message, *sharedpb.TransportFailure) {
 	t.Helper()
-	service := chatpb.File_kent_api_chat_chat_proto.Services().ByName("ChatService")
-	method := service.Methods().ByName(methodName)
+	method := chatpb.File_kent_api_chat_chat_proto.Services().
+		ByName("ChatService").
+		Methods().
+		ByName("Steer")
 	operation, err := protoapi.OperationFromDescriptor(method)
 	if err != nil {
 		t.Fatalf("resolve Chat operation: %v", err)

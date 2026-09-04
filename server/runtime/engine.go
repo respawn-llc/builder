@@ -157,16 +157,17 @@ type Engine struct {
 	outputMutationMu sync.Mutex
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
-	queuedUserWorkMu          sync.Mutex
-	queuedUserWorkScheduled   bool
-	queuedUserWorkCompletion  runtimeDeferred[struct{}]
-	queuedUserWorkPauseCount  int
-	liveRun                   *liveRunCoordinator
-	activeStepGoalMutationsMu sync.Mutex
-	activeStepGoalMutations   map[string][]activeStepGoalMutation
-	pendingGoalLoopStart      bool
-	diagnostics               *diagnosticDedupeStore
-	toolCallStarts            *pendingToolCallStartStore
+	queuedUserWorkMu           sync.Mutex
+	queuedUserWorkScheduled    bool
+	queuedUserWorkCompletion   runtimeDeferred[struct{}]
+	queuedUserWorkPauseCount   int
+	queuedUserWorkAutoDrainIDs map[string]struct{}
+	liveRun                    *liveRunCoordinator
+	activeStepGoalMutationsMu  sync.Mutex
+	activeStepGoalMutations    map[string][]activeStepGoalMutation
+	pendingGoalLoopStart       bool
+	diagnostics                *diagnosticDedupeStore
+	toolCallStarts             *pendingToolCallStartStore
 
 	usageState           *usageTrackingState
 	goalLoop             *goalLoopState

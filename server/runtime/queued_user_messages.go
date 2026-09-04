@@ -138,6 +138,16 @@ func (s *queuedUserMessageStore) ClaimSteers() *queuedUserMessageClaim {
 	})
 }
 
+func (s *queuedUserMessageStore) ClaimSteersAndIDs(ids map[string]struct{}) *queuedUserMessageClaim {
+	return s.claim(func(pending queuedUserMessage) bool {
+		if pending.steerAdmission != nil {
+			return true
+		}
+		_, selected := ids[strings.TrimSpace(pending.message.ID)]
+		return selected
+	})
+}
+
 func (s *queuedUserMessageStore) claim(selected func(queuedUserMessage) bool) *queuedUserMessageClaim {
 	if s == nil || selected == nil {
 		return nil

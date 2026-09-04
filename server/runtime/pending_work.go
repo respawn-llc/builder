@@ -137,6 +137,7 @@ func (e *Engine) removePendingWork(id runtimeids.QueueItemID) (runtimeinput.Pend
 	if !removed {
 		return runtimeinput.PendingWorkRestoration{}, &runtimeinput.PendingWorkRemovalError{ItemID: id}
 	}
+	e.unmarkQueuedUserInjectionForAutoDrain(id.String())
 	if message.steerAdmission != nil {
 		e.completeLiveRunQueueItems(map[string]struct{}{id.String(): {}})
 	}

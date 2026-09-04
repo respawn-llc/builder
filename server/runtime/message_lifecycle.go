@@ -496,11 +496,11 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var claim *queuedUserMessageClaim
-	switch selection.(type) {
+	switch selected := selection.(type) {
 	case allPendingUserInjectionSelection:
 		claim = m.queue.ClaimAll()
 	case steerUserInjectionSelection:
-		claim = m.queue.ClaimSteers()
+		claim = m.queue.ClaimSteersAndIDs(selected.queueItemIDs)
 	default:
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
@@ -547,6 +547,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(
 		}
 		committedQueueItemIDs := queuedUserMessageIDSet(group.queueItems)
 		m.queue.FinalizeClaimItems(claim, committedQueueItemIDs)
+		e.unmarkQueuedUserInjectionForAutoDrainSet(committedQueueItemIDs)
 		if result.queueItemIDs == nil {
 			result.queueItemIDs = committedQueueItemIDs
 		} else {

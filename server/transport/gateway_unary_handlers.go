@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"core/shared/apicontract"
 	"core/shared/protoapi"

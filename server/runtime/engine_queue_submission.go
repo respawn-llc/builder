@@ -381,6 +381,37 @@ func (e *Engine) HasQueuedUserWork() bool {
 	return false
 }
 
+func (e *Engine) markQueuedUserInjectionForAutoDrain(queueItemID string) {
+	queueItemID = strings.TrimSpace(queueItemID)
+	if queueItemID == "" {
+		return
+	}
+	e.queuedUserWorkMu.Lock()
+	if e.queuedUserWorkAutoDrainIDs == nil {
+		e.queuedUserWorkAutoDrainIDs = make(map[string]struct{})
+	}
+	e.queuedUserWorkAutoDrainIDs[queueItemID] = struct{}{}
+	e.queuedUserWorkMu.Unlock()
+}
+
+func (e *Engine) unmarkQueuedUserInjectionForAutoDrainSet(queueItemIDs map[string]struct{}) {
+	if len(queueItemIDs) == 0 {
+		return
+	}
+	e.queuedUserWorkMu.Lock()
+	for queueItemID := range queueItemIDs {
+		delete(e.queuedUserWorkAutoDrainIDs, strings.TrimSpace(queueItemID))
+	}
+	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
+		e.queuedUserWorkAutoDrainIDs = nil
+	}
+	e.queuedUserWorkMu.Unlock()
+}
+
+func (e *Engine) unmarkQueuedUserInjectionForAutoDrain(queueItemID string) {
+	e.unmarkQueuedUserInjectionForAutoDrainSet(map[string]struct{}{queueItemID: {}})
+}
+
 func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if e == nil {
 		return false
@@ -395,10 +426,11 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if e.failQueuedUserWorkIfTerminal() {
 		return false
 	}
-	if !e.messageFlow.HasPendingUserSteers() {
+	e.queuedUserWorkMu.Lock()
+	if !e.messageFlow.HasPendingUserSteers() && len(e.queuedUserWorkAutoDrainIDs) == 0 {
+		e.queuedUserWorkMu.Unlock()
 		return false
 	}
-	e.queuedUserWorkMu.Lock()
 	if e.queuedUserWorkScheduled {
 		e.queuedUserWorkMu.Unlock()
 		return true
@@ -427,7 +459,7 @@ func (e *Engine) processQueuedUserWork(
 			return
 		}
 		e.ensureOrchestrationCollaborators()
-		if e.messageFlow.HasPendingUserSteers() {
+		if e.messageFlow.HasPendingUserSteers() || e.hasQueuedUserAutoDrainIDs() {
 			e.scheduleQueuedUserInjectionsIfIdle()
 		}
 	}()
@@ -438,7 +470,11 @@ func (e *Engine) processQueuedUserWork(
 		e.surfaceRunError(err)
 		return nil
 	}
-	_, receipt, _, err := e.submitQueuedUserMessages(ctx, steerUserInjections(), nil)
+	_, receipt, _, err := e.submitQueuedUserMessages(
+		ctx,
+		steerUserInjections(e.queuedUserAutoDrainIDSnapshot()),
+		nil,
+	)
 	reschedulePending = receipt.Committed
 	if err != nil {
 		if fatal, abort := resultGroupFatalFromError(err); abort {
@@ -489,6 +525,18 @@ func (e *Engine) clearQueuedUserWorkScheduled(
 	e.queuedUserWorkCompletion = runtimeDeferred[struct{}]{}
 	e.queuedUserWorkMu.Unlock()
 	completion.complete(struct{}{}, err)
+}
+
+func (e *Engine) hasQueuedUserAutoDrainIDs() bool {
+	e.queuedUserWorkMu.Lock()
+	defer e.queuedUserWorkMu.Unlock()
+	return len(e.queuedUserWorkAutoDrainIDs) > 0
+}
+
+func (e *Engine) queuedUserAutoDrainIDSnapshot() map[string]struct{} {
+	e.queuedUserWorkMu.Lock()
+	defer e.queuedUserWorkMu.Unlock()
+	return cloneMapIfNonEmpty(e.queuedUserWorkAutoDrainIDs)
 }
 
 func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {
