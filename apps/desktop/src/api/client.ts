@@ -7,6 +7,8 @@ import {
   type Readiness,
 } from "@app/server-api-contract/gen/kent/api/server/server_pb";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+import type { ChatApi } from "./chat";
+import { createChatApi } from "./chat";
 import { listSessionPage as listSessionCatalogPage } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
@@ -131,7 +133,10 @@ export class ApiClient implements ApiService {
   constructor(transport: DescriptorRpcTransport) {
     this.#transport = transport;
     this.connection = transport.connection;
+    this.chat = createChatApi(transport);
   }
+
+  readonly chat: ChatApi;
 
   async getReadiness(): Promise<ServerReadiness> {
     const method = ServerService.method.getReadiness;

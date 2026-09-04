@@ -2662,7 +2662,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -2671,7 +2670,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.canonical_root_path = ?1
 LIMIT 1
 `
@@ -2680,7 +2678,6 @@ type GetWorktreeByCanonicalRootRow struct {
 	ID                    string
 	WorkspaceID           string
 	CanonicalRootPath     string
-	IsMain                int64
 	Managed               int64
 	CreatedBranch         int64
 	OriginSessionID       string
@@ -2697,7 +2694,6 @@ func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootP
 		&i.ID,
 		&i.WorkspaceID,
 		&i.CanonicalRootPath,
-		&i.IsMain,
 		&i.Managed,
 		&i.CreatedBranch,
 		&i.OriginSessionID,
@@ -2715,7 +2711,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -2724,7 +2719,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.id = ?1
 LIMIT 1
 `
@@ -2733,7 +2727,6 @@ type GetWorktreeByIDRow struct {
 	ID                    string
 	WorkspaceID           string
 	CanonicalRootPath     string
-	IsMain                int64
 	Managed               int64
 	CreatedBranch         int64
 	OriginSessionID       string
@@ -2750,7 +2743,6 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 		&i.ID,
 		&i.WorkspaceID,
 		&i.CanonicalRootPath,
-		&i.IsMain,
 		&i.Managed,
 		&i.CreatedBranch,
 		&i.OriginSessionID,
@@ -8269,7 +8261,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -8278,7 +8269,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.workspace_id = ?1
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC
 `
@@ -8287,7 +8277,6 @@ type ListWorktreesByWorkspaceIDRow struct {
 	ID                    string
 	WorkspaceID           string
 	CanonicalRootPath     string
-	IsMain                int64
 	Managed               int64
 	CreatedBranch         int64
 	OriginSessionID       string
@@ -8311,7 +8300,6 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 			&i.ID,
 			&i.WorkspaceID,
 			&i.CanonicalRootPath,
-			&i.IsMain,
 			&i.Managed,
 			&i.CreatedBranch,
 			&i.OriginSessionID,

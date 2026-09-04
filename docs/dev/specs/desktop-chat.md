@@ -355,7 +355,8 @@
 - The Worktree Operation acknowledgement and a later successful transition completion show no Toast or other success notice.
 - A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic through Sonner, and follows the server's existing model-visible failure-Steer behavior.
 - A selector or other user-correctable Worktree failure after acceptance does not restore the command to the composer.
-- The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
+- The current target row omits `Switch`. A current target retains its trash action when deletion is available. The Main Workspace row and Git main worktree have no trash action.
+- The Git main worktree row remains otherwise ordinary and has no special marker or disabled deletion control.
 - Each Worktree row uses the display name as its title.
 - Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.
 - The External title fallback never exposes the complete path. After the Session switches to that worktree and Kent adopts it, ordinary Kent display-name rules apply.
@@ -506,7 +507,8 @@
 - A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to the owning operation contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
 - Mutation controls other than Chat settings prevent duplicate activation while their request is pending. Chat settings follow the independent-request rule in Session Settings And Drafts. This is request presentation, not client-owned replay, reconciliation, or a second authoritative operation state.
 - If a server-owned Chat draft cannot load, opening a materialized Session fails through the initial Error state. If a draft write fails while Chat is open, Desktop preserves the visible unsent text and settings and surfaces the failure.
-- An in-app navigation, detach, pop-out transition, or other controlled disposal that requires draft persistence or runtime release does not silently complete after that prerequisite fails. It keeps the current presentation and surfaces the authoritative diagnostic.
+- An in-app navigation, detach, pop-out transition, or other controlled disposal that requires draft persistence does not silently complete after that prerequisite fails. It keeps the current presentation and surfaces the authoritative diagnostic.
+- Navigation, detach, pop-out or window closure, subscription closure, request cancellation, transport loss, and application shutdown stop only Desktop observation or delivery; they never invoke Runtime Release or alter server-owned Runtime work.
 - Opening a native Chat pop-out failure leaves Chat in the main window and uses the native-window failure notice. Desktop does not create a fallback duplicate window or partially navigate the main window.
 - Prompt-answer races follow the Question/Approval contract: externally resolved prompts disappear, stale results cannot replace current prompt state, and a failed still-pending submission preserves its local answer draft.
 - After a batch failure, Desktop reads the latest completed pending-prompt projection and preserves local drafts only for prompts that appear pending in that response. Desktop does not retry or replay the failed batch automatically.

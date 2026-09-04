@@ -11,4 +11,11 @@ export type {
   RpcEventHandler,
   RpcSubscription,
   RpcTransport,
+  ProjectAttachment,
+  SessionAttachment,
+  AttachedRequest,
+  AttachedProjectCall,
+  ChatSubscriptionInput,
+  RuntimeOwnerContext,
+  RuntimeOwnerOptions,
 } from "../transport";

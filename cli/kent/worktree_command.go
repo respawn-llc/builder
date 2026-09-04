@@ -398,6 +398,8 @@ func writeWorktreeProtoJSON(stdout io.Writer, stderr io.Writer, message proto.Me
 
 func worktreeTopologyVariantJSON(topology *worktreepb.TopologyEntry) (string, error) {
 	switch topology.GetTopology().(type) {
+	case *worktreepb.TopologyEntry_MainWorkspace:
+		return "main_workspace", nil
 	case *worktreepb.TopologyEntry_Registered:
 		return "registered", nil
 	case *worktreepb.TopologyEntry_External:

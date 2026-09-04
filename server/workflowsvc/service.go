@@ -1038,7 +1038,7 @@ func workflowRegisteredWorktree(registered *worktreepb.RegisteredFacts) serverap
 			Bare:           git.Bare,
 			LockedReason:   git.LockedReason,
 			PrunableReason: git.PrunableReason,
-			IsMain:         git.IsMain,
+			IsMainWorktree: git.IsMainWorktree,
 			PathAvailable:  git.PathAvailable,
 		}
 	}

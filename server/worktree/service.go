@@ -1488,18 +1488,9 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		}
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	if record.IsMain {
-		return DeleteTaskWorktreeResponse{}, fmt.Errorf("cannot delete main workspace worktree: %w", worktreecontract.ErrWorktreeBlocked)
-	}
 	if err := s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	activityLease, err := s.acquireDeleteTargetActivity(ctx, &record, &record.CanonicalRoot)
-	if err != nil {
-		return DeleteTaskWorktreeResponse{}, err
-	}
-	defer activityLease.Close()
-	ctx = activityLease.Context()
 	topology, err := s.projectTopology(ctx, record.WorkspaceID, workspaceRoot)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
@@ -1508,6 +1499,15 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if !found {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("managed worktree %q is absent from projected topology: %w", worktreeID, worktreecontract.ErrWorktreeNotFound)
 	}
+	if _, err := deletionSelector(entry); err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, &record, &record.CanonicalRoot)
+	if err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
+	defer activityLease.Close()
+	ctx = activityLease.Context()
 	var target syncedWorktree
 	targetFound := entry.GetRegistered() != nil
 	if targetFound {
@@ -1581,9 +1581,6 @@ func (s *Service) EnsureTaskWorktreeDeletable(ctx context.Context, taskID string
 			return nil
 		}
 		return err
-	}
-	if record.IsMain {
-		return fmt.Errorf("cannot delete main workspace worktree: %w", worktreecontract.ErrWorktreeBlocked)
 	}
 	return s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record)
 }
@@ -1972,7 +1969,6 @@ func (s *Service) registerCreatedWorktree(ctx context.Context, req createdWorktr
 		CanonicalRoot:         strings.TrimSpace(gitEntry.Root),
 		DisplayName:           filepath.Base(strings.TrimSpace(gitEntry.Root)),
 		Availability:          string(PathAvailability(gitEntry.Root)),
-		IsMain:                gitEntry.IsMain,
 		Managed:               req.Managed,
 		CreatedBranch:         req.CreatedBranch,
 		OriginSessionID:       strings.TrimSpace(req.OriginSessionID),

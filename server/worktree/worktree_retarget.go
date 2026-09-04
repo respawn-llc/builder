@@ -236,7 +236,7 @@ func (s *Service) switchSessionTargetWithSync(
 	nextWorktreeID := strings.TrimSpace(next.record.ID)
 	nextBaseRoot := strings.TrimSpace(next.record.CanonicalRoot)
 	var nextWorktree *metadata.SessionExecutionTargetUpdateWorktree
-	if next.git.IsMain {
+	if strings.TrimSpace(next.record.ID) == "" {
 		nextBaseRoot = workspaceCtx.workspaceRoot
 	} else {
 		nextWorktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: nextWorktreeID}
@@ -335,8 +335,8 @@ func worktreeReminderStateForTransition(previous *syncedWorktree, previousTarget
 	if err := validatePresentExecutionTargetWorktreeID(previousTarget); err != nil {
 		return session.WorktreeReminderState{}, false, err
 	}
-	if next.git.IsMain {
-		if previous == nil || previousTarget.Worktree == nil || previous.git.IsMain {
+	if strings.TrimSpace(next.record.ID) == "" {
+		if previous == nil || previousTarget.Worktree == nil || strings.TrimSpace(previous.record.ID) == "" {
 			return session.WorktreeReminderState{}, false, nil
 		}
 		return session.WorktreeReminderState{
@@ -405,7 +405,6 @@ func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktre
 		Bare:           persisted.Bare,
 		LockedReason:   persisted.LockedReason,
 		PrunableReason: persisted.PrunableReason,
-		IsMain:         worktree.IsMain,
 	}
 	if !persisted.Detached {
 		decoded.Branch = branch
