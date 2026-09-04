@@ -5,11 +5,10 @@ export type TranscriptTool = NonNullable<ChatTranscriptCommittedRow["Tool"]>;
 export type TranscriptToolPresentation = NonNullable<TranscriptTool["Presentation"]>;
 type TranscriptAskQuestionPresentation = Omit<TranscriptToolPresentation, "Presentation"> &
   Readonly<{ Presentation: "ask_question" }>;
-type VisibleTranscriptRowVisibility = Exclude<ChatTranscriptCommittedRow["Visibility"], "hidden">;
 
 export type TranscriptAskQuestionToolRow = Omit<ChatTranscriptCommittedRow, "Visibility" | "Kind" | "Tool"> &
   Readonly<{
-    Visibility: VisibleTranscriptRowVisibility;
+    Visibility: ChatTranscriptCommittedRow["Visibility"];
     Kind: "tool";
     Tool: Omit<TranscriptTool, "Presentation"> &
       Readonly<{ Presentation: TranscriptAskQuestionPresentation }>;
@@ -106,11 +105,7 @@ export function projectTranscriptRow(
 }
 
 export function isAskQuestionToolRow(row: ChatTranscriptCommittedRow): row is TranscriptAskQuestionToolRow {
-  return (
-    row.Visibility !== "hidden" &&
-    row.Kind === "tool" &&
-    row.Tool?.Presentation?.Presentation === "ask_question"
-  );
+  return row.Kind === "tool" && row.Tool?.Presentation?.Presentation === "ask_question";
 }
 
 export function transcriptRowContentText(
@@ -206,6 +201,9 @@ function projectReviewerError(row: ChatTranscriptCommittedRow): TranscriptRowPro
 
 function projectAskQuestion(row: ChatTranscriptCommittedRow): TranscriptRowProjection | null {
   if (!isAskQuestionToolRow(row)) {
+    return null;
+  }
+  if (row.Visibility === "hidden") {
     return null;
   }
   const presentation = row.Tool.Presentation;

@@ -176,7 +176,7 @@ describe("Chat transcript row projector", () => {
     }
 
     expect(isAskQuestionToolRow(questionRow())).toBe(true);
-    expect(isAskQuestionToolRow(questionRow({ visibility: "hidden" }))).toBe(false);
+    expect(isAskQuestionToolRow(questionRow({ visibility: "hidden" }))).toBe(true);
   });
 
   it("covers typed notice facts and keeps structured body/copy source selection", () => {
