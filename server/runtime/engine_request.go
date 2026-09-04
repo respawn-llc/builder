@@ -136,7 +136,10 @@ func (e *Engine) assembleRequest(ctx context.Context, stepID string, extra []llm
 	}
 	toolChoiceMode := llm.ToolChoiceModeAutomatic
 	if allowTools {
-		toolChoiceMode = toolChoiceModeForWorkflowCompletion(workflowMode, e.workflowUseRequiredToolCalls())
+		toolChoiceMode = toolChoiceModeForWorkflowCompletion(
+			workflowMode,
+			e.currentNodeExecutionActive() && e.workflowUseRequiredToolCalls(),
+		)
 	}
 	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{
 		ChoiceMode:            toolChoiceMode,

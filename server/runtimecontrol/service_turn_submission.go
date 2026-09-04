@@ -184,6 +184,16 @@ func (s *Service) submitUserTurn(
 		}
 		workflowExecutionRetiring := false
 		err := s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+			if s.workflowTasks != nil {
+				workflowOwned, ownershipErr := s.workflowTaskSession(runCtx, request.SessionID, nil)
+				if ownershipErr != nil {
+					return ownershipErr
+				}
+				if !workflowOwned {
+					workflowExecutionRetiring = true
+					return nil
+				}
+			}
 			if engine.WorkflowTerminalState().Completed {
 				workflowExecutionRetiring = true
 				return nil

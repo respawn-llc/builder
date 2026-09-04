@@ -199,9 +199,10 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 			attempt.Finish()
 			return nil, errors.Join(reactivateErr, historyErr)
 		}
-		sessionName := ""
-		if plan.SessionName != nil {
-			sessionName = *plan.SessionName
+		sessionName, sessionNameErr := retainedSessionNameFallback(plan.SessionName)
+		if sessionNameErr != nil {
+			attempt.Finish()
+			return nil, sessionNameErr
 		}
 		return &headlessPromptRuntime{
 			retainedAdmission:    continuationResult,
@@ -479,7 +480,7 @@ type headlessPromptRuntime struct {
 	retainedAdmission    workflowexecution.WorkflowSessionContinuationResult
 	retainedSessionID    runtimeids.SessionID
 	retainedContinuation *workflowexecution.WorkflowSessionContinuation
-	sessionName          string
+	sessionName          *string
 	technicalContext     context.Context
 	technicalCancel      context.CancelFunc
 	warnings             []string
@@ -620,11 +621,25 @@ func (r *headlessPromptRuntime) submitRetainedWorkflowMessage(ctx context.Contex
 	}, err
 }
 
-func sessionNameOrFallback(name *string, fallback string) string {
+func sessionNameOrFallback(name *string, fallback *string) string {
 	if name != nil {
 		return *name
 	}
-	return fallback
+	if fallback != nil {
+		return *fallback
+	}
+	return ""
+}
+
+func retainedSessionNameFallback(name *string) (*string, error) {
+	if name == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*name)
+	if trimmed == "" {
+		return nil, errors.New("retained Workflow Session fallback name must not be empty")
+	}
+	return &trimmed, nil
 }
 
 func workflowResumeDiagnostics(

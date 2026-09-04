@@ -446,7 +446,13 @@ func (c *CurrentNodeController) reactivateWorkflowSession(
 	if err != nil {
 		var conflict *TaskResumeConflictError
 		if errors.As(err, &conflict) {
-			return WorkflowSessionContinuationResult{}, workflowSessionConflictError(input.Task.ID, err)
+			classified, classificationErr := c.workflowSessionConflict(
+				ctx,
+				input.Task.ID,
+				&input.CurrentNode.Reference,
+				err,
+			)
+			return WorkflowSessionContinuationResult{}, errors.Join(classificationErr, classified)
 		}
 		return WorkflowSessionContinuationResult{}, err
 	}
@@ -669,20 +675,6 @@ const (
 	TaskResumeConflictCurrentNodeNotInterrupted = serverapi.WorkflowTaskResumeConflictCurrentNodeNotInterrupted
 	TaskResumeConflictNoResumableCurrentNode    = serverapi.WorkflowTaskResumeConflictNoResumableCurrentNode
 )
-
-func workflowSessionConflictError(taskID workflow.TaskID, cause error) error {
-	var conflict *TaskResumeConflictError
-	if errors.As(cause, &conflict) && conflict.State.IsValid() {
-		return &TaskResumeConflictError{TaskID: string(taskID), State: conflict.State}
-	}
-	switch {
-	case errors.Is(cause, workflowstore.ErrCurrentNodePendingApproval):
-		return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictPendingApproval}
-	case errors.Is(cause, workflowstore.ErrSessionNotCurrentWorkflowNode):
-		return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictMovedCurrentNode}
-	}
-	return &TaskResumeConflictError{TaskID: string(taskID), State: TaskResumeConflictNoResumableCurrentNode}
-}
 
 func (c *CurrentNodeController) PreflightTaskResume(
 	ctx context.Context,
