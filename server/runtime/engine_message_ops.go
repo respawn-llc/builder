@@ -199,7 +199,7 @@ func (e *Engine) prepareStoredToolCompletion(
 		CondensedText:  r.CondensedText,
 		Presentation:   r.Presentation,
 		ProviderItems:  e.providerItemsForToolCompletion(r),
-		QuestionAnswer: r.QuestionAnswer,
+		QuestionAnswer: cloneAskQuestionAnswer(r.QuestionAnswer),
 	}
 	return payload, backgroundSessionID, hasBackgroundSession, nil
 }

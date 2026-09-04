@@ -1,0 +1,67 @@
+.chat-transcript-row-body {
+  margin: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+  white-space: pre-wrap;
+}
+
+.chat-transcript-reviewer-suggestions,
+.chat-transcript-question-options {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.chat-transcript-reviewer-suggestion {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.chat-transcript-reviewer-number {
+  color: var(--color-muted);
+  user-select: none;
+}
+
+.chat-transcript-question-body {
+  min-width: 0;
+}
+
+.chat-transcript-question-option {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-on-background);
+}
+
+.chat-transcript-question-option--selected {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.chat-transcript-question-answer {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  min-width: 0;
+  color: var(--color-on-background);
+}
+
+.chat-transcript-question-error {
+  margin-top: var(--space-2);
+}
+
+.chat-transcript-copy-icon > svg {
+  transition:
+    opacity var(--motion-fast),
+    transform var(--motion-fast);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-transcript-copy-icon > svg {
+    transition: none;
+  }
+}

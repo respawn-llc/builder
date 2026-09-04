@@ -34,6 +34,7 @@ type ChatEntry struct {
 	CompactLabel          string
 	ToolResultSummary     string
 	ToolCallID            string
+	QuestionAnswer        *tools.AskQuestionAnswer
 	NoticeID              string
 	BackgroundActivityID  string
 	BackgroundProcessID   string
@@ -374,7 +375,7 @@ func (s *chatStore) recordToolCompletionWithProviderItems(res tools.Result, prov
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.toolCompletions[callID] = res
+	s.toolCompletions[callID] = cloneToolResult(res)
 	if len(provenances) > 0 {
 		s.toolCompletionProvenance[callID] = cloneTranscriptCommittedRowProvenance(provenances[0])
 	}

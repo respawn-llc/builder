@@ -173,6 +173,7 @@ func resolvedToolResultForMessage(msg llm.Message, completions map[string]tools.
 		result.Summary = completion.Summary
 		result.CondensedText = completion.CondensedText
 		result.Presentation = completion.Presentation
+		result.QuestionAnswer = cloneAskQuestionAnswer(completion.QuestionAnswer)
 	}
 	if result.Name == "" {
 		result.Name = toolspec.ID("tool")
@@ -200,5 +201,6 @@ func toolResultChatEntry(result tools.Result) ChatEntry {
 		ToolCallID:        strings.TrimSpace(result.CallID),
 		ToolResultSummary: summary,
 		ToolCall:          presentation,
+		QuestionAnswer:    cloneAskQuestionAnswer(result.QuestionAnswer),
 	}
 }

@@ -1352,6 +1352,7 @@ func cloneToolResult(result tools.Result) tools.Result {
 	copyResult := result
 	copyResult.Output = append(json.RawMessage(nil), result.Output...)
 	copyResult.Presentation = clonePersistedToolCallMeta(result.Presentation)
+	copyResult.QuestionAnswer = cloneAskQuestionAnswer(result.QuestionAnswer)
 	return copyResult
 }
 

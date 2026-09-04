@@ -447,7 +447,10 @@ func (s *transcriptRuntimeState) ToolCompletionSnapshot(callID string) (tools.Re
 		chat.mu.Lock()
 		defer chat.mu.Unlock()
 		result, ok := chat.toolCompletions[strings.TrimSpace(callID)]
-		return result, ok
+		if !ok {
+			return tools.Result{}, false
+		}
+		return cloneToolResult(result), true
 	}
 	return tools.Result{}, false
 }
@@ -487,13 +490,14 @@ func (s *transcriptRuntimeState) RecordAssistantStreamFinalization(committedEntr
 
 func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToolCompletion, provenance *TranscriptCommittedRowProvenance) {
 	s.chatProjection().recordToolCompletionWithProviderItems(tools.Result{
-		CallID:        completion.CallID,
-		Name:          toolspec.ID(completion.Name),
-		IsError:       completion.IsError,
-		Output:        completion.Output,
-		Summary:       completion.Summary,
-		CondensedText: completion.CondensedText,
-		Presentation:  completion.Presentation,
+		CallID:         completion.CallID,
+		Name:           toolspec.ID(completion.Name),
+		IsError:        completion.IsError,
+		Output:         completion.Output,
+		Summary:        completion.Summary,
+		CondensedText:  completion.CondensedText,
+		Presentation:   completion.Presentation,
+		QuestionAnswer: cloneAskQuestionAnswer(completion.QuestionAnswer),
 	}, completion.ProviderItems, provenance)
 }
 
