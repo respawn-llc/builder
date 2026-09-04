@@ -23,7 +23,7 @@ type RunPromptResult struct {
 	WorkflowResumeDiagnostics []serverapi.RunPromptWorkflowResumeDiagnostic
 }
 
-func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
+func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, overrides serverapi.RunPromptOverrides, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
 	intent, err := runPromptLaunchIntent(opts, initialSessionID)
 	if err != nil {
 		return RunPromptResult{}, err
@@ -34,7 +34,7 @@ func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Op
 		CallerSessionID: callerSessionID,
 		Prompt:          prompt,
 		Timeout:         timeout,
-		Overrides:       runPromptOverridesFromOptions(opts),
+		Overrides:       overrides,
 	}, progress)
 	result := RunPromptResult{
 		SessionID:   response.SessionID,
@@ -92,7 +92,7 @@ func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {
 		AgentRole:           agentRole,
 		Model:               strings.TrimSpace(opts.Model),
 		ProviderOverride:    strings.TrimSpace(opts.ProviderOverride),
-		ThinkingLevel:       strings.TrimSpace(opts.ThinkingLevel),
+		ThinkingLevel:       textutil.OptionalTrimmedString(opts.ThinkingLevel),
 		Theme:               textutil.OptionalTrimmedString(opts.Theme),
 		ModelTimeoutSeconds: opts.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(opts.Tools),

@@ -1006,7 +1006,7 @@ func TestApplyRunPromptOverridesOverridesHeadlessSettingsWithoutMutatingBasePlan
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{
 		Model:               "gpt-5-mini",
-		ThinkingLevel:       "medium",
+		ThinkingLevel:       launchTestStringPtr("medium"),
 		Theme:               launchTestStringPtr("light"),
 		ModelTimeoutSeconds: 12,
 		Tools:               "shell,patch",
@@ -1052,7 +1052,7 @@ func TestApplyRunPromptOverridesPreservesExplicitThinkingOverSessionSetting(t *t
 	updated, warnings, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
 		plan,
 		store,
-		serverapi.RunPromptOverrides{ThinkingLevel: "high"},
+		serverapi.RunPromptOverrides{ThinkingLevel: launchTestStringPtr("high")},
 		auth.EmptyState(),
 		RunPromptOverrideOptions{},
 	)
@@ -1105,7 +1105,7 @@ func TestApplyRunPromptOverridesValidatesExplicitThinkingInsteadOfPersistedThink
 	updated, _, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
 		plan,
 		store,
-		serverapi.RunPromptOverrides{Model: "gpt-5", ThinkingLevel: "high"},
+		serverapi.RunPromptOverrides{Model: "gpt-5", ThinkingLevel: launchTestStringPtr("high")},
 		auth.EmptyState(),
 		RunPromptOverrideOptions{},
 	)

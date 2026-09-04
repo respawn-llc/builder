@@ -95,7 +95,7 @@ func TestRunPromptOverridesMarshalUsesSnakeCaseAndNullableSelector(t *testing.T)
 		AgentRole:           runPromptStringPtr("worker"),
 		Model:               "gpt-5",
 		ProviderOverride:    "openai",
-		ThinkingLevel:       "medium",
+		ThinkingLevel:       runPromptStringPtr("medium"),
 		Theme:               runPromptStringPtr("dark"),
 		ModelTimeoutSeconds: 30,
 		Tools:               "shell",
@@ -169,5 +169,12 @@ func TestRunPromptOverridesRejectsBlankTheme(t *testing.T) {
 	theme := "  "
 	if err := (RunPromptOverrides{Theme: &theme}).Validate(); err == nil {
 		t.Fatal("expected blank Theme to be invalid")
+	}
+}
+
+func TestRunPromptOverridesRejectsBlankThinkingLevel(t *testing.T) {
+	thinkingLevel := "  "
+	if err := (RunPromptOverrides{ThinkingLevel: &thinkingLevel}).Validate(); err == nil {
+		t.Fatal("expected blank ThinkingLevel to be invalid")
 	}
 }

@@ -657,7 +657,7 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 		return SessionPlan{}, nil, err
 	}
 	next, err = withWorkflowThinking(next, options.WorkflowThinking)
-	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
+	next.ThinkingOverrideExplicit = overrides.ThinkingLevel != nil
 	return next, warnings, err
 }
 
@@ -754,6 +754,9 @@ func PrepareRunPromptOverridesWithContext(app config.App, overrides serverapi.Ru
 }
 
 func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.RunPromptOverrides, authState auth.State, preparation RunPromptPreparationContext, applyBudget modelContextBudgetApplier) (PreparedRunPromptOverrides, error) {
+	if err := overrides.Validate(); err != nil {
+		return PreparedRunPromptOverrides{}, err
+	}
 	roleOverride, err := overrides.AgentRoleOverride()
 	if err != nil {
 		return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
@@ -940,7 +943,7 @@ func applyPreparedConfigOverrides(settings config.Settings, source config.Source
 	if strings.TrimSpace(overrides.ProviderOverride) != "" {
 		settings.ProviderOverride = overrideConfig.Settings.ProviderOverride
 	}
-	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
+	if overrides.ThinkingLevel != nil {
 		settings.ThinkingLevel = overrideConfig.Settings.ThinkingLevel
 	}
 	if overrides.Theme != nil && strings.TrimSpace(*overrides.Theme) != "" {
@@ -995,7 +998,7 @@ func (p Planner) applyPreparedRunPromptOverrides(plan SessionPlan, meta session.
 	}
 	next.QuestionsEnabled = chatSettings.Questions
 	next.AutoCompactionEnabled = chatSettings.AutoCompaction
-	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
+	next.ThinkingOverrideExplicit = overrides.ThinkingLevel != nil
 	return next, warnings, nil
 }
 
@@ -1010,7 +1013,7 @@ func applySessionChatSettingsWithRunOverrides(
 		return config.Settings{}, session.ChatSettings{}, err
 	}
 	var thinkingOverride *string
-	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
+	if overrides.ThinkingLevel != nil {
 		thinkingOverride = textutil.Value(active.ThinkingLevel)
 	}
 	return applyResolvedSessionChatSettings(
@@ -1171,7 +1174,12 @@ func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOpt
 	return config.LoadOptions{
 		Model:            strings.TrimSpace(overrides.Model),
 		ProviderOverride: strings.TrimSpace(overrides.ProviderOverride),
-		ThinkingLevel:    strings.TrimSpace(overrides.ThinkingLevel),
+		ThinkingLevel: func() string {
+			if overrides.ThinkingLevel == nil {
+				return ""
+			}
+			return strings.TrimSpace(*overrides.ThinkingLevel)
+		}(),
 		Theme: func() string {
 			if overrides.Theme == nil {
 				return ""

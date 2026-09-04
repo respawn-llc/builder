@@ -57,7 +57,7 @@ type RunPromptOverridesKey struct {
 	AgentRole           OptionalStringKey
 	Model               string
 	ProviderOverride    string
-	ThinkingLevel       string
+	ThinkingLevel       OptionalStringKey
 	Theme               OptionalStringKey
 	ModelTimeoutSeconds int
 	Tools               string
@@ -72,7 +72,7 @@ func (o RunPromptOverrides) CanonicalKey() (RunPromptOverridesKey, error) {
 	key := RunPromptOverridesKey{
 		Model:               strings.TrimSpace(o.Model),
 		ProviderOverride:    strings.TrimSpace(o.ProviderOverride),
-		ThinkingLevel:       strings.TrimSpace(o.ThinkingLevel),
+		ThinkingLevel:       CanonicalOptionalString(o.ThinkingLevel),
 		Theme:               CanonicalOptionalString(o.Theme),
 		ModelTimeoutSeconds: o.ModelTimeoutSeconds,
 		Tools:               strings.TrimSpace(o.Tools),
@@ -122,7 +122,7 @@ type RunPromptOverrides struct {
 	AgentRole           *string `json:"agent_role,omitempty"`
 	Model               string  `json:"model"`
 	ProviderOverride    string  `json:"provider_override"`
-	ThinkingLevel       string  `json:"thinking_level"`
+	ThinkingLevel       *string `json:"thinking_level,omitempty"`
 	Theme               *string `json:"theme,omitempty"`
 	ModelTimeoutSeconds int     `json:"model_timeout_seconds"`
 	Tools               string  `json:"tools"`
@@ -168,6 +168,9 @@ func (o RunPromptOverrides) Validate() error {
 	if err := o.ValidateAgentRoleOverride(); err != nil {
 		return err
 	}
+	if err := ValidateOptionalIdentifier("thinking_level", o.ThinkingLevel); err != nil {
+		return err
+	}
 	return ValidateOptionalIdentifier("theme", o.Theme)
 }
 
@@ -179,7 +182,7 @@ func (o RunPromptOverrides) HasAny() bool {
 	return o.AgentRole != nil ||
 		strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
-		strings.TrimSpace(o.ThinkingLevel) != "" ||
+		o.ThinkingLevel != nil ||
 		o.Theme != nil ||
 		o.ModelTimeoutSeconds > 0 ||
 		strings.TrimSpace(o.Tools) != "" ||
@@ -189,7 +192,7 @@ func (o RunPromptOverrides) HasAny() bool {
 func (o RunPromptOverrides) HasConfigOverrides() bool {
 	return strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
-		strings.TrimSpace(o.ThinkingLevel) != "" ||
+		o.ThinkingLevel != nil ||
 		o.Theme != nil ||
 		o.ModelTimeoutSeconds > 0 ||
 		strings.TrimSpace(o.Tools) != "" ||

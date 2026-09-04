@@ -242,7 +242,7 @@ func RunPromptOverridesToProto(overrides serverapi.RunPromptOverrides) (*session
 	message := &sessionlaunchpb.RunPromptOverrides{AgentRole: clonePointer(overrides.AgentRole)}
 	setOptionalNonblank(&message.Model, overrides.Model)
 	setOptionalNonblank(&message.ProviderOverride, overrides.ProviderOverride)
-	setOptionalNonblank(&message.ThinkingLevel, overrides.ThinkingLevel)
+	setOptionalString(&message.ThinkingLevel, overrides.ThinkingLevel)
 	setOptionalString(&message.Theme, overrides.Theme)
 	setOptionalNonblank(&message.Tools, overrides.Tools)
 	setOptionalNonblank(&message.OpenaiBaseUrl, overrides.OpenAIBaseURL)
@@ -264,7 +264,7 @@ func RunPromptOverridesFromProto(message *sessionlaunchpb.RunPromptOverrides) (s
 		AgentRole:        clonePointer(message.AgentRole),
 		Model:            dereference(message.Model),
 		ProviderOverride: dereference(message.ProviderOverride),
-		ThinkingLevel:    dereference(message.ThinkingLevel),
+		ThinkingLevel:    clonePointer(message.ThinkingLevel),
 		Theme:            clonePointer(message.Theme),
 		Tools:            dereference(message.Tools),
 		OpenAIBaseURL:    dereference(message.OpenaiBaseUrl),

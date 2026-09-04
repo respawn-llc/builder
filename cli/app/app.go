@@ -64,6 +64,10 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 		}
 	}()
 	runOptions := workspaceConfig.Options
+	runOverrides := runPromptOverridesFromOptions(runOptions)
+	if strings.TrimSpace(opts.SessionID) != "" {
+		runOverrides.Theme = nil
+	}
 	if strings.TrimSpace(opts.SessionID) != "" && strings.TrimSpace(opts.ThinkingLevel) != "" {
 		sessionID, sessionIDErr := runtimeids.ParseSessionID(strings.TrimSpace(opts.SessionID))
 		if sessionIDErr != nil {
@@ -90,9 +94,9 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 		if thinkingErr != nil {
 			return RunPromptResult{}, thinkingErr
 		}
-		runOptions.ThinkingLevel = ""
+		runOverrides.ThinkingLevel = nil
 	}
-	return runPrompt(ctx, runClient, runOptions, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
+	return runPrompt(ctx, runClient, runOptions, runOverrides, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
 }
 
 func runnerRequestFromOptions(opts Options) runner.Request {
