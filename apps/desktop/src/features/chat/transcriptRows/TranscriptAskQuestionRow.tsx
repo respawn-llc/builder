@@ -5,11 +5,11 @@ import type { ChatTranscriptCommittedRow } from "@/api";
 import { StaticMarkdown } from "@/ui";
 
 import { TranscriptFlatRow } from "./TranscriptFlatRow";
-import { projectTranscriptRow } from "./transcriptRowProjector";
+import { isAskQuestionToolRow, projectTranscriptRow } from "./transcriptRowProjector";
 
 export function TranscriptAskQuestionRow({ row }: Readonly<{ row: ChatTranscriptCommittedRow }>) {
   const { t } = useTranslation();
-  if (row.Kind !== "tool" || row.Tool?.Presentation?.Presentation !== "ask_question") return null;
+  if (!isAskQuestionToolRow(row)) return null;
 
   const projection = projectTranscriptRow(row, {
     reviewerFeedbackCompactText: (count) => t("chatTranscript.reviewerSuggestions", { count }),

@@ -3,6 +3,17 @@ import type { ChatTranscriptCommittedRow } from "@/api";
 export type TranscriptNotice = NonNullable<ChatTranscriptCommittedRow["Notice"]>;
 export type TranscriptTool = NonNullable<ChatTranscriptCommittedRow["Tool"]>;
 export type TranscriptToolPresentation = NonNullable<TranscriptTool["Presentation"]>;
+type TranscriptAskQuestionPresentation = Omit<TranscriptToolPresentation, "Presentation"> &
+  Readonly<{ Presentation: "ask_question" }>;
+type VisibleTranscriptRowVisibility = Exclude<ChatTranscriptCommittedRow["Visibility"], "hidden">;
+
+export type TranscriptAskQuestionToolRow = Omit<ChatTranscriptCommittedRow, "Visibility" | "Kind" | "Tool"> &
+  Readonly<{
+    Visibility: VisibleTranscriptRowVisibility;
+    Kind: "tool";
+    Tool: Omit<TranscriptTool, "Presentation"> &
+      Readonly<{ Presentation: TranscriptAskQuestionPresentation }>;
+  }>;
 
 export type TranscriptRowIcon =
   | "notice"
@@ -94,8 +105,12 @@ export function projectTranscriptRow(
   }
 }
 
-export function isAskQuestionToolRow(row: ChatTranscriptCommittedRow): boolean {
-  return row.Kind === "tool" && row.Tool?.Presentation?.Presentation === "ask_question";
+export function isAskQuestionToolRow(row: ChatTranscriptCommittedRow): row is TranscriptAskQuestionToolRow {
+  return (
+    row.Visibility !== "hidden" &&
+    row.Kind === "tool" &&
+    row.Tool?.Presentation?.Presentation === "ask_question"
+  );
 }
 
 export function transcriptRowContentText(
@@ -120,33 +135,37 @@ function projectNotice(
   row: ChatTranscriptCommittedRow,
   labels: TranscriptRowProjectorLabels,
 ): TranscriptRowProjection | null {
-  if (row.Visibility === "hidden" || row.Notice === null) {
-    return null;
-  }
   const notice = row.Notice;
-  const messageType = notice.MessageType ?? null;
-  if (messageType === "interruption" || notice.Diagnostic?.Code === "reviewer_status") {
-    return null;
-  }
-  if (
-    isKnownDeveloperContext(notice) &&
-    notice.Reason !== "compaction" &&
-    noticeRawText(notice).trim().length === 0
-  ) {
+  if (notice === null || shouldOmitNotice(row, notice)) {
     return null;
   }
 
   const body = isMarkdownNotice(notice)
     ? ({ kind: "markdown", text: noticeOriginalText(notice) } as const)
     : ({ kind: "structured_notice", notice } as const);
+  const copySource =
+    body.kind === "markdown" && notice.Reason === "compaction"
+      ? ({ kind: "structured_notice", notice } as const)
+      : body;
   return {
     compactText: noticeCompactText(notice, labels),
     icon: noticeIcon(notice),
     iconTone: noticeIconTone(notice),
-    defaultExpanded: noticeDefaultExpanded(notice),
+    defaultExpanded: noticeDefaultExpanded(notice, row.Visibility),
     body,
-    copySource: body,
+    copySource,
   };
+}
+
+function shouldOmitNotice(row: ChatTranscriptCommittedRow, notice: TranscriptNotice): boolean {
+  if (row.Visibility === "hidden") return true;
+  const messageType = notice.MessageType ?? null;
+  if (messageType === "interruption" || notice.Diagnostic?.Code === "reviewer_status") return true;
+  return (
+    isKnownDeveloperContext(notice) &&
+    notice.Reason !== "compaction" &&
+    noticeRawText(notice).trim().length === 0
+  );
 }
 
 function projectReviewerFeedback(
@@ -186,7 +205,7 @@ function projectReviewerError(row: ChatTranscriptCommittedRow): TranscriptRowPro
 }
 
 function projectAskQuestion(row: ChatTranscriptCommittedRow): TranscriptRowProjection | null {
-  if (row.Tool === null || row.Tool.Presentation?.Presentation !== "ask_question") {
+  if (!isAskQuestionToolRow(row)) {
     return null;
   }
   const presentation = row.Tool.Presentation;
@@ -202,8 +221,14 @@ function projectAskQuestion(row: ChatTranscriptCommittedRow): TranscriptRowProje
 }
 
 function isMarkdownNotice(notice: TranscriptNotice): boolean {
+  if (notice.MessageType === "compaction_summary") {
+    return (
+      notice.Compaction?.Detail !== undefined &&
+      notice.Compaction.Detail !== null &&
+      notice.Compaction.Detail.trim().length > 0
+    );
+  }
   return (
-    notice.Reason !== "compaction" &&
     notice.MessageType !== undefined &&
     notice.MessageType !== null &&
     markdownMessageTypes.has(notice.MessageType)
@@ -220,6 +245,7 @@ function isKnownDeveloperContext(notice: TranscriptNotice): boolean {
 
 function noticeOriginalText(notice: TranscriptNotice): string {
   return firstPresent(
+    notice.Compaction?.Detail,
     notice.Diagnostic?.Detail,
     notice.LegacyText,
     notice.CondensedText,
@@ -251,7 +277,10 @@ function noticeCompactText(notice: TranscriptNotice, labels: TranscriptRowProjec
   return firstPresent(labels.structuredNoticeCompactText(notice), notice.Reason);
 }
 
-function noticeDefaultExpanded(notice: TranscriptNotice): boolean {
+function noticeDefaultExpanded(
+  notice: TranscriptNotice,
+  visibility: ChatTranscriptCommittedRow["Visibility"],
+): boolean {
   if (isKnownDeveloperContext(notice) || notice.Reason === "compaction") {
     return false;
   }
@@ -261,7 +290,7 @@ function noticeDefaultExpanded(notice: TranscriptNotice): boolean {
   if (notice.MessageType === "error_feedback") {
     return true;
   }
-  if (isEmptyUnknownContext(notice)) return true;
+  if (isEmptyUnknownContext(notice, visibility)) return true;
   if (
     notice.MessageType === "runtime_diagnostic" ||
     (notice.Reason === "runtime_diagnostic" && notice.Severity !== "error")
@@ -357,13 +386,18 @@ function noticeIconTone(notice: TranscriptNotice): TranscriptRowIconTone {
   return "neutral";
 }
 
-function isEmptyUnknownContext(notice: TranscriptNotice): boolean {
+function isEmptyUnknownContext(
+  notice: TranscriptNotice,
+  visibility: ChatTranscriptCommittedRow["Visibility"],
+): boolean {
+  const messageType = notice.MessageType;
   return (
+    visibility === "detail" &&
     notice.Reason === "runtime_diagnostic" &&
-    notice.MessageType !== undefined &&
-    notice.MessageType !== null &&
-    noticeRawText(notice).trim().length === 0 &&
-    !contextMessageTypes.has(notice.MessageType)
+    messageType !== undefined &&
+    messageType !== null &&
+    notice.Diagnostic?.Code === messageType &&
+    !contextMessageTypes.has(messageType)
   );
 }
 

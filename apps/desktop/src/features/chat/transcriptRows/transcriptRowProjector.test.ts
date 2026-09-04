@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
 
-import { projectTranscriptRow, transcriptRowContentText } from "./transcriptRowProjector";
+import {
+  isAskQuestionToolRow,
+  projectTranscriptRow,
+  transcriptRowContentText,
+} from "./transcriptRowProjector";
 
 describe("Chat transcript row projector", () => {
   it("applies the row-family inclusion, source, and expansion policy", () => {
@@ -95,6 +99,11 @@ describe("Chat transcript row projector", () => {
         expected: { bodyKind: "ask_question", defaultExpanded: true },
       },
       {
+        name: "explicitly hidden Ask Question",
+        row: questionRow({ visibility: "hidden" }),
+        expected: null,
+      },
+      {
         name: "canceled Ask Question",
         row: questionRow({ isError: true, text: "canceled" }),
         expected: { bodyKind: "ask_question", defaultExpanded: false },
@@ -104,7 +113,6 @@ describe("Chat transcript row projector", () => {
       "skills",
       "subagents",
       "environment",
-      "compaction_summary",
       "headless_mode",
       "headless_mode_exit",
       "workflow_mode",
@@ -115,7 +123,6 @@ describe("Chat transcript row projector", () => {
       "skills",
       "subagents",
       "environment",
-      "compaction_summary",
       "headless_mode",
       "headless_mode_exit",
       "workflow_mode",
@@ -154,7 +161,6 @@ describe("Chat transcript row projector", () => {
       }
       expect(projection.body.kind, testCase.name).toBe(testCase.expected.bodyKind);
       expect(projection.defaultExpanded, testCase.name).toBe(testCase.expected.defaultExpanded);
-      expect(projection.copySource, testCase.name).toEqual(projection.body);
       if (projection.body.kind !== "ask_question") {
         expect(
           transcriptRowContentText(projection.body, {
@@ -168,6 +174,9 @@ describe("Chat transcript row projector", () => {
         );
       }
     }
+
+    expect(isAskQuestionToolRow(questionRow())).toBe(true);
+    expect(isAskQuestionToolRow(questionRow({ visibility: "hidden" }))).toBe(false);
   });
 
   it("covers typed notice facts and keeps structured body/copy source selection", () => {
@@ -175,6 +184,8 @@ describe("Chat transcript row projector", () => {
     const cases: readonly {
       name: string;
       row: ChatTranscriptCommittedRow;
+      bodyKind: "structured_notice" | "markdown";
+      copyKind: "structured_notice" | "markdown";
       defaultExpanded: boolean;
     }[] = [
       {
@@ -189,6 +200,8 @@ describe("Chat transcript row projector", () => {
             Visibility: "ongoing",
           },
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: true,
       },
       {
@@ -198,6 +211,8 @@ describe("Chat transcript row projector", () => {
           MessageType: "compaction_summary",
           Compaction: { Count: 2, Detail: null },
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: false,
       },
       {
@@ -207,6 +222,8 @@ describe("Chat transcript row projector", () => {
           MessageType: "compaction_summary",
           Compaction: { Count: 2, Detail: completeCompactionDetail },
         }),
+        bodyKind: "markdown",
+        copyKind: "structured_notice",
         defaultExpanded: false,
       },
       {
@@ -216,6 +233,8 @@ describe("Chat transcript row projector", () => {
           Severity: "warning",
           ToolOutputRepair: { kind: "fresh_resource", count: 2 },
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: true,
       },
       {
@@ -225,6 +244,8 @@ describe("Chat transcript row projector", () => {
           Severity: "warning",
           ProviderModelMismatch: { requested_model: "requested", served_model: "served" },
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: true,
       },
       {
@@ -239,6 +260,8 @@ describe("Chat transcript row projector", () => {
           },
           Diagnostic: { Code: "worktree_mode", Detail: "complete worktree detail" },
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: false,
       },
       {
@@ -246,8 +269,11 @@ describe("Chat transcript row projector", () => {
         row: noticeRow({
           Reason: "runtime_diagnostic",
           MessageType: "future_context",
-          Diagnostic: null,
+          Diagnostic: { Code: "future_context", Detail: "empty developer message" },
+          Visibility: "detail",
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: true,
       },
       {
@@ -256,6 +282,8 @@ describe("Chat transcript row projector", () => {
           MessageType: "error_feedback",
           Diagnostic: { Code: "error_feedback", Detail: "failure" },
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: true,
       },
       {
@@ -264,6 +292,8 @@ describe("Chat transcript row projector", () => {
           MessageType: "compaction_soon_reminder",
           Diagnostic: { Code: "compaction_soon_reminder", Detail: "soon" },
         }),
+        bodyKind: "structured_notice",
+        copyKind: "structured_notice",
         defaultExpanded: false,
       },
     ];
@@ -278,10 +308,10 @@ describe("Chat transcript row projector", () => {
       if (projection === null) {
         throw new Error(`Expected projection for ${testCase.name}.`);
       }
-      expect(projection.body.kind, testCase.name).toBe("structured_notice");
+      expect(projection.body.kind, testCase.name).toBe(testCase.bodyKind);
+      expect(projection.copySource.kind, testCase.name).toBe(testCase.copyKind);
       expect(projection.defaultExpanded, testCase.name).toBe(testCase.defaultExpanded);
       expect(projection.compactText, testCase.name).not.toBe(testCase.row.Notice?.Reason);
-      expect(projection.copySource, testCase.name).toBe(projection.body);
     }
 
     const compactionDetailCase = cases.find((testCase) => testCase.name === "compaction detail");
@@ -292,6 +322,8 @@ describe("Chat transcript row projector", () => {
     if (compactionProjection === null) {
       throw new Error("Expected compaction projection.");
     }
+    expect(compactionProjection.body.kind).toBe("markdown");
+    expect(compactionProjection.copySource.kind).toBe("structured_notice");
     const formatter = {
       structuredNoticeText: (notice: Notice) => notice.Compaction?.Detail ?? "",
     };
@@ -325,9 +357,15 @@ function noticeRow(input: Partial<Notice> & { Visibility?: ChatTranscriptCommitt
   } satisfies ChatTranscriptCommittedRow;
 }
 
-function questionRow(input: { isError?: boolean; text?: string } = {}) {
+function questionRow(
+  input: {
+    isError?: boolean;
+    text?: string;
+    visibility?: ChatTranscriptCommittedRow["Visibility"];
+  } = {},
+) {
   return {
-    Visibility: "ongoing_collapsed",
+    Visibility: input.visibility ?? "ongoing_collapsed",
     Integrity: 0,
     Kind: "tool",
     Locator: { event_sequence: 1, row_ordinal: 1 },

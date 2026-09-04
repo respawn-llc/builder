@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
+import { basename } from "@/app-facade";
 
 import { firstPresent, projectTranscriptRow } from "./transcriptRowProjector";
 import { createTranscriptRowContentFormatter, structuredNoticeCompactText } from "./transcriptRowText";
@@ -80,7 +81,7 @@ function noticeTextCopy(t: ReturnType<typeof useTranslation>["t"]) {
       });
     },
     worktreeEnter(branch: string | null | undefined, worktreePath: string, effectiveCwd: string) {
-      const name = firstPresent(branch, pathBasename(worktreePath)) || t("chatTranscript.notice.worktree");
+      const name = firstPresent(branch, basename(worktreePath)) || t("chatTranscript.notice.worktree");
       return effectiveCwd.trim().length === 0
         ? t("chatTranscript.notice.worktreeEnter", { name })
         : t("chatTranscript.notice.worktreeEnterCwd", { cwd: effectiveCwd, name });
@@ -99,15 +100,6 @@ function noticeTextCopy(t: ReturnType<typeof useTranslation>["t"]) {
 function assertUnreachable(value: never): never {
   void value;
   throw new Error("Unsupported tool output repair kind.");
-}
-
-function pathBasename(path: string): string {
-  const trimmed = path.trim();
-  const slash = trimmed.lastIndexOf("/");
-  const backslash = trimmed.lastIndexOf("\\");
-  const separator = Math.max(slash, backslash);
-  const basename = separator < 0 ? trimmed : trimmed.slice(separator + 1);
-  return basename === "" || basename === "." ? "" : basename;
 }
 
 function formatOrdinal(value: number): string {
