@@ -22,7 +22,7 @@ export function projectTaskWorkflowInitialState(
 ): Readonly<{ failed: boolean; loading: boolean }> {
   return {
     failed: !established && failed,
-    loading: !established && loading,
+    loading: !established && loading && !failed,
   };
 }
 

@@ -1,13 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { vi } from "vitest";
 
 import { appI18n, initializeI18n } from "@/i18n";
 import { ProjectWorkflowStrip } from "./ProjectWorkflowStrip";
 
+const openProject = vi.hoisted(() => vi.fn());
+
 vi.mock("@/app-facade", async (importOriginal) => ({
   ...(await importOriginal()),
-  useAppNavigation: () => ({ openProject: vi.fn() }),
+  useAppNavigation: () => ({ openProject }),
 }));
 
 beforeAll(async () => initializeI18n());
@@ -41,6 +43,18 @@ describe("ProjectWorkflowStrip", () => {
     expect(buttons[0]).toHaveAttribute("aria-haspopup", "dialog");
     expect(buttons[1]).not.toHaveAttribute("title");
     expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("opens the selected Project Workflow board", () => {
+    renderStrip({
+      workflows: [
+        { description: "Delivery workflow", id: "workflow-1", isProjectDefault: false, name: "Delivery" },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delivery" }));
+
+    expect(openProject).toHaveBeenCalledWith("project-1", "workflow-1");
   });
 });
 
