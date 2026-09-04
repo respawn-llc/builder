@@ -13,7 +13,7 @@ import (
 type ChatSettingsReadTargetKind string
 
 const (
-	ChatSettingsReadTargetLazy    ChatSettingsReadTargetKind = "lazy"
+	ChatSettingsReadTargetNewChat ChatSettingsReadTargetKind = "new_chat"
 	ChatSettingsReadTargetSession ChatSettingsReadTargetKind = "session"
 )
 
@@ -24,9 +24,9 @@ type ChatSettingsReadTarget struct {
 	Session     *runtimeids.SessionID      `json:"session_id,omitempty"`
 }
 
-func LazyChatSettingsTarget(projectID, workspaceID string) ChatSettingsReadTarget {
+func NewChatSettingsTarget(projectID, workspaceID string) ChatSettingsReadTarget {
 	return ChatSettingsReadTarget{
-		TargetKind:  ChatSettingsReadTargetLazy,
+		TargetKind:  ChatSettingsReadTargetNewChat,
 		ProjectID:   &projectID,
 		WorkspaceID: &workspaceID,
 	}
@@ -38,9 +38,9 @@ func SessionChatSettingsTarget(sessionID runtimeids.SessionID) ChatSettingsReadT
 
 func (t ChatSettingsReadTarget) Validate() error {
 	switch t.TargetKind {
-	case ChatSettingsReadTargetLazy:
+	case ChatSettingsReadTargetNewChat:
 		if t.Session != nil {
-			return errors.New("lazy Chat settings target cannot contain session_id")
+			return errors.New("New Chat settings target cannot contain session_id")
 		}
 		if err := validateChatTargetID("project_id", t.ProjectID); err != nil {
 			return err
@@ -48,7 +48,7 @@ func (t ChatSettingsReadTarget) Validate() error {
 		return validateChatTargetID("workspace_id", t.WorkspaceID)
 	case ChatSettingsReadTargetSession:
 		if t.ProjectID != nil || t.WorkspaceID != nil {
-			return errors.New("session Chat settings target cannot contain lazy target identifiers")
+			return errors.New("Session Chat settings target cannot contain New Chat identifiers")
 		}
 		if t.Session == nil || t.Session.IsZero() {
 			return errors.New("session Chat settings target requires session_id")
@@ -229,13 +229,13 @@ func (o ChatSettingsMutationOperation) Validate() error {
 }
 
 type ChatSettingsMutationRequest struct {
-	Target    ChatSettingsReadTarget        `json:"target"`
+	SessionID runtimeids.SessionID          `json:"session_id"`
 	Operation ChatSettingsMutationOperation `json:"operation"`
 }
 
 func (r ChatSettingsMutationRequest) Validate() error {
-	if err := r.Target.Validate(); err != nil {
-		return err
+	if r.SessionID.IsZero() {
+		return errors.New("Session Chat settings mutation requires session_id")
 	}
 	return r.Operation.Validate()
 }
@@ -337,14 +337,14 @@ func (r *ChatSettingsMutationResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (r ChatSettingsMutationResponse) ValidateForTarget(target ChatSettingsReadTarget) error {
+func (r ChatSettingsMutationResponse) ValidateForSession(sessionID runtimeids.SessionID) error {
 	if err := r.Result.Validate(); err != nil {
 		return fmt.Errorf("result: %w", err)
 	}
 	if err := (ChatSettingsReadResponse{
 		Settings: r.Settings,
 		Session:  r.Session,
-	}).ValidateForTarget(target); err != nil {
+	}).ValidateForTarget(SessionChatSettingsTarget(sessionID)); err != nil {
 		return err
 	}
 	return r.Context.Validate()
@@ -354,13 +354,13 @@ func (r ChatSettingsReadResponse) ValidateForTarget(target ChatSettingsReadTarge
 		return fmt.Errorf("target: %w", err)
 	}
 	switch target.TargetKind {
-	case ChatSettingsReadTargetLazy:
+	case ChatSettingsReadTargetNewChat:
 		if r.Session != nil {
-			return errors.New("lazy Chat settings response cannot contain Session facts")
+			return errors.New("New Chat settings response cannot contain Session facts")
 		}
 	case ChatSettingsReadTargetSession:
 		if r.Session == nil || r.Session.SessionID != *target.Session {
-			return errors.New("materialized Chat settings response must contain the target Session")
+			return errors.New("Session Chat settings response must contain the target Session")
 		}
 		if r.Session.PreviousSessionID != nil && r.Session.PreviousSessionID.IsZero() {
 			return errors.New("previous Session ID is invalid")

@@ -296,7 +296,7 @@ describe("Desktop Chat read client", () => {
       contextWindowTokens: 100,
       remainingTokens: 96,
     });
-    await expect(client.chat.getSettings({ ...target, kind: "lazy" })).resolves.toMatchObject({
+    await expect(client.chat.getSettings({ ...target, kind: "new_chat" })).resolves.toMatchObject({
       selectedAgent: { role: "default" },
       session: null,
     });

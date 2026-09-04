@@ -1306,7 +1306,7 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	}
 }
 
-func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
+func TestGatewayAuthorizesNewChatAndSessionSettingsTargets(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
@@ -1332,23 +1332,23 @@ func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	lazy, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
-		Target: serverapi.LazyChatSettingsTarget(appCore.ProjectID(), workspace.ID),
+	newChat, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
+		Target: serverapi.NewChatSettingsTarget(appCore.ProjectID(), workspace.ID),
 	})
 	if err != nil {
-		t.Fatalf("ReadChatSettings lazy: %v", err)
+		t.Fatalf("ReadChatSettings New Chat: %v", err)
 	}
-	if lazy.Session != nil {
-		t.Fatalf("lazy response has Session facts: %+v", lazy.Session)
+	if newChat.Session != nil {
+		t.Fatalf("New Chat response has Session facts: %+v", newChat.Session)
 	}
-	materialized, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
+	sessionSettings, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
 		Target: serverapi.SessionChatSettingsTarget(sessionID),
 	})
 	if err != nil {
 		t.Fatalf("ReadChatSettings Session: %v", err)
 	}
-	if materialized.Session == nil || materialized.Session.SessionID != sessionID {
-		t.Fatalf("materialized response = %+v", materialized.Session)
+	if sessionSettings.Session == nil || sessionSettings.Session.SessionID != sessionID {
+		t.Fatalf("Session settings response = %+v", sessionSettings.Session)
 	}
 
 	conn := dialGateway(t, server)
@@ -1361,11 +1361,11 @@ func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
 		"chat-settings-project-mismatch",
 		protocol.MethodChatSettingsRead,
 		serverapi.ChatSettingsReadRequest{
-			Target: serverapi.LazyChatSettingsTarget("project-foreign", workspace.ID),
+			Target: serverapi.NewChatSettingsTarget("project-foreign", workspace.ID),
 		},
 	)
 	if mismatched.Code == 0 {
-		t.Fatalf("lazy project mismatch unexpectedly succeeded")
+		t.Fatalf("New Chat project mismatch unexpectedly succeeded")
 	}
 }
 

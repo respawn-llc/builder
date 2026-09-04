@@ -89,15 +89,15 @@ func (s *Service) WithPromptHistoryReader(reader promptHistoryReader) *Service {
 	return s
 }
 
-func (s *Service) PrepareMaterializedChatSettingsOperation(
+func (s *Service) PrepareSessionChatSettingsOperation(
 	ctx context.Context,
 	store *session.Store,
 ) (PreparedChatSettingsOperationInput, error) {
-	input, _, err := s.prepareMaterializedChatSettings(ctx, store.Meta())
+	input, _, err := s.prepareSessionChatSettings(ctx, store.Meta())
 	return input, err
 }
 
-func (s *Service) prepareMaterializedChatSettings(
+func (s *Service) prepareSessionChatSettings(
 	ctx context.Context,
 	meta session.Meta,
 ) (PreparedChatSettingsOperationInput, *string, error) {
@@ -177,7 +177,7 @@ func (s *Service) prepareMaterializedChatSettings(
 	}, taskID, nil
 }
 
-func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
+func (s *Service) NewChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
 	planner := s.planner
 	if planner.ReloadConfig != nil {
 		snapshot, err := planner.ReloadConfig()
@@ -214,7 +214,7 @@ func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsR
 	return serverapi.ChatSettingsReadResponse{Settings: settings}, nil
 }
 
-func (s *Service) MaterializedChatSettings(
+func (s *Service) SessionChatSettings(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 ) (serverapi.ChatSettingsReadResponse, error) {
@@ -222,7 +222,7 @@ func (s *Service) MaterializedChatSettings(
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	input, taskID, err := s.prepareMaterializedChatSettings(ctx, *record.Meta)
+	input, taskID, err := s.prepareSessionChatSettings(ctx, *record.Meta)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}

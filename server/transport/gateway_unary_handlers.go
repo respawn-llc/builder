@@ -137,14 +137,14 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodChatSettingsMutate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
 		return handlePrepared(req.ID, prepared, func(params serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
-			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
+			if err := g.requireSessionInActiveProject(ctx, state, params.SessionID.String()); err != nil {
 				return serverapi.ChatSettingsMutationResponse{}, err
 			}
 			response, err := g.deps.ChatSettingsClient().MutateChatSettings(ctx, params)
 			if err != nil {
 				return serverapi.ChatSettingsMutationResponse{}, err
 			}
-			if err := response.ValidateForTarget(params.Target); err != nil {
+			if err := response.ValidateForSession(params.SessionID); err != nil {
 				return serverapi.ChatSettingsMutationResponse{}, err
 			}
 			return response, nil
@@ -232,7 +232,7 @@ func (g *Gateway) authorizeChatSettingsTarget(
 	target serverapi.ChatSettingsReadTarget,
 ) error {
 	switch target.TargetKind {
-	case serverapi.ChatSettingsReadTargetLazy:
+	case serverapi.ChatSettingsReadTargetNewChat:
 		return newRoutePolicyExecutor(g).authorizeScopeFacts(
 			ctx,
 			state,

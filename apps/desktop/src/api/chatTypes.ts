@@ -13,7 +13,7 @@ export type ChatProjectTarget = Readonly<{ projectID: string; workspace: ChatWor
 export type ChatSessionTarget = ChatProjectTarget & Readonly<{ sessionID: string }>;
 export type ChatContextTarget = ChatProjectTarget & Readonly<{ sessionID?: string }>;
 export type ChatSettingsTarget =
-  (ChatProjectTarget & Readonly<{ kind: "lazy" }>) | (ChatSessionTarget & Readonly<{ kind: "session" }>);
+  (ChatProjectTarget & Readonly<{ kind: "new_chat" }>) | (ChatSessionTarget & Readonly<{ kind: "session" }>);
 
 export type ChatMainView = Readonly<{
   version: Readonly<{ epoch: string; generation: number; sequence: number }>;

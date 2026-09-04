@@ -212,7 +212,7 @@ function settingsFromWire(input: z.output<typeof settingsSchema>, target: ChatSe
   };
 }
 function validateSettingsTarget(input: z.output<typeof settingsSchema>, target: ChatSettingsTarget): void {
-  if (target.kind === "lazy") {
+  if (target.kind === "new_chat") {
     if (input.session !== undefined)
       throw new ContractError("Chat Settings response target kind does not match the request.");
     return;
@@ -289,10 +289,10 @@ export function createChatApi(transport: DescriptorRpcTransport): ChatApi {
         request: {
           kind: "factory",
           create: (attachment) => {
-            if (target.kind === "lazy") {
+            if (target.kind === "new_chat") {
               return {
                 target: {
-                  kind: "lazy",
+                  kind: "new_chat",
                   project_id: attachment.projectID,
                   workspace_id: attachment.workspaceID,
                 },

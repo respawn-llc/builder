@@ -27,19 +27,19 @@ func (s chatSettingsService) ReadChatSettings(
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
 	switch req.Target.TargetKind {
-	case serverapi.ChatSettingsReadTargetLazy:
+	case serverapi.ChatSettingsReadTargetNewChat:
 		projectCtx, err := s.core.resolveProjectContext(ctx, *req.Target.ProjectID, *req.Target.WorkspaceID, "")
 		if err != nil {
 			return serverapi.ChatSettingsReadResponse{}, err
 		}
-		return s.core.sessionLaunchServiceForProjectContext(projectCtx).LazyChatSettings(ctx)
+		return s.core.sessionLaunchServiceForProjectContext(projectCtx).NewChatSettings(ctx)
 	case serverapi.ChatSettingsReadTargetSession:
 		sessionID := *req.Target.Session
-		service, err := s.materializedService(ctx, sessionID.String())
+		service, err := s.sessionSettingsService(ctx, sessionID.String())
 		if err != nil {
 			return serverapi.ChatSettingsReadResponse{}, err
 		}
-		return service.MaterializedChatSettings(ctx, sessionID)
+		return service.SessionChatSettings(ctx, sessionID)
 	default:
 		return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
 	}
@@ -52,13 +52,9 @@ func (s chatSettingsService) MutateChatSettings(
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
 	result := serverapi.NewChatSettingsMutationApplied(false)
-	switch req.Target.TargetKind {
-	case serverapi.ChatSettingsReadTargetSession:
-		return s.mutateMaterializedChatSettings(ctx, *req.Target.Session, req.Operation, result)
-	}
-	return serverapi.ChatSettingsMutationResponse{}, errors.New("Chat settings target kind is invalid")
+	return s.mutateSessionChatSettings(ctx, req.SessionID, req.Operation, result)
 }
-func (s chatSettingsService) mutateMaterializedChatSettings(
+func (s chatSettingsService) mutateSessionChatSettings(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	operation serverapi.ChatSettingsMutationOperation,
@@ -71,11 +67,11 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 		sessionStore *session.Store,
 		engine *runtime.Engine,
 	) (bool, error) {
-		service, err := s.materializedService(runCtx, sessionID.String())
+		service, err := s.sessionSettingsService(runCtx, sessionID.String())
 		if err != nil {
 			return false, err
 		}
-		input, err := service.PrepareMaterializedChatSettingsOperation(runCtx, sessionStore)
+		input, err := service.PrepareSessionChatSettingsOperation(runCtx, sessionStore)
 		if err != nil {
 			return false, err
 		}
@@ -122,11 +118,11 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 		result.Applied.Changed = changed
 	}
 	responseCtx := context.WithoutCancel(ctx)
-	service, err := s.materializedService(responseCtx, sessionID.String())
+	service, err := s.sessionSettingsService(responseCtx, sessionID.String())
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	settings, err := service.MaterializedChatSettings(responseCtx, sessionID)
+	settings, err := service.SessionChatSettings(responseCtx, sessionID)
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
@@ -202,7 +198,7 @@ func transcriptSessionSettingFeedback(
 	return feedback, true, nil
 }
 
-func (s chatSettingsService) materializedService(
+func (s chatSettingsService) sessionSettingsService(
 	ctx context.Context,
 	sessionID string,
 ) (*sessionlaunch.Service, error) {

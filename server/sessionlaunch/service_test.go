@@ -938,7 +938,7 @@ func TestPlanLaunchSessionRebasesRemovedInitialAgentToReloadedDefaultBaseline(t 
 	}
 }
 
-func TestLazyChatSettingsReadsFreshStatelessDefaults(t *testing.T) {
+func TestNewChatSettingsReadsFreshStatelessDefaults(t *testing.T) {
 	workspace := t.TempDir()
 	first := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
 	first.Settings.Model = "gpt-5.4"
@@ -961,13 +961,13 @@ func TestLazyChatSettingsReadsFreshStatelessDefaults(t *testing.T) {
 		},
 	})
 
-	firstRead, err := service.LazyChatSettings(t.Context())
+	firstRead, err := service.NewChatSettings(t.Context())
 	if err != nil {
-		t.Fatalf("first LazyChatSettings: %v", err)
+		t.Fatalf("first NewChatSettings: %v", err)
 	}
-	secondRead, err := service.LazyChatSettings(t.Context())
+	secondRead, err := service.NewChatSettings(t.Context())
 	if err != nil {
-		t.Fatalf("second LazyChatSettings: %v", err)
+		t.Fatalf("second NewChatSettings: %v", err)
 	}
 	if reloads != 2 {
 		t.Fatalf("ReloadConfig calls = %d, want one per stateless read", reloads)
