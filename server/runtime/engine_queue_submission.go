@@ -421,6 +421,19 @@ func (e *Engine) pauseQueuedUserAutoDrain() {
 	e.queuedUserWorkMu.Unlock()
 }
 
+// HoldQueuedUserAutoDrain prevents accepted auto-drain work from starting until
+// the returned release function is called.
+func (e *Engine) HoldQueuedUserAutoDrain() func() {
+	if e == nil {
+		return func() {}
+	}
+	e.pauseQueuedUserAutoDrain()
+	var once sync.Once
+	return func() {
+		once.Do(e.resumeQueuedUserAutoDrain)
+	}
+}
+
 func (e *Engine) resumeQueuedUserAutoDrain() {
 	e.queuedUserWorkMu.Lock()
 	if e.queuedUserWorkPauseCount > 0 {

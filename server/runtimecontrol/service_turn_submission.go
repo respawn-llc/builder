@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"core/server/runtime"
 	"core/server/session"
@@ -204,6 +205,7 @@ func (s *Service) submitUserTurn(
 		return executeTurn()
 	}
 	workflowHistoryRecorded := false
+	workflowHistoryManaged := false
 	var historyErr error
 	persistedWorkflow, workflowErr := s.workflowTaskSession(attempt.Context(), request.SessionID, nil)
 	if workflowErr != nil {
@@ -253,62 +255,83 @@ func (s *Service) submitUserTurn(
 				err = preparingErr
 			}
 		case preparing:
+			var release func()
 			err = s.withRuntime(attempt.Context(), request.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+				release = engine.HoldQueuedUserAutoDrain()
 				queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(
 					runCtx,
 					projection.ExecutionText,
 					attempt.Accept,
 				)
 				if queueErr != nil {
+					release()
+					release = nil
 					return queueErr
 				}
 				response = queuedUserTurnResponse(false, queued.ID)
 				return nil
 			})
+			if err == nil && release != nil {
+				go s.releaseQueuedUserAutoDrainWhenWorkflowReady(sessionID, release)
+			}
 		case s.reactivator != nil:
 			liveWorkflowHandled, liveWorkflowErr := runLiveWorkflowTurn()
 			if liveWorkflowHandled {
 				err = liveWorkflowErr
 				break
 			}
-			var reactivateErr error
-			continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuation(projection.ExecutionText, nil)
+			continuation, continuationErr := workflowexecution.NewWorkflowSessionContinuationFromInput(
+				workflowexecution.WorkflowSessionTextInput{Text: projection.ExecutionText},
+			)
 			if continuationErr != nil {
 				err = continuationErr
 				break
 			}
-			var continuationResult workflowexecution.WorkflowSessionContinuationResult
-			continuationResult, reactivateErr = s.reactivator.ReactivateWorkflowSessionWithAcceptance(
-				attempt.Caller(),
-				sessionID,
-				attempt.Accept,
-				attempt.Context(),
-				continuation,
-			)
-			if reactivateErr == nil {
-				if attempt.Accepted() {
-					workflowHistoryRecorded = true
-					historyErr = s.recordAcceptedUserTurnHistory(request, projection)
-				}
-				_, admissionErr := continuationResult.WaitAdmission(attempt.Caller())
-				if admissionErr != nil {
-					err = admissionErr
-					break
-				}
-				turn, turnErr := continuation.WaitTurn(attempt.Caller())
-				_, exactErr := continuation.WaitExact(attempt.Caller())
-				response = runtimeControlResponseFromUserTurn(turn)
-				err = exactErr
-				if err == nil {
-					err = turnErr
-				}
+			workflowHistoryManaged = true
+			type retainedWorkflowResult struct {
+				response serverapi.RuntimeSubmitUserTurnResponse
+				err      error
 			}
-			if reactivateErr != nil {
-				err = reactivateErr
+			resultCh := make(chan retainedWorkflowResult, 1)
+			acceptedCtx := context.WithoutCancel(attempt.Context())
+			go func() {
+				continuationResult, reactivateErr := s.reactivator.ReactivateWorkflowSessionWithAcceptance(
+					attempt.Context(),
+					sessionID,
+					attempt.Accept,
+					acceptedCtx,
+					continuation,
+				)
+				var retainedErr error
+				if continuationResult.Accepted() {
+					retainedErr = s.recordAcceptedUserTurnHistory(request, projection)
+				}
+				if reactivateErr != nil {
+					resultCh <- retainedWorkflowResult{err: errors.Join(reactivateErr, retainedErr)}
+					return
+				}
+				if _, admissionErr := continuationResult.WaitAdmission(acceptedCtx); admissionErr != nil {
+					resultCh <- retainedWorkflowResult{err: errors.Join(admissionErr, retainedErr)}
+					return
+				}
+				turn, turnErr := continuation.WaitTurn(acceptedCtx)
+				_, exactErr := continuation.WaitExact(acceptedCtx)
+				resultCh <- retainedWorkflowResult{
+					response: runtimeControlResponseFromUserTurn(turn),
+					err:      errors.Join(exactErr, turnErr, retainedErr),
+				}
+			}()
+			select {
+			case result := <-resultCh:
+				response = result.response
+				err = result.err
+			case <-attempt.Caller().Done():
+				response = runtimeControlResponseFromUserTurn(runtime.UserTurnResult{})
+				err = context.Cause(attempt.Caller())
 			}
 		}
 	}
-	if attempt.Accepted() && !workflowHistoryRecorded {
+	if attempt.Accepted() && !workflowHistoryRecorded && !workflowHistoryManaged {
 		workflowHistoryRecorded = true
 		historyErr = s.recordAcceptedUserTurnHistory(request, projection)
 	}
@@ -317,6 +340,33 @@ func (s *Service) submitUserTurn(
 
 func (s *Service) waitForWorkflowExecutionRetirement(ctx context.Context, sessionID runtimeids.SessionID) error {
 	return sessionruntime.WaitForWorkflowExecutionRetirement(ctx, s.authority, sessionID)
+}
+
+func (s *Service) releaseQueuedUserAutoDrainWhenWorkflowReady(
+	sessionID runtimeids.SessionID,
+	release func(),
+) {
+	if release == nil {
+		return
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if handle, live := s.authority.SessionExecution(sessionID); live {
+			if _, workflowScoped := handle.Scope().Workflow(); workflowScoped {
+				release()
+				return
+			}
+		}
+		if s.preparations != nil {
+			preparing, err := s.preparations.WorkflowSessionPreparing(context.Background(), sessionID)
+			if err != nil || !preparing {
+				release()
+				return
+			}
+		}
+		<-ticker.C
+	}
 }
 
 func (s *Service) recordAcceptedUserTurnHistory(

@@ -117,7 +117,7 @@ func TestCurrentNodeControllerRetainedResumeRejectsInvalidSelectedNodeBeforeSibl
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	continuation, err := NewWorkflowSessionContinuation("continue", nil)
+	continuation, err := NewWorkflowSessionContinuationFromInput(WorkflowSessionTextInput{Text: "continue"})
 	if err != nil {
 		t.Fatalf("NewWorkflowSessionContinuation: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestCurrentNodeControllerRetainedResumeAcceptanceRejectsBeforeSiblingMutati
 					t.Errorf("close authority: %v", err)
 				}
 			})
-			continuation, err := NewWorkflowSessionContinuation("continue", nil)
+			continuation, err := NewWorkflowSessionContinuationFromInput(WorkflowSessionTextInput{Text: "continue"})
 			if err != nil {
 				t.Fatalf("NewWorkflowSessionContinuation: %v", err)
 			}

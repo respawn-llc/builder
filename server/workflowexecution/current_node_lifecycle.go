@@ -142,22 +142,6 @@ type WorkflowSessionContinuation struct {
 	closed      bool
 }
 
-func NewWorkflowSessionContinuation(text string, steer *runtime.AgentSteer) (*WorkflowSessionContinuation, error) {
-	if steer != nil && strings.TrimSpace(text) != "" {
-		return nil, errors.New("workflow Session continuation cannot contain both text and Agent steer input")
-	}
-	if steer == nil && strings.TrimSpace(text) == "" {
-		return nil, errors.New("workflow Session continuation input is required")
-	}
-	var input WorkflowSessionContinuationInput
-	if steer != nil {
-		input = WorkflowSessionSteerInput{Steer: steer}
-	} else {
-		input = WorkflowSessionTextInput{Text: text}
-	}
-	return newWorkflowSessionContinuation(input), nil
-}
-
 func NewWorkflowSessionContinuationFromInput(input WorkflowSessionContinuationInput) (*WorkflowSessionContinuation, error) {
 	switch value := input.(type) {
 	case WorkflowSessionTextInput:
