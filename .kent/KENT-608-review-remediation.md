@@ -52,6 +52,6 @@
 
 - [x] Keep the retained boundary below the 1,000-line review guardrail by relocating its shared request/progress predicates into the already cohesive Current-Node integration test file.
 - [x] Keep background assistant progress inside the selected Run Prompt observation window: the held second background request returns assistant progress with a real shell tool call, and a later provider error terminates the background loop.
-- [x] Apply the User's September 4, 2026 decision recorded in task comment `comment-046bd153-6a12-4961-8db8-25f8bbf4e7ea`: de-scope only the deterministic combined preexisting auto-drain/background-overlap scheduler-race regression, preserve the independent business coverage, and add no production machinery, test seam, or orchestration solely for that fixture.
-- [x] Apply the User's September 4, 2026 decision recorded in task comment `comment-046bd153-6a12-4961-8db8-25f8bbf4e7ea`: preserve previously approved useful business-behavior tests instead of deleting them solely for historical line-count or test-file-count caps.
-- [x] Verify the source-of-truth plan/remediation update with `git diff --check`; no production or test files changed in this documentation-only round.
+- [ ] Resolve the Design-required deterministic preexisting auto-drain/background-overlap coverage at the public/service boundary. The existing public APIs must be used without adding unapproved production machinery, test seams, or orchestration; do not attribute a de-scope to the User without a recorded answer.
+- [ ] Reduce the complete test diff to the User-authorized maximum of 1,072 added lines while retaining the required public business behavior and the approved 15-file diff, or obtain a new explicit User authorization.
+- [x] Remove the unsupported agent-authored scope attribution and restore the Design/test-budget requirements to the plan and remediation record.
