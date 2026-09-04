@@ -1,4 +1,3 @@
-import type { KeyboardEvent } from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -50,13 +49,6 @@ export function ProjectWorkflowStrip({
   const openWorkflow = (workflowID: string) => {
     void navigation.openProject(projectID, workflowID);
   };
-  const activateWorkflowFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>, workflowID: string) => {
-    if (event.key !== "Enter" && event.key !== " " && event.key !== "Space") {
-      return;
-    }
-    event.preventDefault();
-    openWorkflow(workflowID);
-  };
   return (
     <VirtualizedInfiniteList
       className="shrink-0 overflow-x-auto py-[var(--space-3)] hide-scrollbar"
@@ -95,9 +87,6 @@ export function ProjectWorkflowStrip({
           className="shrink-0"
           onClick={() => {
             openWorkflow(workflow.id);
-          }}
-          onKeyDown={(event) => {
-            activateWorkflowFromKeyboard(event, workflow.id);
           }}
           title={workflow.description}
         >
