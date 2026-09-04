@@ -1241,7 +1241,7 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 			response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
 				Intent:  serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
 				Prompt:  "hello",
-				Timeout: time.Second,
+				Timeout: 2 * time.Second,
 			}, nil)
 			done <- result{response: response, err: err}
 		}()
@@ -1253,7 +1253,7 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		select {
 		case got := <-done:
 			t.Fatalf("RunPrompt returned while history was pending: %+v", got)
-		case <-time.After(1200 * time.Millisecond):
+		case <-time.After(2200 * time.Millisecond):
 		}
 		close(historyRelease)
 		select {
@@ -1263,14 +1263,13 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		}
 		select {
 		case got := <-done:
-			t.Fatalf("RunPrompt returned before selected result release: %+v", got)
-		case <-time.After(50 * time.Millisecond):
+			if !errors.Is(got.err, context.DeadlineExceeded) {
+				t.Fatalf("RunPrompt timeout error = %v, want deadline exceeded", got.err)
+			}
+		case <-time.After(2200 * time.Millisecond):
+			t.Fatal("RunPrompt did not observe the configured result-wait deadline")
 		}
 		close(providerRelease)
-		got := <-done
-		if got.err != nil {
-			t.Fatalf("RunPrompt error = %v, want success after history", got.err)
-		}
 		sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
 		_, active := fixture.authority.SessionExecution(sessionID)
 		if providerCalls != 1 || active {
