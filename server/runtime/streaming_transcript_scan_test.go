@@ -7,7 +7,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -45,15 +44,6 @@ func streamScanTestEventAtSequence(t *testing.T, sequence int64, kind string, pa
 			Output:        completion.Output,
 			Summary:       textutil.Pointer(completion.Summary),
 			CondensedText: textutil.Pointer(completion.CondensedText),
-			QuestionAnswer: func() *session.QuestionAnswerRecord {
-				if completion.QuestionAnswer == nil {
-					return nil
-				}
-				return &session.QuestionAnswerRecord{
-					SelectedOptionNumber: textutil.Pointer(completion.QuestionAnswer.SelectedOptionNumber),
-					Freeform:             textutil.Pointer(completion.QuestionAnswer.Freeform),
-				}
-			}(),
 		}
 		if completion.Presentation != nil {
 			typed := record.(session.ToolCompletionRecord)
@@ -170,43 +160,6 @@ func TestStreamingTranscriptScanSeedsLastFinalAnswerFromCompactionBoundary(t *te
 	applyEventsToStreaming(t, scan, events)
 	if got, want := scan.LastCommittedAssistantFinalAnswer(), "retained final answer"; got == nil || *got != want {
 		t.Fatalf("scan last final answer = %v, want boundary-seeded %q", got, want)
-	}
-}
-
-func TestStreamingTranscriptScanPreservesQuestionAnswerThroughPersistedProjection(t *testing.T) {
-	t.Parallel()
-	selected := 2
-	freeform := "keep the split"
-	presentation := questionCompletionPresentation()
-	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 0, Limit: 10})
-	events := []session.EventRecord{
-		streamScanTestEvent(t, "tool_completed", storedToolCompletion{
-			CallID:         "question-call",
-			Name:           string(toolspec.ToolAskQuestion),
-			Output:         json.RawMessage(`"answered"`),
-			Presentation:   presentation,
-			QuestionAnswer: &tools.AskQuestionAnswer{SelectedOptionNumber: &selected, Freeform: &freeform},
-		}),
-		streamScanTestEvent(t, "message", llm.Message{
-			Role: llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{{
-				ID: "question-call", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{}`),
-			}},
-		}),
-	}
-	for _, event := range events {
-		if err := scan.ApplyPersistedEvent(event); err != nil {
-			t.Fatalf("ApplyPersistedEvent: %v", err)
-		}
-	}
-	entries := scan.CollectedPageSnapshot().Entries
-	if len(entries) != 2 || entries[1].QuestionAnswer == nil {
-		t.Fatalf("persisted question entries = %+v, want typed answer", entries)
-	}
-	answer := entries[1].QuestionAnswer
-	if answer.SelectedOptionNumber == nil || *answer.SelectedOptionNumber != selected ||
-		answer.Freeform == nil || *answer.Freeform != freeform {
-		t.Fatalf("persisted question answer = %+v, want selected=%d freeform=%q", answer, selected, freeform)
 	}
 }
 

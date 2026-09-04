@@ -1,27 +1,30 @@
-import { Circle, CircleDot, CornerDownRight, Star } from "lucide-react";
+import { Circle, CircleAlert, CircleDot, CircleX, CornerDownRight, Star } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
 import { StaticMarkdown } from "@/ui";
 
 import { TranscriptFlatRow } from "./TranscriptFlatRow";
-import { isAskQuestionToolRow, projectTranscriptRow } from "./transcriptRowProjector";
+import {
+  askQuestionCopyText,
+  askQuestionSummary,
+  isAskQuestionToolRow,
+  type TranscriptTool,
+  type TranscriptToolPresentation,
+} from "./transcriptAskQuestionPolicy";
 
 export function TranscriptAskQuestionRow({ row }: Readonly<{ row: ChatTranscriptCommittedRow }>) {
   const { t } = useTranslation();
-  if (!isAskQuestionToolRow(row)) return null;
-
-  const projection = projectTranscriptRow(row, {
-    reviewerFeedbackCompactText: (count) => t("chatTranscript.reviewerSuggestions", { count }),
-    structuredNoticeCompactText: () => "",
-  });
-  if (projection?.body.kind !== "ask_question") return null;
-
-  const formatter = { structuredNoticeText: () => "" };
+  if (!isAskQuestionToolRow(row) || row.Visibility === "hidden") return null;
+  const tool = row.Tool;
+  const presentation = tool.Presentation;
   return (
     <TranscriptFlatRow
-      body={<AskQuestionBody presentation={projection.body.presentation} tool={projection.body.tool} />}
-      formatter={formatter}
+      body={<AskQuestionBody presentation={presentation} tool={tool} />}
+      copyText={askQuestionCopyText(row)}
+      defaultExpanded={!tool.IsError}
+      icon={<AskQuestionIcon isError={tool.IsError} />}
+      iconTone={tool.IsError ? "error" : "success"}
       labels={{
         collapseLabel: t("app.collapse"),
         copyFailedLabel: t("chatTranscript.copyFailed"),
@@ -29,17 +32,22 @@ export function TranscriptAskQuestionRow({ row }: Readonly<{ row: ChatTranscript
         copiedLabel: t("chatTranscript.copied"),
         expandLabel: t("app.expand"),
       }}
-      projection={projection}
+      summary={askQuestionSummary(row)}
     />
   );
+}
+
+function AskQuestionIcon({ isError }: Readonly<{ isError: boolean }>) {
+  const Icon = isError ? CircleX : CircleAlert;
+  return <Icon className="size-4" />;
 }
 
 function AskQuestionBody({
   presentation,
   tool,
 }: Readonly<{
-  tool: NonNullable<ChatTranscriptCommittedRow["Tool"]>;
-  presentation: NonNullable<NonNullable<ChatTranscriptCommittedRow["Tool"]>["Presentation"]>;
+  tool: TranscriptTool;
+  presentation: TranscriptToolPresentation;
 }>) {
   const answer = tool.QuestionAnswer;
   if (!tool.IsError && (answer === undefined || answer === null)) {

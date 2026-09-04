@@ -375,7 +375,7 @@ func (s *chatStore) recordToolCompletionWithProviderItems(res tools.Result, prov
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.toolCompletions[callID] = cloneToolResult(res)
+	s.toolCompletions[callID] = res
 	if len(provenances) > 0 {
 		s.toolCompletionProvenance[callID] = cloneTranscriptCommittedRowProvenance(provenances[0])
 	}

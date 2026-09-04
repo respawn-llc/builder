@@ -1,27 +1,45 @@
 import { useTranslation } from "react-i18next";
+import { StaticMarkdown } from "@/ui";
 
 import type { ChatTranscriptCommittedRow } from "@/api";
 import { basename } from "@/app-facade";
 
-import { firstPresent, projectTranscriptRow } from "./transcriptRowProjector";
-import { createTranscriptRowContentFormatter, structuredNoticeCompactText } from "./transcriptRowText";
-import { TranscriptContentBody, TranscriptFlatRow } from "./TranscriptFlatRow";
+import { firstPresent } from "./firstPresent";
+import {
+  projectNotice,
+  structuredNoticeCompactText,
+  type TranscriptNoticeTextCopy,
+} from "./transcriptNoticePolicy";
+import { TranscriptFlatRow } from "./TranscriptFlatRow";
 
 export function TranscriptNoticeRow({ row }: Readonly<{ row: ChatTranscriptCommittedRow }>) {
   const { t } = useTranslation();
   if (row.Kind !== "notice") return null;
 
-  const formatter = createTranscriptRowContentFormatter(noticeTextCopy(t));
-  const projection = projectTranscriptRow(row, {
-    reviewerFeedbackCompactText: (count) => t("chatTranscript.reviewerSuggestions", { count }),
-    structuredNoticeCompactText: (notice) => structuredNoticeCompactText(notice, noticeTextCopy(t)),
-  });
-  if (projection === null) return null;
+  const copy = noticeTextCopy(t);
+  const policy = projectNotice(
+    row,
+    {
+      structuredNoticeCompactText: (notice) => structuredNoticeCompactText(notice, copy),
+    },
+    copy,
+  );
+  if (policy === null) return null;
+  const Icon = policy.icon;
 
   return (
     <TranscriptFlatRow
-      body={<TranscriptContentBody content={projection.body} formatter={formatter} />}
-      formatter={formatter}
+      body={
+        policy.body.kind === "markdown" ? (
+          <StaticMarkdown value={policy.body.text} />
+        ) : (
+          <p className="chat-transcript-row-body">{policy.body.text}</p>
+        )
+      }
+      copyText={policy.copyText}
+      defaultExpanded={policy.defaultExpanded}
+      icon={<Icon className="size-4" />}
+      iconTone={policy.iconTone}
       labels={{
         collapseLabel: t("app.collapse"),
         copyFailedLabel: t("chatTranscript.copyFailed"),
@@ -29,12 +47,12 @@ export function TranscriptNoticeRow({ row }: Readonly<{ row: ChatTranscriptCommi
         copiedLabel: t("chatTranscript.copied"),
         expandLabel: t("app.expand"),
       }}
-      projection={projection}
+      summary={policy.summary}
     />
   );
 }
 
-function noticeTextCopy(t: ReturnType<typeof useTranslation>["t"]) {
+function noticeTextCopy(t: ReturnType<typeof useTranslation>["t"]): TranscriptNoticeTextCopy {
   return {
     cacheWarning(scope: string, reason: string, lostInputTokens: number | null | undefined) {
       const reasonKey =

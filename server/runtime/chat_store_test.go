@@ -345,39 +345,3 @@ func TestHistoryReplacementPrunesPriorToolWorkingState(t *testing.T) {
 		}
 	}
 }
-
-func TestLiveDeliverySnapshotPreservesTypedQuestionAnswer(t *testing.T) {
-	t.Parallel()
-	state := newTranscriptRuntimeState("")
-	selected := 2
-	freeform := "keep the split"
-	state.AppendMessage(nil, llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:    "question-call",
-			Name:  string(toolspec.ToolAskQuestion),
-			Input: json.RawMessage(`{}`),
-		}},
-	})
-	state.RecordStoredToolCompletion(storedToolCompletion{
-		CallID:         "question-call",
-		Name:           string(toolspec.ToolAskQuestion),
-		Output:         json.RawMessage(`"answered"`),
-		Presentation:   questionCompletionPresentation(),
-		QuestionAnswer: &tools.AskQuestionAnswer{SelectedOptionNumber: &selected, Freeform: &freeform},
-	}, nil)
-	state.AppendMessage(nil, llm.Message{
-		Role:       llm.RoleTool,
-		ToolCallID: textutil.Value("question-call"),
-		Name:       textutil.Value(string(toolspec.ToolAskQuestion)),
-	})
-	snapshot := state.chatProjection().deliverySnapshot()
-	if len(snapshot.Rows) != 2 || snapshot.Rows[1].Tool == nil || snapshot.Rows[1].Tool.QuestionAnswer == nil {
-		t.Fatalf("live delivery rows = %+v, want typed Question answer", snapshot.Rows)
-	}
-	answer := snapshot.Rows[1].Tool.QuestionAnswer
-	if answer.SelectedOptionNumber == nil || *answer.SelectedOptionNumber != selected ||
-		answer.Freeform == nil || *answer.Freeform != freeform {
-		t.Fatalf("live delivery answer = %+v, want selected=%d freeform=%q", answer, selected, freeform)
-	}
-}

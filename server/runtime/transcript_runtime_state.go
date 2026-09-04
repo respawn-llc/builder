@@ -450,7 +450,7 @@ func (s *transcriptRuntimeState) ToolCompletionSnapshot(callID string) (tools.Re
 		if !ok {
 			return tools.Result{}, false
 		}
-		return cloneToolResult(result), true
+		return result, true
 	}
 	return tools.Result{}, false
 }
