@@ -46,9 +46,6 @@ export function ProjectWorkflowStrip({
 }>) {
   const { t } = useTranslation();
   const navigation = useAppNavigation();
-  const openWorkflow = (workflowID: string) => {
-    void navigation.openProject(projectID, workflowID);
-  };
   return (
     <VirtualizedInfiniteList
       className="shrink-0 overflow-x-auto py-[var(--space-3)] hide-scrollbar"
@@ -86,7 +83,7 @@ export function ProjectWorkflowStrip({
         <InteractiveChip
           className="shrink-0"
           onClick={() => {
-            openWorkflow(workflow.id);
+            void navigation.openProject(projectID, workflow.id);
           }}
           title={workflow.description}
         >
