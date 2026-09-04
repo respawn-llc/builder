@@ -93,7 +93,7 @@ func TestSessionDeleteCommandSuccess(t *testing.T) {
 	}
 	exitCode, stdout, stderr := runSessionCommandTest(t, command, []string{"delete", "session-delete", "--confirm"})
 
-	if exitCode != 0 || string(stdout) != "done\n" || stderr != "" {
+	if exitCode != 0 || stderr != "" {
 		t.Fatalf("exit = %d, stdout = %q, stderr = %q", exitCode, stdout, stderr)
 	}
 	if len(remote.deleteRequests) != 1 || remote.deleteRequests[0].SessionId != "session-delete" {

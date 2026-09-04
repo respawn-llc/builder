@@ -204,12 +204,9 @@ func runSessionArchiveUseCase(
 	if err != nil {
 		return nil, err
 	}
-	if response == nil || response.SessionId != sessionID || response.OutputPath != outputPath {
-		return nil, errors.New("Session archive returned an invalid response")
-	}
 	return &sessionRemovalResult{
-		SessionID:  sessionID,
-		OutputPath: &outputPath,
+		SessionID:  response.SessionId,
+		OutputPath: &response.OutputPath,
 	}, nil
 }
 
@@ -224,10 +221,7 @@ func runSessionDeleteUseCase(
 	if err != nil {
 		return nil, err
 	}
-	if response == nil || response.SessionId != sessionID {
-		return nil, errors.New("Session deletion returned an invalid response")
-	}
-	return &sessionRemovalResult{SessionID: sessionID}, nil
+	return &sessionRemovalResult{SessionID: response.SessionId}, nil
 }
 
 func sessionArchiveFailure(sessionID string, err error) *sessionRemovalError {
