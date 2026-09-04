@@ -43,6 +43,7 @@ type Gateway struct {
 	deps                            GatewayDependencies
 	identity                        protocol.ServerIdentity
 	registration                    gatewayRegistration
+	sessionReattachMu               sync.Mutex
 	sessionReattach                 *sessionReattachAuthority
 	sessionExecutionRequestContract serverjsoncontract.SessionExecutionEnvironmentRequest
 }
@@ -241,17 +242,33 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 	if err != nil {
 		return nil, err
 	}
-	sessionReattach, err := newSessionReattachAuthority()
-	if err != nil {
-		return nil, err
-	}
 	return &Gateway{
 		deps:                            deps,
 		identity:                        identity,
 		registration:                    registration,
-		sessionReattach:                 sessionReattach,
 		sessionExecutionRequestContract: sessionExecutionRequestContract,
 	}, nil
+}
+
+func (g *Gateway) sessionReattachAuthority() (*sessionReattachAuthority, error) {
+	if g == nil || g.deps == nil {
+		return nil, ErrGatewayDependenciesRequired
+	}
+	g.sessionReattachMu.Lock()
+	defer g.sessionReattachMu.Unlock()
+	if g.sessionReattach != nil {
+		return g.sessionReattach, nil
+	}
+	metadataStore := g.deps.MetadataStore()
+	if metadataStore == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	authority, err := loadSessionReattachAuthority(metadataStore.PersistenceRoot())
+	if err != nil {
+		return nil, err
+	}
+	g.sessionReattach = authority
+	return authority, nil
 }
 
 func isNilGatewayDependencies(deps GatewayDependencies) bool {

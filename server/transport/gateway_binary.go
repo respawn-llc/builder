@@ -326,7 +326,11 @@ func invokeBinaryAttachSession(
 	state.attachedWorkspaceID = binding.WorkspaceID
 	state.attachedWorkspaceRoot = binding.CanonicalRoot
 	state.attachedSession = &parsedSessionID
-	reattachCapability, err := g.sessionReattach.issue(request.SessionId)
+	authority, err := g.sessionReattachAuthority()
+	if err != nil {
+		return nil, err
+	}
+	reattachCapability, err := authority.issue(request.SessionId)
 	if err != nil {
 		return nil, err
 	}

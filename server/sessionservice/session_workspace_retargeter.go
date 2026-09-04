@@ -233,34 +233,50 @@ func (s *SessionWorkspaceRetargeter) scheduleWorkspaceRetargetResolutionWithComp
 				}
 			},
 			func(boundaryCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) (callbackErr error) {
+				steerUnplannedFailure := func(cause error) error {
+					receipt, steerErr := activeRuntime.SteerSessionRebindFailureDiagnostic(cause)
+					failurePersisted = receipt.Committed
+					return errors.Join(cause, steerErr)
+				}
 				req, resolveErr := resolve(boundaryCtx)
 				if resolveErr != nil {
 					failureCause = resolveErr
-					return resolveErr
+					return steerUnplannedFailure(resolveErr)
 				}
 				if strings.TrimSpace(req.SessionID) != sessionID {
 					failureCause = errors.New("resolved Session workspace retarget does not match the scheduled Session")
-					return failureCause
+					return steerUnplannedFailure(failureCause)
 				}
 				currentPlan, planErr := s.metadata.PlanSessionWorkspaceRetarget(boundaryCtx, req)
 				if planErr != nil {
 					failureCause = planErr
-					return planErr
+					return steerUnplannedFailure(planErr)
 				}
 				plan = &currentPlan
 				sourceTarget, targetErr := s.metadata.ResolveSessionExecutionTarget(boundaryCtx, currentPlan.SessionID)
 				if targetErr != nil {
 					failureCause = targetErr
-					return targetErr
+					return steerUnplannedFailure(targetErr)
 				}
 				sourceWorkdir = sourceTarget.EffectiveWorkdir
+				steerPlannedFailure := func(cause error) error {
+					reminder := rebindFailureReminder(currentPlan, sourceWorkdir, cause)
+					receipt, steerErr := activeRuntime.SteerSessionRebindFailure(reminder)
+					failurePersisted = receipt.Committed
+					if failurePersisted {
+						return errors.Join(cause, steerErr)
+					}
+					persistErr := store.SetSessionRebindReminder(&reminder)
+					failurePersisted = persistErr == nil
+					return errors.Join(cause, steerErr, persistErr)
+				}
 				applyCtx := boundaryCtx
 				var releaseStarts sessionruntime.SessionStartBlockRelease
 				if currentPlan.CrossProject() {
 					releaseStarts, applyCtx, planErr = s.blockSessionStarts(boundaryCtx, currentPlan.SessionID)
 					if planErr != nil {
 						failureCause = planErr
-						return planErr
+						return steerPlannedFailure(planErr)
 					}
 					defer func() {
 						callbackErr = errors.Join(callbackErr, releaseStarts.Close(context.Background()))
@@ -269,15 +285,7 @@ func (s *SessionWorkspaceRetargeter) scheduleWorkspaceRetargetResolutionWithComp
 				_, applyErr := s.applyWorkspaceRetarget(applyCtx, req, store, activeRuntime, true)
 				if applyErr != nil {
 					failureCause = applyErr
-					reminder := rebindFailureReminder(currentPlan, sourceWorkdir, applyErr)
-					receipt, steerErr := activeRuntime.SteerSessionRebindFailure(reminder)
-					failurePersisted = receipt.Committed
-					if failurePersisted {
-						return errors.Join(applyErr, steerErr)
-					}
-					persistErr := store.SetSessionRebindReminder(&reminder)
-					failurePersisted = persistErr == nil
-					return errors.Join(applyErr, steerErr, persistErr)
+					return steerPlannedFailure(applyErr)
 				}
 				retirementScheduled, publicationErr = s.publishCommittedWorkspaceRetarget(currentPlan.SessionID, activeRuntime)
 				return nil

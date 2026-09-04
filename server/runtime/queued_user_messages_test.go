@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -44,6 +45,24 @@ func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 	}
 	if _, err := (QueuedUserMessage{}).DisplayText(); err == nil {
 		t.Fatal("DisplayText accepted an invalid payload")
+	}
+}
+
+func TestQueuedUserMessageStoreRejectsDuplicatePendingIdentity(t *testing.T) {
+	store := &queuedUserMessageStore{}
+	item := QueuedUserMessage{
+		ID: runtimeids.NewQueueItemID().String(),
+		Message: llm.Message{
+			Role:    llm.RoleUser,
+			Content: textutil.Value("first"),
+		},
+	}
+	if _, err := store.QueueItem(item); err != nil {
+		t.Fatalf("QueueItem first: %v", err)
+	}
+	item.Message.Content = textutil.Value("second")
+	if _, err := store.QueueItem(item); !errors.Is(err, errDuplicateQueuedUserMessageID) {
+		t.Fatalf("QueueItem duplicate error = %v, want duplicate identity rejection", err)
 	}
 }
 

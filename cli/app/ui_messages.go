@@ -253,6 +253,8 @@ type askEventMsg struct {
 	event askEvent
 }
 
+type missingPromptRehydrationMsg struct{}
+
 type uiStatusNoticeKind uint8
 
 const (

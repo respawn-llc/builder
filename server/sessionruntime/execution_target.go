@@ -21,10 +21,18 @@ import (
 )
 
 type ActiveRuntimeMaintenance struct {
-	PreviousFilesystemContext tools.FilesystemContext
-	Replace                   func(tools.FilesystemContext) error
-	steerSessionRebindFailure func(session.SessionRebindReminder) (session.CommitReceipt, error)
-	retire                    bool
+	PreviousFilesystemContext           tools.FilesystemContext
+	Replace                             func(tools.FilesystemContext) error
+	steerSessionRebindFailureDiagnostic func(error) (session.CommitReceipt, error)
+	steerSessionRebindFailure           func(session.SessionRebindReminder) (session.CommitReceipt, error)
+	retire                              bool
+}
+
+func (m *ActiveRuntimeMaintenance) SteerSessionRebindFailureDiagnostic(cause error) (session.CommitReceipt, error) {
+	if m == nil || m.steerSessionRebindFailureDiagnostic == nil {
+		return session.CommitReceipt{}, errors.New("active runtime Session rebind failure diagnostic steering is unavailable")
+	}
+	return m.steerSessionRebindFailureDiagnostic(cause)
 }
 
 func (m *ActiveRuntimeMaintenance) SteerSessionRebindFailure(reminder session.SessionRebindReminder) (session.CommitReceipt, error) {
@@ -291,7 +299,8 @@ func runActiveRuntimeMaintenance(
 			currentContext = next.Clone()
 			return nil
 		},
-		steerSessionRebindFailure: engine.SteerSessionRebindFailure,
+		steerSessionRebindFailureDiagnostic: engine.SteerSessionRebindFailureDiagnostic,
+		steerSessionRebindFailure:           engine.SteerSessionRebindFailure,
 	}
 	callbackErr := fn(maintenance)
 	active = false

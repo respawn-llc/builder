@@ -94,10 +94,14 @@ func (g *Gateway) resolveSessionAttachmentTargetWithCapability(
 	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
 		activeProjectID = strings.TrimSpace(state.attachedProject)
 	}
-	if activeProjectID != "" &&
-		strings.TrimSpace(binding.ProjectID) != activeProjectID &&
-		!g.sessionReattach.authorizes(trimmedSessionID, reattachCapability) {
-		return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
+		authority, authorityErr := g.sessionReattachAuthority()
+		if authorityErr != nil {
+			return clientui.SessionExecutionTarget{}, metadata.Binding{}, authorityErr
+		}
+		if !authority.authorizes(trimmedSessionID, reattachCapability) {
+			return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+		}
 	}
 	return target, binding, nil
 }

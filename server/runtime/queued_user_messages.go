@@ -13,6 +13,7 @@ import (
 )
 
 var errInvalidQueuedUserMessage = errors.New("queued message requires a role and content")
+var errDuplicateQueuedUserMessageID = errors.New("queued message identity is already pending")
 
 type queuedUserMessageStore struct {
 	mu          sync.Mutex
@@ -66,6 +67,12 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations 
 		association = associations[0]
 	}
 	s.mu.Lock()
+	for _, pending := range s.items {
+		if pending.message.ID == item.ID {
+			s.mu.Unlock()
+			return QueuedUserMessage{}, errDuplicateQueuedUserMessageID
+		}
+	}
 	s.items = append(s.items, queuedUserMessage{
 		message:        item,
 		steerAdmission: clonePendingWorkSteerAdmission(association.steerAdmission),

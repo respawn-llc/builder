@@ -297,6 +297,67 @@ func TestGatewayProjectRemoteContinuesAfterActiveStepScheduledCrossProjectMove(t
 	}
 }
 
+func TestGatewaySessionReattachCapabilitySurvivesGatewayReplacement(t *testing.T) {
+	home := t.TempDir()
+	sourceWorkspace := t.TempDir()
+	targetWorkspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureGatewayTestServerPort(t)
+
+	sourceConfig := resolveGatewayTestConfig(t, sourceWorkspace)
+	sourceBinding := registerGatewayTestBinding(t, sourceConfig.Config)
+	targetConfig := resolveGatewayTestConfig(t, targetWorkspace)
+	targetBinding := registerGatewayTestBinding(t, targetConfig.Config)
+	appCore, _ := newGatewayTestServerForConfig(t, sourceConfig.Config)
+	movedSession := createGatewayAuthoritativeSession(t, appCore)
+
+	firstGateway, err := NewGateway(appCore, gatewayTestIdentity())
+	if err != nil {
+		t.Fatalf("NewGateway first: %v", err)
+	}
+	firstAttachment, err := invokeBinaryAttachSession(
+		firstGateway,
+		t.Context(),
+		&connectionState{attachedProject: sourceBinding.ProjectID},
+		&connectionpb.AttachSessionRequest{SessionId: movedSession.Meta().SessionID},
+	)
+	if err != nil {
+		t.Fatalf("attach Session before move: %v", err)
+	}
+	capability := firstAttachment.GetSession().GetReattachCapability()
+
+	if _, err := appCore.SessionLifecycleClient().RetargetSessionWorkspace(
+		t.Context(),
+		serverapi.SessionRetargetWorkspaceRequest{
+			SessionID:     movedSession.Meta().SessionID,
+			WorkspaceRoot: targetConfig.Config.WorkspaceRoot,
+			ProjectID:     &targetBinding.ProjectID,
+		},
+	); err != nil {
+		t.Fatalf("move Session: %v", err)
+	}
+
+	replacementGateway, err := NewGateway(appCore, gatewayTestIdentity())
+	if err != nil {
+		t.Fatalf("NewGateway replacement: %v", err)
+	}
+	attachment, err := invokeBinaryAttachSession(
+		replacementGateway,
+		t.Context(),
+		&connectionState{attachedProject: sourceBinding.ProjectID},
+		&connectionpb.AttachSessionRequest{
+			SessionId:          movedSession.Meta().SessionID,
+			ReattachCapability: &capability,
+		},
+	)
+	if err != nil {
+		t.Fatalf("reattach moved Session through replacement Gateway: %v", err)
+	}
+	if got := attachment.GetSession().GetProjectId(); got != targetBinding.ProjectID {
+		t.Fatalf("reattached Project = %q, want %q", got, targetBinding.ProjectID)
+	}
+}
+
 func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *testing.T) {
 	home := t.TempDir()
 	workspaceA := t.TempDir()

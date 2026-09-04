@@ -781,88 +781,117 @@ func TestSessionWorkspaceRetargeterKeepsSuccessReminderWhenRuntimeRetirementFail
 }
 
 func TestSessionWorkspaceRetargeterPublishesFailureBeforeQueuedModelWorkResumes(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
-	targetProjectID := fixture.targetProject.ProjectID
-	request := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Meta().SessionID,
-		WorkspaceRoot: fixture.targetWorkspaceRoot,
-		ProjectID:     &targetProjectID,
-	}
-	applyErr := errors.New("target boundary unavailable")
-	retargeter := fixture.retargeter(
-		failingSessionRetargetBoundary{Store: fixture.metadata, err: applyErr},
-		retargetProcessSource{},
-	)
-	client := &queuedFailureRetargetRuntimeClient{
-		scheduled:     make(chan struct{}),
-		releaseFirst:  make(chan struct{}),
-		secondStarted: make(chan struct{}),
-	}
-	engine := fixture.openRuntimeWithClient(t, client)
-	client.run = func() error {
-		active := engine.ActiveRun()
-		if active == nil {
-			return errors.New("active Agent Step is required")
-		}
-		_, err := retargeter.ScheduleWorkspaceRetarget(
-			t.Context(),
-			request,
-			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
-			worktreecontract.NewOperationID(),
-		)
-		return err
-	}
+	for _, test := range []struct {
+		name     string
+		metadata func(*metadata.Store, error) sessionRetargetMetadata
+	}{
+		{
+			name: "apply failure",
+			metadata: func(store *metadata.Store, failure error) sessionRetargetMetadata {
+				return failingSessionRetargetBoundary{Store: store, err: failure}
+			},
+		},
+		{
+			name: "planning failure",
+			metadata: func(store *metadata.Store, failure error) sessionRetargetMetadata {
+				return failingSessionRetargetPlan{Store: store, err: failure}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRealSessionRetargetFixture(t, false)
+			targetProjectID := fixture.targetProject.ProjectID
+			request := metadata.SessionWorkspaceRetargetRequest{
+				SessionID:     fixture.child.Meta().SessionID,
+				WorkspaceRoot: fixture.targetWorkspaceRoot,
+				ProjectID:     &targetProjectID,
+			}
+			failure := errors.New("target unavailable")
+			retargeter := fixture.retargeter(test.metadata(fixture.metadata, failure), retargetProcessSource{})
+			client := &queuedFailureRetargetRuntimeClient{
+				scheduled:     make(chan struct{}),
+				releaseFirst:  make(chan struct{}),
+				secondStarted: make(chan struct{}),
+			}
+			engine := fixture.openRuntimeWithClient(t, client)
+			client.run = func() error {
+				active := engine.ActiveRun()
+				if active == nil {
+					return errors.New("active Agent Step is required")
+				}
+				_, err := retargeter.ScheduleWorkspaceRetarget(
+					t.Context(),
+					request,
+					serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
+					worktreecontract.NewOperationID(),
+				)
+				return err
+			}
 
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "move this Session")
-		firstDone <- err
-	}()
-	select {
-	case <-client.scheduled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("self-rebind was not scheduled")
+			firstDone := make(chan error, 1)
+			go func() {
+				_, err := engine.SubmitUserMessage(context.Background(), "move this Session")
+				firstDone <- err
+			}()
+			select {
+			case <-client.scheduled:
+			case <-time.After(3 * time.Second):
+				t.Fatal("self-rebind was not scheduled")
+			}
+			type queuedResult struct {
+				accepted bool
+				err      error
+			}
+			queued := make(chan queuedResult, 1)
+			go func() {
+				_, accepted, err := engine.QueueUserMessageForActiveRun(
+					context.Background(),
+					"continue after the failed move",
+					nil,
+				)
+				queued <- queuedResult{accepted: accepted, err: err}
+			}()
+			close(client.releaseFirst)
+			if result := <-queued; result.err != nil || !result.accepted {
+				t.Fatalf("queue successor accepted=%t error=%v", result.accepted, result.err)
+			}
+			if err := <-firstDone; err != nil {
+				t.Fatalf("originating Agent Step: %v", err)
+			}
+			select {
+			case <-client.secondStarted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("queued user work did not resume")
+			}
+			requestAfterFailure := client.request(1)
+			for _, item := range requestAfterFailure.Items {
+				if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback {
+					return
+				}
+			}
+			messageTypes := make([]string, 0, len(requestAfterFailure.Items))
+			for _, item := range requestAfterFailure.Items {
+				if item.MessageType == nil {
+					messageTypes = append(messageTypes, "<none>")
+				} else {
+					messageTypes = append(messageTypes, string(*item.MessageType))
+				}
+			}
+			t.Fatalf("queued request lacks rebind failure notice; message types: %v", messageTypes)
+		})
 	}
-	type queuedResult struct {
-		accepted bool
-		err      error
-	}
-	queued := make(chan queuedResult, 1)
-	go func() {
-		_, accepted, err := engine.QueueUserMessageForActiveRun(
-			context.Background(),
-			"continue after the failed move",
-			nil,
-		)
-		queued <- queuedResult{accepted: accepted, err: err}
-	}()
-	close(client.releaseFirst)
-	if result := <-queued; result.err != nil || !result.accepted {
-		t.Fatalf("queue successor accepted=%t error=%v", result.accepted, result.err)
-	}
-	if err := <-firstDone; err != nil {
-		t.Fatalf("originating Agent Step: %v", err)
-	}
-	select {
-	case <-client.secondStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("queued user work did not resume")
-	}
-	requestAfterFailure := client.request(1)
-	for _, item := range requestAfterFailure.Items {
-		if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback {
-			return
-		}
-	}
-	messageTypes := make([]string, 0, len(requestAfterFailure.Items))
-	for _, item := range requestAfterFailure.Items {
-		if item.MessageType == nil {
-			messageTypes = append(messageTypes, "<none>")
-		} else {
-			messageTypes = append(messageTypes, string(*item.MessageType))
-		}
-	}
-	t.Fatalf("queued request lacks rebind failure notice; message types: %v", messageTypes)
+}
+
+type failingSessionRetargetPlan struct {
+	*metadata.Store
+	err error
+}
+
+func (s failingSessionRetargetPlan) PlanSessionWorkspaceRetarget(
+	context.Context,
+	metadata.SessionWorkspaceRetargetRequest,
+) (metadata.SessionWorkspaceRetargetPlan, error) {
+	return metadata.SessionWorkspaceRetargetPlan{}, s.err
 }
 
 func TestSessionWorkspaceRetargeterRejectsActiveCrossProjectRuntimeImmediately(t *testing.T) {

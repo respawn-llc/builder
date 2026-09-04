@@ -48,7 +48,11 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageStepState:
 		m.applyTranscriptStepState(message.Payload().(clientui.TranscriptStepState))
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
-		return m.applyTranscriptRuntimeReadModelUpdate(admission)
+		cmd := m.applyTranscriptRuntimeReadModelUpdate(admission)
+		if m.runtimeActivityProjection.State == clientui.RuntimeActivityAwaitingPrompt && !m.ask.hasCurrent() {
+			cmd = sequenceCmds(cmd, func() tea.Msg { return missingPromptRehydrationMsg{} })
+		}
+		return cmd
 	case clientui.TranscriptMessageSessionStatus:
 		m.applyTranscriptSessionStatus(message.Payload().(clientui.TranscriptSessionStatus))
 	case clientui.TranscriptMessageSessionIdentity:
@@ -110,7 +114,6 @@ func (m *uiModel) applyTranscriptHydration(
 	}
 
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
-	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
 	currentSessionID := strings.TrimSpace(m.sessionID)
 	preserved := m.processList.entries[:0]
 	for _, entry := range m.processList.entries {
@@ -153,15 +156,14 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 			"",
 		)
 	}
-	promptCtrlCCmd := m.releasePendingPromptCtrlCContinuation()
 	if view.Activity.ActiveForControl() {
-		return promptCtrlCCmd
+		return nil
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
 		cmd = m.acknowledgePendingInterrupt()
 	}
-	return tea.Batch(promptCtrlCCmd, cmd, m.releaseDeferredRuntimeSyncs())
+	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 }
 
 func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {
@@ -214,7 +216,6 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	}
 	m.pendingCompactionRequestIDs = nil
 	m.askController().cancelActiveDelivery()
-	m.ask.pendingCtrlCContinuation = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()

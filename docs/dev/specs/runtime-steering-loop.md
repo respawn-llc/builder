@@ -25,8 +25,10 @@
 - An Idle Active Session Runtime applies accepted short mutations without waiting for a prior Agent Step.
 - Post-turn Queue is a separate server-owned first-in, first-out message collection.
 - Post-turn Queue accepts each message as a distinct Queue Item and returns without waiting for its later eligible turn.
-- Session Name, Thinking, Fast Mode, Supervisor, Questions, and Auto-compaction changes persist immediately while an Agent Step is running.
-- Immediate setting changes enter neither Pending Work nor the Engine Intent Queue.
+- Session Name persists immediately while an Agent Step is running.
+- Thinking, Fast Mode, Supervisor, Questions, and Auto-compaction changes may complete failure-prone preparation, durably commit, and return while an Agent Step is running.
+- A committed live-Runtime setting change is accepted in Session mutation order and applies at the next between-Agent-Step boundary.
+- Setting changes enter neither user-visible Pending Work nor the post-turn Queue.
 - The server publishes each successful setting change and its typed transient feedback to every connected client.
 - A setting change affects later provider and compaction requests and never alters an Agent Step already running.
 - Setting changes create no model-visible entries or transcript rows.
@@ -176,16 +178,17 @@
 
 ## Questions, Approvals, And Stop
 
-- A pending Question or Approval remains part of its exact live execution and may be interrupted through the ordinary exact Interrupt behavior.
+- A pending Question or Approval remains part of its exact live Agent execution even when no model or tool step is active. It may be interrupted through the ordinary exact Interrupt behavior.
 - Manual Move denies a pending Workflow Approval before applying the requested move.
 - Every public Instant Stop route revalidates and admits Stop through Session Runtime Authority before it cancels an Agent execution.
 - A stale Stop cannot cancel a successor execution.
-- Only matching exact live Agent execution authorizes Instant Stop.
+- Only a matching exact live Agent execution, including one waiting for a Question or Approval, authorizes Instant Stop.
 - Only matching live Agent or Script execution authorizes Task Interrupt.
 - Stop closes the matching execution to new associated human input before cancellation begins.
 - Input accepted after Stop admission belongs to later Runtime work and is not removed by that execution's cleanup.
 - A finalizing exact execution is no longer stoppable.
 - Repeating Stop during or after finalizing cleanup does not start another cleanup.
+- Stop closes pending Question and Approval calls through the ordinary interrupted execution outcome.
 - When the stopped execution reaches its boundary, Kent removes its pending human Send/Steer and post-turn Queue messages.
 - Non-message Session mutations remain accepted after Stop.
 - Worktree and foreground-shell operations already running continue under their own owners after Stop.
