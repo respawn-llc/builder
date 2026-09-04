@@ -44,6 +44,7 @@ const (
 	ScopeRuntimeLiveSessionOptional ScopePolicy = "runtime_live_session_optional"
 	ScopeProcessActiveProject       ScopePolicy = "process_active_project"
 	ScopeNotification               ScopePolicy = "notification"
+	ScopeChatTarget                 ScopePolicy = "chat_target"
 )
 
 type ConnectionStrategy string
