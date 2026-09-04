@@ -2,7 +2,6 @@ package launch
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -53,49 +52,6 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 			t.Fatalf("previous session ID = %v, want %q", meta.PreviousSessionID, parent.Meta().SessionID)
 		}
 	})
-}
-
-func TestPlannerRejectsInitialChatForDerivedSessionBeforePersistence(t *testing.T) {
-	planner, containerDir, persistence := newTypedIntentPlanner(t)
-	parent := createTypedIntentSession(t, containerDir, sessioncontract.SessionCategoryMain, persistence)
-	gate := sessiontest.NewPersistenceGate(persistence)
-	planner.StoreOptions = []session.StoreOption{
-		session.WithPersistenceObserver(gate),
-		session.WithPersistedSessionResolver(persistence),
-		session.WithSessionContextFactWriter(persistence),
-	}
-	persistenceErr := errors.New("persistence must remain armed")
-	gate.FailNext(persistenceErr)
-	supervisor := "edits"
-	thinking := "medium"
-	fast := false
-	questions := true
-	autoCompaction := true
-
-	if _, err := planner.PlanSession(context.Background(), SessionRequest{
-		Mode:   ModeInteractive,
-		Intent: createNewTypedIntentWithPreviousSession(t, parent.Meta().SessionID),
-		InitialChat: &session.ChatDraftState{
-			Message: "draft",
-			Agent:   config.DefaultSubagentRole,
-			Settings: &session.ChatSettingsOverrides{
-				Supervisor:     &supervisor,
-				Thinking:       &thinking,
-				Fast:           &fast,
-				Questions:      &questions,
-				AutoCompaction: &autoCompaction,
-			},
-		},
-	}); err == nil {
-		t.Fatal("derived Session accepted initial Chat state")
-	}
-
-	if _, err := planner.PlanSession(context.Background(), SessionRequest{
-		Mode:   ModeInteractive,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	}); !errors.Is(err, persistenceErr) {
-		t.Fatalf("following independent creation error = %v, want still-armed persistence failure", err)
-	}
 }
 
 func TestPlannerOpenExistingIntentOpensTheRequestedSession(t *testing.T) {

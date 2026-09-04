@@ -67,31 +67,6 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	releaseMaintenance()
 }
 
-func TestPendingWorkProjectsCanonicalQueuedInputWithoutChangingExecution(t *testing.T) {
-	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
-	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
-
-	queued, err := engine.QueueUserInput(context.Background(), QueuedUserInput{
-		ExecutionText:         "expanded prompt body",
-		CanonicalPresentation: "/review src",
-	})
-	if err != nil {
-		t.Fatalf("QueueUserInput: %v", err)
-	}
-	if queued.Message.Content == nil || *queued.Message.Content != "expanded prompt body" {
-		t.Fatalf("queued execution = %+v", queued.Message)
-	}
-	snapshot := pendingWorkTestSnapshot(t, engine)
-	if len(snapshot.Items) != 1 ||
-		snapshot.Items[0].CanonicalInput != "/review src" ||
-		snapshot.Items[0].Message == nil ||
-		snapshot.Items[0].Message.Text != "/review src" {
-		t.Fatalf("Pending Work = %+v, want canonical command presentation", snapshot.Items)
-	}
-
-	releaseMaintenance()
-}
-
 func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)

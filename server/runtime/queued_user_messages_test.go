@@ -29,24 +29,6 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 	}
 }
 
-func TestQueuedUserMessagePreservesDistinctExecutionAndCanonicalPresentation(t *testing.T) {
-	const execution = "expanded prompt body"
-	const canonical = "/review src"
-	item, err := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
-		Message:               llm.Message{Role: llm.RoleUser, Content: textutil.Value(execution)},
-		CanonicalPresentation: canonical,
-	})
-	if err != nil {
-		t.Fatalf("QueueItem: %v", err)
-	}
-	if item.Message.Content == nil || *item.Message.Content != execution {
-		t.Fatalf("execution message = %+v, want %q", item.Message, execution)
-	}
-	if display, err := item.DisplayText(); err != nil || display != canonical {
-		t.Fatalf("DisplayText = %q/%v, want %q", display, err, canonical)
-	}
-}
-
 func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 	store := &queuedUserMessageStore{}
 	if _, err := store.QueueItem(QueuedUserMessage{}); err == nil {

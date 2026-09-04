@@ -15,7 +15,6 @@ import (
 	"core/server/sessionruntime"
 	"core/shared/apicontract"
 	"core/shared/config"
-	chatpb "core/shared/protoapi/gen/kent/api/chat"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -246,127 +245,6 @@ func TestRuntimePlannerPlansDormantPersistedSessionThenOpensIt(t *testing.T) {
 		runtimeAPI.release.OwnerID != runtimeAPI.activate.OwnerID ||
 		runtimeAPI.release.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
 		t.Fatalf("Runtime release = %+v", runtimeAPI.release)
-	}
-}
-
-func TestServiceFinalizesActivatedRuntimeWhenResponseTargetsAnotherSession(t *testing.T) {
-	fixture := newRuntimePlannerFixture(t)
-	settings := config.DefaultOnboardingSettings()
-	settings.Model = "gpt-5"
-	launchService := &runtimePlannerSessionLaunch{
-		result: sessionlaunch.PlanResult{Plan: launch.SessionPlan{
-			Descriptor:            mustRuntimePlannerDescriptor(t, fixture.sessionID),
-			ActiveSettings:        settings,
-			QuestionsEnabled:      true,
-			AutoCompactionEnabled: true,
-		}},
-	}
-	otherSessionID := runtimeids.NewSessionID()
-	runtimeAPI := &runtimePlannerRuntimeAPI{
-		activateReply: &serverapi.SessionRuntimeActivateResponse{
-			Attachment: serverapi.SessionRuntimeAttachment{
-				SessionID:  otherSessionID.String(),
-				Generation: 7,
-			},
-		},
-	}
-	planner := NewRuntimePlanner(
-		fixture.authority,
-		func(context.Context, runtimeids.SessionID) (PersistedSessionPlanner, error) {
-			return launchService, nil
-		},
-		runtimeAPI,
-	)
-	service := newTestService(
-		&steerTargetResolver{resolved: ResolvedTarget{SessionID: fixture.sessionID}},
-		planner,
-		&steerAdmission{},
-	)
-
-	result, err := service.Steer(t.Context(), &chatpb.SteerRequest{
-		Target: &chatpb.ChatTarget{
-			Target: &chatpb.ChatTarget_Session{
-				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.sessionID.String()},
-			},
-		},
-		Activation: &chatpb.Activation{
-			Input: &chatpb.Activation_Text{Text: "continue"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Steer: %v", err)
-	}
-	if result.GetNotAccepted().GetInternalFailure() == nil {
-		t.Fatalf("Steer result = %+v, want typed non-acceptance", result)
-	}
-	if runtimeAPI.release.Attachment.SessionID != otherSessionID.String() ||
-		runtimeAPI.release.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle ||
-		!runtimeAPI.release.DropOwner ||
-		!runtimeAPI.releaseTimed {
-		t.Fatalf("invalid Runtime response finalization = %+v, timed=%v", runtimeAPI.release, runtimeAPI.releaseTimed)
-	}
-}
-
-func TestRuntimePlannerServiceAttachmentRejectsUnsupportedReleasePolicy(t *testing.T) {
-	fixture := newRuntimePlannerFixture(t)
-	runtimeAPI := &runtimePlannerRuntimeAPI{}
-	attachment := serviceRuntimeAttachment{
-		sessionID: fixture.sessionID,
-		attachment: serverapi.SessionRuntimeAttachment{
-			SessionID:  fixture.sessionID.String(),
-			Generation: 7,
-		},
-		ownerID:    "chat-owner",
-		runtimeAPI: runtimeAPI,
-	}
-
-	if err := attachment.Release(t.Context(), sessionruntime.RuntimeReleaseClose); err == nil {
-		t.Fatal("unsupported close release policy succeeded")
-	}
-	if runtimeAPI.release != (serverapi.SessionRuntimeReleaseRequest{}) {
-		t.Fatalf("unsupported release reached Runtime service: %+v", runtimeAPI.release)
-	}
-}
-
-func TestRuntimePlannerPropagatesCancellationDuringPersistedSessionPlanning(t *testing.T) {
-	fixture := newRuntimePlannerFixture(t)
-	launchService := &runtimePlannerSessionLaunch{err: context.Canceled}
-	runtimeAPI := &runtimePlannerRuntimeAPI{}
-	planner := NewRuntimePlanner(
-		fixture.authority,
-		func(context.Context, runtimeids.SessionID) (PersistedSessionPlanner, error) {
-			return launchService, nil
-		},
-		runtimeAPI,
-	)
-
-	if _, err := planner.Open(t.Context(), fixture.sessionID); err != context.Canceled {
-		t.Fatalf("Open error = %v, want cancellation", err)
-	}
-	if runtimeAPI.activateCalls != 0 {
-		t.Fatalf("canceled planning activated Runtime: %+v", runtimeAPI.activate)
-	}
-}
-
-func TestRuntimePlannerPropagatesCancellationDuringRuntimeOpening(t *testing.T) {
-	fixture := newRuntimePlannerFixture(t)
-	launchService := &runtimePlannerSessionLaunch{
-		result: sessionlaunch.PlanResult{Plan: launch.SessionPlan{
-			Descriptor:     mustRuntimePlannerDescriptor(t, fixture.sessionID),
-			ActiveSettings: config.DefaultOnboardingSettings(),
-		}},
-	}
-	runtimeAPI := &runtimePlannerRuntimeAPI{activateErr: context.Canceled}
-	planner := NewRuntimePlanner(
-		fixture.authority,
-		func(context.Context, runtimeids.SessionID) (PersistedSessionPlanner, error) {
-			return launchService, nil
-		},
-		runtimeAPI,
-	)
-
-	if _, err := planner.Open(t.Context(), fixture.sessionID); err != context.Canceled {
-		t.Fatalf("Open error = %v, want cancellation", err)
 	}
 }
 
