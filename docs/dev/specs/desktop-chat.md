@@ -121,7 +121,7 @@
 - User, committed assistant, and live assistant content use the same rich Markdown presentation. It sanitizes raw HTML and applies the specified link behavior. Completed supported code is syntax-highlighted and selectable; incomplete code remains selectable plain text until the Markdown parser reports the fence complete. Diagrams, math, and built-in Markdown controls are unavailable.
 - A live assistant message appears only after its first nonempty content arrives. It presents live text with the specified character motion and no caret; completed messages use static presentation. Reduced motion shows characters immediately.
 - A live Chat opened mid-response may animate already received eligible text once, then only newly arriving text. Each assistant update immediately changes the one visible live message; Chat does not alter, repair, or buffer model text.
-- Live Markdown is available only when it meets the approved safety, scrolling, responsiveness, and product-review requirements for long output, incomplete Markdown, tables and lists, hostile links and HTML, and unfinished code. If it does not, streaming uses selectable plain text and the completed message uses the shared static Markdown presentation.
+- Live Markdown must preserve safe scrolling and responsive interaction for long output, incomplete Markdown, tables and lists, hostile links and HTML, and unfinished code. When it cannot satisfy those requirements, streaming uses selectable plain text and the completed message uses the shared static Markdown presentation.
 
 ## Chat Presentation
 
