@@ -1383,6 +1383,9 @@ func (a *Authority) openResource(
 	a.mu.Unlock()
 	created := false
 	if resource == nil {
+		if plan == nil {
+			return nil, ErrAgentRuntimePlanRequired
+		}
 		var err error
 		resource, err = a.buildAgentResource(ctx, descriptor, plan, admittedStore)
 		if err != nil {
