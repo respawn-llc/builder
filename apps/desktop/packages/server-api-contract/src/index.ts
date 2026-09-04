@@ -3,6 +3,7 @@ export type { DescMessage, DescMethod, Message, MessageShape } from "@bufbuild/p
 export { decodeEnvelope, decodeEnvelopeCorrelation, encodeEnvelope } from "./envelope.js";
 export { decode, decodeJson, encode, encodeJson, validate } from "./message.js";
 export {
+  legacyWireName,
   operationName,
   subscriptionAssociations,
   unaryConnectionPolicy,

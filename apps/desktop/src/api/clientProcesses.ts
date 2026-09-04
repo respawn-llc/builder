@@ -1,4 +1,4 @@
-import { create, decodeJson, encodeJson, operationName } from "@app/server-api-contract";
+import { create, decodeJson, encodeJson, legacyWireName, operationName } from "@app/server-api-contract";
 import {
   ControlService,
   ListSuccessSchema,
@@ -18,7 +18,7 @@ export async function listProcesses(
 ): Promise<readonly DesktopProcess[]> {
   const method = ViewService.method.list;
   const request = create(method.input, { projectId: projectID.trim() });
-  const raw = await transport.call(operationName(method), encodeJson(method.input, request));
+  const raw = await transport.call(legacyWireName(method), encodeJson(method.input, request));
   try {
     const success = decodeJson(ListSuccessSchema, jsonValueSchema.parse(raw));
     return success.processes.map(processFromGenerated);
@@ -30,7 +30,7 @@ export async function listProcesses(
 export async function killProcess(transport: DescriptorRpcTransport, processID: string): Promise<void> {
   const method = ControlService.method.kill;
   const request = create(method.input, { processId: processID.trim() });
-  await transport.call(operationName(method), encodeJson(method.input, request));
+  await transport.call(legacyWireName(method), encodeJson(method.input, request));
 }
 
 function processFromGenerated(process: BackgroundProcess): DesktopProcess {

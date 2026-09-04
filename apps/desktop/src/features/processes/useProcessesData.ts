@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { DesktopProcess } from "@/api";
-import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
+import { queryKeys, useAppServices, useConnectionSnapshot, useWindowFocus } from "@/app-facade";
 
 const processRefreshIntervalMs = 1_500;
 
@@ -24,9 +24,11 @@ export type ProcessesData = Readonly<{
 export function useProcessesData(projectID: string): ProcessesData {
   const { api } = useAppServices();
   const connection = useConnectionSnapshot();
+  const windowFocused = useWindowFocus();
   const issuedReadSequenceRef = useRef(0);
   const pendingRef = useRef(new Map<string, PendingTermination>());
   const mountedRef = useRef(true);
+  const previousWindowFocusedRef = useRef<boolean | null>(null);
   const [pendingTerminationIDs, setPendingTerminationIDs] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
@@ -59,11 +61,19 @@ export function useProcessesData(projectID: string): ProcessesData {
       }
       return processes;
     },
-    refetchInterval: processRefreshIntervalMs,
-    refetchIntervalInBackground: false,
+    refetchInterval: windowFocused === true ? processRefreshIntervalMs : false,
     refetchOnMount: "always",
-    refetchOnWindowFocus: "always",
+    refetchOnWindowFocus: false,
   });
+  const refetchProcesses = query.refetch;
+
+  useEffect(() => {
+    const previousWindowFocused = previousWindowFocusedRef.current;
+    previousWindowFocusedRef.current = windowFocused;
+    if (previousWindowFocused === false && windowFocused === true) {
+      void refetchProcesses();
+    }
+  }, [refetchProcesses, windowFocused]);
 
   const terminate = useCallback(
     async (processID: string) => {
@@ -80,11 +90,11 @@ export function useProcessesData(projectID: string): ProcessesData {
             phase: "awaiting_read",
             afterSequence: issuedReadSequenceRef.current,
           });
-          void query.refetch();
+          void refetchProcesses();
         }
       }
     },
-    [api, connection.phase, publishPending, query],
+    [api, connection.phase, publishPending, refetchProcesses],
   );
 
   return {
@@ -96,7 +106,7 @@ export function useProcessesData(projectID: string): ProcessesData {
     isConnected: connection.phase === "connected",
     pendingTerminationIDs,
     retry: () => {
-      void query.refetch();
+      void refetchProcesses();
     },
     terminate,
   };

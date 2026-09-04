@@ -118,8 +118,8 @@ func BackgroundProcessToProto(process clientui.BackgroundProcess) (*processpb.Ba
 		LastUpdatedAt:           timestamppb.New(process.LastUpdatedAt),
 		RecentOutput:            process.RecentOutput,
 	}
-	if !process.FinishedAt.IsZero() {
-		message.FinishedAt = timestamppb.New(process.FinishedAt)
+	if process.FinishedAt != nil {
+		message.FinishedAt = timestamppb.New(*process.FinishedAt)
 	}
 	return message, nil
 }
@@ -194,12 +194,12 @@ func requiredProcessTime(timestamp *timestamppb.Timestamp, field string) (time.T
 	return timestamp.AsTime(), nil
 }
 
-func optionalProcessTime(timestamp *timestamppb.Timestamp, field string) (time.Time, error) {
+func optionalProcessTime(timestamp *timestamppb.Timestamp, field string) (*time.Time, error) {
 	if timestamp == nil {
-		return time.Time{}, nil
+		return nil, nil
 	}
 	if err := timestamp.CheckValid(); err != nil {
-		return time.Time{}, fmt.Errorf("%s is invalid: %w", field, err)
+		return nil, fmt.Errorf("%s is invalid: %w", field, err)
 	}
-	return timestamp.AsTime(), nil
+	return textutil.Value(timestamp.AsTime()), nil
 }
