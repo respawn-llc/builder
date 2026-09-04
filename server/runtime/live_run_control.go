@@ -322,12 +322,8 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Con
 		queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item, queuedUserMessageAssociation{
 			steerAdmission: admission,
 		})
-		if queueErr == nil {
-			item = queuedItem
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false, nil)
-		}
-		e.outputMutationMu.Unlock()
 		if queueErr != nil {
+			e.outputMutationMu.Unlock()
 			queueItemID := mustQueueItemID(item.ID)
 			e.liveRun.finishQueueItemPublication(queueItemID)
 			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)

@@ -21,7 +21,7 @@ type userTurnProjection struct {
 	HistoryText   string
 }
 
-func runtimeControlResponseFromWorkflowTurn(result runtime.UserTurnResult) serverapi.RuntimeSubmitUserTurnResponse {
+func runtimeControlResponseFromUserTurn(result runtime.UserTurnResult) serverapi.RuntimeSubmitUserTurnResponse {
 	response := serverapi.RuntimeSubmitUserTurnResponse{
 		ResultKind: clientui.UserTurnResultKindNoFinal,
 	}
@@ -160,20 +160,8 @@ func (s *Service) submitUserTurn(
 			response = queuedUserTurnResponse(compacted, queued.ID)
 			return acceptedCompactionErr
 		}
-		response = serverapi.RuntimeSubmitUserTurnResponse{
-			Compacted:  compacted,
-			ResultKind: clientui.UserTurnResultKindNoFinal,
-		}
-		switch outcome.Kind {
-		case runtime.UserTurnResultAssistantFinal:
-			response.ResultKind = clientui.UserTurnResultKindAssistantFinal
-			if outcome.FinalAnswer != nil && outcome.FinalAnswer.Content != nil {
-				response.Message = outcome.FinalAnswer.Content
-			}
-		case runtime.UserTurnResultSilentFinal:
-			response.ResultKind = clientui.UserTurnResultKindSilentFinal
-			response.Message = textutil.Value("")
-		}
+		response = runtimeControlResponseFromUserTurn(outcome)
+		response.Compacted = compacted
 		return acceptedCompactionErr
 	}
 	executeTurn := func() error {
@@ -226,7 +214,7 @@ func (s *Service) submitUserTurn(
 				}
 				turn, turnErr := continuation.WaitTurn(attempt.Caller())
 				_, exactErr := continuation.WaitExact(attempt.Caller())
-				response = runtimeControlResponseFromWorkflowTurn(turn)
+				response = runtimeControlResponseFromUserTurn(turn)
 				err = exactErr
 				if err == nil {
 					err = turnErr

@@ -44,6 +44,7 @@ type HeadlessBootstrap struct {
 	SessionLaunch              *sessionlaunch.Service
 	PromptHistory              promptHistoryStore
 	RuntimeAuthority           *sessionruntime.Authority
+	WorkflowSessionOwnership   workflowexecution.WorkflowSessionOwnershipReader
 	WorkflowSessionReactivator workflowexecution.WorkflowSessionReactivatorWithAcceptance
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
 	ManagedWorktreeBaseDir string
@@ -69,6 +70,16 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		}
 	}
 	retained := false
+	if openingExisting && l.boot.WorkflowSessionOwnership != nil {
+		owned, ownershipErr := l.boot.WorkflowSessionOwnership.SessionHasWorkflowTask(ctx, selectedSessionID.String())
+		if ownershipErr != nil {
+			return nil, ownershipErr
+		}
+		retained = owned
+	}
+	if retained && l.boot.WorkflowSessionReactivator == nil {
+		return nil, errors.New("headless workflow Session reactivator is required")
+	}
 	if openingExisting && l.boot.WorkflowSessionReactivator != nil && l.boot.RuntimeAuthority != nil {
 		retainedErr := l.boot.RuntimeAuthority.WithRetainedWorkflowRuntime(
 			ctx,

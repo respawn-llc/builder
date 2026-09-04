@@ -343,6 +343,7 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 		SessionLaunch:              s.sessionLaunchServiceForProjectContext(projectCtx),
 		PromptHistory:              s.safeBundles().Persistence.metadataStore,
 		RuntimeAuthority:           s.safeBundles().Runtime.runtimeAuthority,
+		WorkflowSessionOwnership:   s.safeBundles().Persistence.metadataStore,
 		WorkflowSessionReactivator: s.safeBundles().Workflows.controller,
 		ManagedWorktreeBaseDir:     s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
 	})
