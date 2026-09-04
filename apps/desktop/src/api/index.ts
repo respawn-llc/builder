@@ -12,6 +12,7 @@ export type {
   ChatSettings,
   ChatSettingsTarget,
   ChatTranscriptCompletion,
+  ChatTranscriptCommittedRow,
   ChatTranscriptHandler,
   ChatTranscriptKind,
   ChatTranscriptMessage,
