@@ -118,8 +118,8 @@
 - When the operator has scrolled away from the tail, incoming content preserves the viewport. A `Jump to latest` control appears when a newer server segment exists or when the viewport is more than 80px from the end of the loaded newest segment. The control has no unseen count. Activating it fetches the newest segment in one request when necessary and never walks intermediate segments.
 - `Jump to latest` is a 40px circular glass control with a 24px downward arrow and 12px end and bottom spacing above the composer. It uses scale motion when it appears or disappears; reduced motion changes visibility immediately.
 - At the tail, new assistant content, committed rows, and composer-height changes keep the view at the tail. Reduced motion removes movement animation.
-- User, committed assistant, and live assistant content use the same approved rich Markdown presentation. It sanitizes raw HTML and applies the approved link behavior. Completed supported code is syntax-highlighted and selectable; incomplete code remains selectable plain text until the Markdown parser reports the fence complete. Diagrams, math, and built-in Markdown controls are unavailable.
-- A live assistant message appears only after its first nonempty content arrives. It presents live text with the approved character motion and no caret; completed messages use static presentation. Reduced motion shows characters immediately.
+- User, committed assistant, and live assistant content use the same rich Markdown presentation. It sanitizes raw HTML and applies the specified link behavior. Completed supported code is syntax-highlighted and selectable; incomplete code remains selectable plain text until the Markdown parser reports the fence complete. Diagrams, math, and built-in Markdown controls are unavailable.
+- A live assistant message appears only after its first nonempty content arrives. It presents live text with the specified character motion and no caret; completed messages use static presentation. Reduced motion shows characters immediately.
 - A live Chat opened mid-response may animate already received eligible text once, then only newly arriving text. Each assistant update immediately changes the one visible live message; Chat does not alter, repair, or buffer model text.
 - Live Markdown is available only when it meets the approved safety, scrolling, responsiveness, and product-review requirements for long output, incomplete Markdown, tables and lists, hostile links and HTML, and unfinished code. If it does not, streaming uses selectable plain text and the completed message uses the shared static Markdown presentation.
 
@@ -192,7 +192,7 @@
 ## Composer And Pending Work
 
 - Send starts a user turn while idle and Steers the active turn while work is running. A Steer takes effect at the next safe step boundary. Queue is a separate action that starts after active work completes; when idle, queued work starts immediately.
-- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
+- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation.
 - `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
 - `/compact` enters Pending Work in accepted Session mutation order.
 - Pending Work shows canonical `/compact` followed by normalized guidance when guidance is present.
@@ -204,8 +204,6 @@
 - Queue has no visible button. While work is running and an empty composer can queue work, its placeholder is `Ctrl+Enter to queue`.
 - While work runs, an icon-only Stop action is visible beside Send/Steer. Stop clears all Queue and Steer items.
 - The composer grows to one-third of available Chat height, then scrolls internally. Up and Down recall prompt history only at whole-buffer boundaries; returning below the newest history item restores the pre-history draft, and editing recalled text detaches it from history.
-- `@` path suggestions search the Session effective working directory. They include files, derived directories, and hidden paths; exclude `.git`; preserve server fuzzy order; and never scan the desktop filesystem or transfer the whole repository.
-- At most seven path suggestions are visible. Up and Down select them; Enter, Tab, or pointer activation inserts the exact `@`-prefixed repository-relative path, with `/` for a directory, without sending. Escape hides suggestions until the query changes.
 - Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in Queue order, then Steer items in server acceptance order across human messages, manual compaction, and Worktree transitions. Each item shows no more than two lines and has an accessible Discard action.
 - Normal human-message, manual-compaction, and Active-Runtime Worktree-transition admission rejects with a typed capacity failure when the server independently observes at least 100 combined pending Queue and Steer items. Rejection changes no Pending Work membership and leaves the initiating input unchanged.
 - Concurrent normal admissions may pass below the limit and temporarily exceed 100 items. Restoring definitely uncommitted human input may also exceed 100 items. Kent never evicts accepted work to enforce the limit, and later normal admission rejects while the independently observed total remains at least 100.
@@ -533,4 +531,4 @@
 - Desktop replaces terminal interaction mechanics with desktop controls without removing the capability they exposed.
 - Desktop Chat provides no screen-reader transcript model, streaming announcements, ARIA-specific interaction architecture, or blind-user interaction flow.
 - Shared UI-kit components keep their ordinary incidental semantics. Keyboard shortcuts, functional focus transitions, Copy/select behavior, resizable-window layouts, and explicitly specified reduced-motion behavior remain product mechanics rather than a separate accessibility program.
-- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment. `@` workspace references are paths, not attachments.
+- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment.

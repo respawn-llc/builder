@@ -125,7 +125,7 @@ it.each([
     expect(fixture.openSessionChat).toHaveBeenCalledOnce();
   } else {
     const row = screen.getByTestId("attention-row");
-    expect(row.tagName).toBe("BUTTON");
+    expect(screen.getAllByRole("button")).toHaveLength(1);
     fireEvent.click(row);
     expect(openSidebar).toHaveBeenCalledOnce();
   }
@@ -137,7 +137,7 @@ it("keeps production attention rows as one Task Detail interaction", () => {
   const row = screen.getByTestId("attention-row");
 
   expect(within(row).queryByTestId("attention-chat-header")).not.toBeInTheDocument();
-  expect(row.tagName).toBe("BUTTON");
+  expect(screen.getAllByRole("button")).toHaveLength(1);
   fireEvent.click(row);
   expect(openSidebar).toHaveBeenCalledOnce();
 });

@@ -1,75 +1,115 @@
-import { render } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { I18nextProvider } from "react-i18next";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 
-import type { TaskDetailSessionChatEntry } from "@/features/task-detail";
+import { SidebarRootContext } from "@/app-facade";
+import { createBrowserNativeBridge } from "@/test-support/native-bridge";
+import { createTaskDetailTestServices, taskDetailResponse } from "@/test-support/task-detail";
+import { createTestSidebarController } from "@/test-support/sidebar";
+import { TestAppProviders } from "@/test-support/app-services";
 import { appI18n, initializeI18n } from "@/i18n";
 import { StandaloneTaskRoute } from "./StandaloneTaskRoute";
 import { TaskDetailWindowRoute } from "./TaskDetailWindowRoute";
 
-type TaskDetailSurfaceTestProps = Readonly<{
-  openSessionChat?: TaskDetailSessionChatEntry;
-}>;
-
 const fixture = vi.hoisted(() => ({
-  closeCurrent: vi.fn(async () => undefined),
+  featureFlags: { desktopChatEnabled: true },
+  copyText: vi.fn(async () => undefined),
   navigation: {
     openHome: vi.fn(async () => undefined),
     openSessionChat: vi.fn(async () => undefined),
   },
-  taskDetailProps: vi.fn<(props: TaskDetailSurfaceTestProps) => void>(),
 }));
 
+vi.mock("@/shared/feature-flags", () => fixture.featureFlags);
 vi.mock("@/app-facade", async (importOriginal) => ({
   ...(await importOriginal()),
-  SidebarRootOwner: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
   useAppNavigation: () => fixture.navigation,
-  useAppServices: () => ({
-    nativeBridge: { window: { closeCurrent: fixture.closeCurrent } },
-  }),
-  useOwnedSidebarRoots: () => ({ open: vi.fn() }),
 }));
-
-vi.mock("./TaskDetailSurface", () => ({
-  TaskDetailSurface: (props: TaskDetailSurfaceTestProps) => {
-    fixture.taskDetailProps(props);
-    return <div />;
-  },
-}));
-
 vi.mock("./taskDetailDismissal", () => ({
   useExactTaskDetailDeleteDismissal: () => async () => ({ kind: "accepted" }),
 }));
 
+beforeAll(async () => initializeI18n());
 beforeEach(() => {
-  fixture.closeCurrent.mockClear();
+  fixture.featureFlags.desktopChatEnabled = true;
+  fixture.copyText.mockClear();
   fixture.navigation.openHome.mockClear();
   fixture.navigation.openSessionChat.mockClear();
-  fixture.taskDetailProps.mockClear();
 });
 
-beforeAll(async () => initializeI18n());
-
-it("supplies direct Session Chat navigation from standalone main-window Task Detail", async () => {
-  render(
-    <I18nextProvider i18n={appI18n}>
-      <StandaloneTaskRoute taskId="task-1" />
-    </I18nextProvider>,
-  );
-
-  const props = fixture.taskDetailProps.mock.lastCall?.[0];
-  if (props?.openSessionChat === undefined) throw new Error("Expected standalone Chat entry.");
-
-  await props.openSessionChat({ projectID: "project-1", sessionID: "session-1" });
-  expect(fixture.navigation.openSessionChat).toHaveBeenCalledWith({
-    projectID: "project-1",
-    sessionID: "session-1",
+function renderTaskDetailHost(child: ReactElement) {
+  const browserBridge = createBrowserNativeBridge();
+  const nativeBridge = {
+    ...browserBridge,
+    capabilities: {
+      ...browserBridge.capabilities,
+      clipboard: { ...browserBridge.capabilities.clipboard, writeText: true },
+    },
+    clipboard: { ...browserBridge.clipboard, writeText: fixture.copyText },
+  };
+  const services = createTaskDetailTestServices(taskDetailResponse, { nativeBridge });
+  const router = createRouter({
+    history: createMemoryHistory({ initialEntries: ["/tasks/task-1"] }),
+    routeTree: createRootRoute(),
   });
+  return render(
+    <RouterContextProvider router={router}>
+      <SidebarRootContext.Provider value={createTestSidebarController()}>
+        <TestAppProviders services={services}>{child}</TestAppProviders>
+      </SidebarRootContext.Provider>
+    </RouterContextProvider>,
+  );
+}
+
+it.each([
+  ["development", true, true],
+  ["production", false, false],
+] as const)("renders the %s main-window Task Detail actions", async (_name, enabled, hasChat) => {
+  fixture.featureFlags.desktopChatEnabled = enabled;
+  renderTaskDetailHost(<StandaloneTaskRoute taskId="task-1" />);
+
+  const flow = await screen.findByTestId("task-detail-action-flow");
+  const openInCli = within(flow).getByRole("button", {
+    name: appI18n.t("task.openInCli", { name: "Review chat" }),
+  });
+  expect(openInCli).toBeInTheDocument();
+  fireEvent.click(openInCli);
+  await waitFor(() => {
+    expect(fixture.copyText).toHaveBeenCalledWith("kent --session=session-1");
+  });
+
+  const openChat = within(flow).queryByRole("button", {
+    name: appI18n.t("task.openChat", { name: "Review chat" }),
+  });
+  expect(openChat !== null).toBe(hasChat);
+  if (openChat !== null) {
+    fireEvent.click(openChat);
+    await waitFor(() => {
+      expect(fixture.navigation.openSessionChat).toHaveBeenCalledWith({
+        projectID: "project-1",
+        sessionID: "session-1",
+      });
+    });
+  }
 });
 
-it("omits Session Chat navigation from native Task Detail", () => {
-  render(<TaskDetailWindowRoute taskID="task-1" />);
+it("keeps native Task Detail on its CLI action without a Chat action", async () => {
+  renderTaskDetailHost(<TaskDetailWindowRoute taskID="task-1" />);
 
-  const props = fixture.taskDetailProps.mock.lastCall?.[0];
-  expect(props?.openSessionChat).toBeUndefined();
+  const flow = await screen.findByTestId("task-detail-action-flow");
+  expect(
+    within(flow).getByRole("button", {
+      name: appI18n.t("task.openInCli", { name: "Review chat" }),
+    }),
+  ).toBeInTheDocument();
+  expect(
+    within(flow).queryByRole("button", {
+      name: appI18n.t("task.openChat", { name: "Review chat" }),
+    }),
+  ).not.toBeInTheDocument();
 });
