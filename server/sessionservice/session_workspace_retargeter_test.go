@@ -3,6 +3,7 @@ package sessionservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -533,18 +534,33 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	client := &selfRetargetRuntimeClient{}
 	engine := fixture.openRuntimeWithClient(t, client)
 	completed := make(chan error, 1)
+	requestCanceled := make(chan struct{})
 	client.run = func() error {
 		active := engine.ActiveRun()
 		if active == nil {
 			return errors.New("active Agent Step is required")
 		}
-		_, err := retargeter.ScheduleWorkspaceRetargetWithCompletion(
-			t.Context(),
-			request,
+		requestCtx, cancelRequest := context.WithCancel(t.Context())
+		_, err := retargeter.ScheduleWorkspaceRetargetResolutionWithCompletion(
+			requestCtx,
+			request.SessionID,
 			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
 			worktreecontract.NewOperationID(),
+			func(resolveCtx context.Context) (metadata.SessionWorkspaceRetargetRequest, error) {
+				select {
+				case <-requestCanceled:
+				default:
+					return metadata.SessionWorkspaceRetargetRequest{}, errors.New("target resolved before scheduled acknowledgement returned")
+				}
+				if err := context.Cause(resolveCtx); err != nil {
+					return metadata.SessionWorkspaceRetargetRequest{}, fmt.Errorf("scheduled target inherited caller cancellation: %w", err)
+				}
+				return request, nil
+			},
 			func(err error) { completed <- err },
 		)
+		cancelRequest()
+		close(requestCanceled)
 		return err
 	}
 

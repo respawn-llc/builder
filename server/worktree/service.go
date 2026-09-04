@@ -50,6 +50,7 @@ type processSource interface {
 type sessionWorkspaceRetargeter interface {
 	RetargetWorkspace(context.Context, metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
 	ScheduleWorkspaceRetargetWithCompletion(context.Context, metadata.SessionWorkspaceRetargetRequest, serverapi.RuntimeStepOrigin, worktreecontract.OperationID, func(error)) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error)
+	ScheduleWorkspaceRetargetResolutionWithCompletion(context.Context, string, serverapi.RuntimeStepOrigin, worktreecontract.OperationID, func(context.Context) (metadata.SessionWorkspaceRetargetRequest, error), func(error)) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error)
 }
 
 type ServiceOptions struct {

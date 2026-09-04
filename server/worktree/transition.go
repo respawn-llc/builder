@@ -51,7 +51,7 @@ func (s *Service) EnterWorktree(ctx context.Context, req *worktreepb.EnterReques
 		return nil, err
 	}
 	if strings.TrimSpace(currentTarget.WorkspaceID) != request.workspace.workspaceID {
-		return s.enterWorktreeAcrossWorkspace(ctx, request, req.Origin, currentTarget)
+		return s.enterWorktreeAcrossWorkspace(ctx, request, req.Origin)
 	}
 	selector := request.selector
 	return s.runWorktreeTransition(ctx, request, runtimeinput.PendingWorkWorktreeTransition{
@@ -89,27 +89,68 @@ func (s *Service) enterWorktreeAcrossWorkspace(
 	ctx context.Context,
 	request worktreeTransitionRequest,
 	origin *worktreepb.TransitionRuntimeStepOrigin,
-	previousTarget clientui.SessionExecutionTarget,
 ) (*worktreepb.ScheduledAcknowledgement, error) {
 	if s.sessionRetargeter == nil {
 		return nil, errors.New("session workspace retargeter is required")
 	}
-	lease, err := s.acquireWorkspaceMutationLease(ctx, request.workspace.workspaceID)
+	resolve := func(resolveCtx context.Context) (metadata.SessionWorkspaceRetargetRequest, error) {
+		return s.resolveCrossWorkspaceEnter(resolveCtx, request)
+	}
+	complete := func(runErr error) {
+		if runErr != nil {
+			runErr = worktreeTransitionFailure(runErr)
+		}
+		_ = s.publishWorktreeTransitionResult(request, runErr, nil)
+	}
+	if origin != nil {
+		runtimeOrigin := serverapi.RuntimeStepOrigin{
+			RunID:  strings.TrimSpace(origin.RunId),
+			StepID: strings.TrimSpace(origin.StepId),
+		}
+		if _, err := s.sessionRetargeter.ScheduleWorkspaceRetargetResolutionWithCompletion(
+			ctx,
+			request.sessionID,
+			runtimeOrigin,
+			worktreecontract.OperationID(request.operationID),
+			resolve,
+			complete,
+		); err != nil {
+			return nil, err
+		}
+		return &worktreepb.ScheduledAcknowledgement{OperationId: request.operationID.String()}, nil
+	}
+	retargetRequest, err := resolve(ctx)
 	if err != nil {
 		return nil, err
+	}
+	_, err = s.sessionRetargeter.RetargetWorkspace(ctx, retargetRequest)
+	complete(err)
+	if err != nil {
+		return nil, err
+	}
+	return &worktreepb.ScheduledAcknowledgement{OperationId: request.operationID.String()}, nil
+}
+
+func (s *Service) resolveCrossWorkspaceEnter(
+	ctx context.Context,
+	request worktreeTransitionRequest,
+) (metadata.SessionWorkspaceRetargetRequest, error) {
+	lease, err := s.acquireWorkspaceMutationLease(ctx, request.workspace.workspaceID)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
 	}
 	defer lease.Release()
 	topology, err := s.projectTopology(ctx, request.workspace.workspaceID, request.workspace.workspaceRoot)
 	if err != nil {
-		return nil, err
+		return metadata.SessionWorkspaceRetargetRequest{}, err
 	}
 	match, err := resolveTopologySelector(topology, request.selector)
 	if err != nil {
-		return nil, err
+		return metadata.SessionWorkspaceRetargetRequest{}, err
 	}
 	entry := match.entry
 	if entry.GetMissing() != nil {
-		return nil, worktreecontract.NewSelectorError(
+		return metadata.SessionWorkspaceRetargetRequest{}, worktreecontract.NewSelectorError(
 			worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_UNAVAILABLE,
 			request.selector,
 			nil,
@@ -117,7 +158,11 @@ func (s *Service) enterWorktreeAcrossWorkspace(
 	}
 	next, err := s.enterTransitionWorktree(ctx, request.workspace, entry)
 	if err != nil {
-		return nil, err
+		return metadata.SessionWorkspaceRetargetRequest{}, err
+	}
+	previousTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, request.sessionID)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
 	}
 	nextTarget := clientui.SessionExecutionTarget{
 		WorkspaceID:      request.workspace.workspaceID,
@@ -127,7 +172,7 @@ func (s *Service) enterWorktreeAcrossWorkspace(
 	}
 	reminder, hasReminder, err := worktreeReminderStateForTransition(nil, previousTarget, next, nextTarget)
 	if err != nil {
-		return nil, err
+		return metadata.SessionWorkspaceRetargetRequest{}, err
 	}
 	var targetWorktreeID *string
 	if worktreeID := strings.TrimSpace(next.record.ID); worktreeID != "" {
@@ -142,34 +187,7 @@ func (s *Service) enterWorktreeAcrossWorkspace(
 	if hasReminder {
 		retargetRequest.WorktreeReminder = &reminder
 	}
-	complete := func(runErr error) {
-		if runErr != nil {
-			runErr = worktreeTransitionFailure(runErr)
-		}
-		_ = s.publishWorktreeTransitionResult(request, runErr, nil)
-	}
-	if origin != nil {
-		runtimeOrigin := serverapi.RuntimeStepOrigin{
-			RunID:  strings.TrimSpace(origin.RunId),
-			StepID: strings.TrimSpace(origin.StepId),
-		}
-		if _, err := s.sessionRetargeter.ScheduleWorkspaceRetargetWithCompletion(
-			ctx,
-			retargetRequest,
-			runtimeOrigin,
-			worktreecontract.OperationID(request.operationID),
-			complete,
-		); err != nil {
-			return nil, err
-		}
-		return &worktreepb.ScheduledAcknowledgement{OperationId: request.operationID.String()}, nil
-	}
-	_, err = s.sessionRetargeter.RetargetWorkspace(ctx, retargetRequest)
-	complete(err)
-	if err != nil {
-		return nil, err
-	}
-	return &worktreepb.ScheduledAcknowledgement{OperationId: request.operationID.String()}, nil
+	return retargetRequest, nil
 }
 
 func (s *Service) LeaveWorktree(ctx context.Context, req *worktreepb.LeaveRequest) (*worktreepb.ScheduledAcknowledgement, error) {

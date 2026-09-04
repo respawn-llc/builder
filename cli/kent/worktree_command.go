@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -253,7 +254,8 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	targetWorkspace, err := resolveWorktreeTransitionWorkspace(context.Background())
+	selector := strings.TrimSpace(fs.Args()[0])
+	targetWorkspace, err := resolveWorktreeTransitionWorkspace(context.Background(), selector)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -275,14 +277,14 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		return remote.EnterWorktree(ctx, &worktreepb.EnterRequest{
 			OperationId:     operationID.String(),
 			SessionId:       sessionID,
-			Selector:        strings.TrimSpace(fs.Args()[0]),
+			Selector:        selector,
 			TargetWorkspace: targetWorkspace,
 			Origin:          transitionOrigin,
 		})
 	})
 }
 
-func resolveWorktreeTransitionWorkspace(ctx context.Context) (*worktreepb.TransitionWorkspace, error) {
+func resolveWorktreeTransitionWorkspace(ctx context.Context, selector string) (*worktreepb.TransitionWorkspace, error) {
 	configRoot, err := nearestCommandConfigRoot()
 	if err != nil {
 		return nil, err
@@ -292,7 +294,7 @@ func resolveWorktreeTransitionWorkspace(ctx context.Context) (*worktreepb.Transi
 		return nil, err
 	}
 	defer func() { _ = remote.Close() }()
-	binding, err := resolveWorkspaceBinding(ctx, remote, cfg.WorkspaceRoot)
+	binding, err := resolveWorkspaceBinding(ctx, remote, worktreeTransitionResolutionPath(selector, cfg.WorkspaceRoot))
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +302,14 @@ func resolveWorktreeTransitionWorkspace(ctx context.Context) (*worktreepb.Transi
 		WorkspaceId:   strings.TrimSpace(binding.WorkspaceID),
 		WorkspaceRoot: strings.TrimSpace(binding.CanonicalRoot),
 	}, nil
+}
+
+func worktreeTransitionResolutionPath(selector string, workspaceRoot string) string {
+	selector = strings.TrimSpace(selector)
+	if filepath.IsAbs(selector) {
+		return filepath.Clean(selector)
+	}
+	return strings.TrimSpace(workspaceRoot)
 }
 
 func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
