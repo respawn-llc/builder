@@ -1,9 +1,4 @@
-import {
-  ContractError,
-  resolveChatToolIdentity,
-  type ChatTranscriptCommittedRow,
-  type ChatTranscriptPayloadByKind,
-} from "@/api";
+import type { ChatTranscriptCommittedRow, ChatTranscriptPayloadByKind } from "@/api";
 
 type TranscriptToolStart = ChatTranscriptPayloadByKind["tool_start"];
 type TranscriptTool = NonNullable<ChatTranscriptCommittedRow["Tool"]>;
@@ -22,51 +17,6 @@ export type TranscriptCommittedToolRow = Omit<ChatTranscriptCommittedRow, "Kind"
       Readonly<{ Presentation?: TranscriptNonQuestionToolPresentation | null }>;
   }>;
 
-export type TranscriptToolSlotCandidate =
-  | Readonly<{ kind: "live"; tool: TranscriptToolStart }>
-  | Readonly<{
-      kind: "committed";
-      row: Omit<ChatTranscriptCommittedRow, "Kind" | "Tool"> &
-        Readonly<{ Kind: "tool"; Tool: TranscriptTool }>;
-    }>;
-
-declare const transcriptToolSlotItemBrand: unique symbol;
-
-export type TranscriptToolSlotItem = (
+export type TranscriptToolSlotItem =
   | Readonly<{ kind: "live"; tool: TranscriptLiveToolRow }>
-  | Readonly<{ kind: "committed"; row: TranscriptCommittedToolRow }>
-) &
-  Readonly<{ [transcriptToolSlotItemBrand]: true }>;
-
-export function transcriptToolSlotItem(candidate: TranscriptToolSlotCandidate): TranscriptToolSlotItem {
-  assertTranscriptToolSlotItem(candidate);
-  return candidate;
-}
-
-function assertTranscriptToolSlotItem(
-  candidate: TranscriptToolSlotCandidate,
-): asserts candidate is TranscriptToolSlotItem {
-  const tool = candidate.kind === "live" ? candidate.tool : candidate.row.Tool;
-  const presentation = tool.Presentation;
-  if (
-    resolveChatToolIdentity(tool.ToolName)?.kind === "ask-question" ||
-    !isNonQuestionPresentation(presentation)
-  ) {
-    throw new ContractError("Ask Question cannot be rendered by the non-Question tool slot", [
-      { code: "invalid_tool_slot", path: ["ToolName"] },
-    ]);
-  }
-}
-
-function isNonQuestionPresentation(
-  presentation: TranscriptToolPresentation | null | undefined,
-): presentation is TranscriptNonQuestionToolPresentation | null | undefined {
-  if (presentation === null || presentation === undefined) return true;
-  return (
-    presentation.Presentation !== "ask_question" &&
-    presentation.RenderBehavior !== "ask_question" &&
-    presentation.Question.trim().length === 0 &&
-    presentation.Suggestions.length === 0 &&
-    presentation.RecommendedOptionIndex === 0
-  );
-}
+  | Readonly<{ kind: "committed"; row: TranscriptCommittedToolRow }>;

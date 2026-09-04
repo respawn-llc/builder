@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { patchPresentationSchema } from "./chatPatchSchemas";
-import { resolveChatToolIdentity } from "./chatToolIdentity";
 
 export const nonBlank = z.string().refine((value) => value.trim().length > 0);
 export const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
@@ -243,7 +242,7 @@ export const assistantRowSchema = z
 export const toolMetaSchema = z
   .object({
     ToolName: z.string(),
-    Presentation: z.string(),
+    Presentation: z.enum(["default", "shell", "ask_question"]),
     RenderBehavior: z.string(),
     IsShell: z.boolean(),
     UserInitiated: z.boolean(),
@@ -271,19 +270,7 @@ export const toolMetaSchema = z
     MovedToBackground: z.boolean(),
     ShellExitCode: optionalNullable(z.number().int()),
   })
-  .strict()
-  .superRefine((meta, context) => {
-    const ownsPatchPresentation = resolveChatToolIdentity(meta.ToolName)?.ownsPatchPresentation === true;
-    if (ownsPatchPresentation !== (meta.PatchPresentation != null)) {
-      context.addIssue({
-        code: "custom",
-        path: ["PatchPresentation"],
-        message: ownsPatchPresentation
-          ? "Patch/Edit presentation is required"
-          : "non-Patch tool cannot carry Patch/Edit presentation",
-      });
-    }
-  });
+  .strict();
 
 export function validateToolPresentationOwner(
   owner: Readonly<{
@@ -292,15 +279,6 @@ export function validateToolPresentationOwner(
   }>,
   context: z.RefinementCtx,
 ) {
-  const ownsPatchPresentation = resolveChatToolIdentity(owner.ToolName)?.ownsPatchPresentation === true;
-  if (ownsPatchPresentation && owner.Presentation == null) {
-    context.addIssue({
-      code: "custom",
-      path: ["Presentation"],
-      message: "Patch/Edit presentation is required",
-    });
-    return;
-  }
   if (owner.Presentation != null && owner.Presentation.ToolName !== owner.ToolName) {
     context.addIssue({
       code: "custom",

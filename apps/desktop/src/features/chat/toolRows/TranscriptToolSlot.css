@@ -123,18 +123,23 @@
 }
 
 .transcript-patch-source-line {
-  display: block;
   min-inline-size: 0;
-  border-inline-start: 2px solid transparent;
+  min-block-size: 1lh;
   padding-inline: var(--space-2);
 }
 
-.transcript-patch-source-line--removed {
-  border-inline-start-color: var(--color-error);
-  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+.transcript-patch-source-line::before {
+  display: inline-block;
+  inline-size: 1ch;
+  user-select: none;
 }
 
-.transcript-patch-source-line--added {
-  border-inline-start-color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+.transcript-patch-source-line--removed::before {
+  content: "-";
+  color: var(--color-error);
+}
+
+.transcript-patch-source-line--added::before {
+  content: "+";
+  color: var(--color-success);
 }
