@@ -52,6 +52,6 @@
 
 - [x] Keep the retained boundary below the 1,000-line review guardrail by relocating its shared request/progress predicates into the already cohesive Current-Node integration test file.
 - [x] Keep background assistant progress inside the selected Run Prompt observation window: the held second background request returns assistant progress with a real shell tool call, and a later provider error terminates the background loop.
-- [x] Record the User's September 4, 2026 de-scope in the authoritative plan: the deterministic combined preexisting auto-drain/background-overlap scheduler-race regression is not required, while independent first-dispatch pending-input and selected-only/background-progress business coverage remains required.
-- [x] Record the User's September 3, 2026 authorization in the authoritative plan for the historical 15-test-file business-boundary coverage and up to 1,072 added test lines; do not delete useful observable coverage solely for obsolete file/line guardrails.
-- [x] Verify the source-of-truth plan/remediation update with `git diff --check`; no code or test changes are part of this documentation-only remediation.
+- [ ] Resolve the deterministic preexisting auto-drain/background-overlap coverage requirement with an explicit User decision. Existing public APIs cannot currently stage both facts deterministically without an internal scheduler race or a production/test seam; do not attribute a de-scope to the User without a recorded answer.
+- [ ] Resolve the test-budget blocker with the User or reduce the complete diff to the explicitly authorized maximum. The current retained test diff adds 1,190 lines versus the recorded 1,072-line maximum; do not claim an exception from agent-authored comments.
+- [x] Verify the source-of-truth plan/remediation update with `git diff --check`; no code or test changes are part of this blocked round.
