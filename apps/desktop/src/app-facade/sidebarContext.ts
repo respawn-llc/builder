@@ -114,6 +114,11 @@ export type SidebarDestination =
       projectID: string;
     }>
   | Readonly<{
+      kind: "processes";
+      mode?: SidebarMode;
+      projectID: string;
+    }>
+  | Readonly<{
       kind: "custom";
       mode?: SidebarMode;
       sizing?: SidebarSizePreference | undefined;

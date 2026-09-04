@@ -459,7 +459,7 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	}
 }
 
-func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
+func TestGatewayScopesProcessViewsAndAllowsGlobalKill(t *testing.T) {
 	home := t.TempDir()
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
@@ -496,6 +496,8 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 		Command:        []string{"/bin/sh", "-lc", "printf own\\n; sleep 1"},
 		DisplayCommand: "printf own; sleep 1",
 		OwnerSessionID: storeA.Meta().SessionID,
+		OwnerRunID:     "run-a",
+		OwnerStepID:    "step-a",
 		Workdir:        appCore.Config().WorkspaceRoot,
 		YieldTime:      time.Millisecond,
 	})
@@ -506,6 +508,8 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 		Command:        []string{"/bin/sh", "-lc", "printf foreign\\n; sleep 1"},
 		DisplayCommand: "printf foreign; sleep 1",
 		OwnerSessionID: storeB.Meta().SessionID,
+		OwnerRunID:     "run-b",
+		OwnerStepID:    "step-b",
 		Workdir:        resolvedB.Config.WorkspaceRoot,
 		YieldTime:      time.Millisecond,
 	})
@@ -519,7 +523,9 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	listed, err := remote.ListProcesses(context.Background(), serverapi.ProcessListRequest{})
+	listed, err := remote.ListProcesses(context.Background(), serverapi.ProcessListRequest{
+		ProjectID: bindingA.ProjectID,
+	})
 	if err != nil {
 		t.Fatalf("ListProcesses: %v", err)
 	}
@@ -532,8 +538,8 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	if _, err := remote.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: foreignResult.SessionID, MaxChars: 128}); err == nil {
 		t.Fatal("expected foreign process inline output to be rejected")
 	}
-	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err == nil {
-		t.Fatal("expected foreign process kill to be rejected")
+	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err != nil {
+		t.Fatalf("expected globally identified foreign process kill to succeed, got %v", err)
 	}
 	if _, err := remote.GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: ownResult.SessionID}); err != nil {
 		t.Fatalf("expected own process get to succeed, got %v", err)

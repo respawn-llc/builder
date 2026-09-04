@@ -89,6 +89,7 @@ export const queryKeys = {
   allActivity: ["activity"],
   allComments: ["comments"],
   allPendingAsks: ["pending-asks"],
+  allProcesses: ["processes"],
   boardWorkflowRoot: (projectID: string, workflowID: string | undefined) => ["board", projectID, workflowID],
   projectBoardsRoot: (projectID: string) => ["board", projectID],
   board: (projectID: string, workflowID: string | undefined, filter: BoardFilterInput) => [
@@ -183,6 +184,7 @@ export const queryKeys = {
   activity: (taskID: string) => ["activity", taskID],
   comments: (taskID: string) => ["comments", taskID],
   pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
+  processes: (projectID: string) => ["processes", projectID],
   worktreeStatus: (sessionID: string) => ["worktree", worktreeFact(sessionID), "status"] as const,
   worktreeList: (sessionID: string) => ["worktree", worktreeFact(sessionID), "list"] as const,
   worktreeCreateTargetResolution: (sessionID: string, target: string) =>

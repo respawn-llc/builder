@@ -11,10 +11,6 @@ import (
 )
 
 const (
-	eventLogMigrationWorkspaceDir            = "events.jsonl.migration"
-	eventLogMigrationWorkspaceMarkerFile     = "kent-session-events-migration-v1"
-	eventLogMigrationStagedLogFile           = "staged-events.jsonl"
-	eventLogMigrationReadyMarkerFile         = "staged-events.ready"
 	eventLogMigrationWorkspaceMarkerContents = "kent.session.events.migration.workspace.v1\n"
 	eventLogMigrationReadyMarkerContents     = "kent.session.events.migration.ready.v1\n"
 )

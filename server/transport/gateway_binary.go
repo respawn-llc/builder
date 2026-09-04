@@ -111,6 +111,9 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 	if err := registerSessionLaunchGatewayBinaryBindings(bindings); err != nil {
 		return nil, err
 	}
+	if err := registerSessionRemovalGatewayBinaryBindings(bindings); err != nil {
+		return nil, err
+	}
 	if err := registerWorktreeGatewayBinaryBindings(bindings); err != nil {
 		return nil, err
 	}

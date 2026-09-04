@@ -43,7 +43,6 @@ const (
 	ScopeRuntimeLiveSessionRequired ScopePolicy = "runtime_live_session_required"
 	ScopeRuntimeLiveSessionOptional ScopePolicy = "runtime_live_session_optional"
 	ScopeProcessActiveProject       ScopePolicy = "process_active_project"
-	ScopeProcessListActiveProject   ScopePolicy = "process_list_active_project"
 	ScopeNotification               ScopePolicy = "notification"
 )
 
@@ -236,9 +235,9 @@ var routeContracts = []Route{
 	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalResume, AuthServer, ScopeGoalSession, ConnectionControl),
 	unary[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalComplete, AuthServer, ScopeGoalSession, ConnectionControl),
 	unary[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalClear, AuthServer, ScopeGoalSession, ConnectionControl),
-	unary[serverapi.ProcessListRequest, serverapi.ProcessListResponse](protocol.MethodProcessList, AuthPreServerAuth, ScopeProcessListActiveProject, ConnectionControl),
+	unary[serverapi.ProcessListRequest, serverapi.ProcessListResponse](protocol.MethodProcessList, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped),
 	unary[serverapi.ProcessGetRequest, serverapi.ProcessGetResponse](protocol.MethodProcessGet, AuthPreServerAuth, ScopeProcessActiveProject, ConnectionControl),
-	unary[serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](protocol.MethodProcessKill, AuthServer, ScopeProcessActiveProject, ConnectionControl),
+	unary[serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](protocol.MethodProcessKill, AuthServer, ScopeNone, ConnectionUnscoped),
 	unary[serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](protocol.MethodProcessInlineOutput, AuthServer, ScopeProcessActiveProject, ConnectionControl),
 	unary[serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](protocol.MethodAskListPending, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl),
 	unary[serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](protocol.MethodPromptAnswerBatch, AuthServer, ScopeSessionActiveProject, ConnectionControl),

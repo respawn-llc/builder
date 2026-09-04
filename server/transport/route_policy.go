@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,9 +9,9 @@ import (
 	"strings"
 
 	"core/server/auth"
-	"core/server/session"
 	rpccontract "core/shared/apicontract"
-	"core/shared/clientui"
+	"core/shared/protoapi"
+	processpb "core/shared/protoapi/gen/kent/api/process"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -77,14 +76,47 @@ func (e routePolicyExecutor) preflight(ctx context.Context, state *connectionSta
 }
 
 func (e routePolicyExecutor) decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
-	if route.Method == protocol.MethodSessionGetExecutionEnvironment && e.gateway != nil {
+	switch route.Method {
+	case protocol.MethodSessionGetExecutionEnvironment:
+		if e.gateway == nil {
+			break
+		}
 		params, err := e.gateway.sessionExecutionRequestContract.Decode(raw)
 		if err != nil {
 			return nil, fmt.Errorf("decode params: %w", err)
 		}
 		return params, nil
+	case protocol.MethodProcessList:
+		var message processpb.ListRequest
+		if err := protoapi.DecodeJSON(raw, &message); err != nil {
+			return nil, fmt.Errorf("decode params: %w", err)
+		}
+		return protoapi.ProcessListRequestFromProto(&message), nil
+	case protocol.MethodProcessKill:
+		var message processpb.KillRequest
+		if err := protoapi.DecodeJSON(raw, &message); err != nil {
+			return nil, fmt.Errorf("decode params: %w", err)
+		}
+		return protoapi.ProcessKillRequestFromProto(&message), nil
 	}
-	return decodeRouteParams(route, raw)
+	params, err := decodeRouteParams(route, raw)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeLegacyProcessRequest(params), nil
+}
+
+func normalizeLegacyProcessRequest(params any) any {
+	switch request := params.(type) {
+	case serverapi.ProcessGetRequest:
+		request.ProcessID = strings.TrimSpace(request.ProcessID)
+		return request
+	case serverapi.ProcessInlineOutputRequest:
+		request.ProcessID = strings.TrimSpace(request.ProcessID)
+		return request
+	default:
+		return params
+	}
 }
 
 type gatewayRouteError struct {
@@ -283,11 +315,6 @@ func (e routePolicyExecutor) authorizeScopeFacts(
 	case rpccontract.ScopeProcessActiveProject:
 		_, err := e.gateway.processInActiveProject(ctx, state, scopeParams.processID)
 		return err
-	case rpccontract.ScopeProcessListActiveProject:
-		if strings.TrimSpace(scopeParams.ownerSessionID) != "" {
-			return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.ownerSessionID)
-		}
-		return nil
 	default:
 		return fmt.Errorf("unsupported route scope %q for method %q", scope, method)
 	}
@@ -297,7 +324,6 @@ type routeScopeParams struct {
 	sessionID                 string
 	sessionReattachCapability *string
 	processID                 string
-	ownerSessionID            string
 	projectID                 string
 	workspaceID               string
 }
@@ -324,12 +350,6 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 			return routeScopeParams{}, fmt.Errorf("route %q scope %q requires typed process id accessor", route.Method, route.Scope)
 		}
 		return routeScopeParams{processID: processID}, nil
-	case rpccontract.ScopeProcessListActiveProject:
-		ownerSessionID, ok := routeOwnerSessionID(params)
-		if !ok {
-			return routeScopeParams{}, fmt.Errorf("route %q scope %q requires typed owner session id accessor", route.Method, route.Scope)
-		}
-		return routeScopeParams{ownerSessionID: ownerSessionID}, nil
 	case rpccontract.ScopeProjectWorkspaceBinding:
 		projectID, workspaceID, ok := routeProjectWorkspaceBinding(params)
 		if !ok {
@@ -441,15 +461,6 @@ func routeProcessID(params any) (string, bool) {
 	}
 }
 
-func routeOwnerSessionID(params any) (string, bool) {
-	switch p := params.(type) {
-	case serverapi.ProcessListRequest:
-		return p.OwnerSessionID, true
-	default:
-		return "", false
-	}
-}
-
 func (g *Gateway) preflightRouteRequest(ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) (any, protocol.Response, bool) {
 	result := newRoutePolicyExecutor(g).preflight(ctx, state, route, req)
 	return result.params, result.resp, result.failed
@@ -539,26 +550,4 @@ func (g *Gateway) processInActiveProject(ctx context.Context, state *connectionS
 		return serverapi.ProcessGetResponse{}, err
 	}
 	return resp, nil
-}
-
-func (g *Gateway) filterProcessesForActiveProject(ctx context.Context, state *connectionState, processes []clientui.BackgroundProcess) ([]clientui.BackgroundProcess, error) {
-	filtered := make([]clientui.BackgroundProcess, 0, len(processes))
-	for _, process := range processes {
-		ownerSessionID := strings.TrimSpace(process.OwnerSessionID)
-		if ownerSessionID == "" {
-			continue
-		}
-		err := g.requireSessionInActiveProject(ctx, state, ownerSessionID)
-		if err == nil {
-			filtered = append(filtered, process)
-			continue
-		}
-		if !errors.Is(err, errSessionOutsideActiveProject) &&
-			!errors.Is(err, errActiveProjectRequired) &&
-			!errors.Is(err, session.ErrSessionNotFound) &&
-			!errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-	}
-	return filtered, nil
 }

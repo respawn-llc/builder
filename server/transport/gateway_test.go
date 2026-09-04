@@ -931,7 +931,7 @@ func TestGatewayRejectsMethodsBeforeHandshake(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	sendGatewayRequest(t, conn, "1", protocol.MethodProcessList, serverapi.ProcessListRequest{})
+	sendGatewayRequest(t, conn, "1", protocol.MethodProcessList, map[string]any{"project_id": "project-1"})
 	var response protocol.Response
 	if err := websocket.JSON.Receive(conn, &response); err == nil {
 		t.Fatalf("pre-handshake application traffic unexpectedly received %+v", response)
