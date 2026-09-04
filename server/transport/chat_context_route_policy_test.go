@@ -9,19 +9,10 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestChatContextRouteScopeUsesOnlySessionTarget(t *testing.T) {
+func TestChatContextRouteScopeUsesSessionTarget(t *testing.T) {
 	fixture := newRoutePolicyFixture(t)
 	executor := newRoutePolicyExecutor(fixture.gateway)
 	route := routeForTest(t, protocol.MethodChatContextGet)
-
-	if err := executor.authorizeScope(
-		context.Background(),
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		route,
-		serverapi.NewWorkspaceChatContextRequest(),
-	); err != nil {
-		t.Fatalf("workspace Chat target scope: %v", err)
-	}
 
 	sessionRequest := serverapi.NewSessionChatContextRequest(mustChatContextSessionID(t, fixture.ownSessionID))
 	if err := executor.authorizeScope(

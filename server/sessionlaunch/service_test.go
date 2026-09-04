@@ -18,7 +18,10 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/protoapi"
+	chatpb "core/shared/protoapi/gen/kent/api/chat"
+	chatsettingspb "core/shared/protoapi/gen/kent/api/chat_settings"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -336,6 +339,656 @@ func TestPlanLaunchSessionReturnsPlanWithoutRegisteringStore(t *testing.T) {
 	}
 	if resp.Plan.ActiveSettings.OpenAIBaseURL != "http://config.local/v1" {
 		t.Fatalf("active OpenAI base URL = %q, want http://config.local/v1", resp.Plan.ActiveSettings.OpenAIBaseURL)
+	}
+}
+
+func TestPlanLaunchSessionCreatesIndependentMainSessionWithInitialChatState(t *testing.T) {
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.Model = "gpt-5.6-sol"
+	cfg.Settings.Reviewer.Frequency = "edits"
+	cfg.Settings.ThinkingLevel = "medium"
+	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	service := newSessionLaunchTestService(cfg, containerDir)
+	draft := " exact unsent\ncomposer text "
+
+	result, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		InitialChat: &InitialChatCreation{
+			Settings: InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            serverapi.ChatSettingsSupervisorAlways,
+				Thinking:              textutil.Value("high"),
+				Fast:                  textutil.Value(false),
+				QuestionsEnabled:      false,
+				AutoCompactionEnabled: false,
+			},
+			InputDraft: &draft,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+
+	reopened, err := session.Open(
+		filepath.Join(containerDir, result.Plan.Descriptor.SessionID().String()),
+		serviceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("open created Session: %v", err)
+	}
+	state, err := session.ChatDraftStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatDraftStateFromMeta: %v", err)
+	}
+	want := sessiontest.CompleteChatSettingsState(
+		t,
+		config.DefaultSubagentRole,
+		"all",
+		"high",
+		false,
+		false,
+		false,
+	)
+	if state.Message != draft ||
+		state.Agent != want.Agent ||
+		!reflect.DeepEqual(state.Settings, want.Settings) {
+		t.Fatalf("created Chat state = %+v, want draft %q and settings %+v", state, draft, want)
+	}
+	if result.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
+		result.Plan.ActiveSettings.ThinkingLevel != "high" ||
+		result.Plan.ActiveSettings.PriorityRequestMode ||
+		result.Plan.QuestionsEnabled ||
+		result.Plan.AutoCompactionEnabled {
+		t.Fatalf(
+			"planned Chat settings = supervisor=%q thinking=%q fast=%t questions=%t auto_compaction=%t",
+			result.Plan.ActiveSettings.Reviewer.Frequency,
+			result.Plan.ActiveSettings.ThinkingLevel,
+			result.Plan.ActiveSettings.PriorityRequestMode,
+			result.Plan.QuestionsEnabled,
+			result.Plan.AutoCompactionEnabled,
+		)
+	}
+}
+
+func TestPlanSessionDecodesGeneratedInitialChatCreation(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Model = "gpt-5.6-sol"
+	service := newSessionLaunchTestService(cfg, containerDir)
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	)
+	if err != nil {
+		t.Fatalf("SessionLaunchIntentToProto: %v", err)
+	}
+	draft := " exact generated draft "
+	questions := false
+	autoCompaction := true
+
+	response, err := service.PlanSession(t.Context(), &sessionlaunchpb.SessionPlanRequest{
+		Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+		Intent: intent,
+		InitialChatSettings: &chatpb.InitialChatSettings{
+			AgentRole:             config.DefaultSubagentRole,
+			Supervisor:            chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_ALWAYS,
+			QuestionsEnabled:      &questions,
+			AutoCompactionEnabled: &autoCompaction,
+		},
+		InitialInputDraft: &draft,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	reopened, err := session.Open(
+		filepath.Join(containerDir, response.Plan.SessionId),
+		serviceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("open created Session: %v", err)
+	}
+	state, err := session.ChatDraftStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatDraftStateFromMeta: %v", err)
+	}
+	if state.Message != draft ||
+		state.Settings == nil ||
+		state.Settings.Supervisor == nil ||
+		*state.Settings.Supervisor != "all" ||
+		state.Settings.Questions == nil ||
+		*state.Settings.Questions ||
+		state.Settings.AutoCompaction == nil ||
+		!*state.Settings.AutoCompaction {
+		t.Fatalf("generated initial Chat state = %+v", state)
+	}
+}
+
+func TestPlanSessionRejectsMalformedGeneratedInitialChatBeforePersistence(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Model = "gpt-5.6-sol"
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	)
+	if err != nil {
+		t.Fatalf("SessionLaunchIntentToProto: %v", err)
+	}
+	draft := "unsent"
+	questions := true
+	autoCompaction := true
+	tests := map[string]*sessionlaunchpb.SessionPlanRequest{
+		"draft without settings": {
+			Mode:              sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+			Intent:            intent,
+			InitialInputDraft: &draft,
+		},
+		"settings without Questions selection": {
+			Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+			Intent: intent,
+			InitialChatSettings: &chatpb.InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_AFTER_EDITS,
+				AutoCompactionEnabled: &autoCompaction,
+			},
+		},
+		"invalid Supervisor selection": {
+			Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+			Intent: intent,
+			InitialChatSettings: &chatpb.InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_UNSPECIFIED,
+				QuestionsEnabled:      &questions,
+				AutoCompactionEnabled: &autoCompaction,
+			},
+		},
+	}
+	for name, request := range tests {
+		t.Run(name, func(t *testing.T) {
+			persistence := sessiontest.NewPersistence()
+			gate := sessiontest.NewPersistenceGate(persistence)
+			persistenceErr := errors.New("persistence must remain armed")
+			gate.FailNext(persistenceErr)
+			service := NewService(launch.Planner{
+				Config:       cfg,
+				ContainerDir: t.TempDir(),
+				StoreOptions: []session.StoreOption{
+					session.WithPersistenceObserver(gate),
+					session.WithPersistedSessionResolver(persistence),
+					session.WithSessionContextFactWriter(persistence),
+				},
+				PersistedSessions:        persistence,
+				ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
+			})
+
+			if _, err := service.PlanSession(t.Context(), request); err == nil {
+				t.Fatal("malformed generated initial Chat creation succeeded")
+			}
+			if _, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+				Mode:   launch.ModeInteractive,
+				Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			}); !errors.Is(err, persistenceErr) {
+				t.Fatalf("following ordinary creation error = %v, want still-armed persistence failure", err)
+			}
+		})
+	}
+}
+
+func TestPlanLaunchSessionRejectsNonIndependentOrHeadlessInitialChatBeforePersistence(t *testing.T) {
+	tests := map[string]func(runtimeids.SessionID) (launch.Mode, serverapi.SessionLaunchIntent){
+		"headless": func(runtimeids.SessionID) (launch.Mode, serverapi.SessionLaunchIntent) {
+			return launch.ModeHeadless, serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
+		},
+		"previous Session": func(sourceID runtimeids.SessionID) (launch.Mode, serverapi.SessionLaunchIntent) {
+			return launch.ModeInteractive, serverapi.CreateNewSessionLaunchIntent(serverapi.PreviousSessionCreateOrigin(sourceID))
+		},
+		"parent Agent": func(sourceID runtimeids.SessionID) (launch.Mode, serverapi.SessionLaunchIntent) {
+			return launch.ModeInteractive, serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(sourceID))
+		},
+	}
+	for name, request := range tests {
+		t.Run(name, func(t *testing.T) {
+			workspace := t.TempDir()
+			cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+			cfg.Settings.Model = "gpt-5.6-sol"
+			persistence := sessiontest.NewPersistence()
+			source, err := session.Create(
+				t.TempDir(),
+				"workspace",
+				workspace,
+				sessioncontract.SessionCategoryMain,
+				persistence.Options()...,
+			)
+			if err != nil {
+				t.Fatalf("create source Session: %v", err)
+			}
+			if err := source.EnsureDurable(); err != nil {
+				t.Fatalf("persist source Session: %v", err)
+			}
+			sourceID := mustSessionLaunchIntentID(t, source.Meta().SessionID)
+			mode, intent := request(sourceID)
+			gate := sessiontest.NewPersistenceGate(persistence)
+			persistenceErr := errors.New("persistence must remain armed")
+			gate.FailNext(persistenceErr)
+			service := NewService(launch.Planner{
+				Config:       cfg,
+				ContainerDir: t.TempDir(),
+				StoreOptions: []session.StoreOption{
+					session.WithPersistenceObserver(gate),
+					session.WithPersistedSessionResolver(persistence),
+					session.WithSessionContextFactWriter(persistence),
+				},
+				PersistedSessions:        persistence,
+				ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
+			})
+
+			if _, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+				Mode:   mode,
+				Intent: intent,
+				InitialChat: &InitialChatCreation{
+					Settings: InitialChatSettings{
+						AgentRole:             config.DefaultSubagentRole,
+						Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
+						QuestionsEnabled:      true,
+						AutoCompactionEnabled: true,
+					},
+				},
+			}); err == nil {
+				t.Fatal("invalid initial Chat creation target succeeded")
+			}
+			if _, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+				Mode:   launch.ModeInteractive,
+				Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			}); !errors.Is(err, persistenceErr) {
+				t.Fatalf("following ordinary creation error = %v, want still-armed persistence failure", err)
+			}
+		})
+	}
+}
+
+func TestPlanLaunchSessionReturnsNoSessionWhenOrdinaryCreationPersistenceFails(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Model = "gpt-5.6-sol"
+	persistence := sessiontest.NewPersistence()
+	gate := sessiontest.NewPersistenceGate(persistence)
+	persistenceErr := errors.New("ordinary creation persistence failed")
+	gate.FailNext(persistenceErr)
+	service := NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: t.TempDir(),
+		StoreOptions: []session.StoreOption{
+			session.WithPersistenceObserver(gate),
+			session.WithPersistedSessionResolver(persistence),
+			session.WithSessionContextFactWriter(persistence),
+		},
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
+	})
+
+	result, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		InitialChat: &InitialChatCreation{
+			Settings: InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
+				QuestionsEnabled:      true,
+				AutoCompactionEnabled: true,
+			},
+		},
+	})
+	if !errors.Is(err, persistenceErr) {
+		t.Fatalf("PlanLaunchSession error = %v, want ordinary persistence failure", err)
+	}
+	if !reflect.DeepEqual(result, PlanResult{}) {
+		t.Fatalf("PlanLaunchSession result = %+v, want no Session result", result)
+	}
+}
+
+func TestPlanLaunchSessionMakesInitialChatVisibleWithoutDraft(t *testing.T) {
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.Model = "gpt-5.6-sol"
+	metadataStore, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = metadataStore.Close() })
+	binding, err := metadataStore.RegisterWorkspaceBinding(t.Context(), workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions")
+	if err := os.MkdirAll(containerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll Session container: %v", err)
+	}
+	service := NewService(launch.Planner{
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        metadataStore,
+		ProjectWorkspaceBoundary: metadataStore,
+	})
+
+	result, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		InitialChat: &InitialChatCreation{
+			Settings: InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
+				QuestionsEnabled:      true,
+				AutoCompactionEnabled: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	page, err := metadataStore.ListSessionPage(
+		t.Context(),
+		binding.ProjectID,
+		sessioncontract.SessionCategoryMain,
+		0,
+		10,
+	)
+	if err != nil {
+		t.Fatalf("ListSessionPage: %v", err)
+	}
+	if len(page.Sessions) != 1 ||
+		page.Sessions[0].SessionID != result.Plan.Descriptor.SessionID() {
+		t.Fatalf("visible Sessions = %+v, want created initial Chat", page.Sessions)
+	}
+}
+
+func TestPlanLaunchSessionPreservesValidCustomInitialThinking(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Model = "private-model"
+	cfg.Settings.ThinkingLevel = "provider-default"
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	result, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		InitialChat: &InitialChatCreation{
+			Settings: InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
+				Thinking:              textutil.Value("operator-depth"),
+				QuestionsEnabled:      true,
+				AutoCompactionEnabled: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	reopened, err := session.Open(
+		filepath.Join(containerDir, result.Plan.Descriptor.SessionID().String()),
+		serviceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("open created Session: %v", err)
+	}
+	state, err := session.ChatSettingsStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatSettingsStateFromMeta: %v", err)
+	}
+	if state.Settings == nil ||
+		state.Settings.Thinking == nil ||
+		*state.Settings.Thinking != "operator-depth" {
+		t.Fatalf("initial Thinking = %+v, want operator-depth", state.Settings)
+	}
+}
+
+func TestPlanLaunchSessionRebasesUnavailableInitialThinkingToCurrentBaseline(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Model = "gpt-5.4"
+	cfg.Settings.ThinkingLevel = "medium"
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	result, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		InitialChat: &InitialChatCreation{
+			Settings: InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
+				Thinking:              textutil.Value("ultra"),
+				QuestionsEnabled:      true,
+				AutoCompactionEnabled: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	reopened, err := session.Open(
+		filepath.Join(containerDir, result.Plan.Descriptor.SessionID().String()),
+		serviceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("open created Session: %v", err)
+	}
+	state, err := session.ChatSettingsStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatSettingsStateFromMeta: %v", err)
+	}
+	if state.Settings == nil ||
+		state.Settings.Thinking == nil ||
+		*state.Settings.Thinking != "medium" {
+		t.Fatalf("rebased initial Thinking = %+v, want current baseline medium", state.Settings)
+	}
+}
+
+func TestPlanLaunchSessionRebasesUnavailableInitialFastModeToCurrentBaseline(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Model = "gpt-5.6-sol"
+	cfg.Settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID: "custom",
+	}
+	cfg.Settings.PriorityRequestMode = false
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	result, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		InitialChat: &InitialChatCreation{
+			Settings: InitialChatSettings{
+				AgentRole:             config.DefaultSubagentRole,
+				Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
+				Fast:                  textutil.Value(true),
+				QuestionsEnabled:      true,
+				AutoCompactionEnabled: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	reopened, err := session.Open(
+		filepath.Join(containerDir, result.Plan.Descriptor.SessionID().String()),
+		serviceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("open created Session: %v", err)
+	}
+	state, err := session.ChatSettingsStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatSettingsStateFromMeta: %v", err)
+	}
+	if state.Settings == nil ||
+		state.Settings.Fast == nil ||
+		*state.Settings.Fast {
+		t.Fatalf("rebased initial Fast mode = %+v, want current baseline off", state.Settings)
+	}
+}
+
+func TestPlanLaunchSessionRebasesRemovedInitialAgentToReloadedDefaultBaseline(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	stale := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	workerSettings := stale.Settings
+	workerSettings.Model = "gpt-5.6-sol"
+	workerSettings.ThinkingLevel = "high"
+	stale.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			Settings:         workerSettings,
+			AgentCallable:    true,
+			AgentCallableSet: true,
+		},
+	}
+	current := stale
+	current.Settings.Subagents = nil
+	current.Settings.Model = "gpt-5.4"
+	current.Settings.Reviewer.Frequency = "off"
+	current.Settings.ThinkingLevel = "low"
+	current.Settings.PriorityRequestMode = false
+	current.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}
+	current.Settings.CompactionMode = config.CompactionModeNone
+	persistence := sessiontest.NewPersistence()
+	reloads := 0
+	service := NewService(launch.Planner{
+		Config:                   stale,
+		ContainerDir:             containerDir,
+		StoreOptions:             persistence.Options(),
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
+		ReloadConfig: func() (config.App, error) {
+			reloads++
+			return current, nil
+		},
+	})
+	fast := true
+	thinking := "high"
+
+	result, err := service.PlanLaunchSession(t.Context(), PlanRequest{
+		Mode:   launch.ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		InitialChat: &InitialChatCreation{
+			Settings: InitialChatSettings{
+				AgentRole:             "worker",
+				Supervisor:            serverapi.ChatSettingsSupervisorAlways,
+				Thinking:              &thinking,
+				Fast:                  &fast,
+				QuestionsEnabled:      true,
+				AutoCompactionEnabled: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if reloads != 1 {
+		t.Fatalf("ReloadConfig calls = %d, want 1", reloads)
+	}
+	reopened, err := session.Open(
+		filepath.Join(containerDir, result.Plan.Descriptor.SessionID().String()),
+		persistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("open created Session: %v", err)
+	}
+	state, err := session.ChatSettingsStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatSettingsStateFromMeta: %v", err)
+	}
+	want := sessiontest.CompleteChatSettingsState(
+		t,
+		config.DefaultSubagentRole,
+		"off",
+		"low",
+		false,
+		false,
+		true,
+	)
+	if !reflect.DeepEqual(state, want) {
+		gotSettings := session.ChatSettings{
+			Supervisor:     *state.Settings.Supervisor,
+			Thinking:       *state.Settings.Thinking,
+			Fast:           *state.Settings.Fast,
+			Questions:      *state.Settings.Questions,
+			AutoCompaction: *state.Settings.AutoCompaction,
+		}
+		wantSettings := session.ChatSettings{
+			Supervisor:     *want.Settings.Supervisor,
+			Thinking:       *want.Settings.Thinking,
+			Fast:           *want.Settings.Fast,
+			Questions:      *want.Settings.Questions,
+			AutoCompaction: *want.Settings.AutoCompaction,
+		}
+		t.Fatalf(
+			"rebased initial Chat settings = agent:%q settings:%+v, want agent:%q settings:%+v",
+			state.Agent,
+			gotSettings,
+			want.Agent,
+			wantSettings,
+		)
+	}
+}
+
+func TestLazyChatSettingsReadsFreshStatelessDefaults(t *testing.T) {
+	workspace := t.TempDir()
+	first := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	first.Settings.Model = "gpt-5.4"
+	first.Settings.Reviewer.Frequency = "off"
+	first.Settings.ThinkingLevel = "low"
+	first.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}
+	second := first
+	second.Settings.Model = "gpt-5.6-sol"
+	second.Settings.Reviewer.Frequency = "all"
+	second.Settings.ThinkingLevel = "high"
+	second.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	snapshots := []config.App{first, second}
+	reloads := 0
+	service := NewService(launch.Planner{
+		Config: first,
+		ReloadConfig: func() (config.App, error) {
+			snapshot := snapshots[reloads]
+			reloads++
+			return snapshot, nil
+		},
+	})
+
+	firstRead, err := service.LazyChatSettings(t.Context())
+	if err != nil {
+		t.Fatalf("first LazyChatSettings: %v", err)
+	}
+	secondRead, err := service.LazyChatSettings(t.Context())
+	if err != nil {
+		t.Fatalf("second LazyChatSettings: %v", err)
+	}
+	if reloads != 2 {
+		t.Fatalf("ReloadConfig calls = %d, want one per stateless read", reloads)
+	}
+	if firstRead.Session != nil ||
+		firstRead.Settings.SelectedAgent.Role != config.DefaultSubagentRole ||
+		firstRead.Settings.SelectedAgent.Model != "gpt-5.4" ||
+		firstRead.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorOff ||
+		firstRead.Settings.Thinking == nil ||
+		firstRead.Settings.Thinking.Value != "low" ||
+		firstRead.Settings.Questions.Enabled {
+		t.Fatalf("first stateless defaults = %+v", firstRead)
+	}
+	if secondRead.Session != nil ||
+		secondRead.Settings.SelectedAgent.Role != config.DefaultSubagentRole ||
+		secondRead.Settings.SelectedAgent.Model != "gpt-5.6-sol" ||
+		secondRead.Settings.Supervisor.Value != serverapi.ChatSettingsSupervisorAlways ||
+		secondRead.Settings.Thinking == nil ||
+		secondRead.Settings.Thinking.Value != "high" ||
+		!secondRead.Settings.Questions.Enabled {
+		t.Fatalf("second stateless defaults = %+v", secondRead)
 	}
 }
 

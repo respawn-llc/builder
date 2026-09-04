@@ -96,7 +96,6 @@ type SessionBundle struct {
 	sessionLaunchMap    map[string]apicontract.SessionLaunchService
 	sessionServices     map[string]*sessionlaunch.Service
 	runPromptMap        map[string]apicontract.RunPromptService
-	draftOwner          *sessionlaunch.WorkspaceChatDraftOwner
 	sessionLaunch       apicontract.SessionLaunchService
 	sessionViews        apicontract.SessionViewService
 	sessionContextOwner chatcontext.SessionOwner
@@ -166,7 +165,6 @@ func emptySessionBundle() *SessionBundle {
 		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
 		sessionServices:  make(map[string]*sessionlaunch.Service),
 		runPromptMap:     make(map[string]apicontract.RunPromptService),
-		draftOwner:       nil,
 	}
 }
 
@@ -321,7 +319,6 @@ func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleS
 		sessionLaunchMap:    make(map[string]apicontract.SessionLaunchService),
 		sessionServices:     make(map[string]*sessionlaunch.Service),
 		runPromptMap:        make(map[string]apicontract.RunPromptService),
-		draftOwner:          sessionlaunch.NewWorkspaceChatDraftOwner(metadataStore),
 		sessionLaunch:       unregisteredSessionLaunchClient{},
 		sessionViews:        sessionViewService,
 		sessionContextOwner: sessionViewService,

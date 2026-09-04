@@ -251,20 +251,6 @@ func (s *Store) AuthoritativeSessionStoreOptions() []session.StoreOption {
 	}
 }
 
-func (s *Store) WorkspaceChatMaterializationStoreOptions(workspaceID string) []session.StoreOption {
-	if s == nil {
-		return nil
-	}
-	return []session.StoreOption{
-		session.WithPersistenceObserver(workspaceChatMaterializationObserver{
-			store:       s,
-			workspaceID: strings.TrimSpace(workspaceID),
-		}),
-		session.WithPersistedSessionResolver(s),
-		session.WithSessionContextFactWriter(s),
-	}
-}
-
 func (s *Store) EnsureWorkspaceBinding(ctx context.Context, workspaceRoot string) (Binding, error) {
 	binding, err := s.lookupWorkspaceBinding(ctx, workspaceRoot)
 	if err == nil {
@@ -440,63 +426,6 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlit
 		return sqlitegen.Workspace{}, fmt.Errorf("get workspace by id: %w", err)
 	}
 	return row, nil
-}
-
-func (s *Store) ReadWorkspaceChatDraft(ctx context.Context, workspaceID string) (*WorkspaceChatDraftDocument, error) {
-	if s == nil || s.queries == nil {
-		return nil, errors.New("metadata store is required")
-	}
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if trimmedWorkspaceID == "" {
-		return nil, errors.New("workspace id is required")
-	}
-	document, err := s.queries.GetWorkspaceChatDraft(ctx, trimmedWorkspaceID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
-		}
-		return nil, fmt.Errorf("get workspace Chat draft: %w", err)
-	}
-	if !document.Valid {
-		return nil, nil
-	}
-	var draft WorkspaceChatDraftDocument
-	if err := json.Unmarshal([]byte(document.String), &draft); err != nil {
-		return nil, fmt.Errorf("decode workspace Chat draft: %w", err)
-	}
-	return &draft, nil
-}
-
-func (s *Store) ReplaceWorkspaceChatDraft(ctx context.Context, workspaceID string, draft *WorkspaceChatDraftDocument) error {
-	if s == nil || s.queries == nil {
-		return errors.New("metadata store is required")
-	}
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if trimmedWorkspaceID == "" {
-		return errors.New("workspace id is required")
-	}
-	value := sql.NullString{}
-	if draft != nil {
-		if err := draft.Validate(); err != nil {
-			return err
-		}
-		encoded, err := json.Marshal(draft)
-		if err != nil {
-			return fmt.Errorf("encode workspace Chat draft: %w", err)
-		}
-		value = sql.NullString{String: string(encoded), Valid: true}
-	}
-	rows, err := s.queries.ReplaceWorkspaceChatDraft(ctx, sqlitegen.ReplaceWorkspaceChatDraftParams{
-		ChatDraftJson: value,
-		ID:            trimmedWorkspaceID,
-	})
-	if err != nil {
-		return fmt.Errorf("replace workspace Chat draft: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
-	}
-	return nil
 }
 
 func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.Workspace, error) {
@@ -2410,7 +2339,6 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		ctx,
 		s.queries.WithTx(tx),
 		snapshot,
-		sessionSnapshotUpsertOptions{},
 	); err != nil {
 		return err
 	}
@@ -2420,61 +2348,10 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	return nil
 }
 
-type sessionSnapshotUpsertOptions struct {
-	workspaceID        string
-	forceLaunchVisible bool
-}
-
-func (s *Store) upsertWorkspaceChatMaterializationSnapshot(
-	ctx context.Context,
-	workspaceID string,
-	snapshot session.PersistedStoreSnapshot,
-) error {
-	if s == nil || s.queries == nil {
-		return errors.New("metadata store is required")
-	}
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if trimmedWorkspaceID == "" {
-		return errors.New("workspace id is required")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin workspace Chat materialization tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	if err := s.upsertSessionSnapshotWithQueries(
-		ctx,
-		q,
-		snapshot,
-		sessionSnapshotUpsertOptions{
-			workspaceID:        trimmedWorkspaceID,
-			forceLaunchVisible: true,
-		},
-	); err != nil {
-		return err
-	}
-	rows, err := q.ReplaceWorkspaceChatDraft(ctx, sqlitegen.ReplaceWorkspaceChatDraftParams{
-		ChatDraftJson: sql.NullString{},
-		ID:            trimmedWorkspaceID,
-	})
-	if err != nil {
-		return fmt.Errorf("consume workspace Chat draft: %w", err)
-	}
-	if rows != 1 {
-		return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit workspace Chat materialization tx: %w", err)
-	}
-	return nil
-}
-
 func (s *Store) upsertSessionSnapshotWithQueries(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	snapshot session.PersistedStoreSnapshot,
-	options sessionSnapshotUpsertOptions,
 ) error {
 	category, err := nullableSessionCategory(snapshot.Meta.SessionID, snapshot.Meta.Category)
 	if err != nil {
@@ -2528,41 +2405,7 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 	persistedWorktreeReminder := snapshot.Meta.WorktreeReminder
 	worktreeID := sql.NullString{}
 	cwdRelpath := "."
-	if options.workspaceID != "" {
-		workspace, err := q.GetWorkspaceByID(ctx, options.workspaceID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, options.workspaceID)
-		}
-		if err != nil {
-			return fmt.Errorf("get materialization workspace: %w", err)
-		}
-		sameRoot, err := canonicalWorkspaceRootsEqual(snapshot.Meta.WorkspaceRoot, workspace.CanonicalRootPath)
-		if err != nil {
-			return err
-		}
-		if !sameRoot ||
-			(targetErr == nil &&
-				(existingTarget.ProjectID != workspace.ProjectID ||
-					existingTarget.WorkspaceID != workspace.ID)) {
-			return fmt.Errorf(
-				"%w: workspace %q same_root=%t session %q",
-				serverapi.ErrWorkspaceNotRegistered,
-				options.workspaceID,
-				sameRoot,
-				strings.TrimSpace(snapshot.Meta.SessionID),
-			)
-		}
-		binding = bindingFromWorkspaceFields(
-			workspace.ProjectID,
-			"",
-			"",
-			workspace.ID,
-			workspace.CanonicalRootPath,
-		)
-		workspaceRoot = workspace.CanonicalRootPath
-		workspaceContainer = filepath.Base(workspace.CanonicalRootPath)
-		persistedWorktreeReminder = nil
-	} else if targetErr == nil {
+	if targetErr == nil {
 		binding.ProjectID = existingTarget.ProjectID
 		binding.WorkspaceID = existingTarget.WorkspaceID
 		authoritativeRoot := strings.TrimSpace(existingTarget.WorkspaceRoot)
@@ -2610,7 +2453,7 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 		return err
 	}
 	launchVisible := int64(0)
-	if options.forceLaunchVisible || sessionLaunchVisible(snapshot.Meta) {
+	if sessionLaunchVisible(snapshot.Meta) {
 		launchVisible = 1
 	}
 	if err := q.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
@@ -2711,6 +2554,9 @@ func sessionLaunchVisible(meta session.Meta) bool {
 		return true
 	}
 	if strings.TrimSpace(meta.InputDraft) != "" {
+		return true
+	}
+	if meta.ChatSettings != nil {
 		return true
 	}
 	if meta.PreviousSessionID != nil || meta.ParentAgentSessionID != nil {
@@ -3091,11 +2937,6 @@ type sessionObserver struct {
 	store *Store
 }
 
-type workspaceChatMaterializationObserver struct {
-	store       *Store
-	workspaceID string
-}
-
 func (o sessionObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if o.store == nil {
 		return nil
@@ -3108,11 +2949,4 @@ func (o sessionObserver) ObserveEventLogReconciliation(ctx context.Context, reco
 		return nil
 	}
 	return o.store.reconcileSessionEventLog(ctx, reconciliation)
-}
-
-func (o workspaceChatMaterializationObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
-	if o.store == nil {
-		return errors.New("metadata store is required")
-	}
-	return o.store.upsertWorkspaceChatMaterializationSnapshot(ctx, o.workspaceID, snapshot)
 }

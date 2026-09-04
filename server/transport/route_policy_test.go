@@ -396,21 +396,6 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	); err != nil {
 		t.Fatalf("project workspace with attached project: %v", err)
 	}
-	materializationMethod := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().
-		ByName("SessionLaunchService").Methods().ByName("MaterializeWorkspaceChat")
-	materializationOperation, err := protoapi.OperationFromDescriptor(materializationMethod)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := executor.authorizeScopeFacts(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		routeScopePolicy(materializationOperation.Options.ScopePolicy),
-		materializationOperation.Name,
-		routeScopeParams{},
-	); err != nil {
-		t.Fatalf("workspace Chat materialization with attached project: %v", err)
-	}
 	workspaceListMethod := worktreepb.File_kent_api_worktree_worktree_proto.Services().
 		ByName("ListService").Methods().ByName("ListWorkspace")
 	workspaceListOperation, err := protoapi.OperationFromDescriptor(workspaceListMethod)
@@ -458,15 +443,6 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 		routeScopeParams{},
 	); err == nil {
 		t.Fatal("project workspace without active project unexpectedly allowed")
-	}
-	if err := newRoutePolicyExecutor(unboundGateway).authorizeScopeFacts(
-		ctx,
-		&connectionState{},
-		routeScopePolicy(materializationOperation.Options.ScopePolicy),
-		materializationOperation.Name,
-		routeScopeParams{},
-	); err == nil {
-		t.Fatal("workspace Chat materialization without active project unexpectedly allowed")
 	}
 }
 

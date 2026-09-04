@@ -53,31 +53,6 @@ func (s chatSettingsService) MutateChatSettings(
 	}
 	result := serverapi.NewChatSettingsMutationApplied(false)
 	switch req.Target.TargetKind {
-	case serverapi.ChatSettingsReadTargetLazy:
-		projectCtx, err := s.core.resolveProjectContext(ctx, *req.Target.ProjectID, *req.Target.WorkspaceID, "")
-		if err != nil {
-			return serverapi.ChatSettingsMutationResponse{}, err
-		}
-		service := s.core.sessionLaunchServiceForProjectContext(projectCtx)
-		projected, changed, err := service.MutateWorkspaceChatSettingsAggregate(ctx, req.Operation)
-		if err != nil {
-			return serverapi.ChatSettingsMutationResponse{}, err
-		}
-		if projected.Rejection != nil {
-			result = serverapi.NewChatSettingsMutationRejected(projected.Rejection.Reason)
-		}
-		if result.Applied != nil {
-			result.Applied.Changed = changed
-		}
-		settings, err := service.LazyChatSettings(ctx)
-		if err != nil {
-			return serverapi.ChatSettingsMutationResponse{}, err
-		}
-		contextFacts, err := service.ReadWorkspaceChatContext(ctx)
-		if err != nil {
-			return serverapi.ChatSettingsMutationResponse{}, err
-		}
-		return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings.Settings, Context: contextFacts}, nil
 	case serverapi.ChatSettingsReadTargetSession:
 		return s.mutateMaterializedChatSettings(ctx, *req.Target.Session, req.Operation, result)
 	}

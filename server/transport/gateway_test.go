@@ -287,7 +287,10 @@ func TestCancellationMessageRoundTripsThroughRemoteClient(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	_, err = remote.GetChatContext(context.Background(), serverapi.NewWorkspaceChatContextRequest())
+	_, err = remote.GetChatContext(
+		context.Background(),
+		serverapi.NewSessionChatContextRequest(runtimeids.NewSessionID()),
+	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("GetChatContext error = %v, want context.Canceled", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/chatcontext"
 	"core/shared/apicontract"
 	"core/shared/protoapi"
 	"core/shared/protocol"
@@ -40,33 +39,6 @@ func runtimePendingWorkClient(deps GatewayDependencies) apicontract.RuntimePendi
 var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
 		return handlePrepared(req.ID, prepared, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
-			if params.Target.IsWorkspaceChat() {
-				authReady, err := newRoutePolicyExecutor(g).serverAuthReady(ctx, state)
-				if err != nil {
-					return serverapi.ChatContextResponse{}, err
-				}
-				if !authReady {
-					return serverapi.ChatContextResponse{}, serverapi.ErrServerAuthRequired
-				}
-				projectID, err := g.activeProjectID(ctx, state)
-				if err != nil {
-					return serverapi.ChatContextResponse{}, err
-				}
-				var owner chatcontext.WorkspaceOwner
-				if strings.TrimSpace(state.attachedWorkspaceID) == "" {
-					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
-				} else {
-					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, state.attachedWorkspaceID)
-				}
-				if err != nil {
-					return serverapi.ChatContextResponse{}, err
-				}
-				if owner == nil {
-					return serverapi.ChatContextResponse{}, errors.New("workspace Chat Context owner is required")
-				}
-				contextFacts, err := owner.ReadWorkspaceChatContext(ctx)
-				return serverapi.ChatContextResponse{Context: contextFacts}, err
-			}
 			sessionID, selected := params.Target.SessionID()
 			if !selected {
 				return serverapi.ChatContextResponse{}, errors.New("validated Chat Context target is required")

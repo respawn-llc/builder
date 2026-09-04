@@ -5,6 +5,7 @@ package kent.api.session_launch;
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "kent/api/auth/auth.proto";
+import "kent/api/chat/chat.proto";
 import "kent/api/project/project.proto";
 import "kent/api/runtime/runtime.proto";
 import "kent/api/server/server.proto";
@@ -350,6 +351,14 @@ message SessionPlanRequest {
   SessionLaunchIntent intent = 2 [(buf.validate.field).required = true];
   optional string caller_session_id = 3 [(buf.validate.field).string.min_len = 1];
   RunPromptOverrides overrides = 4;
+  kent.api.chat.InitialChatSettings initial_chat_settings = 5;
+  optional string initial_input_draft = 6;
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.initial_input_draft_settings"
+    message: "initial_input_draft requires initial_chat_settings"
+    expression: "!has(this.initial_input_draft) || has(this.initial_chat_settings)"
+  };
 }
 
 message SessionRuntimeChatSettings {

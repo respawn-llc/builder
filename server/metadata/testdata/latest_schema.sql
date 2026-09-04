@@ -398,8 +398,7 @@ CREATE TABLE "workspaces" (
     git_metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at_unix_ms INTEGER NOT NULL,
     updated_at_unix_ms INTEGER NOT NULL
-, chat_draft_json TEXT
-CHECK (chat_draft_json IS NULL OR json_valid(chat_draft_json)));
+);
 
 CREATE TABLE "worktrees" (
     id TEXT PRIMARY KEY,

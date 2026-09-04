@@ -142,8 +142,6 @@ type SessionTranscriptService interface {
 
 type SessionLaunchService interface {
 	PlanSession(ctx context.Context, req *sessionlaunchpb.SessionPlanRequest) (*sessionlaunchpb.SessionPlanSuccess, error)
-	WorkspaceChatDraft(ctx context.Context, req *sessionlaunchpb.WorkspaceChatDraftRequest) (*sessionlaunchpb.WorkspaceChatDraftSuccess, error)
-	MaterializeWorkspaceChat(ctx context.Context, req *emptypb.Empty) (*sessionlaunchpb.MaterializeWorkspaceChatSuccess, error)
 }
 
 type ChatSettingsService interface {

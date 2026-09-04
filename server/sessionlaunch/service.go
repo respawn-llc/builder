@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"core/server/auth"
-	"core/server/chatcontext"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/session"
@@ -16,14 +14,10 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/protoapi"
-	runtimepb "core/shared/protoapi/gen/kent/api/runtime"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/sessioncontract"
 	"core/shared/textutil"
-
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type authStateReader interface {
@@ -37,12 +31,9 @@ type promptHistoryReader interface {
 }
 
 type Service struct {
-	planner                     launch.Planner
-	authStates                  authStateReader
-	promptHistory               promptHistoryReader
-	workspaceID                 string
-	draftOwner                  *WorkspaceChatDraftOwner
-	materializationStoreOptions []session.StoreOption
+	planner       launch.Planner
+	authStates    authStateReader
+	promptHistory promptHistoryReader
 }
 
 type PlanResult struct {
@@ -55,6 +46,7 @@ type PlanRequest struct {
 	Intent          serverapi.SessionLaunchIntent
 	CallerSessionID *string
 	Overrides       serverapi.RunPromptOverrides
+	InitialChat     *InitialChatCreation
 }
 
 func (r PlanRequest) Validate() error {
@@ -69,6 +61,11 @@ func (r PlanRequest) Validate() error {
 	if err := serverapi.ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
 		return err
 	}
+	if r.InitialChat != nil {
+		if err := r.InitialChat.Validate(r.Mode, r.Intent); err != nil {
+			return err
+		}
+	}
 	return r.Overrides.ValidateAgentRoleOverride()
 }
 
@@ -76,25 +73,6 @@ func NewService(planner launch.Planner) *Service {
 	return &Service{planner: planner}
 }
 
-func (s *Service) ReadWorkspaceChatContext(ctx context.Context) (serverapi.ChatContext, error) {
-	resolution, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
-	if err != nil {
-		return serverapi.ChatContext{}, err
-	}
-	selected, ok := resolution.limits[normalizeWorkspaceChatDraftAgent(resolution.Draft.Agent)]
-	if !ok {
-		return serverapi.ChatContext{}, fmt.Errorf("workspace Chat draft Agent %q has no resolved settings", resolution.Draft.Agent)
-	}
-	provider, err := llm.ResolveEffectiveProviderCapabilities(ctx, nil, selected.settings, s.authStates)
-	if err != nil {
-		return serverapi.ChatContext{}, err
-	}
-	policy := chatcontext.ResolvePolicy(selected.settings, provider.Capabilities, nil)
-	return chatcontext.Project(chatcontext.ProjectionInput{
-		Policy:                policy,
-		AutoCompactionEnabled: resolution.Draft.AutoCompaction,
-	}), nil
-}
 func (s *Service) WithAuthStateReader(reader authStateReader) *Service {
 	if s == nil {
 		return nil
@@ -109,169 +87,6 @@ func (s *Service) WithPromptHistoryReader(reader promptHistoryReader) *Service {
 	}
 	s.promptHistory = reader
 	return s
-}
-
-func (s *Service) WithWorkspaceChatDraft(owner *WorkspaceChatDraftOwner, workspaceID string) *Service {
-	if s != nil {
-		s.workspaceID = strings.TrimSpace(workspaceID)
-		s.draftOwner = owner
-	}
-	return s
-}
-
-func (s *Service) WithWorkspaceChatMaterializationStoreOptions(options ...session.StoreOption) *Service {
-	if s != nil {
-		s.materializationStoreOptions = append([]session.StoreOption(nil), options...)
-	}
-	return s
-}
-
-func (s *Service) materializeWorkspaceChatSession(ctx context.Context) (runtimeids.SessionID, error) {
-	owner, workspaceID, err := s.workspaceChatDraftOwner()
-	if err != nil {
-		return runtimeids.SessionID{}, err
-	}
-	return owner.MaterializeWorkspaceChat(
-		ctx,
-		workspaceID,
-		s.workspaceChatMaterializationResolverInput,
-		s.materializeResolvedWorkspaceChat,
-	)
-}
-
-func (s *Service) workspaceChatMaterializationResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
-	input, err := s.workspaceChatDraftResolverInput(ctx)
-	if err != nil {
-		return WorkspaceChatDraftResolverInput{}, err
-	}
-	input.SkipProviderReadinessValidation = true
-	return input, nil
-}
-
-func (s *Service) MaterializeWorkspaceChat(
-	ctx context.Context,
-	req *emptypb.Empty,
-) (*sessionlaunchpb.MaterializeWorkspaceChatSuccess, error) {
-	if req == nil {
-		return nil, errors.New("workspace Chat materialization request is required")
-	}
-	sessionID, err := s.materializeWorkspaceChatSession(ctx)
-	if err != nil {
-		return nil, err
-	}
-	success := &sessionlaunchpb.MaterializeWorkspaceChatSuccess{SessionId: sessionID.String()}
-	if err := protoapi.Validate(success); err != nil {
-		return nil, err
-	}
-	return success, nil
-}
-
-func (s *Service) materializeResolvedWorkspaceChat(
-	ctx context.Context,
-	resolution WorkspaceChatDraftResolution,
-) (runtimeids.SessionID, error) {
-	if s == nil {
-		return runtimeids.SessionID{}, errors.New("Session launch service is required")
-	}
-	if len(s.materializationStoreOptions) == 0 {
-		return runtimeids.SessionID{}, errors.New("workspace Chat materialization persistence is required")
-	}
-	containerDir := strings.TrimSpace(s.planner.ContainerDir)
-	if containerDir == "" {
-		return runtimeids.SessionID{}, errors.New("Session container directory is required")
-	}
-	workspaceRoot := strings.TrimSpace(s.planner.Config.WorkspaceRoot)
-	if workspaceRoot == "" {
-		return runtimeids.SessionID{}, errors.New("workspace root is required")
-	}
-	store, err := session.NewLazy(
-		containerDir,
-		filepath.Base(containerDir),
-		workspaceRoot,
-		sessioncontract.SessionCategoryMain,
-		s.materializationStoreOptions...,
-	)
-	if err != nil {
-		return runtimeids.SessionID{}, err
-	}
-	draft := resolution.Draft
-	if err := session.InitializeChatDraft(store, session.ChatDraftState{
-		Message: draft.Message,
-		Agent:   draft.Agent,
-		Settings: &session.ChatSettingsOverrides{
-			Supervisor:     &draft.Supervisor,
-			Thinking:       &draft.Thinking,
-			Fast:           &draft.Fast,
-			Questions:      &draft.Questions,
-			AutoCompaction: &draft.AutoCompaction,
-		},
-	}); err != nil {
-		return runtimeids.SessionID{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return runtimeids.SessionID{}, err
-	}
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id %q is invalid: %w", store.Meta().SessionID, err)
-	}
-	if !sessionID.IsCanonicalUUIDv4() {
-		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id %q must be a canonical UUIDv4", sessionID.String())
-	}
-	if err := store.EnsureDurable(); err != nil {
-		return runtimeids.SessionID{}, errors.Join(err, store.RemoveDurable())
-	}
-	return sessionID, nil
-}
-
-func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
-	planner := s.planner
-	if planner.ReloadConfig != nil {
-		snapshot, err := planner.ReloadConfig()
-		if err != nil {
-			return WorkspaceChatDraftResolverInput{}, err
-		}
-		planner.Config = snapshot
-	}
-	authState := auth.EmptyState()
-	if s.authStates != nil {
-		var err error
-		authState, err = s.authStates.StoredState(ctx)
-		if err != nil {
-			return WorkspaceChatDraftResolverInput{}, err
-		}
-	}
-	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState}, nil
-}
-
-func (s *Service) workspaceChatDraftOwner() (*WorkspaceChatDraftOwner, string, error) {
-	if s == nil || s.draftOwner == nil {
-		return nil, "", errors.New("workspace Chat draft service is required")
-	}
-	id := strings.TrimSpace(s.workspaceID)
-	if id == "" {
-		return nil, "", errors.New("workspace id is required")
-	}
-	return s.draftOwner, id, nil
-}
-
-func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (WorkspaceChatDraftResolution, error) {
-	owner, workspaceID, err := s.workspaceChatDraftOwner()
-	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
-	}
-	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
-}
-
-func (s *Service) MutateWorkspaceChatSettingsAggregate(
-	ctx context.Context,
-	operation serverapi.ChatSettingsMutationOperation,
-) (PreparedChatSettingsOperationResult, bool, error) {
-	owner, workspaceID, err := s.workspaceChatDraftOwner()
-	if err != nil {
-		return PreparedChatSettingsOperationResult{}, false, err
-	}
-	return owner.MutateWorkspaceChatSettings(ctx, workspaceID, s.workspaceChatDraftResolverInput, operation)
 }
 
 func (s *Service) PrepareMaterializedChatSettingsOperation(
@@ -363,26 +178,35 @@ func (s *Service) prepareMaterializedChatSettings(
 }
 
 func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
-	resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
+	planner := s.planner
+	if planner.ReloadConfig != nil {
+		snapshot, err := planner.ReloadConfig()
+		if err != nil {
+			return serverapi.ChatSettingsReadResponse{}, err
+		}
+		planner.Config = snapshot
+	}
+	authState := auth.EmptyState()
+	if s.authStates != nil {
+		var err error
+		authState, err = s.authStates.StoredState(ctx)
+		if err != nil {
+			return serverapi.ChatSettingsReadResponse{}, err
+		}
+	}
+	catalog, err := launch.PrepareChatAgentCatalog(planner.Config, authState, false)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	draft := resolved.Draft
-	thinking := draft.Thinking
-	if resolved.PersistedThinking != nil {
-		thinking = *resolved.PersistedThinking
+	entry, ok := catalog.Lookup(config.DefaultSubagentRole)
+	if !ok {
+		return serverapi.ChatSettingsReadResponse{}, errors.New("default Chat Agent baseline is missing")
 	}
 	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog: resolved.Catalog,
-		Agent:   draft.Agent,
-		Settings: session.ChatSettings{
-			Supervisor:     draft.Supervisor,
-			Thinking:       thinking,
-			Fast:           draft.Fast,
-			Questions:      resolved.PersistedQuestionsPolicy,
-			AutoCompaction: draft.AutoCompaction,
-		},
-		CompactionMode: resolved.CompactionMode,
+		Catalog:        catalog,
+		Agent:          config.DefaultSubagentRole,
+		Settings:       entry.Settings.Baseline,
+		CompactionMode: planner.Config.Settings.CompactionMode,
 	})
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
@@ -442,72 +266,6 @@ func (s *Service) workflowTaskID(ctx context.Context, sessionID string) (*string
 	return &validated, err
 }
 
-func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
-	owner, workspaceID, err := s.workspaceChatDraftOwner()
-	if err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform)
-}
-
-func (s *Service) WorkspaceChatDraft(
-	ctx context.Context,
-	req *sessionlaunchpb.WorkspaceChatDraftRequest,
-) (*sessionlaunchpb.WorkspaceChatDraftSuccess, error) {
-	if req == nil {
-		return nil, errors.New("workspace Chat draft request is required")
-	}
-	var message string
-	var availability session.GoalAvailability
-	switch operation := req.Operation.(type) {
-	case *sessionlaunchpb.WorkspaceChatDraftRequest_ReadMessage:
-		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
-		if err != nil {
-			return nil, err
-		}
-		message = resolved.Draft.Message
-		availability = resolved.GoalAvailability
-	case *sessionlaunchpb.WorkspaceChatDraftRequest_UpdateMessage:
-		resolved, err := s.TransformWorkspaceChatDraftAggregate(ctx, func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
-			availability = current.GoalAvailability
-			next := current.Draft
-			next.Message = operation.UpdateMessage
-			return next, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		message = resolved.Message
-	case *sessionlaunchpb.WorkspaceChatDraftRequest_Clear:
-		owner, workspaceID, err := s.workspaceChatDraftOwner()
-		if err != nil {
-			return nil, err
-		}
-		if err := owner.ClearWorkspaceChatDraft(ctx, workspaceID); err != nil {
-			return nil, err
-		}
-		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
-		if err != nil {
-			return nil, err
-		}
-		availability = resolved.GoalAvailability
-	default:
-		return nil, fmt.Errorf("workspace Chat draft operation %T is invalid", req.Operation)
-	}
-	generatedAvailability, err := workspaceChatGoalAvailabilityToGenerated(availability)
-	if err != nil {
-		return nil, err
-	}
-	success := &sessionlaunchpb.WorkspaceChatDraftSuccess{
-		Message:          message,
-		GoalAvailability: generatedAvailability,
-	}
-	if err := protoapi.Validate(success); err != nil {
-		return nil, err
-	}
-	return success, nil
-}
-
 func (s *Service) PlanSession(
 	ctx context.Context,
 	req *sessionlaunchpb.SessionPlanRequest,
@@ -548,6 +306,14 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req PlanRequest) (PlanR
 		}
 		planner.Config = snapshot
 		planner.ReloadConfig = nil
+	}
+	var initialChat *session.ChatDraftState
+	if req.InitialChat != nil {
+		var initialChatErr error
+		initialChat, initialChatErr = s.prepareInitialChatCreation(ctx, planner.Config, *req.InitialChat)
+		if initialChatErr != nil {
+			return PlanResult{}, initialChatErr
+		}
 	}
 	roleOverride, err := req.Overrides.AgentRoleOverride()
 	if err != nil {
@@ -600,6 +366,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req PlanRequest) (PlanR
 		Intent:                              req.Intent,
 		SkipContinuationAgentRoleValidation: roleOverride.Default,
 		PreparedPromptFacingTarget:          preparedPromptFacingTarget,
+		InitialChat:                         initialChat,
 	}, req.Overrides, preparedOverrides)
 	return s.finalizeLaunchPlan(ctx, plan, warnings, err)
 }
@@ -840,11 +607,19 @@ func sessionPlanRequestFromGenerated(request *sessionlaunchpb.SessionPlanRequest
 			return PlanRequest{}, err
 		}
 	}
+	initialChat, err := initialChatCreationFromGenerated(
+		request.InitialChatSettings,
+		request.InitialInputDraft,
+	)
+	if err != nil {
+		return PlanRequest{}, err
+	}
 	internal := PlanRequest{
 		Mode:            mode,
 		Intent:          intent,
 		CallerSessionID: textutil.Pointer(request.CallerSessionId),
 		Overrides:       overrides,
+		InitialChat:     initialChat,
 	}
 	return internal, internal.Validate()
 }
@@ -905,21 +680,4 @@ func sessionPlanSuccessFromResult(result PlanResult) (*sessionlaunchpb.SessionPl
 	return success, nil
 }
 
-func workspaceChatGoalAvailabilityToGenerated(
-	availability session.GoalAvailability,
-) (runtimepb.GoalAvailability, error) {
-	switch availability {
-	case session.GoalAvailable:
-		return runtimepb.GoalAvailability_GOAL_AVAILABILITY_AVAILABLE, nil
-	case session.GoalAgentCapabilityMissing:
-		return runtimepb.GoalAvailability_GOAL_AVAILABILITY_AGENT_CAPABILITY_MISSING, nil
-	default:
-		return runtimepb.GoalAvailability_GOAL_AVAILABILITY_UNSPECIFIED, fmt.Errorf(
-			"workspace Chat goal availability %d is invalid",
-			availability,
-		)
-	}
-}
-
 var _ servicecontract.SessionLaunchService = (*Service)(nil)
-var _ chatcontext.WorkspaceOwner = (*Service)(nil)

@@ -74,6 +74,7 @@ type SessionRequest struct {
 	Intent                              serverapi.SessionLaunchIntent
 	SkipContinuationAgentRoleValidation bool
 	PreparedPromptFacingTarget          *PreparedBaseTarget
+	InitialChat                         *session.ChatDraftState
 }
 
 type SessionPlan struct {
@@ -355,6 +356,9 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 }
 
 func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPlan, error) {
+	if err := validateInitialChatSessionRequest(req); err != nil {
+		return SessionPlan{}, err
+	}
 	if p.ReloadConfig != nil {
 		cfg, err := p.ReloadConfig()
 		if err != nil {
@@ -390,6 +394,9 @@ func (p Planner) PlanNewSessionWithPreparedOverrides(
 	overrides serverapi.RunPromptOverrides,
 	prepared PreparedRunPromptOverrides,
 ) (SessionPlan, []string, error) {
+	if err := validateInitialChatSessionRequest(req); err != nil {
+		return SessionPlan{}, nil, err
+	}
 	if req.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 		return SessionPlan{}, nil, errors.New("new-session planning requires a create-new intent")
 	}
@@ -419,11 +426,35 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 }
 
 func (p Planner) PlanPersistedSessionWithPreparedOverrides(ctx context.Context, req SessionRequest, meta session.Meta, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
+	if err := validateInitialChatSessionRequest(req); err != nil {
+		return SessionPlan{}, nil, err
+	}
 	plan, err := p.planSession(ctx, req, meta, nil)
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
 	return p.applyPreparedRunPromptOverrides(plan, meta, nil, overrides, prepared, options)
+}
+
+func validateInitialChatSessionRequest(req SessionRequest) error {
+	if req.InitialChat == nil {
+		return nil
+	}
+	return ValidateInitialChatCreationTarget(req.Mode, req.Intent)
+}
+
+func ValidateInitialChatCreationTarget(mode Mode, intent serverapi.SessionLaunchIntent) error {
+	if mode != ModeInteractive {
+		return errors.New("initial Chat creation requires interactive Session launch")
+	}
+	if intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
+		return errors.New("initial Chat creation requires a new Session")
+	}
+	origin, ok := intent.CreateOrigin()
+	if !ok || origin.Kind() != serverapi.SessionCreateOriginIndependent {
+		return errors.New("initial Chat creation requires an independent Session")
+	}
+	return nil
 }
 
 func (p Planner) planSession(ctx context.Context, req SessionRequest, meta session.Meta, store *session.Store) (SessionPlan, error) {
@@ -1255,7 +1286,7 @@ func (p Planner) openStore(ctx context.Context, req SessionRequest) (*session.St
 		if !ok {
 			return nil, errors.New("create-new session launch intent requires origin")
 		}
-		return p.createSession(ctx, origin, req.Mode)
+		return p.createSession(ctx, origin, req.Mode, req.InitialChat)
 	default:
 		return nil, errSessionLaunchIntentRequired
 	}
@@ -1277,7 +1308,12 @@ func (p Planner) SelectedSessionPromptFacingTargetFromMeta(meta session.Meta) (P
 	}, nil
 }
 
-func (p Planner) createSession(ctx context.Context, origin serverapi.SessionCreateOrigin, mode Mode) (*session.Store, error) {
+func (p Planner) createSession(
+	ctx context.Context,
+	origin serverapi.SessionCreateOrigin,
+	mode Mode,
+	initialChat *session.ChatDraftState,
+) (*session.Store, error) {
 	containerName := filepath.Base(p.ContainerDir)
 	category := sessioncontract.SessionCategoryMain
 	if mode == ModeHeadless {
@@ -1290,6 +1326,11 @@ func (p Planner) createSession(ctx context.Context, origin serverapi.SessionCrea
 		}
 		if err := session.InitializeCreationContext(created, nil, session.SessionCreationSourceIndependent, session.ChildContextOptions{}); err != nil {
 			return nil, err
+		}
+		if initialChat != nil {
+			if err := session.InitializeChatDraft(created, *initialChat); err != nil {
+				return nil, err
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
