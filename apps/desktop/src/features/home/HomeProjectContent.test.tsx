@@ -58,6 +58,7 @@ vi.mock("@/app-facade", async (importOriginal) => ({
     },
     selectHomeProject: vi.fn(),
   }),
+  useSessionChatCatalogReturn: () => null,
   useAppServices: () => ({ api: {} }),
   useOwnedSidebarRoots: () => ({ open: vi.fn() }),
 }));

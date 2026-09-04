@@ -16,7 +16,8 @@ export type SessionChatCatalogOrigin = Readonly<{
 
 export type SessionChatHistoryState = Readonly<{
   sessionChat?: Readonly<{
-    catalogOrigin: SessionChatCatalogOrigin;
+    catalogOrigin: SessionChatCatalogOrigin | null;
+    projectID: string;
   }> | null;
 }>;
 
@@ -182,8 +183,10 @@ export function useAppNavigation(): AppNavigation {
             params: { projectId: target.projectID, sessionId: target.sessionID },
             state: (previous) => ({
               ...previous,
-              sessionChat:
-                target.catalogOrigin === undefined ? null : { catalogOrigin: target.catalogOrigin },
+              sessionChat: {
+                catalogOrigin: target.catalogOrigin ?? null,
+                projectID: target.projectID,
+              },
             }),
           });
         });

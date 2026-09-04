@@ -7,13 +7,18 @@ import { sessionChatRoutePath } from "@/app-facade";
 import { createAppRouter } from "./routes";
 
 const fixture = vi.hoisted(() => ({
+  probeCatalogReturn: false,
   triggerCatalogNavigation: false,
 }));
 
 vi.mock("./routeComponents", async () => {
   const { Outlet } = await import("@tanstack/react-router");
   const { useEffect } = await import("react");
-  const { useAppNavigation } = await import("@/app-facade");
+  const {
+    SessionChatCatalogReturnProvider,
+    useAppNavigation,
+    useSessionChatCatalogReturn,
+  } = await import("@/app-facade");
   return {
     HomeShellRoute: () => null,
     ChatRoute: () => <div data-testid="standalone-chat-route" />,
@@ -21,10 +26,16 @@ vi.mock("./routeComponents", async () => {
     ProjectTasksRoute: () =>
       fixture.triggerCatalogNavigation ? (
         <CatalogNavigationProbe />
+      ) : fixture.probeCatalogReturn ? (
+        <CatalogReturnProbe />
       ) : (
         <div data-testid="standalone-project-tasks-route" />
       ),
-    RootRoute: () => <Outlet />,
+    RootRoute: () => (
+      <SessionChatCatalogReturnProvider>
+        <Outlet />
+      </SessionChatCatalogReturnProvider>
+    ),
     TaskRoute: () => null,
     WorkflowEditorShellRoute: () => null,
     WorkflowLibraryShellRoute: () => null,
@@ -33,6 +44,7 @@ vi.mock("./routeComponents", async () => {
   function CatalogNavigationProbe() {
     const navigation = useAppNavigation();
     useEffect(() => {
+      fixture.triggerCatalogNavigation = false;
       void navigation.openSessionChat({
         catalogOrigin: { category: "main" },
         projectID: "project-1",
@@ -41,9 +53,15 @@ vi.mock("./routeComponents", async () => {
     }, [navigation]);
     return <div data-testid="standalone-project-tasks-route" />;
   }
+
+  function CatalogReturnProbe() {
+    const catalogReturn = useSessionChatCatalogReturn("project-1");
+    return <div data-category={catalogReturn?.category ?? "none"} data-testid="catalog-return-probe" />;
+  }
 });
 
 afterEach(() => {
+  fixture.probeCatalogReturn = false;
   fixture.triggerCatalogNavigation = false;
   window.history.replaceState(null, "", "/");
 });
@@ -117,6 +135,28 @@ it("transports a catalog origin through the real AppNavigation route transition"
 
   expect(await screen.findByTestId("standalone-chat-route")).toBeInTheDocument();
   expect(router.state.location.state).toMatchObject({
-    sessionChat: { catalogOrigin: { category: "main" } },
+    sessionChat: {
+      catalogOrigin: { category: "main" },
+      projectID: "project-1",
+    },
+  });
+});
+
+it("restores the originating catalog after returning from Session Chat", async () => {
+  fixture.probeCatalogReturn = true;
+  fixture.triggerCatalogNavigation = true;
+  window.history.replaceState(null, "", "/projects/project-1/tasks");
+  const router = createAppRouter();
+  render(
+    <TestAppProviders services={createTestServices([])}>
+      <RouterProvider router={router} />
+    </TestAppProviders>,
+  );
+
+  expect(await screen.findByTestId("standalone-chat-route")).toBeInTheDocument();
+  router.history.back();
+
+  await waitFor(() => {
+    expect(screen.getByTestId("catalog-return-probe")).toHaveAttribute("data-category", "main");
   });
 });

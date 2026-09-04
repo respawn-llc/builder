@@ -1,6 +1,5 @@
+import type { SessionChatTarget } from "@/app-facade";
+
 export type TaskDetailSessionChatEntry = (
-  target: Readonly<{
-    projectID: string;
-    sessionID: string;
-  }>,
+  target: SessionChatTarget,
 ) => Promise<void>;

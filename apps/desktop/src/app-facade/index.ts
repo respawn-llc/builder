@@ -12,6 +12,8 @@ export * from "./queryKeys";
 export * from "./queryErrors";
 export * from "./services";
 export * from "./servicesContext";
+export * from "./SessionChatCatalogReturnProvider";
+export * from "./sessionChatCatalogReturn";
 export * from "./sidebarContext";
 export * from "./sidebarDestinationSizing";
 export * from "./sidebarHeaderAction";

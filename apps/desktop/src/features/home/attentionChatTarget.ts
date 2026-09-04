@@ -1,11 +1,7 @@
 import type { AttentionItem } from "@/api";
+import type { SessionChatTarget } from "@/app-facade";
 
-export type AttentionChatTarget = Readonly<{
-  projectID: string;
-  sessionID: string;
-}>;
-
-export function attentionChatTarget(item: AttentionItem): AttentionChatTarget | null {
+export function attentionChatTarget(item: AttentionItem): SessionChatTarget | null {
   switch (item.kind) {
     case "question":
       return { projectID: item.projectID, sessionID: item.question.sessionID };
