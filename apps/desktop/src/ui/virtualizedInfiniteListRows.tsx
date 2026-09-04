@@ -419,9 +419,7 @@ function resolveVirtualizedRowGeometry({
   virtualIndex: number;
 }>): Readonly<{ boundary: boolean; sticky: boolean }> {
   const horizontal = orientation === "horizontal";
-  const sticky =
-    (horizontal && layout.headerIndex === virtualIndex) ||
-    (itemKey !== undefined && stickyItemKeys?.has(itemKey) === true);
+  const sticky = itemKey !== undefined && stickyItemKeys?.has(itemKey) === true;
   const boundary =
     horizontal &&
     (layout.previousBoundaryIndex === virtualIndex ||

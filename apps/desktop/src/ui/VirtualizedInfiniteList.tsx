@@ -220,9 +220,6 @@ function VirtualizedInfiniteListContent<TItem>({
   );
   const pinnedIndexes = useMemo(() => {
     const indexes = new Set<number>();
-    if (horizontal && layout.headerIndex !== null) {
-      indexes.add(layout.headerIndex);
-    }
     if (retainedItemKeys.size === 0) {
       return indexes;
     }
@@ -232,7 +229,7 @@ function VirtualizedInfiniteListContent<TItem>({
       }
     });
     return indexes;
-  }, [getItemKey, horizontal, itemStartIndex, items, layout.headerIndex, retainedItemKeys]);
+  }, [getItemKey, itemStartIndex, items, retainedItemKeys]);
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => scrollRef.current,
@@ -642,7 +639,6 @@ function restoreLeadingAnchor({
       return;
     }
     element.scrollLeft = scrollOffset;
-    virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
     return;
   }
   const measuredOffset = isFallbackRendering
