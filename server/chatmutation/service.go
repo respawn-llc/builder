@@ -25,7 +25,7 @@ type RuntimeOpeningService interface {
 	Open(context.Context, runtimeids.SessionID) (RuntimeAttachment, error)
 }
 
-type UserTurnAdmissionService interface {
+type RuntimeAdmissionService interface {
 	AdmitUserTurn(
 		context.Context,
 		serverapi.RuntimeSubmitUserTurnRequest,
@@ -34,18 +34,22 @@ type UserTurnAdmissionService interface {
 		context.Context,
 		serverapi.RuntimeSubmitUserTurnRequest,
 	) (runtimeids.QueueItemID, bool, error)
+	AdmitManualCompaction(
+		context.Context,
+		serverapi.RuntimeCompactContextRequest,
+	) (bool, error)
 }
 
 type Service struct {
 	targets    TargetResolutionService
 	runtimes   RuntimeOpeningService
-	admissions UserTurnAdmissionService
+	admissions RuntimeAdmissionService
 }
 
 func NewService(
 	targets TargetResolutionService,
 	runtimes RuntimeOpeningService,
-	admissions UserTurnAdmissionService,
+	admissions RuntimeAdmissionService,
 ) *Service {
 	return &Service{
 		targets:    targets,
@@ -84,6 +88,71 @@ func (s *Service) Queue(
 	)
 }
 
+func (s *Service) Compact(
+	ctx context.Context,
+	request *chatpb.CompactRequest,
+) (*chatpb.CompactionMutationSuccess, error) {
+	if err := protoapi.Validate(request); err != nil {
+		return nil, err
+	}
+	draft, admission, err := compactionInvocation(request.Invocation)
+	if err != nil {
+		return nil, err
+	}
+	target, attachment, err := s.prepareRuntime(ctx, request.Target, draft)
+	if err != nil {
+		if target.SessionID.IsZero() {
+			return nil, err
+		}
+		return compactionNotAccepted(target.SessionID, err), nil
+	}
+	if s.admissions == nil {
+		releaseErr := attachment.Release(context.WithoutCancel(ctx), sessionruntime.RuntimeReleaseCloseIfIdle)
+		return compactionNotAcceptedInternal(
+			target.SessionID,
+			"release_chat_runtime",
+			errors.Join(errors.New("manual-compaction admission service is required"), releaseErr),
+		), nil
+	}
+	requestID := runtimeids.NewCompactionRequestID()
+	accepted, admissionErr := s.admissions.AdmitManualCompaction(ctx, serverapi.RuntimeCompactContextRequest{
+		SessionID: target.SessionID.String(),
+		RequestID: requestID,
+		Admission: admission,
+	})
+	releasePolicy := sessionruntime.RuntimeReleaseCloseIfIdle
+	if accepted {
+		releasePolicy = sessionruntime.RuntimeReleaseDetach
+	}
+	releaseErr := attachment.Release(context.WithoutCancel(ctx), releasePolicy)
+	if !accepted {
+		if releaseErr != nil {
+			return compactionNotAcceptedInternal(
+				target.SessionID,
+				"release_chat_runtime",
+				errors.Join(admissionErr, releaseErr),
+			), nil
+		}
+		return compactionNotAccepted(target.SessionID, admissionErr), nil
+	}
+	acceptedResult := &chatpb.CompactionAccepted{
+		Request: &chatpb.CompactionRequestIdentity{Id: requestID.String()},
+	}
+	switch {
+	case releaseErr != nil:
+		acceptedResult.Diagnostic = acceptedDiagnostic(
+			"release_chat_runtime",
+			errors.Join(admissionErr, releaseErr),
+		)
+	case admissionErr != nil:
+		acceptedResult.Diagnostic = acceptedDiagnostic("chat_compact", admissionErr)
+	}
+	return &chatpb.CompactionMutationSuccess{
+		Session: &chatpb.ExistingSessionTarget{SessionId: target.SessionID.String()},
+		Outcome: &chatpb.CompactionMutationSuccess_Accepted{Accepted: acceptedResult},
+	}, nil
+}
+
 type inputMutationOperation string
 
 const (
@@ -97,37 +166,16 @@ func (s *Service) mutateInput(
 	activation *chatpb.Activation,
 	operation inputMutationOperation,
 ) (*chatpb.InputMutationSuccess, error) {
-	if s == nil || s.targets == nil {
-		return nil, errors.New("Chat target resolver is required")
-	}
 	draft, input, err := activationInput(activation)
 	if err != nil {
 		return nil, err
 	}
-	target, err := s.targets.Resolve(ctx, TargetResolutionRequest{
-		Target:       targetRequest,
-		InitialDraft: &draft,
-	})
+	target, attachment, err := s.prepareRuntime(ctx, targetRequest, draft)
 	if err != nil {
-		return nil, err
-	}
-	if s.runtimes == nil {
-		return inputNotAccepted(target.SessionID, operation, errors.New("Session Runtime planner is required")), nil
-	}
-	attachment, err := s.runtimes.Open(ctx, target.SessionID)
-	if err != nil {
+		if target.SessionID.IsZero() {
+			return nil, err
+		}
 		return inputNotAccepted(target.SessionID, operation, err), nil
-	}
-	if attachment == nil {
-		return inputNotAccepted(target.SessionID, operation, errors.New("Session Runtime attachment is required")), nil
-	}
-	if attachment.SessionID() != target.SessionID {
-		releaseErr := attachment.Release(context.WithoutCancel(ctx), sessionruntime.RuntimeReleaseCloseIfIdle)
-		return inputNotAccepted(
-			target.SessionID,
-			operation,
-			errors.Join(errors.New("Session Runtime attachment targets another Session"), releaseErr),
-		), nil
 	}
 	if s.admissions == nil {
 		releaseErr := attachment.Release(context.WithoutCancel(ctx), sessionruntime.RuntimeReleaseCloseIfIdle)
@@ -181,6 +229,44 @@ func (s *Service) mutateInput(
 	}, nil
 }
 
+func (s *Service) prepareRuntime(
+	ctx context.Context,
+	targetRequest *chatpb.ChatTarget,
+	initialDraft string,
+) (ResolvedTarget, RuntimeAttachment, error) {
+	if s == nil || s.targets == nil {
+		return ResolvedTarget{}, nil, errors.New("Chat target resolver is required")
+	}
+	target, err := s.targets.Resolve(ctx, TargetResolutionRequest{
+		Target:       targetRequest,
+		InitialDraft: &initialDraft,
+	})
+	if err != nil {
+		return ResolvedTarget{}, nil, err
+	}
+	if s.runtimes == nil {
+		return target, nil, errors.New("Session Runtime planner is required")
+	}
+	attachment, err := s.runtimes.Open(ctx, target.SessionID)
+	if err != nil {
+		return target, nil, err
+	}
+	if attachment == nil {
+		return target, nil, errors.New("Session Runtime attachment is required")
+	}
+	if attachment.SessionID() != target.SessionID {
+		releaseErr := attachment.Release(
+			context.WithoutCancel(ctx),
+			sessionruntime.RuntimeReleaseCloseIfIdle,
+		)
+		return target, nil, errors.Join(
+			errors.New("Session Runtime attachment targets another Session"),
+			releaseErr,
+		)
+	}
+	return target, attachment, nil
+}
+
 func (s *Service) admitInput(
 	ctx context.Context,
 	operation inputMutationOperation,
@@ -214,6 +300,98 @@ func activationInput(activation *chatpb.Activation) (string, runtimeinput.Input,
 	}
 	draft := command.Token + command.SeparatorWhitespace + command.Arguments
 	return draft, runtimeinput.Command(command.CatalogIdentity, command.Arguments), nil
+}
+
+func compactionInvocation(
+	invocation *chatpb.CompactionInvocation,
+) (string, runtimeinput.ManualCompactionAdmission, error) {
+	if err := protoapi.Validate(invocation); err != nil {
+		return "", runtimeinput.ManualCompactionAdmission{}, err
+	}
+	draft := invocation.Token + invocation.SeparatorWhitespace + invocation.RawGuidance
+	normalizedGuidance := runtimeinput.NormalizePendingWorkArgument(invocation.RawGuidance)
+	admission := runtimeinput.ManualCompactionAdmission{}
+	if normalizedGuidance != "" {
+		admission.Guidance = &normalizedGuidance
+	}
+	return draft, admission, nil
+}
+
+func compactionNotAccepted(
+	sessionID runtimeids.SessionID,
+	cause error,
+) *chatpb.CompactionMutationSuccess {
+	if cause == nil {
+		cause = errors.New("manual-compaction admission completed without accepting work")
+	}
+	return &chatpb.CompactionMutationSuccess{
+		Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+		Outcome: &chatpb.CompactionMutationSuccess_NotAccepted{
+			NotAccepted: compactionNotAcceptedForCause(cause),
+		},
+	}
+}
+
+func compactionNotAcceptedInternal(
+	sessionID runtimeids.SessionID,
+	operation string,
+	cause error,
+) *chatpb.CompactionMutationSuccess {
+	return &chatpb.CompactionMutationSuccess{
+		Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+		Outcome: &chatpb.CompactionMutationSuccess_NotAccepted{
+			NotAccepted: &chatpb.CompactionNotAccepted{
+				Reason: &chatpb.CompactionNotAccepted_InternalFailure{
+					InternalFailure: internalFailure(operation, cause),
+				},
+			},
+		},
+	}
+}
+
+func compactionNotAcceptedForCause(cause error) *chatpb.CompactionNotAccepted {
+	switch {
+	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
+		return &chatpb.CompactionNotAccepted{
+			Reason: &chatpb.CompactionNotAccepted_Canceled{Canceled: &emptypb.Empty{}},
+		}
+	case errors.Is(cause, serverapi.ErrRuntimeUnavailable):
+		return &chatpb.CompactionNotAccepted{
+			Reason: &chatpb.CompactionNotAccepted_RuntimeUnavailable{
+				RuntimeUnavailable: &chatpb.RuntimeUnavailableDetails{},
+			},
+		}
+	case errors.Is(cause, serverapi.ErrPendingWorkCapacity):
+		return &chatpb.CompactionNotAccepted{
+			Reason: &chatpb.CompactionNotAccepted_PendingWorkCapacity{
+				PendingWorkCapacity: &chatpb.PendingWorkCapacityDetails{},
+			},
+		}
+	case errors.Is(cause, serverapi.ErrManualCompactionTooSoon):
+		return &chatpb.CompactionNotAccepted{
+			Reason: &chatpb.CompactionNotAccepted_TooSoon{
+				TooSoon: &chatpb.ManualCompactionTooSoonDetails{},
+			},
+		}
+	case errors.Is(cause, serverapi.ErrManualCompactionDisabled):
+		return &chatpb.CompactionNotAccepted{
+			Reason: &chatpb.CompactionNotAccepted_Disabled{
+				Disabled: &chatpb.ManualCompactionDisabledDetails{},
+			},
+		}
+	case errors.Is(cause, serverapi.ErrManualCompactionActive):
+		return &chatpb.CompactionNotAccepted{
+			Reason: &chatpb.CompactionNotAccepted_Active{
+				Active: &chatpb.ManualCompactionActiveDetails{},
+			},
+		}
+	default:
+		return &chatpb.CompactionNotAccepted{
+			Reason: &chatpb.CompactionNotAccepted_InternalFailure{
+				InternalFailure: internalFailure("chat_compact", cause),
+			},
+		}
+	}
 }
 
 func inputNotAccepted(

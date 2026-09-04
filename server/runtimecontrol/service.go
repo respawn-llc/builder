@@ -400,15 +400,39 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return err
 	}
 	_, err := runRuntimeCommand(ctx, func(ctx context.Context) (struct{}, bool, error) {
-		attempt := newRuntimeCommandAttempt(ctx)
-		defer attempt.Finish()
-		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, compactErr := engine.CompactContextAdmissionForRequestWithAcceptance(runCtx, req.RequestID, req.Admission, attempt.Accept)
-			return compactErr
-		})
-		return struct{}{}, attempt.Accepted(), commandErr
+		accepted, commandErr := s.AdmitManualCompaction(ctx, req)
+		return struct{}{}, accepted, commandErr
 	})
 	return err
+}
+
+func (s *Service) AdmitManualCompaction(
+	ctx context.Context,
+	req serverapi.RuntimeCompactContextRequest,
+) (bool, error) {
+	if err := req.Validate(); err != nil {
+		return false, err
+	}
+	attempt := newRuntimeCommandAttempt(ctx)
+	defer attempt.Finish()
+	commandErr := s.withRuntime(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		workflowState, stateErr := engine.WorkflowSessionState()
+		if stateErr != nil {
+			return stateErr
+		}
+		active := engine.ActiveRun()
+		if workflowState != nil && (active == nil || active.ActiveKind != runtime.ActiveKindWorkflowTurn) {
+			return serverapi.ErrRuntimeUnavailable
+		}
+		_, compactErr := engine.CompactContextAdmissionForRequestWithAcceptance(
+			runCtx,
+			req.RequestID,
+			req.Admission,
+			attempt.Accept,
+		)
+		return compactErr
+	})
+	return attempt.Accepted(), commandErr
 }
 
 func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {

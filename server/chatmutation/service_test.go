@@ -22,12 +22,14 @@ type steerTargetResolver struct {
 	resolved ResolvedTarget
 	request  TargetResolutionRequest
 	err      error
+	calls    int
 }
 
 func (r *steerTargetResolver) Resolve(
 	_ context.Context,
 	request TargetResolutionRequest,
 ) (ResolvedTarget, error) {
+	r.calls++
 	r.request = request
 	return r.resolved, r.err
 }
@@ -67,16 +69,31 @@ func (a *steerRuntimeAttachment) Release(
 }
 
 type steerAdmission struct {
-	request       serverapi.RuntimeSubmitUserTurnRequest
-	result        serverapi.RuntimeSubmitUserTurnResponse
-	accepted      bool
-	err           error
-	onAdmit       func()
-	queueRequest  serverapi.RuntimeSubmitUserTurnRequest
-	queueItemID   runtimeids.QueueItemID
-	queueAccepted bool
-	queueErr      error
-	onQueue       func()
+	request            serverapi.RuntimeSubmitUserTurnRequest
+	result             serverapi.RuntimeSubmitUserTurnResponse
+	accepted           bool
+	err                error
+	onAdmit            func()
+	queueRequest       serverapi.RuntimeSubmitUserTurnRequest
+	queueItemID        runtimeids.QueueItemID
+	queueAccepted      bool
+	queueErr           error
+	onQueue            func()
+	compactionRequest  serverapi.RuntimeCompactContextRequest
+	compactionAccepted bool
+	compactionErr      error
+	onCompact          func()
+}
+
+func (a *steerAdmission) AdmitManualCompaction(
+	_ context.Context,
+	request serverapi.RuntimeCompactContextRequest,
+) (bool, error) {
+	a.compactionRequest = request
+	if a.onCompact != nil {
+		a.onCompact()
+	}
+	return a.compactionAccepted, a.compactionErr
 }
 
 func (a *steerAdmission) AdmitUserTurn(
@@ -191,6 +208,249 @@ func TestServiceQueueAcceptsExistingSessionInputAndDetachesItsRuntime(t *testing
 	}
 	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
 		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
+	}
+}
+
+func TestServiceCompactAcceptsExactInvocationWithNormalizedGuidance(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}}
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	admission := &steerAdmission{compactionAccepted: true}
+	service := NewService(
+		resolver,
+		&steerRuntimePlanner{attachment: attachment},
+		admission,
+	)
+
+	result, err := service.Compact(t.Context(), &chatpb.CompactRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+			},
+		},
+		Invocation: &chatpb.CompactionInvocation{
+			Token:               "/compact",
+			SeparatorWhitespace: " \t",
+			RawGuidance:         "preserve  exact\nguidance ",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if result.GetSession().GetSessionId() != sessionID.String() ||
+		result.GetAccepted().GetRequest().GetId() == "" {
+		t.Fatalf("Compact result = %+v", result)
+	}
+	if resolver.request.InitialDraft == nil ||
+		*resolver.request.InitialDraft != "/compact \tpreserve  exact\nguidance " {
+		t.Fatalf("target-resolution draft = %v", resolver.request.InitialDraft)
+	}
+	if admission.compactionRequest.SessionID != sessionID.String() ||
+		admission.compactionRequest.RequestID.String() != result.GetAccepted().GetRequest().GetId() ||
+		admission.compactionRequest.Admission.Guidance == nil ||
+		*admission.compactionRequest.Admission.Guidance != "preserve exact guidance" {
+		t.Fatalf("manual-compaction admission = %+v", admission.compactionRequest)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
+		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
+	}
+}
+
+func TestServiceCompactRejectsMalformedInvocationBeforeTargetResolution(t *testing.T) {
+	resolver := &steerTargetResolver{}
+	service := NewService(resolver, &steerRuntimePlanner{}, &steerAdmission{})
+
+	result, err := service.Compact(t.Context(), &chatpb.CompactRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_NewChat{NewChat: validSteerNewChatTarget()},
+		},
+		Invocation: &chatpb.CompactionInvocation{
+			Token:               "/compact",
+			SeparatorWhitespace: "-",
+			RawGuidance:         "preserve context",
+		},
+	})
+	if err == nil {
+		t.Fatal("Compact accepted malformed lexical invocation")
+	}
+	if result != nil {
+		t.Fatalf("Compact result = %+v, want no result before target resolution", result)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("target resolver calls = %d, want zero", resolver.calls)
+	}
+}
+
+func TestServiceCompactReturnsFreshNewChatSessionAndExactDraftWhenTooSoon(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	resolver := &steerTargetResolver{resolved: ResolvedTarget{
+		SessionID: sessionID,
+		Created:   true,
+	}}
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	admission := &steerAdmission{compactionErr: serverapi.ErrManualCompactionTooSoon}
+	service := NewService(
+		resolver,
+		&steerRuntimePlanner{attachment: attachment},
+		admission,
+	)
+
+	result, err := service.Compact(t.Context(), &chatpb.CompactRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_NewChat{NewChat: validSteerNewChatTarget()},
+		},
+		Invocation: &chatpb.CompactionInvocation{
+			Token:               "/compact",
+			SeparatorWhitespace: "\t ",
+			RawGuidance:         "preserve  exact\ninput ",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if result.GetSession().GetSessionId() != sessionID.String() ||
+		result.GetNotAccepted().GetTooSoon() == nil {
+		t.Fatalf("Compact result = %+v, want created Session and too-soon rejection", result)
+	}
+	if resolver.request.InitialDraft == nil ||
+		*resolver.request.InitialDraft != "/compact\t preserve  exact\ninput " {
+		t.Fatalf("New Chat draft = %v", resolver.request.InitialDraft)
+	}
+	if admission.compactionRequest.Admission.Guidance == nil ||
+		*admission.compactionRequest.Admission.Guidance != "preserve exact input" {
+		t.Fatalf("normalized compaction admission = %+v", admission.compactionRequest.Admission)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseCloseIfIdle {
+		t.Fatalf("Runtime release policy = %v, want close if idle", attachment.policy)
+	}
+}
+
+func TestServiceCompactCancellationBeforeAcceptanceClosesIdleRuntime(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	service := NewService(
+		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
+		&steerRuntimePlanner{attachment: attachment},
+		&steerAdmission{compactionErr: context.Canceled},
+	)
+
+	result, err := service.Compact(t.Context(), &chatpb.CompactRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+			},
+		},
+		Invocation: &chatpb.CompactionInvocation{Token: "/compact"},
+	})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if result.GetNotAccepted().GetCanceled() == nil {
+		t.Fatalf("Compact result = %+v, want canceled admission", result)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseCloseIfIdle {
+		t.Fatalf("Runtime release policy = %v, want close if idle", attachment.policy)
+	}
+}
+
+func TestServiceCompactAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	ctx, cancel := context.WithCancel(t.Context())
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	service := NewService(
+		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
+		&steerRuntimePlanner{attachment: attachment},
+		&steerAdmission{
+			compactionAccepted: true,
+			onCompact:          cancel,
+		},
+	)
+
+	result, err := service.Compact(ctx, &chatpb.CompactRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+			},
+		},
+		Invocation: &chatpb.CompactionInvocation{Token: "/compact"},
+	})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if result.GetAccepted().GetRequest().GetId() == "" {
+		t.Fatalf("Compact result = %+v, want accepted Compaction Request", result)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
+		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
+	}
+	if attachment.releaseContextErr != nil {
+		t.Fatalf("release inherited caller cancellation: %v", attachment.releaseContextErr)
+	}
+}
+
+func TestServiceCompactMapsTypedManualCompactionRejections(t *testing.T) {
+	tests := []struct {
+		name  string
+		cause error
+		check func(*chatpb.CompactionNotAccepted) bool
+	}{
+		{
+			name:  "too soon",
+			cause: serverapi.ErrManualCompactionTooSoon,
+			check: func(outcome *chatpb.CompactionNotAccepted) bool {
+				return outcome.GetTooSoon() != nil
+			},
+		},
+		{
+			name:  "disabled",
+			cause: serverapi.ErrManualCompactionDisabled,
+			check: func(outcome *chatpb.CompactionNotAccepted) bool {
+				return outcome.GetDisabled() != nil
+			},
+		},
+		{
+			name:  "active",
+			cause: serverapi.ErrManualCompactionActive,
+			check: func(outcome *chatpb.CompactionNotAccepted) bool {
+				return outcome.GetActive() != nil
+			},
+		},
+		{
+			name:  "capacity",
+			cause: &serverapi.PendingWorkCapacityError{},
+			check: func(outcome *chatpb.CompactionNotAccepted) bool {
+				return outcome.GetPendingWorkCapacity() != nil
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sessionID := runtimeids.NewSessionID()
+			attachment := &steerRuntimeAttachment{sessionID: sessionID}
+			service := NewService(
+				&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
+				&steerRuntimePlanner{attachment: attachment},
+				&steerAdmission{compactionErr: test.cause},
+			)
+
+			result, err := service.Compact(t.Context(), &chatpb.CompactRequest{
+				Target: &chatpb.ChatTarget{
+					Target: &chatpb.ChatTarget_Session{
+						Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+					},
+				},
+				Invocation: &chatpb.CompactionInvocation{Token: "/compact"},
+			})
+			if err != nil {
+				t.Fatalf("Compact: %v", err)
+			}
+			if !test.check(result.GetNotAccepted()) {
+				t.Fatalf("Compact result = %+v, want %s rejection", result, test.name)
+			}
+			if attachment.policy != sessionruntime.RuntimeReleaseCloseIfIdle {
+				t.Fatalf("Runtime release policy = %v, want close if idle", attachment.policy)
+			}
+		})
 	}
 }
 

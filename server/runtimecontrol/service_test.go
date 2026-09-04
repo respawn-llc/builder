@@ -278,6 +278,29 @@ func waitForRuntimeControlIdle(t *testing.T, engine *runtime.Engine) {
 	}
 }
 
+func waitForRuntimeControlActiveRun(t *testing.T, engine *runtime.Engine) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for engine.ActiveRun() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for Runtime execution to start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func runtimeControlPendingWorkContains(
+	pending runtimeinput.PendingWork,
+	itemID runtimeids.QueueItemID,
+) bool {
+	for _, item := range pending.Items {
+		if item.ID == itemID {
+			return true
+		}
+	}
+	return false
+}
+
 func waitForRuntimeControlQueuedStatus(
 	t *testing.T,
 	statuses <-chan runtime.QueuedUserMessageStatusEvent,
@@ -2359,6 +2382,272 @@ func TestServiceAdmitQueuedUserInputStartsIdleRuntimeAndReturnsIdentity(t *testi
 	}
 	if got := countPromptHistoryEvents(t, store, "queued Chat input"); got != 1 {
 		t.Fatalf("queued prompt history count = %d, want 1", got)
+	}
+}
+
+func TestServiceAdmitManualCompactionAcceptsEligibleIdleRuntime(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("seeded"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}},
+		compactionResponses: []llm.CompactionResponse{{
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				EncryptedContent: textutil.Value("checkpoint"),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}},
+	}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model:                        "gpt-5",
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	if _, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "seed-manual-compaction", "seed"),
+	); err != nil {
+		t.Fatalf("seed user turn: %v", err)
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "seeded")
+	waitForRuntimeControlIdle(t, engine)
+	requestID := runtimeids.NewCompactionRequestID()
+
+	accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if err != nil {
+		t.Fatalf("AdmitManualCompaction: %v", err)
+	}
+	if !accepted {
+		t.Fatal("eligible idle manual compaction was not accepted")
+	}
+}
+
+func TestServiceAdmitManualCompactionQueuesBehindActiveAgentStep(t *testing.T) {
+	client := &blockingRuntimeControlClient{}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model: "gpt-5",
+	})
+	if _, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "active-manual-compaction", "keep working"),
+	); err != nil {
+		t.Fatalf("start user turn: %v", err)
+	}
+	waitForRuntimeControlActiveRun(t, engine)
+	requestID := runtimeids.NewCompactionRequestID()
+
+	accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if err != nil {
+		t.Fatalf("AdmitManualCompaction: %v", err)
+	}
+	if !accepted {
+		t.Fatal("manual compaction behind an active Agent Step was not accepted")
+	}
+	itemID, err := serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
+	if err != nil {
+		t.Fatalf("Pending Work identity: %v", err)
+	}
+	pending, err := engine.PendingWorkSnapshot()
+	if err != nil {
+		t.Fatalf("Pending Work: %v", err)
+	}
+	if !runtimeControlPendingWorkContains(pending, itemID) {
+		t.Fatalf("manual compaction %s is absent from Pending Work: %+v", requestID, pending.Items)
+	}
+}
+
+func TestServiceAdmitManualCompactionRejectsFreshIdleRuntimeAsTooSoon(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		Model: "gpt-5",
+	})
+	requestID := runtimeids.NewCompactionRequestID()
+
+	accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if accepted || !errors.Is(err, serverapi.ErrManualCompactionTooSoon) {
+		t.Fatalf("AdmitManualCompaction = %v/%v, want typed too-soon rejection", accepted, err)
+	}
+	pending, snapshotErr := engine.PendingWorkSnapshot()
+	if snapshotErr != nil {
+		t.Fatalf("Pending Work: %v", snapshotErr)
+	}
+	if len(pending.Items) != 0 {
+		t.Fatalf("fresh rejected compaction changed Pending Work: %+v", pending.Items)
+	}
+}
+
+func TestServiceAdmitManualCompactionRejectsRetainedWorkflowSession(t *testing.T) {
+	execution := runtimeControlExactExecution(t)
+	execution.Instructions.WorkflowID = runtimeids.NewWorkflowID()
+	store, engine, service := newRuntimeControlWorkflowTestService(
+		t,
+		nil,
+		nil,
+		runtime.Config{Model: "gpt-5"},
+		execution,
+	)
+
+	accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: runtimeids.NewCompactionRequestID(),
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if accepted || !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("retained Workflow compaction = %v/%v, want Runtime unavailable", accepted, err)
+	}
+	pending, snapshotErr := engine.PendingWorkSnapshot()
+	if snapshotErr != nil {
+		t.Fatalf("Pending Work: %v", snapshotErr)
+	}
+	if len(pending.Items) != 0 {
+		t.Fatalf("retained Workflow rejection changed Pending Work: %+v", pending.Items)
+	}
+}
+
+func TestServiceAdmitManualCompactionRejectsAlreadyActiveCompaction(t *testing.T) {
+	client := &blockingCompactionRuntimeControlClient{
+		runtimeControlFakeClient: runtimeControlFakeClient{
+			responses: []llm.Response{{
+				Assistant: llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: textutil.Value("seeded"),
+					Phase:   textutil.Value(llm.MessagePhaseFinal),
+				},
+				Usage: llm.Usage{WindowTokens: 200000},
+			}},
+			compactionResponses: []llm.CompactionResponse{{
+				Checkpoint: llm.ResponseItem{
+					Type:             llm.ResponseItemTypeCompaction,
+					EncryptedContent: textutil.Value("checkpoint"),
+				},
+				Usage: llm.Usage{WindowTokens: 200000},
+			}},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseCompaction := func() {
+		releaseOnce.Do(func() { close(client.release) })
+	}
+	defer releaseCompaction()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model:                        "gpt-5",
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	if _, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "seed-active-compaction", "seed"),
+	); err != nil {
+		t.Fatalf("seed user turn: %v", err)
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "seeded")
+	waitForRuntimeControlIdle(t, engine)
+	if accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: runtimeids.NewCompactionRequestID(),
+		Admission: serverapi.ManualCompactionAdmission{},
+	}); err != nil || !accepted {
+		t.Fatalf("start manual compaction = %v/%v", accepted, err)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual compaction did not start")
+	}
+
+	accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: runtimeids.NewCompactionRequestID(),
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if accepted || !errors.Is(err, serverapi.ErrManualCompactionActive) {
+		t.Fatalf("second manual compaction = %v/%v, want active rejection", accepted, err)
+	}
+}
+
+func TestServiceAdmitManualCompactionHonorsPreAcceptanceCancellation(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		Model: "gpt-5",
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	accepted, err := service.AdmitManualCompaction(ctx, serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: runtimeids.NewCompactionRequestID(),
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if accepted || !errors.Is(err, context.Canceled) {
+		t.Fatalf("AdmitManualCompaction = %v/%v, want canceled rejection", accepted, err)
+	}
+	pending, snapshotErr := engine.PendingWorkSnapshot()
+	if snapshotErr != nil {
+		t.Fatalf("Pending Work: %v", snapshotErr)
+	}
+	if len(pending.Items) != 0 {
+		t.Fatalf("canceled compaction changed Pending Work: %+v", pending.Items)
+	}
+}
+
+func TestServiceAdmitManualCompactionSurvivesCallerCancellationAfterAcceptance(t *testing.T) {
+	var cancel context.CancelFunc
+	client := &blockingRuntimeControlClient{}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model: "gpt-5",
+		OnEvent: func(event runtime.Event) {
+			if event.Kind == runtime.EventPendingWorkChanged && cancel != nil {
+				cancel()
+			}
+		},
+	})
+	if _, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "active-cancel-after-compact", "keep working"),
+	); err != nil {
+		t.Fatalf("start user turn: %v", err)
+	}
+	waitForRuntimeControlActiveRun(t, engine)
+	ctx, cancelCaller := context.WithCancel(t.Context())
+	cancel = cancelCaller
+	requestID := runtimeids.NewCompactionRequestID()
+
+	accepted, err := service.AdmitManualCompaction(ctx, serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if err != nil || !accepted {
+		t.Fatalf("AdmitManualCompaction = %v/%v, want accepted work", accepted, err)
+	}
+	if !errors.Is(context.Cause(ctx), context.Canceled) {
+		t.Fatalf("caller context cause = %v, want cancellation after acceptance", context.Cause(ctx))
+	}
+	itemID, parseErr := serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
+	if parseErr != nil {
+		t.Fatalf("Pending Work identity: %v", parseErr)
+	}
+	pending, snapshotErr := engine.PendingWorkSnapshot()
+	if snapshotErr != nil {
+		t.Fatalf("Pending Work: %v", snapshotErr)
+	}
+	if !runtimeControlPendingWorkContains(pending, itemID) {
+		t.Fatalf("accepted compaction %s was lost after caller cancellation: %+v", requestID, pending.Items)
 	}
 }
 
