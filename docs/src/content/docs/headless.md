@@ -218,12 +218,12 @@ Because the child was never created, this response has no session ID or continua
 
 Supported run-specific flags:
 
-| Flag              | Description                                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| Flag              | Description                                                                                                                                                                                                |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--timeout`       | Limits waiting for the selected agent or Workflow result; preparation, history, teardown, and other technical phases have independent bounds and may extend total command duration. Default is no timeout. |
-| `--output-mode`   | `final-text` or `json`. Default is `final-text`.                                                       |
-| `--progress-mode` | `stderr` for live responses and notices, or `quiet` for final-result-only output. Default is `stderr`. |
-| `-q`, `--quiet`   | Shortcut for `--progress-mode=quiet`.                                                                  |
-| `--continue`      | Continue a previous session by id.                                                                     |
-| `--agent`         | Select a named subagent role from `config.toml`; use `default` for the base role.                      |
-| `--fast`          | Shortcut for the built-in `fast` subagent role.                                                        |
+| `--output-mode`   | `final-text` or `json`. Default is `final-text`.                                                                                                                                                           |
+| `--progress-mode` | `stderr` for live responses and notices, or `quiet` for final-result-only output. Default is `stderr`.                                                                                                     |
+| `-q`, `--quiet`   | Shortcut for `--progress-mode=quiet`.                                                                                                                                                                      |
+| `--continue`      | Continue a previous session by id.                                                                                                                                                                         |
+| `--agent`         | Select a named subagent role from `config.toml`; use `default` for the base role.                                                                                                                          |
+| `--fast`          | Shortcut for the built-in `fast` subagent role.                                                                                                                                                            |

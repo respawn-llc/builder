@@ -74,10 +74,6 @@ func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontra
 	return remote, closeFn, nil
 }
 
-func startRuntimeControlClient(ctx context.Context, opts Options) (apicontract.RuntimeControlService, func() error, error) {
-	return startRuntimeControlRemote(ctx, opts)
-}
-
 func startRuntimeControlRemote(ctx context.Context, opts Options) (*client.Remote, func() error, error) {
 	cfg, err := loadRemoteAttachConfig(opts)
 	if err != nil {

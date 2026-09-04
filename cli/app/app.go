@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
 
 	"core/cli/app/internal/runner"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -63,14 +65,25 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 	}()
 	runOptions := workspaceConfig.Options
 	if strings.TrimSpace(opts.SessionID) != "" && strings.TrimSpace(opts.ThinkingLevel) != "" {
-		controls, closeControls, controlErr := startRuntimeControlClient(ctx, workspaceConfig.Options)
+		sessionID, sessionIDErr := runtimeids.ParseSessionID(strings.TrimSpace(opts.SessionID))
+		if sessionIDErr != nil {
+			return RunPromptResult{}, sessionIDErr
+		}
+		thinkingLevel := strings.TrimSpace(opts.ThinkingLevel)
+		controls, closeControls, controlErr := startRuntimeControlRemote(ctx, workspaceConfig.Options)
 		if controlErr != nil {
 			return RunPromptResult{}, controlErr
 		}
-		thinkingErr := controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{
-			SessionID: strings.TrimSpace(opts.SessionID),
-			Level:     strings.TrimSpace(opts.ThinkingLevel),
+		thinkingResponse, thinkingErr := controls.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
+			Target: serverapi.SessionChatSettingsTarget(sessionID),
+			Operation: serverapi.ChatSettingsMutationOperation{
+				Kind:  serverapi.ChatSettingsMutationThinking,
+				Value: &thinkingLevel,
+			},
 		})
+		if thinkingErr == nil && thinkingResponse.Result.Kind == serverapi.ChatSettingsMutationRejected {
+			thinkingErr = fmt.Errorf("thinking level mutation rejected: %s", thinkingResponse.Result.Rejected.Reason)
+		}
 		if closeControls != nil {
 			thinkingErr = errors.Join(thinkingErr, closeControls())
 		}
