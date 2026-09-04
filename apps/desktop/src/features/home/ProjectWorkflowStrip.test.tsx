@@ -16,6 +16,10 @@ vi.mock("@/app-facade", async (importOriginal) => ({
 beforeAll(async () => initializeI18n());
 
 describe("ProjectWorkflowStrip", () => {
+  beforeEach(() => {
+    openProject.mockReset();
+  });
+
   it("places Sort and Link Workflow before the retained Workflow items", () => {
     renderStrip({
       workflows: [
@@ -69,11 +73,13 @@ describe("ProjectWorkflowStrip", () => {
     const button = screen.getByRole("button", { name: "Delivery" });
     button.focus();
     await user.keyboard("{Enter}");
+    expect(openProject).toHaveBeenCalledTimes(1);
     expect(openProject).toHaveBeenCalledWith("project-1", "workflow-1");
 
     openProject.mockClear();
     button.focus();
     await user.keyboard(" ");
+    expect(openProject).toHaveBeenCalledTimes(1);
     expect(openProject).toHaveBeenCalledWith("project-1", "workflow-1");
   });
 });
