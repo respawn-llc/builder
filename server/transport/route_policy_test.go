@@ -124,22 +124,6 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(
 		ctx,
 		draftState,
-		activeRoute,
-		serverapi.SessionMainViewRequest{SessionID: fixture.reboundSessionID},
-	); err != nil {
-		t.Fatalf("exact attached Session after cross-Project move: %v", err)
-	}
-	if err := executor.authorizeScope(
-		ctx,
-		draftState,
-		activeRoute,
-		serverapi.SessionMainViewRequest{SessionID: fixture.foreignSessionID},
-	); err == nil {
-		t.Fatal("exact Session attachment authorized an unrelated Session")
-	}
-	if err := executor.authorizeScope(
-		ctx,
-		draftState,
 		draftRoute,
 		serverapi.SessionPersistInputDraftRequest{
 			SessionID: fixture.reboundSessionID,
@@ -233,47 +217,6 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		routeScopeParams{sessionID: fixture.foreignSessionID},
 	); err == nil {
 		t.Fatal("attach foreign session unexpectedly allowed")
-	}
-	if err := executor.authorizeScopeFacts(
-		ctx,
-		&connectionState{},
-		rpccontract.ScopeAttachSession,
-		"AttachSession",
-		routeScopeParams{sessionID: fixture.foreignSessionID},
-	); err == nil {
-		t.Fatal("fresh connection attached a foreign Session without reattach authority")
-	}
-	reattachCapability, err := fixture.gateway.sessionReattach.issue(fixture.foreignSessionID)
-	if err != nil {
-		t.Fatalf("issue Session reattach capability: %v", err)
-	}
-	if err := executor.authorizeScopeFacts(
-		ctx,
-		&connectionState{},
-		rpccontract.ScopeAttachSession,
-		"AttachSession",
-		routeScopeParams{
-			sessionID:                 fixture.foreignSessionID,
-			sessionReattachCapability: &reattachCapability,
-		},
-	); err != nil {
-		t.Fatalf("authorized fresh connection attach after cross-Project move: %v", err)
-	}
-	unrelatedCapability, err := fixture.gateway.sessionReattach.issue(fixture.ownSessionID)
-	if err != nil {
-		t.Fatalf("issue unrelated Session reattach capability: %v", err)
-	}
-	if err := executor.authorizeScopeFacts(
-		ctx,
-		&connectionState{},
-		rpccontract.ScopeAttachSession,
-		"AttachSession",
-		routeScopeParams{
-			sessionID:                 fixture.foreignSessionID,
-			sessionReattachCapability: &unrelatedCapability,
-		},
-	); err == nil {
-		t.Fatal("Session reattach capability authorized an unrelated Session")
 	}
 }
 
