@@ -134,7 +134,7 @@ func (s chatSettingsService) mutateMaterializedChatSettings(
 		}
 		changed = committed.Changed
 		if engine != nil && projected.State.Agent == input.Raw.Agent {
-			if err := engine.ApplyPreparedChatSettings(projected.Effective); err != nil {
+			if err := engine.AcceptPreparedChatSettings(projected.Effective); err != nil {
 				return false, err
 			}
 		}

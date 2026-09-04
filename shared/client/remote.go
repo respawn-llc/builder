@@ -52,6 +52,7 @@ type Remote struct {
 	transport                        rpcwire.ClientTransport
 	mu                               sync.Mutex
 	control                          *remoteControlConn
+	draftHandoff                     *remoteSessionControl
 	identity                         protocol.ServerIdentity
 	attachIntent                     *remoteAttachmentIntent
 	attachment                       *remoteAttachment
@@ -125,11 +126,17 @@ func (c *Remote) Close() error {
 	c.mu.Lock()
 	control := c.control
 	c.control = nil
+	draftHandoff := c.draftHandoff
+	c.draftHandoff = nil
 	c.mu.Unlock()
-	if control == nil {
-		return nil
+	var draftHandoffErr error
+	if draftHandoff != nil {
+		draftHandoffErr = draftHandoff.remote.Close()
 	}
-	return control.Close()
+	if control == nil {
+		return draftHandoffErr
+	}
+	return errors.Join(control.Close(), draftHandoffErr)
 }
 
 func (c *Remote) Identity() protocol.ServerIdentity {
@@ -292,6 +299,8 @@ func (c *Remote) projectBinding() (ProjectAttachment, bool) {
 	if c == nil {
 		return ProjectAttachment{}, false
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return remoteAttachmentProjectBinding(c.attachment)
 }
 
@@ -703,7 +712,11 @@ func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionIniti
 
 func (c *Remote) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
 	var resp serverapi.SessionPersistInputDraftResponse
-	return resp, c.call(ctx, protocol.MethodSessionPersistInputDraft, req, &resp)
+	control, err := c.draftControl(ctx, req.SessionID)
+	if err != nil {
+		return resp, err
+	}
+	return resp, control.call(ctx, protocol.MethodSessionPersistInputDraft, req, &resp)
 }
 
 func (c *Remote) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
@@ -974,7 +987,12 @@ func (c *Remote) ensureControl(ctx context.Context) (*remoteControlConn, error) 
 		_ = c.control.Close()
 		c.control = nil
 	}
-	conn, cleanup, state, err := c.openSetupRPCConn(ctx, nil)
+	conn, cleanup, state, err := c.openSetupRPCConnForAttachment(
+		ctx,
+		nil,
+		c.attachIntent,
+		c.attachment,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -985,6 +1003,15 @@ func (c *Remote) ensureControl(ctx context.Context) (*remoteControlConn, error) 
 	control := newRemoteControlConn(conn)
 	c.control = control
 	c.identity = state.identity
+	c.attachment = state.attachment
+	if state.attachment != nil && state.attachment.session != nil {
+		c.attachIntent, err = newRemoteSessionReattachmentIntent(*state.attachment.session)
+		if err != nil {
+			_ = control.Close()
+			c.control = nil
+			return nil, err
+		}
+	}
 	return control, nil
 }
 

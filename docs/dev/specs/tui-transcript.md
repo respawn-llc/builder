@@ -220,7 +220,8 @@
 - The TUI has no standalone per-item discard affordance for operational Pending Work.
 - Pending queues are lost on process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - A mid-turn message becomes durable only when Kent delivers it.
-- The server-published Run lifecycle is the TUI liveness authority for `Ctrl+C`: while the Run lifecycle is Running, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same Run exits locally. A later Running lifecycle with a different Run or Step identity sends a new Interrupt. The server revalidates that Interrupt targets an active Agent Turn. A submission already sent to the server may start or continue after the client detaches.
+- The server-published Run lifecycle and the current server-published pending Question or Approval are the TUI liveness authorities for `Ctrl+C`. While either identifies live work, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same execution exits locally. A later Running lifecycle with a different Run or Step identity sends a new Interrupt. The server revalidates that Interrupt targets an active Agent execution, including one waiting for a Question or Approval. A submission already sent to the server may start or continue after the client detaches.
+- When a live Runtime projection reports a prompt wait but the corresponding pending prompt is absent, Ongoing Mode requests Scratch Rehydration to recover the authoritative prompt. The execution remains interruptible while that projection is being recovered.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.
@@ -311,8 +312,7 @@
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
 - While an Agent Turn is active, every available `/prompt:*` command submits its typed identity as Steering in the current Session. Kent resolves the prompt body on the server before accepting the Steering input.
-- `/name`, `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` persist and publish their Session value immediately while an Agent Step runs.
-- Those immediate setting commands affect later provider and compaction requests, never the Agent Step already running, and create no transcript rows.
+- `/name`, `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) Session-setting contract.
 - `/compact` and Active-Runtime `/worktree switch`, `/wt switch`, `/worktree leave`, and `/wt leave` enter typed operational Pending Work while an Agent Step or another boundary-owning Runtime operation is active.
 - Goal follows its Goal owner. Client-local navigation, overlays, reads, detach actions, and direct Worktree management reach their direct owners while an Agent Turn is active.
 - `/resume` always enters the session picker, including when no other session exists. The originating attachment is released before the picker opens. A picker `Ctrl+C` leaves that run ownerless; it issues no second release and no interrupt.

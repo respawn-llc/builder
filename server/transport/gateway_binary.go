@@ -86,7 +86,10 @@ func productionGatewayBinaryBindings() (map[string]gatewayBinaryBinding, error) 
 		gatewayBinaryCoreActiveExclusive,
 		func() *connectionpb.AttachSessionRequest { return &connectionpb.AttachSessionRequest{} },
 		func(request *connectionpb.AttachSessionRequest) (routeScopeParams, error) {
-			return routeScopeParams{sessionID: request.SessionId}, nil
+			return routeScopeParams{
+				sessionID:                 request.SessionId,
+				sessionReattachCapability: request.ReattachCapability,
+			}, nil
 		},
 		invokeBinaryAttachSession,
 		binaryAttachSessionFailure,
@@ -309,11 +312,24 @@ func invokeBinaryAttachSession(
 	state *connectionState,
 	request *connectionpb.AttachSessionRequest,
 ) (*connectionpb.AttachmentSuccess, error) {
-	binding, err := g.resolveSessionAttachment(ctx, state, request.SessionId)
+	_, binding, err := g.resolveSessionAttachmentTargetWithCapability(
+		ctx,
+		state,
+		request.SessionId,
+		request.ReattachCapability,
+	)
 	if err != nil {
 		return nil, err
 	}
 	parsedSessionID, err := runtimeids.ParseSessionID(request.SessionId)
+	if err != nil {
+		return nil, err
+	}
+	authority, err := g.sessionReattachAuthority()
+	if err != nil {
+		return nil, err
+	}
+	reattachCapability, err := authority.issue(request.SessionId)
 	if err != nil {
 		return nil, err
 	}
@@ -324,10 +340,11 @@ func invokeBinaryAttachSession(
 	return &connectionpb.AttachmentSuccess{
 		Attachment: &connectionpb.AttachmentSuccess_Session{
 			Session: &connectionpb.SessionAttachment{
-				ProjectId:     binding.ProjectID,
-				WorkspaceId:   binding.WorkspaceID,
-				WorkspaceRoot: binding.CanonicalRoot,
-				SessionId:     request.SessionId,
+				ProjectId:          binding.ProjectID,
+				WorkspaceId:        binding.WorkspaceID,
+				WorkspaceRoot:      binding.CanonicalRoot,
+				SessionId:          request.SessionId,
+				ReattachCapability: reattachCapability,
 			},
 		},
 	}, nil

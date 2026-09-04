@@ -13,6 +13,7 @@ import (
 )
 
 const uiRuntimeControlTimeout = 3 * time.Second
+const uiChatSettingsTimeout = 30 * time.Second
 const uiRuntimeHydrationReadTimeout = 10 * time.Second
 const runtimeReconnectWarningText = "Lost connection to the session runtime; reconnected."
 

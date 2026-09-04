@@ -20,7 +20,7 @@ func (c *sessionRuntimeClient) ReadChatSettings() (serverapi.ChatSettings, error
 	if err != nil {
 		return serverapi.ChatSettings{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), uiChatSettingsTimeout)
 	defer cancel()
 	response, err := c.chatSettings.ReadChatSettings(ctx, serverapi.ChatSettingsReadRequest{
 		Target: serverapi.SessionChatSettingsTarget(sessionID),
@@ -36,7 +36,7 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), uiChatSettingsTimeout)
 	defer cancel()
 	response, err := c.chatSettings.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
 		Target:    serverapi.SessionChatSettingsTarget(sessionID),

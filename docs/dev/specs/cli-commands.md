@@ -255,8 +255,9 @@ To respond, run: kent run steer <source-session-id> "message"
 - A present malformed `KENT_SESSION_ID` fails Run steer before submission. An absent or blank value uses human-steer behavior.
 - Prompt history stores the complete wrapped message.
 - `kent run stop <session-id>` interrupts an active Session regardless of client origin.
+- An exact Agent execution waiting for a Question or access request is active for Run stop even when it has no active model or tool step.
 - Run stop requires a Session ID, rejects attempts by a Session to target itself, prints `Stopped` when accepted, and prints `No active execution` as a successful no-op for idle or nonexistent Sessions.
-- Run stop returns after direct exact-live cancellation. Pending human Steering for the stopped execution is removed when that execution unwinds; the CLI neither waits for that cleanup nor promises restoration.
+- Run stop returns after direct exact-live cancellation. Cancellation closes pending Question and access-request calls through the ordinary interrupted execution outcome. Pending human Steering for the stopped execution is removed when that execution unwinds; the CLI neither waits for that cleanup nor promises restoration.
 - `kent run wait <session-id>` waits for an active Session's final result.
 - `kent run wait …` always selects the Run wait command. A headless prompt beginning with `wait` uses `kent run -- wait …`.
 - Run wait requires a canonical UUIDv4 Session ID, rejects attempts by a Session to target itself, and fails without final-answer output if no execution is active.

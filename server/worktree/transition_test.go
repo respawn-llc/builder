@@ -35,6 +35,7 @@ func (emptySessionRetargetProcessSource) List() []shelltool.Snapshot { return ni
 
 type scheduledSessionRetargeterStub struct {
 	request    metadata.SessionWorkspaceRetargetRequest
+	resolve    func(context.Context) (metadata.SessionWorkspaceRetargetRequest, error)
 	origin     serverapi.RuntimeStepOrigin
 	operation  worktreecontract.OperationID
 	completion func(error)
@@ -61,6 +62,63 @@ func (s *scheduledSessionRetargeterStub) ScheduleWorkspaceRetargetWithCompletion
 	return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{OperationID: operation}, nil
 }
 
+func (s *scheduledSessionRetargeterStub) ScheduleWorkspaceRetargetResolutionWithCompletion(
+	_ context.Context,
+	sessionID string,
+	origin serverapi.RuntimeStepOrigin,
+	operation worktreecontract.OperationID,
+	resolve func(context.Context) (metadata.SessionWorkspaceRetargetRequest, error),
+	completion func(error),
+) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error) {
+	s.request.SessionID = sessionID
+	s.resolve = resolve
+	s.origin = origin
+	s.operation = operation
+	s.completion = completion
+	return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{OperationID: operation}, nil
+}
+
+func TestEnterWorktreeSchedulesCrossWorkspaceResolutionBeforeSelectorExists(t *testing.T) {
+	env := newServiceTestEnv(t)
+	sourceSession := createNonGitSourceSession(t, env)
+	retargeter := &scheduledSessionRetargeterStub{}
+	env.service.sessionRetargeter = retargeter
+	operationID := clientui.NewWorktreeTransitionID()
+	runID, stepID := uuid.NewString(), uuid.NewString()
+	requestCtx, cancelRequest := context.WithCancel(t.Context())
+
+	ack, err := env.service.EnterWorktree(requestCtx, &worktreepb.EnterRequest{
+		OperationId: operationID.String(),
+		SessionId:   sourceSession.Meta().SessionID,
+		Selector:    "feature/created-after-acceptance",
+		TargetWorkspace: &worktreepb.TransitionWorkspace{
+			WorkspaceId:   env.binding.WorkspaceID,
+			WorkspaceRoot: env.workspaceRoot,
+		},
+		Origin: &worktreepb.TransitionRuntimeStepOrigin{RunId: runID, StepId: stepID},
+	})
+	if err != nil {
+		t.Fatalf("EnterWorktree before selector exists: %v", err)
+	}
+	if ack.GetOperationId() != operationID.String() {
+		t.Fatalf("ack operation = %q, want %q", ack.GetOperationId(), operationID)
+	}
+	cancelRequest()
+	next := mustCreateWorktree(t, env, "feature/created-after-acceptance")
+	if retargeter.resolve == nil {
+		t.Fatal("scheduled transition did not retain target resolution")
+	}
+	request, err := retargeter.resolve(context.Background())
+	if err != nil {
+		t.Fatalf("resolve scheduled target after caller cancellation: %v", err)
+	}
+	if request.SessionID != sourceSession.Meta().SessionID ||
+		request.TargetWorktreeID == nil ||
+		*request.TargetWorktreeID != next.WorktreeID {
+		t.Fatalf("resolved Session retarget = %+v, want Worktree %q", request, next.WorktreeID)
+	}
+}
+
 func TestEnterWorktreeSchedulesCrossProjectRetargetFromNonGitWorkspace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	next := mustCreateWorktree(t, env, "feature/scheduled-cross-project-enter")
@@ -85,6 +143,13 @@ func TestEnterWorktreeSchedulesCrossProjectRetargetFromNonGitWorkspace(t *testin
 	}
 	if ack.GetOperationId() != operationID.String() {
 		t.Fatalf("ack operation = %q, want %q", ack.GetOperationId(), operationID)
+	}
+	if retargeter.resolve == nil {
+		t.Fatal("scheduled transition did not retain target resolution")
+	}
+	retargeter.request, err = retargeter.resolve(t.Context())
+	if err != nil {
+		t.Fatalf("resolve scheduled Session retarget: %v", err)
 	}
 	if retargeter.request.SessionID != sourceSession.Meta().SessionID ||
 		retargeter.request.WorkspaceRoot != env.workspaceRoot ||

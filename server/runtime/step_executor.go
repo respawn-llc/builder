@@ -251,12 +251,7 @@ func registerAcceptedOutputPosition(
 }
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
-	result, err := s.runStepLoopWithOptions(ctx, stepID, options)
-	var stopped *queuedUserFlushStoppedError
-	if errors.As(err, &stopped) && !s.engine.currentNodeExecutionActive() {
-		return stepLoopResult{}, nil
-	}
-	return result, err
+	return s.runStepLoopWithOptions(ctx, stepID, options)
 }
 
 func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
@@ -296,10 +291,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
-				if err := s.commitPendingUserSteer(stepID, options, &mismatchWarningCommitted); err != nil {
-					return llm.Request{}, err
-				}
-				return e.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
+				return s.buildActiveTurnRequestAtBoundary(ctx, stepID, options, &mismatchWarningCommitted)
 			},
 			func(delta llm.AssistantDelta) {
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
@@ -540,13 +532,10 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 }
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) (int, error) {
-	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
+	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections())
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
 		return 0, err
-	}
-	if result.disposition == userInjectionFlushStopped {
-		return 0, &queuedUserFlushStoppedError{}
 	}
 	if result.startedStep {
 		*mismatchWarningCommitted = false
@@ -555,18 +544,43 @@ func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options 
 }
 
 func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) error {
-	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
+	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections())
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
 		return err
-	}
-	if result.disposition == userInjectionFlushStopped {
-		return &queuedUserFlushStoppedError{}
 	}
 	if result.startedStep {
 		*mismatchWarningCommitted = false
 	}
 	return nil
+}
+
+func (s *defaultStepExecutor) buildActiveTurnRequestAtBoundary(
+	ctx context.Context,
+	stepID string,
+	options stepLoopOptions,
+	mismatchWarningCommitted *bool,
+) (llm.Request, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return llm.Request{}, err
+		}
+		if err := s.commitPendingUserSteer(stepID, options, mismatchWarningCommitted); err != nil {
+			return llm.Request{}, err
+		}
+		request, err := s.engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
+		if err != nil {
+			return llm.Request{}, err
+		}
+		// Request preparation may persist contract state. Reopen the boundary
+		// when mutations arrived during that work, then rebuild from their result.
+		if !s.engine.HasPendingRuntimeOperations() {
+			return request, nil
+		}
+		if err := s.engine.stepLifecycle.BeginAgentStepBoundary(ctx); err != nil {
+			return llm.Request{}, err
+		}
+	}
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response, options stepLoopOptions) (preparedCompletedResponse, error) {

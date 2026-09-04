@@ -88,7 +88,6 @@ func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 	if !m.ask.hasCurrent() || strings.TrimSpace(string(m.ask.current.prompt.PromptID)) != targetID {
 		return nil
 	}
-	continuationCmd := promptAnswerDeliveryContinuationCmd(m.ask.activeDelivery)
 	c.cancelActiveDelivery()
 	if len(m.ask.queue) > 0 {
 		next := m.ask.queue[0]
@@ -96,7 +95,7 @@ func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 		c.setActiveAsk(next)
 		m.activity = uiActivityQuestion
 		m.setInputMode(uiInputModeAsk)
-		return tea.Batch(m.scheduleCurrentQuestionProjection(), continuationCmd)
+		return m.scheduleCurrentQuestionProjection()
 	}
 	m.ask.current = nil
 	m.ask.currentToken = nextNonZeroToken(m.ask.currentToken)
@@ -114,7 +113,7 @@ func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 			m.activity = uiActivityIdle
 		}
 	}
-	return continuationCmd
+	return nil
 }
 
 func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -315,28 +314,10 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (c uiAskController) handleCtrlC() (tea.Model, tea.Cmd) {
 	m := c.model
-	if m.ask.activeDelivery != nil &&
-		m.ask.activeDelivery.continuation != nil &&
-		*m.ask.activeDelivery.continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
-		return m, nil
-	}
 	c.cancelActiveDelivery()
-	currentToken := m.ask.currentToken
-	accepted, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
-	runtimeCtrlCCmd := tea.Cmd(nil)
-	if m.ask.activeDelivery != nil {
-		continuation := promptAnswerDeliveryContinuationRuntimeCtrlC
-		m.ask.activeDelivery.continuation = &continuation
-	} else if accepted && (m.ask.currentToken != currentToken || !m.ask.hasCurrent()) && m.blocksRuntimeInput() {
-		_, runtimeCtrlCCmd = m.inputController().handleRuntimeCtrlC(nil)
-		runtimeCtrlCCmd = tea.Batch(runtimeCtrlCCmd, m.interruptedStatusNoticeCmd())
-	}
-	if hasNext {
-		m.activity = uiActivityQuestion
-	} else {
-		m.activity = uiActivityInterrupted
-	}
-	return m, tea.Batch(answerCmd, runtimeCtrlCCmd)
+	_, runtimeCtrlCCmd := m.inputController().handleRuntimeCtrlC(nil)
+	m.activity = uiActivityInterrupted
+	return m, tea.Batch(runtimeCtrlCCmd, m.interruptedStatusNoticeCmd())
 }
 
 func (c uiAskController) renderPriorityPromptLines() []askPromptLine {
@@ -498,7 +479,6 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 	if m == nil || !m.ask.activeDelivery.matches(result.key, result.generation) {
 		return nil
 	}
-	continuationCmd := promptAnswerDeliveryContinuationCmd(m.ask.activeDelivery)
 	if result.err == nil {
 		c.cancelActiveDelivery()
 		hasNext := c.finishDeliveredPrompt()
@@ -509,7 +489,7 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 		} else {
 			m.activity = uiActivityIdle
 		}
-		return continuationCmd
+		return nil
 	}
 	c.cancelActiveDelivery()
 	m.activity = uiActivityQuestion
@@ -517,22 +497,6 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 		return nil
 	}
 	return m.sendTransientStatusWithNoticeID(result.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-}
-
-func promptAnswerDeliveryContinuationCmd(delivery *activePromptAnswerDelivery) tea.Cmd {
-	if delivery == nil || delivery.continuation == nil {
-		return nil
-	}
-	switch *delivery.continuation {
-	case promptAnswerDeliveryContinuationRuntimeCtrlC:
-		return promptCtrlCContinuationCmd(delivery.key)
-	default:
-		panic(fmt.Sprintf("unknown prompt answer delivery continuation %d", *delivery.continuation))
-	}
-}
-
-func promptCtrlCContinuationCmd(key transcriptPromptKey) tea.Cmd {
-	return func() tea.Msg { return promptCtrlCContinuationMsg{key: key} }
 }
 
 func askVisibleOptions(req clientui.TranscriptPrompt) []string {

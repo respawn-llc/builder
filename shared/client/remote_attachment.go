@@ -17,7 +17,8 @@ type remoteProjectAttachmentIntent struct {
 }
 
 type remoteSessionAttachmentIntent struct {
-	sessionID string
+	sessionID          string
+	reattachCapability *string
 }
 
 type remoteAttachmentIntent struct {
@@ -40,10 +41,11 @@ type ProjectAttachment struct {
 }
 
 type remoteSessionAttachment struct {
-	projectID     string
-	workspaceID   string
-	workspaceRoot string
-	sessionID     string
+	projectID          string
+	workspaceID        string
+	workspaceRoot      string
+	sessionID          string
+	reattachCapability string
 }
 
 type remoteProjectAttachmentSelection struct {
@@ -94,6 +96,20 @@ func newRemoteSessionAttachmentIntent(sessionID string) (*remoteAttachmentIntent
 		return nil, errRemoteSessionIDRequired
 	}
 	return &remoteAttachmentIntent{session: &remoteSessionAttachmentIntent{sessionID: sessionID}}, nil
+}
+
+func newRemoteSessionReattachmentIntent(attachment remoteSessionAttachment) (*remoteAttachmentIntent, error) {
+	if err := validateRemoteAttachmentField("session ID", attachment.sessionID); err != nil {
+		return nil, err
+	}
+	if err := validateRemoteAttachmentField("Session reattach capability", attachment.reattachCapability); err != nil {
+		return nil, err
+	}
+	capability := attachment.reattachCapability
+	return &remoteAttachmentIntent{session: &remoteSessionAttachmentIntent{
+		sessionID:          attachment.sessionID,
+		reattachCapability: &capability,
+	}}, nil
 }
 
 func (i *remoteAttachmentIntent) projectRequest() (remoteProjectAttachmentIntent, bool) {
@@ -156,6 +172,9 @@ func (i *remoteAttachmentIntent) validateResponse(response remoteAttachment) err
 	if response.session.sessionID != request.sessionID {
 		return fmt.Errorf("session attach returned session %q, want %q", response.session.sessionID, request.sessionID)
 	}
+	if err := validateRemoteAttachmentField("Session reattach capability", response.session.reattachCapability); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -184,6 +203,12 @@ func validateReattachedBinding(expected *remoteAttachment, actual *remoteAttachm
 		return errors.New("unscoped remote reconnect unexpectedly attached")
 	case actual == nil:
 		return errors.New("attached remote reconnect omitted attachment")
+	case expected.session != nil &&
+		expected.project == nil &&
+		actual.session != nil &&
+		actual.project == nil &&
+		expected.session.sessionID == actual.session.sessionID:
+		return nil
 	case expected.equal(*actual):
 		return nil
 	default:

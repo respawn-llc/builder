@@ -30,5 +30,5 @@
 - `Tab` toggles between the option picker and freeform text entry; for Approvals, freeform is commentary for the selected decision. Toggling back preserves the typed draft for a non-Approval prompt and shows it dimmed below the options.
 - Freeform entry uses the same editing and clipboard behavior as the main composer.
 - Choosing the "Freeform answer" option with empty text enters freeform mode; submitting it with empty text is rejected with an error notice + bell.
-- `Esc` cancels any active answer delivery, then cancels the prompt (the agent receives a typed cancellation); `Ctrl+C` cancels any active answer delivery and the prompt, then routes to global runtime Ctrl+C handling (interrupt while busy).
+- `Esc` cancels any active answer delivery, then cancels the prompt so the agent receives a typed cancellation. `Ctrl+C` cancels only the client-side answer delivery and directly interrupts the prompt's exact Agent execution. The server interruption closes the pending prompt through the ordinary interrupted execution outcome. The TUI does not submit a prompt cancellation before Interrupt, wait for canceled answer delivery, or show that delivery's cancellation or deadline as an error.
 - There is no digit-jump on prompt options.

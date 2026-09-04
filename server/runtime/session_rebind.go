@@ -2,10 +2,33 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 )
+
+func (e *Engine) SteerSessionRebindFailureDiagnostic(cause error) (session.CommitReceipt, error) {
+	if cause == nil {
+		return session.CommitReceipt{}, errors.New("Session rebind failure cause is required")
+	}
+	return e.steerRuntimeWithCommitReceipt(
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeErrorFeedback),
+				Content: textutil.Value(fmt.Sprintf(
+					"Session move failed before its destination could be applied: %s\nThe Session remains in its previous Project and Working Directory.",
+					cause,
+				)),
+			}},
+		),
+	)
+}
 
 func (e *Engine) SteerSessionRebindFailure(reminder session.SessionRebindReminder) (session.CommitReceipt, error) {
 	normalized, err := session.NormalizeSessionRebindReminder(reminder)

@@ -1301,8 +1301,13 @@ func (a *Authority) interruptCurrentAgentExecution(
 		sessionID,
 		withoutExecution,
 		func(_ context.Context, engine *runtime.Engine, execution *execution) error {
+			promptPending := len(execution.prompts.pending) != 0
 			var err error
 			interrupted, err = interrupt(engine)
+			if err == nil && !interrupted && promptPending {
+				err = engine.PersistInterruption()
+				interrupted = err == nil
+			}
 			if err == nil && interrupted {
 				execution.cancel()
 			}

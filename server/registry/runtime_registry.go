@@ -710,20 +710,41 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	}
 	id := resource.SessionID().String()
 	entry := r.authorityEntryByRef(resource)
+	if entry == nil {
+		return fmt.Errorf(
+			"publish pending prompt %q for session %s generation %d: %w",
+			req.ID,
+			resource.SessionID(),
+			resource.Generation(),
+			serverapi.ErrStreamUnavailable,
+		)
+	}
 	var snapshot PendingPromptSnapshot
+	var wakeErr error
+	entry.publicationMu.Lock()
 	projected := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
 		var admitted bool
 		snapshot, admitted = r.pendingPrompts.Begin(id, resource, scope.ID(), req, createdAt)
 		return admitted
 	})
-	if projected && entry != nil {
+	if projected {
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 		r.publishAttentionPending(id, snapshot)
-		wakeErr := r.publishTaskQuestionWaitingForScope(scope, snapshot)
-		r.publishCurrentRuntimeActivity(id)
-		if wakeErr != nil {
-			return wakeErr
-		}
+		wakeErr = r.publishTaskQuestionWaitingForScope(scope, snapshot)
+	}
+	entry.publicationMu.Unlock()
+	if !projected {
+		return fmt.Errorf(
+			"publish pending prompt %q for session %s generation %d: %w",
+			req.ID,
+			resource.SessionID(),
+			resource.Generation(),
+			serverapi.ErrStreamUnavailable,
+		)
+	}
+	r.publishCurrentRuntimeActivity(id)
+	if wakeErr != nil {
+		return wakeErr
 	}
 	return nil
 }
