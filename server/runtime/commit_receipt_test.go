@@ -132,6 +132,47 @@ func TestRuntimeSetterCallerCancellationStopsOnlyWait(t *testing.T) {
 	}
 }
 
+func TestPreparedChatSettingsReturnAfterRuntimeAcceptance(t *testing.T) {
+	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), &fakeClient{}, Config{
+		Model:            "gpt-5",
+		QuestionsEnabled: textutil.Value(true),
+	})
+	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("pause Runtime FIFO: %v", err)
+	}
+
+	settings := session.ChatSettings{
+		Thinking:       engine.ThinkingLevel(),
+		Fast:           engine.FastModeEnabled(),
+		Supervisor:     engine.ReviewerFrequency(),
+		Questions:      false,
+		AutoCompaction: engine.AutoCompactionEnabled(),
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		accepted <- engine.AcceptPreparedChatSettings(settings)
+	}()
+
+	select {
+	case err := <-accepted:
+		if err != nil {
+			t.Fatalf("accept prepared Chat settings: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("prepared Chat settings waited for the paused Runtime FIFO")
+	}
+	if !engine.QuestionsEnabled() {
+		t.Fatal("prepared Chat settings applied before the paused Runtime FIFO drained")
+	}
+
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatalf("drain accepted Chat settings: %v", err)
+	}
+	if engine.QuestionsEnabled() {
+		t.Fatal("accepted Chat settings did not apply after the Runtime FIFO drained")
+	}
+}
+
 func waitForPendingRuntimeOperation(t *testing.T, engine *Engine) {
 	t.Helper()
 	deadline := time.After(runtimeTestSynchronizationTimeout)
