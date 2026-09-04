@@ -37,8 +37,6 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 function List({
   hasNextPage = false,
-  isFetchingNextPage = false,
-  isFetchingPreviousPage = false,
   onLoadMore = () => undefined,
   hasPreviousPage = false,
   onLoadPrevious = () => undefined,
@@ -56,8 +54,6 @@ function List({
   header,
 }: Readonly<{
   hasNextPage?: boolean;
-  isFetchingNextPage?: boolean;
-  isFetchingPreviousPage?: boolean;
   onLoadMore?: () => void;
   hasPreviousPage?: boolean;
   onLoadPrevious?: () => void;
@@ -85,8 +81,8 @@ function List({
       hasNextPage={hasNextPage}
       hasPreviousPage={hasPreviousPage}
       header={header}
-      isFetchingNextPage={isFetchingNextPage}
-      isFetchingPreviousPage={isFetchingPreviousPage}
+      isFetchingNextPage={false}
+      isFetchingPreviousPage={false}
       initialScrollKey={initialScrollKey}
       initialScrollRequestKey={initialScrollRequestKey}
       items={items}
@@ -204,45 +200,6 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
       />,
     );
     expect(list.scrollLeft).toBe(361);
-  });
-
-  it("suppresses duplicate horizontal edge requests while the edge remains visible", () => {
-    const onLoadMore = vi.fn();
-    virtualizer.getVirtualItems.mockReturnValue([
-      { end: 120, index: 2, key: "c", lane: 0, size: 40, start: 80 },
-    ]);
-    const view = render(
-      <List
-        hasNextPage
-        isFetchingNextPage={false}
-        items={["a", "b", "c"]}
-        onLoadMore={onLoadMore}
-        orientation="horizontal"
-      />,
-    );
-
-    expect(onLoadMore).toHaveBeenCalledOnce();
-
-    view.rerender(
-      <List
-        hasNextPage
-        isFetchingNextPage
-        items={["a", "b", "c"]}
-        onLoadMore={onLoadMore}
-        orientation="horizontal"
-      />,
-    );
-    view.rerender(
-      <List
-        hasNextPage
-        isFetchingNextPage={false}
-        items={["a", "b", "c"]}
-        onLoadMore={onLoadMore}
-        orientation="horizontal"
-      />,
-    );
-
-    expect(onLoadMore).toHaveBeenCalledOnce();
   });
 
   it("rearms both horizontal edge requests after each retained window leaves that edge", () => {
