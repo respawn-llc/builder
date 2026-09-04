@@ -581,9 +581,8 @@ describe("ProjectTasksSurface", () => {
 
     renderSurface();
 
-    const alert = screen.getByRole("alert");
-    expect(alert).toBeInTheDocument();
-    expect(within(alert).getByRole("button")).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(countsError.message);
+    expect(screen.getByRole("button", { name: appI18n.t("app.retry") })).toBeInTheDocument();
     expect(
       screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
     ).not.toBeInTheDocument();
