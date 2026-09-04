@@ -108,7 +108,11 @@ function ProjectContentTabs({
               viewMemory={taskListViewMemory}
             />
           ) : (
-            <SessionList query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery} />
+            <SessionList
+              category={tab === "sessions" ? "main" : "subagent"}
+              projectID={projectID}
+              query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery}
+            />
           )}
         </OverlappingCrossfade>
       </div>
@@ -117,8 +121,12 @@ function ProjectContentTabs({
 }
 
 function SessionList({
+  category,
+  projectID,
   query,
 }: Readonly<{
+  category: "main" | "subagent";
+  projectID: string;
   query: Readonly<{
     data:
       | Readonly<{
@@ -135,6 +143,7 @@ function SessionList({
   }>;
 }>) {
   const { t } = useTranslation();
+  const navigation = useAppNavigation();
   const sessions = query.data?.pages.flatMap((page) => page.sessions) ?? [];
   const initialBoundary = directionalBoundary({
     failed: query.isError,
@@ -174,7 +183,13 @@ function SessionList({
       renderItem={(session) => (
         <HomeListCard
           ariaLabel={session.name ?? session.firstPromptPreview ?? session.id}
-          onClick={unavailableSessionAction}
+          onClick={() => {
+            void navigation.openSessionChat({
+              catalogOrigin: { category },
+              projectID,
+              sessionID: session.id,
+            });
+          }}
         >
           <span className="truncate text-sm text-[var(--color-muted)]">
             {formatRelativeTime(session.updatedAt)}
@@ -187,8 +202,4 @@ function SessionList({
       )}
     />
   );
-}
-
-function unavailableSessionAction(): void {
-  return;
 }

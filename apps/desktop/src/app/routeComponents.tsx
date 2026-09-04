@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { BoardRoute } from "@/features/board";
+import { ChatShell } from "@/features/chat";
 import { createProjectTasksViewMemory, HomeRoute, ProjectTasksSurface } from "@/features/home";
 import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
@@ -11,6 +12,7 @@ import { AppChrome } from "./AppChrome";
 import {
   readBrowserStorage,
   readLastProjectRoute,
+  sessionChatRoutePath,
   SidebarRootOwner,
   writeBrowserStorage,
   writeLastProjectRoute,
@@ -35,6 +37,7 @@ const projectRouteApi = getRouteApi("/projects/$projectId");
 const projectTasksRouteApi = getRouteApi("/projects/$projectId/tasks");
 const workflowEditorRouteApi = getRouteApi("/workflows/$workflowId/editor");
 const taskRouteApi = getRouteApi("/tasks/$taskId");
+const chatRouteApi = getRouteApi(sessionChatRoutePath);
 
 const routeRestoreSessionKey = "desktop.routeRestoreChecked";
 let routeRestoreCheckedFallback = false;
@@ -191,4 +194,20 @@ export function TaskRoute() {
   const params = taskRouteApi.useParams();
   useWindowChromeTitle(t("task.title"));
   return <StandaloneTaskRoute taskId={params.taskId} />;
+}
+
+const emptyChatContent = () => null;
+const emptyChatComposer = () => null;
+
+export function ChatRoute() {
+  const params = chatRouteApi.useParams();
+  return (
+    <ChatShell
+      composer={emptyChatComposer}
+      content={emptyChatContent}
+      selectedSession={{ projectID: params.projectId, sessionID: params.sessionId }}
+      sessionName={null}
+      state={{ kind: "ready" }}
+    />
+  );
 }

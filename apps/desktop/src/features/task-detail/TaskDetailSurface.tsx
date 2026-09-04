@@ -15,6 +15,7 @@ import { ProjectLabelsProvider, TaskLabelAssignmentProvider } from "@/shared/lab
 import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
 import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
+import type { TaskDetailSessionChatEntry } from "./taskDetailSessionChat";
 import { useTaskActivity, useTaskAttention, useTaskComments, useTaskDetail } from "./useTaskDetailData";
 
 type TaskDetailSurfaceCommonProps = Readonly<{
@@ -22,6 +23,7 @@ type TaskDetailSurfaceCommonProps = Readonly<{
   enabled: boolean;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   retainedState?: unknown;
   sidebarDestination?: Extract<SidebarDestination, { kind: "taskDetail" }> | undefined;
@@ -47,6 +49,7 @@ export function TaskDetailSurface({
   navigator,
   onDeleteDismiss,
   onMutated,
+  openSessionChat,
   openSidebar,
   retainedState,
   sidebarDestination,
@@ -94,6 +97,7 @@ export function TaskDetailSurface({
           navigator={navigator}
           onDeleteDismiss={deleteDismissal}
           onMutated={onMutated}
+          openSessionChat={openSessionChat}
           openSidebar={openSidebar}
           retainedState={retainedState}
           sidebarDestination={sidebarDestination}

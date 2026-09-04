@@ -1,23 +1,51 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider } from "@tanstack/react-router";
 import { afterEach, expect, it, vi } from "vitest";
 
+import { createTestServices, TestAppProviders } from "@/test-support/app-services";
+import { sessionChatRoutePath } from "@/app-facade";
 import { createAppRouter } from "./routes";
+import { routeUsesEdgeToEdgeLayout } from "./routeLayout";
+
+const fixture = vi.hoisted(() => ({
+  triggerCatalogNavigation: false,
+}));
 
 vi.mock("./routeComponents", async () => {
   const { Outlet } = await import("@tanstack/react-router");
+  const { useEffect } = await import("react");
+  const { useAppNavigation } = await import("@/app-facade");
   return {
     HomeShellRoute: () => null,
+    ChatRoute: () => <div data-testid="standalone-chat-route" />,
     ProjectRoute: () => null,
-    ProjectTasksRoute: () => <div data-testid="standalone-project-tasks-route" />,
+    ProjectTasksRoute: () =>
+      fixture.triggerCatalogNavigation ? (
+        <CatalogNavigationProbe />
+      ) : (
+        <div data-testid="standalone-project-tasks-route" />
+      ),
     RootRoute: () => <Outlet />,
     TaskRoute: () => null,
     WorkflowEditorShellRoute: () => null,
     WorkflowLibraryShellRoute: () => null,
   };
+
+  function CatalogNavigationProbe() {
+    const navigation = useAppNavigation();
+    useEffect(() => {
+      void navigation.openSessionChat({
+        catalogOrigin: { category: "main" },
+        projectID: "project-1",
+        sessionID: "session-1",
+      });
+    }, [navigation]);
+    return <div data-testid="standalone-project-tasks-route" />;
+  }
 });
 
 afterEach(() => {
+  fixture.triggerCatalogNavigation = false;
   window.history.replaceState(null, "", "/");
 });
 
@@ -48,4 +76,52 @@ it("opens the standalone Project Task List route from its public URL", async () 
   render(<RouterProvider router={createAppRouter()} />);
 
   expect(await screen.findByTestId("standalone-project-tasks-route")).toBeInTheDocument();
+});
+
+it("opens the development-gated Session Chat route and uses ordinary Back", async () => {
+  window.history.replaceState(null, "", "/projects/project-1/tasks");
+  const router = createAppRouter();
+  render(<RouterProvider router={router} />);
+
+  await router.navigate({
+    to: sessionChatRoutePath,
+    params: { projectId: "project-1", sessionId: "session-1" },
+  });
+
+  expect(await screen.findByTestId("standalone-chat-route")).toBeInTheDocument();
+  expect(window.location.pathname).toBe("/projects/project-1/sessions/session-1");
+
+  router.history.back();
+  await waitFor(() => {
+    expect(window.location.pathname).toBe("/projects/project-1/tasks");
+  });
+});
+
+it("classifies Session Chat as edge-to-edge", () => {
+  expect(routeUsesEdgeToEdgeLayout("/projects/project-1/sessions/session-1")).toBe(true);
+});
+
+it("opens a direct Session Chat URL without a catalog origin", async () => {
+  window.history.replaceState(null, "", "/projects/project-1/sessions/session-1");
+  const router = createAppRouter();
+  render(<RouterProvider router={router} />);
+
+  expect(await screen.findByTestId("standalone-chat-route")).toBeInTheDocument();
+  expect(Object.hasOwn(router.state.location.state, "sessionChat")).toBe(false);
+});
+
+it("transports a catalog origin through the real AppNavigation route transition", async () => {
+  fixture.triggerCatalogNavigation = true;
+  window.history.replaceState(null, "", "/projects/project-1/tasks");
+  const router = createAppRouter();
+  render(
+    <TestAppProviders services={createTestServices([])}>
+      <RouterProvider router={router} />
+    </TestAppProviders>,
+  );
+
+  expect(await screen.findByTestId("standalone-chat-route")).toBeInTheDocument();
+  expect(router.state.location.state).toMatchObject({
+    sessionChat: { catalogOrigin: { category: "main" } },
+  });
 });

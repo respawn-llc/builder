@@ -18,6 +18,7 @@ import {
 } from "@/ui";
 import { cx, fieldIslandInputClassName } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
+import type { TaskDetailSessionChatEntry } from "./taskDetailSessionChat";
 import { ellipsizeActionTarget } from "./ellipsizeActionTarget";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
 import { TaskDetailLabels } from "./TaskDetailLabels";
@@ -200,10 +201,12 @@ export function PropertiesIsland({
   detail,
   disabled,
   mutations,
+  openSessionChat,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
 }>) {
   const { t } = useTranslation();
   const openExternalLink = useOpenExternalLink();
@@ -239,7 +242,12 @@ export function PropertiesIsland({
           <TaskCurrentNodeSelectionProperties key={node.nodeID} node={node} />
         ))}
       </dl>
-      <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
+      <TaskActionPanel
+        detail={detail}
+        disabled={disabled}
+        mutations={mutations}
+        openSessionChat={openSessionChat}
+      />
     </Island>
   );
 }
@@ -268,10 +276,12 @@ function TaskActionPanel({
   detail,
   disabled,
   mutations,
+  openSessionChat,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
 }>) {
   const { t } = useTranslation();
   const interruptTarget = taskInterruptTarget(detail);
@@ -292,7 +302,7 @@ function TaskActionPanel({
         ) : detail.actions.canResume ? (
           <TaskResumeButton disabled={disabled} />
         ) : null}
-        <TaskOpenButtons detail={detail} disabled={disabled} />
+        <TaskOpenButtons detail={detail} disabled={disabled} openSessionChat={openSessionChat} />
         {detail.actions.canInterrupt ? (
           <Button
             aria-label={interruptFullLabel}
@@ -311,7 +321,15 @@ function TaskActionPanel({
   );
 }
 
-function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; disabled: boolean }>) {
+function TaskOpenButtons({
+  detail,
+  disabled,
+  openSessionChat,
+}: Readonly<{
+  detail: TaskDetail;
+  disabled: boolean;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
+}>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const [openError, setOpenError] = useState("");
@@ -336,22 +354,42 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
       {detail.liveSessions.map((session) => {
         const target = taskLiveSessionTarget(session);
         const fullLabel = t("task.openInCli", { name: target });
+        const chatLabel = t("task.openChat", { name: target });
         return (
-          <Button
-            aria-label={fullLabel}
-            disabled={disabled}
-            key={session.sessionID}
-            onClick={() => {
-              setOpenError("");
-              void openInCli(session.sessionID).catch((cause: unknown) => {
-                setOpenError(errorMessage(cause));
-              });
-            }}
-            title={fullLabel}
-            variant="secondary"
-          >
-            {t("task.openInCli", { name: ellipsizeActionTarget(target) })}
-          </Button>
+          <span className="contents" key={session.sessionID}>
+            <Button
+              aria-label={fullLabel}
+              disabled={disabled}
+              onClick={() => {
+                setOpenError("");
+                void openInCli(session.sessionID).catch((cause: unknown) => {
+                  setOpenError(errorMessage(cause));
+                });
+              }}
+              title={fullLabel}
+              variant="secondary"
+            >
+              {t("task.openInCli", { name: ellipsizeActionTarget(target) })}
+            </Button>
+            {openSessionChat === undefined ? null : (
+              <Button
+                aria-label={chatLabel}
+                disabled={disabled}
+                onClick={() => {
+                  setOpenError("");
+                  void openSessionChat({ projectID: detail.projectID, sessionID: session.sessionID }).catch(
+                    (cause: unknown) => {
+                      setOpenError(errorMessage(cause));
+                    },
+                  );
+                }}
+                title={chatLabel}
+                variant="secondary"
+              >
+                {t("task.openChat", { name: ellipsizeActionTarget(target) })}
+              </Button>
+            )}
+          </span>
         );
       })}
       {canOpenScript

@@ -7,6 +7,11 @@
 - Session discovery is always scoped to a selected Project; there is no unbounded all-Project session list.
 - All desktop presentations of a Session control the same server-authoritative Session. Opening the same Session in another presentation neither creates separate runtime ownership nor forks client state.
 - Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.
+- A Task attention card uses a header with the muted Task key and a bold flexible-width title, followed by a Chat icon and chevron when the attention item identifies a Session.
+- Selecting a Chat-enabled attention-card header opens that Session at its latest transcript position.
+- Selecting any target outside a Chat-enabled attention-card header opens Task Detail.
+- An attention card without a Session identity has no Chat action, Chat hover state, Chat icon, or chevron, and every target opens Task Detail.
+- Attention-card description text uses the secondary presentation, and its date uses the muted presentation at the bottom of the card.
 - Chat can appear as a full-page destination, a separate window, or an adaptive detail presentation.
 - The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
 - Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
@@ -113,15 +118,19 @@
 - When the operator has scrolled away from the tail, incoming content preserves the viewport. A `Jump to latest` control appears when a newer server segment exists or when the viewport is more than 80px from the end of the loaded newest segment. The control has no unseen count. Activating it fetches the newest segment in one request when necessary and never walks intermediate segments.
 - `Jump to latest` is a 40px circular glass control with a 24px downward arrow and 12px end and bottom spacing above the composer. It uses scale motion when it appears or disappears; reduced motion changes visibility immediately.
 - At the tail, new assistant content, committed rows, and composer-height changes keep the view at the tail. Reduced motion removes movement animation.
-- User, committed assistant, and live assistant content use the same rich Markdown presentation. It sanitizes raw HTML and applies the specified link behavior. Completed supported code is syntax-highlighted and selectable; incomplete code remains selectable plain text until the Markdown parser reports the fence complete. Diagrams, math, and built-in Markdown controls are unavailable.
-- A live assistant message appears only after its first nonempty content arrives. It presents live text with the specified character motion and no caret; completed messages use static presentation. Reduced motion shows characters immediately.
+- User, committed assistant, and live assistant content use the same approved rich Markdown presentation. It sanitizes raw HTML and applies the approved link behavior. Completed supported code is syntax-highlighted and selectable; incomplete code remains selectable plain text until the Markdown parser reports the fence complete. Diagrams, math, and built-in Markdown controls are unavailable.
+- A live assistant message appears only after its first nonempty content arrives. It presents live text with the approved character motion and no caret; completed messages use static presentation. Reduced motion shows characters immediately.
 - A live Chat opened mid-response may animate already received eligible text once, then only newly arriving text. Each assistant update immediately changes the one visible live message; Chat does not alter, repair, or buffer model text.
-- Live Markdown must preserve safe scrolling and responsive interaction for long output, incomplete Markdown, tables and lists, hostile links and HTML, and unfinished code. When it cannot satisfy those requirements, streaming uses selectable plain text and the completed message uses the shared static Markdown presentation.
+- Live Markdown is available only when it meets the approved safety, scrolling, responsiveness, and product-review requirements for long output, incomplete Markdown, tables and lists, hostile links and HTML, and unfinished code. If it does not, streaming uses selectable plain text and the completed message uses the shared static Markdown presentation.
 
 ## Chat Presentation
 
-- Chat is edge-to-edge. Existing Session hydration shows a compact centered loading state while retaining application chrome; transcript and composer appear together only after authoritative hydration. On initial failure, the same position shows an error with Retry and Back remains available. New Chat does not show this loading state.
+- Chat is edge-to-edge. Existing Session transcript hydration shows the generic loading state inside the transcript area while the composer remains visible and usable. When Desktop cannot load the selected Session, it replaces the Chat body with the generic Error state and Retry while application chrome remains mounted. New Chat does not show the transcript loading state.
 - Application chrome owns Session title and Back. Chat has neither an in-content title nor a second Back action.
+- Back uses the application's ordinary navigation-history availability and behavior.
+- When a Session has no authoritative name, Chat chrome leaves its title area blank.
+- Initial existing-Session loading leaves the Chat chrome title area blank until the authoritative Session name arrives.
+- A separate Chat window shows the Session title without Back or a separate-window action and relies on native window controls to close.
 - Transcript content is at most 1200px wide. User and assistant messages are content-sized up to 1000px, with normal wrapping. User messages align right and assistant messages align left; there are no avatars or role labels.
 - User messages, assistant commentary, and assistant final answers are the only durable transcript islands. Tools, Reasoning Traces, context, diagnostics, notices, and every other durable non-conversational item use borderless inline disclosure or tool-row presentation.
 - Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
@@ -183,7 +192,7 @@
 ## Composer And Pending Work
 
 - Send starts a user turn while idle and Steers the active turn while work is running. A Steer takes effect at the next safe step boundary. Queue is a separate action that starts after active work completes; when idle, queued work starts immediately.
-- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation.
+- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
 - `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
 - `/compact` enters Pending Work in accepted Session mutation order.
 - Pending Work shows canonical `/compact` followed by normalized guidance when guidance is present.
@@ -195,6 +204,8 @@
 - Queue has no visible button. While work is running and an empty composer can queue work, its placeholder is `Ctrl+Enter to queue`.
 - While work runs, an icon-only Stop action is visible beside Send/Steer. Stop clears all Queue and Steer items.
 - The composer grows to one-third of available Chat height, then scrolls internally. Up and Down recall prompt history only at whole-buffer boundaries; returning below the newest history item restores the pre-history draft, and editing recalled text detaches it from history.
+- `@` path suggestions search the Session effective working directory. They include files, derived directories, and hidden paths; exclude `.git`; preserve server fuzzy order; and never scan the desktop filesystem or transfer the whole repository.
+- At most seven path suggestions are visible. Up and Down select them; Enter, Tab, or pointer activation inserts the exact `@`-prefixed repository-relative path, with `/` for a directory, without sending. Escape hides suggestions until the query changes.
 - Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in Queue order, then Steer items in server acceptance order across human messages, manual compaction, and Worktree transitions. Each item shows no more than two lines and has an accessible Discard action.
 - Normal human-message, manual-compaction, and Active-Runtime Worktree-transition admission rejects with a typed capacity failure when the server independently observes at least 100 combined pending Queue and Steer items. Rejection changes no Pending Work membership and leaves the initiating input unchanged.
 - Concurrent normal admissions may pass below the limit and temporarily exceed 100 items. Restoring definitely uncommitted human input may also exceed 100 items. Kent never evicts accepted work to enforce the limit, and later normal admission rejects while the independently observed total remains at least 100.
@@ -500,8 +511,11 @@
 - Desktop never replays an ambiguous Session mutation after connection loss. A later explicit operator action is a new operation; reconnect reopens the ordered transcript subscription and independently reads the latest completed Pending Work, draft, runtime, prompt, Goal, Process, and Worktree projections from their owners.
 - A transcript sequence gap, subscription loss, or buffered-stream failure discards provisional live content and starts Scratch Rehydration. Already committed transcript content never becomes fake empty or idle state.
 - Scratch Rehydration uses the ordinary sequenced transcript hydration and independent owner reads. It adds no client transcript repair, duplicate suppression, history rewrite, freshness fence, or global snapshot/replay mechanism.
-- Loading a materialized Session uses the compact centered Chat loading state. Inspection, runtime activation, transcript hydration, or draft-load failure uses the matching compact Error state with Retry while chrome Back remains available.
-- Retry repeats the complete ordinary Session open path. It does not retry only one guessed failing sub-operation and adds no target-repair behavior.
+- Initial existing-Session transcript loading and failure use the transcript area's generic loading or Error state while the composer remains visible and usable.
+- Initial failure to load the selected Session or its draft uses the generic whole-Chat Error state with Retry while application chrome remains mounted.
+- When opening from a Session catalog row reports that the Session is unavailable, Chat uses the generic whole-Chat Error state and refreshes only that row's owning Session category so the stale row is absent when the operator returns.
+- When an unavailable Session was opened without a Session catalog origin, Chat uses the generic whole-Chat Error state without refreshing an unrelated Session category.
+- Initial Retry repeats only its failed load and adds no target-repair behavior.
 - A failed refresh after Chat is already hydrated preserves the last server-owned visible projections. Desktop surfaces the failure through the owning global connection or operation error presentation and never fabricates empty state.
 - Older/newer transcript page failure affects only that boundary row. Loaded content remains usable and Retry repeats the same opaque cursor request.
 - A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to the owning operation contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
@@ -519,4 +533,4 @@
 - Desktop replaces terminal interaction mechanics with desktop controls without removing the capability they exposed.
 - Desktop Chat provides no screen-reader transcript model, streaming announcements, ARIA-specific interaction architecture, or blind-user interaction flow.
 - Shared UI-kit components keep their ordinary incidental semantics. Keyboard shortcuts, functional focus transitions, Copy/select behavior, resizable-window layouts, and explicitly specified reduced-motion behavior remain product mechanics rather than a separate accessibility program.
-- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment.
+- Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment. `@` workspace references are paths, not attachments.

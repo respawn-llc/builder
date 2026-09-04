@@ -4,13 +4,20 @@ import type { SidebarDestination } from "@/app-facade";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 import { SidebarDestinationView } from "./sidebarDestinations";
 import { sidebarDestinationPolicy } from "./sidebarDestinationPolicy";
+import type { TaskDetailSessionChatEntry } from "@/features/task-detail";
+
+type SidebarTaskDetailTestProps = Readonly<{
+  openSessionChat?: TaskDetailSessionChatEntry;
+}>;
 const headerAction = vi.hoisted(() => vi.fn<(action: unknown) => void>());
 const fixture = vi.hoisted(() => ({
   copyText: vi.fn(async () => undefined),
   openWindow: vi.fn(async () => undefined),
   openProject: vi.fn(async () => undefined),
   openWorkflowEditor: vi.fn(async () => undefined),
+  openSessionChat: vi.fn(async () => undefined),
   push: vi.fn(),
+  taskDetailProps: vi.fn<(props: SidebarTaskDetailTestProps) => void>(),
   workflowEditorProps: vi.fn<(props: unknown) => void>(),
   newTaskProps: vi.fn<(props: unknown) => void>(),
 }));
@@ -18,6 +25,7 @@ vi.mock("@/app-facade", () => ({
   sidebarTitle: () => "",
   useAppNavigation: () => ({
     openProject: fixture.openProject,
+    openSessionChat: fixture.openSessionChat,
     openWorkflowEditor: fixture.openWorkflowEditor,
   }),
   useAppServices: () => ({
@@ -31,7 +39,10 @@ vi.mock("@/app-facade", () => ({
   useStatusController: () => ({ push: fixture.push }),
 }));
 vi.mock("@/features/task-detail", () => ({
-  TaskDetailSurface: () => <div />,
+  TaskDetailSurface: (props: SidebarTaskDetailTestProps) => {
+    fixture.taskDetailProps(props);
+    return <div />;
+  },
 }));
 vi.mock("@/features/project-edit", () => ({
   ProjectDeleteButton: () => <div />,
@@ -234,6 +245,29 @@ describe("Sidebar destination completion ownership", () => {
     render(action);
     fireEvent.click(screen.getByRole("button", { name: "workflowLibrary.newWorkflow" }));
     expect(navigator.replace).toHaveBeenCalledWith({ ...destination, creating: true });
+  });
+  it("provides Chat entry for main-window Task Detail and suppresses it after a stale close", async () => {
+    const destination = { kind: "taskDetail", taskID: "task-1" } as const;
+    const navigator = mountDestination(destination);
+    const props = fixture.taskDetailProps.mock.lastCall?.[0];
+    if (props?.openSessionChat === undefined) throw new Error("Expected sidebar Chat entry.");
+
+    await props.openSessionChat({ projectID: "project-1", sessionID: "session-1" });
+    expect(navigator.close).toHaveBeenCalledOnce();
+    expect(fixture.openSessionChat).toHaveBeenCalledWith({
+      projectID: "project-1",
+      sessionID: "session-1",
+    });
+
+    const stale = createTestSidebarNavigator({ close: vi.fn(() => "stale" as const) });
+    mountDestination(destination, stale);
+    const staleProps = fixture.taskDetailProps.mock.lastCall?.[0];
+    if (staleProps?.openSessionChat === undefined) {
+      throw new Error("Expected stale sidebar Chat entry.");
+    }
+    await staleProps.openSessionChat({ projectID: "project-1", sessionID: "session-2" });
+    expect(stale.close).toHaveBeenCalledOnce();
+    expect(fixture.openSessionChat).toHaveBeenCalledOnce();
   });
   it.each([
     {
