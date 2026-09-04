@@ -340,10 +340,14 @@ func (e *Engine) waitQueuedUserAutoDrainAllowed(ctx context.Context) error {
 }
 
 func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
-	if strings.TrimSpace(text) == "" {
-		return UserTurnResult{}, nil, errors.New("empty message")
+	return e.SubmitUserInputOrSteerWithAcceptance(ctx, plainQueuedUserInput(text), accept)
+}
+
+func (e *Engine) SubmitUserInputOrSteerWithAcceptance(ctx context.Context, input QueuedUserInput, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+	if err := input.Validate(); err != nil {
+		return UserTurnResult{}, nil, err
 	}
-	item, err := e.QueueUserMessageForAutoDrainWithAcceptance(ctx, text, accept)
+	item, err := e.QueueUserInputForAutoDrainWithAcceptance(ctx, input, accept)
 	if err != nil {
 		return UserTurnResult{}, nil, err
 	}
@@ -351,11 +355,19 @@ func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, tex
 }
 
 func (e *Engine) QueueUserMessageForAutoDrain(ctx context.Context, text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, true, nil)
+	return e.QueueUserInputForAutoDrain(ctx, plainQueuedUserInput(text))
 }
 
 func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, true, accept)
+	return e.QueueUserInputForAutoDrainWithAcceptance(ctx, plainQueuedUserInput(text), accept)
+}
+
+func (e *Engine) QueueUserInputForAutoDrain(ctx context.Context, input QueuedUserInput) (QueuedUserMessage, error) {
+	return e.queueUserInput(ctx, input, true, true, nil)
+}
+
+func (e *Engine) QueueUserInputForAutoDrainWithAcceptance(ctx context.Context, input QueuedUserInput, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueUserInput(ctx, input, true, true, accept)
 }
 
 func (e *Engine) HasQueuedUserWork() bool {

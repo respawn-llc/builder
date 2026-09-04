@@ -138,7 +138,7 @@ type messageLifecycle interface {
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	PendingUserMessages() []QueuedUserMessage
 	PendingUserMessageEntries() []queuedUserMessage
-	QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
+	QueueUserMessage(input QueuedUserInput, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool)
 	HasPendingUserInjections() bool

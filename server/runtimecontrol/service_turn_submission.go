@@ -20,6 +20,13 @@ type userTurnProjection struct {
 	HistoryText   string
 }
 
+func (p userTurnProjection) queuedInput() runtime.QueuedUserInput {
+	return runtime.QueuedUserInput{
+		ExecutionText:         p.ExecutionText,
+		CanonicalPresentation: p.HistoryText,
+	}
+}
+
 func queuedUserTurnResponse(compacted bool, queueItemID string) serverapi.RuntimeSubmitUserTurnResponse {
 	return serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, ResultKind: clientui.UserTurnResultKindQueued, Steered: true, QueueItemID: queueItemID}
 }
@@ -129,9 +136,9 @@ func (s *Service) submitUserTurn(
 			}
 		}
 		if compactionBusy {
-			queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(
+			queued, queueErr := engine.QueueUserInputForAutoDrainWithAcceptance(
 				runCtx,
-				projection.ExecutionText,
+				projection.queuedInput(),
 				accept,
 			)
 			if queueErr != nil {
@@ -140,9 +147,9 @@ func (s *Service) submitUserTurn(
 			response = queuedUserTurnResponse(compacted, queued.ID)
 			return acceptedCompactionErr
 		}
-		outcome, queued, err := engine.SubmitUserMessageOrSteerWithAcceptance(
+		outcome, queued, err := engine.SubmitUserInputOrSteerWithAcceptance(
 			runCtx,
-			projection.ExecutionText,
+			projection.queuedInput(),
 			accept,
 		)
 		if err != nil {
@@ -223,7 +230,7 @@ func (s *Service) submitUserTurn(
 		}
 	}
 	if attempt.Accepted() {
-		s.recordAcceptedUserTurnHistory(request, projection)
+		_ = s.recordAcceptedUserTurnHistory(request, projection)
 	}
 	return response, err
 }
@@ -231,13 +238,15 @@ func (s *Service) submitUserTurn(
 func (s *Service) recordAcceptedUserTurnHistory(
 	request sessionUserTurnRequest,
 	projection userTurnProjection,
-) {
+) error {
 	if _, err := s.recordPromptHistory(context.Background(), request.SessionID, projection.HistoryText); err != nil {
-		_ = s.withRuntime(context.Background(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		reportErr := s.withRuntime(context.Background(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			engine.ReportPromptHistoryPersistError(err.Error())
 			return nil
 		})
+		return errors.Join(err, reportErr)
 	}
+	return nil
 }
 
 func (s *Service) runPreSubmitCompaction(

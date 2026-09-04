@@ -67,11 +67,16 @@ func (a *steerRuntimeAttachment) Release(
 }
 
 type steerAdmission struct {
-	request  serverapi.RuntimeSubmitUserTurnRequest
-	result   serverapi.RuntimeSubmitUserTurnResponse
-	accepted bool
-	err      error
-	onAdmit  func()
+	request       serverapi.RuntimeSubmitUserTurnRequest
+	result        serverapi.RuntimeSubmitUserTurnResponse
+	accepted      bool
+	err           error
+	onAdmit       func()
+	queueRequest  serverapi.RuntimeSubmitUserTurnRequest
+	queueItemID   runtimeids.QueueItemID
+	queueAccepted bool
+	queueErr      error
+	onQueue       func()
 }
 
 func (a *steerAdmission) AdmitUserTurn(
@@ -83,6 +88,17 @@ func (a *steerAdmission) AdmitUserTurn(
 		a.onAdmit()
 	}
 	return a.result, a.accepted, a.err
+}
+
+func (a *steerAdmission) AdmitQueuedUserInput(
+	_ context.Context,
+	request serverapi.RuntimeSubmitUserTurnRequest,
+) (runtimeids.QueueItemID, bool, error) {
+	a.queueRequest = request
+	if a.onQueue != nil {
+		a.onQueue()
+	}
+	return a.queueItemID, a.queueAccepted, a.queueErr
 }
 
 func TestServiceSteerAcceptsExistingSessionInputAndDetachesItsRuntime(t *testing.T) {
@@ -129,6 +145,49 @@ func TestServiceSteerAcceptsExistingSessionInputAndDetachesItsRuntime(t *testing
 		admission.request.Input.Text == nil ||
 		*admission.request.Input.Text != "  exact Chat input  " {
 		t.Fatalf("Runtime admission request = %+v", admission.request)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
+		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
+	}
+}
+
+func TestServiceQueueAcceptsExistingSessionInputAndDetachesItsRuntime(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	queueItemID := runtimeids.NewQueueItemID()
+	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}}
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	planner := &steerRuntimePlanner{attachment: attachment}
+	admission := &steerAdmission{queueAccepted: true, queueItemID: queueItemID}
+	service := NewService(resolver, planner, admission)
+	target := &chatpb.ChatTarget{
+		Target: &chatpb.ChatTarget_Session{
+			Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+		},
+	}
+	activation := &chatpb.Activation{
+		Input: &chatpb.Activation_Text{Text: "  exact queued Chat input  "},
+	}
+
+	result, err := service.Queue(t.Context(), &chatpb.QueueRequest{
+		Target:     target,
+		Activation: activation,
+	})
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	if result.GetSession().GetSessionId() != sessionID.String() ||
+		result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
+		t.Fatalf("Queue result = %+v", result)
+	}
+	if resolver.request.InitialDraft == nil ||
+		*resolver.request.InitialDraft != "  exact queued Chat input  " {
+		t.Fatalf("target-resolution draft = %v", resolver.request.InitialDraft)
+	}
+	if admission.queueRequest.SessionID != sessionID.String() ||
+		admission.queueRequest.Input.Kind != runtimeinput.KindText ||
+		admission.queueRequest.Input.Text == nil ||
+		*admission.queueRequest.Input.Text != "  exact queued Chat input  " {
+		t.Fatalf("Runtime Queue admission request = %+v", admission.queueRequest)
 	}
 	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
 		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
@@ -240,6 +299,34 @@ func TestServiceSteerReturnsCreatedSessionWhenPendingWorkCapacityRejectsAdmissio
 	}
 }
 
+func TestServiceQueueReturnsCreatedSessionWhenPendingWorkCapacityRejectsAdmission(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}}
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	service := NewService(
+		resolver,
+		&steerRuntimePlanner{attachment: attachment},
+		&steerAdmission{queueErr: &serverapi.PendingWorkCapacityError{}},
+	)
+
+	result, err := service.Queue(t.Context(), &chatpb.QueueRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_NewChat{NewChat: validSteerNewChatTarget()},
+		},
+		Activation: &chatpb.Activation{Input: &chatpb.Activation_Text{Text: "ship it"}},
+	})
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	if result.GetSession().GetSessionId() != sessionID.String() ||
+		result.GetNotAccepted().GetPendingWorkCapacity() == nil {
+		t.Fatalf("Queue result = %+v, want created Session and capacity rejection", result)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseCloseIfIdle {
+		t.Fatalf("Runtime release policy = %v, want close if idle", attachment.policy)
+	}
+}
+
 func TestServiceSteerCreatesNewChatFromExactCommandDraftAndCanonicalInput(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	queueItemID := runtimeids.NewQueueItemID()
@@ -282,6 +369,47 @@ func TestServiceSteerCreatesNewChatFromExactCommandDraftAndCanonicalInput(t *tes
 		admission.request.Input.PromptCommand.Name != "prompt:review" ||
 		admission.request.Input.PromptCommand.Arguments != "keep  exact\narguments" {
 		t.Fatalf("Runtime command input = %+v", admission.request.Input)
+	}
+}
+
+func TestServiceQueueCreatesNewChatFromExactCommandDraftAndCanonicalInput(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	queueItemID := runtimeids.NewQueueItemID()
+	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}}
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	admission := &steerAdmission{queueAccepted: true, queueItemID: queueItemID}
+	service := NewService(resolver, &steerRuntimePlanner{attachment: attachment}, admission)
+	command := &chatpb.CommandInvocation{
+		CatalogIdentity:     "prompt:review",
+		Token:               "/review",
+		SeparatorWhitespace: "\t ",
+		Arguments:           "keep  exact\narguments",
+	}
+
+	result, err := service.Queue(t.Context(), &chatpb.QueueRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_NewChat{NewChat: validSteerNewChatTarget()},
+		},
+		Activation: &chatpb.Activation{
+			Input: &chatpb.Activation_Command{Command: command},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	if result.GetSession().GetSessionId() != sessionID.String() ||
+		result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
+		t.Fatalf("Queue result = %+v", result)
+	}
+	if resolver.request.InitialDraft == nil ||
+		*resolver.request.InitialDraft != "/review\t keep  exact\narguments" {
+		t.Fatalf("New Chat draft = %v", resolver.request.InitialDraft)
+	}
+	if admission.queueRequest.Input.Kind != runtimeinput.KindPromptCommand ||
+		admission.queueRequest.Input.PromptCommand == nil ||
+		admission.queueRequest.Input.PromptCommand.Name != "prompt:review" ||
+		admission.queueRequest.Input.PromptCommand.Arguments != "keep  exact\narguments" {
+		t.Fatalf("Runtime Queue command input = %+v", admission.queueRequest.Input)
 	}
 }
 
@@ -392,6 +520,34 @@ func TestServiceSteerCancellationDuringAdmissionClosesIdleRuntime(t *testing.T) 
 	}
 }
 
+func TestServiceQueueCancellationDuringAdmissionClosesIdleRuntime(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	service := NewService(
+		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
+		&steerRuntimePlanner{attachment: attachment},
+		&steerAdmission{queueErr: context.Canceled},
+	)
+
+	result, err := service.Queue(t.Context(), &chatpb.QueueRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+			},
+		},
+		Activation: &chatpb.Activation{Input: &chatpb.Activation_Text{Text: "ship it"}},
+	})
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	if result.GetNotAccepted().GetCanceled() == nil {
+		t.Fatalf("Queue result = %+v, want canceled admission", result)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseCloseIfIdle {
+		t.Fatalf("Runtime release policy = %v, want close if idle", attachment.policy)
+	}
+}
+
 func TestServiceSteerAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	queueItemID := runtimeids.NewQueueItemID()
@@ -425,6 +581,44 @@ func TestServiceSteerAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
 	}
 	if result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
 		t.Fatalf("Steer result = %+v, want accepted Queue Item", result)
+	}
+	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
+		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
+	}
+	if attachment.releaseContextErr != nil {
+		t.Fatalf("release inherited caller cancellation: %v", attachment.releaseContextErr)
+	}
+}
+
+func TestServiceQueueAcceptedWorkSurvivesCallerCancellation(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	queueItemID := runtimeids.NewQueueItemID()
+	ctx, cancel := context.WithCancel(t.Context())
+	attachment := &steerRuntimeAttachment{sessionID: sessionID}
+	admission := &steerAdmission{
+		queueAccepted: true,
+		queueItemID:   queueItemID,
+		onQueue:       cancel,
+	}
+	service := NewService(
+		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
+		&steerRuntimePlanner{attachment: attachment},
+		admission,
+	)
+
+	result, err := service.Queue(ctx, &chatpb.QueueRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+			},
+		},
+		Activation: &chatpb.Activation{Input: &chatpb.Activation_Text{Text: "ship it"}},
+	})
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	if result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
+		t.Fatalf("Queue result = %+v, want accepted Queue Item", result)
 	}
 	if attachment.policy != sessionruntime.RuntimeReleaseDetach {
 		t.Fatalf("Runtime release policy = %v, want detach", attachment.policy)
@@ -503,6 +697,37 @@ func TestServiceSteerRetainsAcceptedIdentityWithSynchronousDiagnostic(t *testing
 		result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() ||
 		result.GetAccepted().GetDiagnostic().GetInternalFailure() == nil {
 		t.Fatalf("Steer result = %+v, want accepted identities and diagnostic", result)
+	}
+}
+
+func TestServiceQueueRetainsAcceptedIdentityWithPromptHistoryDiagnostic(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	queueItemID := runtimeids.NewQueueItemID()
+	service := NewService(
+		&steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID}},
+		&steerRuntimePlanner{attachment: &steerRuntimeAttachment{sessionID: sessionID}},
+		&steerAdmission{
+			queueAccepted: true,
+			queueItemID:   queueItemID,
+			queueErr:      errors.New("prompt history failed after Queue acceptance"),
+		},
+	)
+
+	result, err := service.Queue(t.Context(), &chatpb.QueueRequest{
+		Target: &chatpb.ChatTarget{
+			Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+			},
+		},
+		Activation: &chatpb.Activation{Input: &chatpb.Activation_Text{Text: "ship it"}},
+	})
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	if result.GetSession().GetSessionId() != sessionID.String() ||
+		result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() ||
+		result.GetAccepted().GetDiagnostic().GetInternalFailure() == nil {
+		t.Fatalf("Queue result = %+v, want accepted identities and diagnostic", result)
 	}
 }
 

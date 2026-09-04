@@ -17,7 +17,8 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 	}
 	message := steer.Message()
 	item, err := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
-		Message: message,
+		Message:               message,
+		CanonicalPresentation: "report status",
 	})
 	if err != nil {
 		t.Fatalf("QueueItem: %v", err)
@@ -25,6 +26,24 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 	if item.Message.Role != llm.RoleDeveloper ||
 		item.Message.MessageType == nil || *item.Message.MessageType != llm.MessageTypeAgentSteer {
 		t.Fatalf("queued message lost typed agent steer: %+v", item.Message)
+	}
+}
+
+func TestQueuedUserMessagePreservesDistinctExecutionAndCanonicalPresentation(t *testing.T) {
+	const execution = "expanded prompt body"
+	const canonical = "/review src"
+	item, err := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
+		Message:               llm.Message{Role: llm.RoleUser, Content: textutil.Value(execution)},
+		CanonicalPresentation: canonical,
+	})
+	if err != nil {
+		t.Fatalf("QueueItem: %v", err)
+	}
+	if item.Message.Content == nil || *item.Message.Content != execution {
+		t.Fatalf("execution message = %+v, want %q", item.Message, execution)
+	}
+	if display, err := item.DisplayText(); err != nil || display != canonical {
+		t.Fatalf("DisplayText = %q/%v, want %q", display, err, canonical)
 	}
 }
 
@@ -39,6 +58,7 @@ func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 				Role:    llm.RoleUser,
 				Content: textutil.Value(content),
 			},
+			CanonicalPresentation: content,
 		}); err == nil {
 			t.Fatalf("QueueItem accepted whitespace-only content %q", content)
 		}
@@ -79,10 +99,10 @@ func TestQueuedUserMessageFlushGroupsKeepAgentSteersSeparate(t *testing.T) {
 	firstMessage := first.Message()
 	secondMessage := second.Message()
 	pending := []queuedUserMessage{
-		{message: QueuedUserMessage{ID: "h1", Message: human}},
-		{message: QueuedUserMessage{ID: "a1", Message: firstMessage}},
-		{message: QueuedUserMessage{ID: "a2", Message: secondMessage}},
-		{message: QueuedUserMessage{ID: "h2", Message: human}},
+		{message: QueuedUserMessage{ID: "h1", Message: human, CanonicalPresentation: "human"}},
+		{message: QueuedUserMessage{ID: "a1", Message: firstMessage, CanonicalPresentation: "first"}},
+		{message: QueuedUserMessage{ID: "a2", Message: secondMessage, CanonicalPresentation: "second"}},
+		{message: QueuedUserMessage{ID: "h2", Message: human, CanonicalPresentation: "human"}},
 	}
 	groups, err := queuedUserMessageFlushGroups(pending)
 	if err != nil {

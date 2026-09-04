@@ -2342,6 +2342,134 @@ func TestServiceAdmitUserTurnReturnsAcceptedQueueItem(t *testing.T) {
 	waitForRuntimeControlAssistantFinal(t, engine, "done")
 }
 
+func TestServiceAdmitQueuedUserInputStartsIdleRuntimeAndReturnsIdentity(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	request := runtimeControlUserTurnRequest(store, "chat-queue", "queued Chat input")
+
+	queueItemID, accepted, err := service.AdmitQueuedUserInput(t.Context(), request)
+	if err != nil {
+		t.Fatalf("AdmitQueuedUserInput: %v", err)
+	}
+	if !accepted || queueItemID.IsZero() {
+		t.Fatalf("AdmitQueuedUserInput = %s/%v, want accepted Queue Item", queueItemID, accepted)
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "done")
+	if got := countUserMessagesWithContent(t, store, "queued Chat input"); got != 1 {
+		t.Fatalf("queued user message count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "queued Chat input"); got != 1 {
+		t.Fatalf("queued prompt history count = %d, want 1", got)
+	}
+}
+
+func TestServiceAdmitQueuedPromptCommandUsesExpandedExecutionAndCanonicalPresentation(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	statuses := make(chan runtime.QueuedUserMessageStatusEvent, 2)
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			if event.QueuedUserMessageStatus != nil {
+				statuses <- *event.QueuedUserMessageStatus
+			}
+		},
+	})
+	resolver := &runtimeControlPromptCommandResolver{content: "expanded prompt body"}
+	service.WithPromptCommandResolver(resolver)
+	request := runtimeControlUserTurnRequest(store, "chat-queue-command", "unused")
+	request.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src")
+
+	queueItemID, accepted, err := service.AdmitQueuedUserInput(t.Context(), request)
+	if err != nil {
+		t.Fatalf("AdmitQueuedUserInput: %v", err)
+	}
+	if !accepted || queueItemID.IsZero() {
+		t.Fatalf("AdmitQueuedUserInput = %s/%v, want accepted Queue Item", queueItemID, accepted)
+	}
+	status := waitForRuntimeControlQueuedStatus(t, statuses, queueItemID.String(), runtime.QueuedUserMessageAccepted)
+	if status.Text != "/review src" {
+		t.Fatalf("accepted Queue presentation = %q, want canonical command", status.Text)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("queued command did not start while the Runtime was idle")
+	}
+	if got := countUserMessagesWithContent(t, store, "expanded prompt body"); got != 1 {
+		t.Fatalf("expanded user message count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {
+		t.Fatalf("canonical prompt history count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "expanded prompt body"); got != 0 {
+		t.Fatalf("expanded prompt history count = %d, want 0", got)
+	}
+	if calls := resolver.calls.Load(); calls != 1 {
+		t.Fatalf("prompt resolver calls = %d, want 1", calls)
+	}
+	if err := engine.Interrupt(); err != nil {
+		t.Fatalf("Interrupt queued command: %v", err)
+	}
+	close(client.release)
+	waitForRuntimeControlIdle(t, engine)
+}
+
+func TestServiceAdmitQueuedUserInputRetainsAcceptanceWhenPromptHistoryFails(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	historyErr := errors.New("prompt history unavailable")
+	runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).SetRecordError(historyErr)
+
+	queueItemID, accepted, err := service.AdmitQueuedUserInput(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "chat-queue-history-failure", "queued despite history failure"),
+	)
+	if !accepted || queueItemID.IsZero() {
+		t.Fatalf("AdmitQueuedUserInput = %s/%v, want accepted Queue Item", queueItemID, accepted)
+	}
+	if !errors.Is(err, historyErr) {
+		t.Fatalf("AdmitQueuedUserInput error = %v, want prompt-history diagnostic", err)
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "done")
+	if got := countUserMessagesWithContent(t, store, "queued despite history failure"); got != 1 {
+		t.Fatalf("queued user message count = %d, want 1", got)
+	}
+}
+
+func TestServiceAdmitQueuedUserInputSurvivesCallerCancellationAfterAcceptance(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	history := runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID)
+	history.recordEntered = make(chan struct{})
+	historyRelease := make(chan struct{})
+	history.recordRelease = historyRelease
+	ctx, cancel := context.WithCancel(t.Context())
+	type queueResult struct {
+		itemID   runtimeids.QueueItemID
+		accepted bool
+		err      error
+	}
+	done := make(chan queueResult, 1)
+	go func() {
+		itemID, accepted, err := service.AdmitQueuedUserInput(
+			ctx,
+			runtimeControlUserTurnRequest(store, "chat-queue-response-loss", "survive response loss"),
+		)
+		done <- queueResult{itemID: itemID, accepted: accepted, err: err}
+	}()
+	select {
+	case <-history.recordEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Queue did not reach post-acceptance prompt history")
+	}
+	cancel()
+	close(historyRelease)
+	result := <-done
+	if result.err != nil || !result.accepted || result.itemID.IsZero() {
+		t.Fatalf("AdmitQueuedUserInput = %s/%v/%v, want accepted work", result.itemID, result.accepted, result.err)
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "done")
+	if got := countUserMessagesWithContent(t, store, "survive response loss"); got != 1 {
+		t.Fatalf("queued user message count = %d, want 1", got)
+	}
+}
+
 func TestServiceAdmitUserTurnReturnsDefiniteNonAcceptanceWithoutSubmitWrapper(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	resolutionErr := errors.New("prompt command disappeared")
@@ -2582,7 +2710,7 @@ func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission
 		t.Fatalf("SubmitUserTurn prompt command while model was thinking = %+v, want accepted steering", steered)
 	}
 	status := waitForRuntimeControlQueuedStatus(t, queuedStatuses, steered.QueueItemID, runtime.QueuedUserMessageAccepted)
-	if status.Text != "expanded prompt body" {
+	if status.Text != "/review src" {
 		t.Fatalf("accepted prompt-command queue status = %+v", status)
 	}
 	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {

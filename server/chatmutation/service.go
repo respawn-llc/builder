@@ -30,6 +30,10 @@ type UserTurnAdmissionService interface {
 		context.Context,
 		serverapi.RuntimeSubmitUserTurnRequest,
 	) (serverapi.RuntimeSubmitUserTurnResponse, bool, error)
+	AdmitQueuedUserInput(
+		context.Context,
+		serverapi.RuntimeSubmitUserTurnRequest,
+	) (runtimeids.QueueItemID, bool, error)
 }
 
 type Service struct {
@@ -57,34 +61,71 @@ func (s *Service) Steer(
 	if err := protoapi.Validate(request); err != nil {
 		return nil, err
 	}
+	return s.mutateInput(
+		ctx,
+		request.Target,
+		request.Activation,
+		inputMutationSteer,
+	)
+}
+
+func (s *Service) Queue(
+	ctx context.Context,
+	request *chatpb.QueueRequest,
+) (*chatpb.InputMutationSuccess, error) {
+	if err := protoapi.Validate(request); err != nil {
+		return nil, err
+	}
+	return s.mutateInput(
+		ctx,
+		request.Target,
+		request.Activation,
+		inputMutationQueue,
+	)
+}
+
+type inputMutationOperation string
+
+const (
+	inputMutationSteer inputMutationOperation = "chat_steer"
+	inputMutationQueue inputMutationOperation = "chat_queue"
+)
+
+func (s *Service) mutateInput(
+	ctx context.Context,
+	targetRequest *chatpb.ChatTarget,
+	activation *chatpb.Activation,
+	operation inputMutationOperation,
+) (*chatpb.InputMutationSuccess, error) {
 	if s == nil || s.targets == nil {
 		return nil, errors.New("Chat target resolver is required")
 	}
-	draft, input, err := activationInput(request.Activation)
+	draft, input, err := activationInput(activation)
 	if err != nil {
 		return nil, err
 	}
 	target, err := s.targets.Resolve(ctx, TargetResolutionRequest{
-		Target:       request.Target,
+		Target:       targetRequest,
 		InitialDraft: &draft,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if s.runtimes == nil {
-		return inputNotAccepted(target.SessionID, errors.New("Session Runtime planner is required")), nil
+		return inputNotAccepted(target.SessionID, operation, errors.New("Session Runtime planner is required")), nil
 	}
 	attachment, err := s.runtimes.Open(ctx, target.SessionID)
 	if err != nil {
-		return inputNotAccepted(target.SessionID, err), nil
+		return inputNotAccepted(target.SessionID, operation, err), nil
 	}
 	if attachment == nil {
-		return inputNotAccepted(target.SessionID, errors.New("Session Runtime attachment is required")), nil
+		return inputNotAccepted(target.SessionID, operation, errors.New("Session Runtime attachment is required")), nil
 	}
 	if attachment.SessionID() != target.SessionID {
 		releaseErr := attachment.Release(context.WithoutCancel(ctx), sessionruntime.RuntimeReleaseCloseIfIdle)
 		return inputNotAccepted(
 			target.SessionID,
+			operation,
 			errors.Join(errors.New("Session Runtime attachment targets another Session"), releaseErr),
 		), nil
 	}
@@ -92,10 +133,11 @@ func (s *Service) Steer(
 		releaseErr := attachment.Release(context.WithoutCancel(ctx), sessionruntime.RuntimeReleaseCloseIfIdle)
 		return inputNotAccepted(
 			target.SessionID,
+			operation,
 			errors.Join(errors.New("user-turn admission service is required"), releaseErr),
 		), nil
 	}
-	response, accepted, admissionErr := s.admissions.AdmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{
+	queueItemID, accepted, admissionErr := s.admitInput(ctx, operation, serverapi.RuntimeSubmitUserTurnRequest{
 		SessionID: target.SessionID.String(),
 		Input:     input,
 	})
@@ -112,12 +154,11 @@ func (s *Service) Steer(
 				errors.Join(admissionErr, releaseErr),
 			), nil
 		}
-		return inputNotAccepted(target.SessionID, errors.Join(admissionErr, releaseErr)), nil
+		return inputNotAccepted(target.SessionID, operation, errors.Join(admissionErr, releaseErr)), nil
 	}
-	queueItemID, parseErr := runtimeids.ParseQueueItemID(response.QueueItemID)
-	if parseErr != nil {
+	if queueItemID.IsZero() {
 		return nil, errors.Join(
-			fmt.Errorf("accepted Chat Steer Queue Item: %w", parseErr),
+			fmt.Errorf("accepted Chat %s Queue Item identity is required", operation),
 			admissionErr,
 			releaseErr,
 		)
@@ -132,12 +173,32 @@ func (s *Service) Steer(
 			errors.Join(admissionErr, releaseErr),
 		)
 	case admissionErr != nil:
-		acceptedResult.Diagnostic = acceptedDiagnostic("chat_steer", admissionErr)
+		acceptedResult.Diagnostic = acceptedDiagnostic(string(operation), admissionErr)
 	}
 	return &chatpb.InputMutationSuccess{
 		Session: &chatpb.ExistingSessionTarget{SessionId: target.SessionID.String()},
 		Outcome: &chatpb.InputMutationSuccess_Accepted{Accepted: acceptedResult},
 	}, nil
+}
+
+func (s *Service) admitInput(
+	ctx context.Context,
+	operation inputMutationOperation,
+	request serverapi.RuntimeSubmitUserTurnRequest,
+) (runtimeids.QueueItemID, bool, error) {
+	switch operation {
+	case inputMutationSteer:
+		response, accepted, err := s.admissions.AdmitUserTurn(ctx, request)
+		if !accepted {
+			return runtimeids.QueueItemID{}, false, err
+		}
+		queueItemID, parseErr := runtimeids.ParseQueueItemID(response.QueueItemID)
+		return queueItemID, true, errors.Join(err, parseErr)
+	case inputMutationQueue:
+		return s.admissions.AdmitQueuedUserInput(ctx, request)
+	default:
+		return runtimeids.QueueItemID{}, false, fmt.Errorf("unsupported Chat input mutation %q", operation)
+	}
 }
 
 func activationInput(activation *chatpb.Activation) (string, runtimeinput.Input, error) {
@@ -157,6 +218,7 @@ func activationInput(activation *chatpb.Activation) (string, runtimeinput.Input,
 
 func inputNotAccepted(
 	sessionID runtimeids.SessionID,
+	operation inputMutationOperation,
 	cause error,
 ) *chatpb.InputMutationSuccess {
 	if cause == nil {
@@ -165,7 +227,7 @@ func inputNotAccepted(
 	return &chatpb.InputMutationSuccess{
 		Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
 		Outcome: &chatpb.InputMutationSuccess_NotAccepted{
-			NotAccepted: inputNotAcceptedForCause(cause),
+			NotAccepted: inputNotAcceptedForCause(operation, cause),
 		},
 	}
 }
@@ -187,7 +249,10 @@ func inputNotAcceptedInternal(
 	}
 }
 
-func inputNotAcceptedForCause(cause error) *chatpb.InputNotAccepted {
+func inputNotAcceptedForCause(
+	operation inputMutationOperation,
+	cause error,
+) *chatpb.InputNotAccepted {
 	switch {
 	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
 		return &chatpb.InputNotAccepted{
@@ -235,7 +300,7 @@ func inputNotAcceptedForCause(cause error) *chatpb.InputNotAccepted {
 	}
 	return &chatpb.InputNotAccepted{
 		Reason: &chatpb.InputNotAccepted_InternalFailure{
-			InternalFailure: internalFailure("chat_steer", cause),
+			InternalFailure: internalFailure(string(operation), cause),
 		},
 	}
 }
