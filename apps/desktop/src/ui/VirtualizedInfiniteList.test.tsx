@@ -114,6 +114,15 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
     const forwardItems = thirdPage.slice(40).concat("workflow-120");
     const onLoadMore = vi.fn();
     const onLoadPrevious = vi.fn();
+    virtualizer.getOffsetForIndex.mockImplementation((index: number) => {
+      if (index === 31) {
+        return [310];
+      }
+      if (index === 41) {
+        return [400];
+      }
+      return undefined;
+    });
     virtualizer.getVirtualItems.mockReturnValue([
       { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
       { end: 760, index: 71, key: "workflow-70", lane: 0, size: 60, start: 700 },
@@ -148,7 +157,7 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
 
     virtualizer.getVirtualItems.mockReturnValue([
       { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
-      { end: 370, index: 31, key: "workflow-70", lane: 0, size: 60, start: 310 },
+      { end: 40, index: 1, key: "workflow-40", lane: 0, size: 40, start: 0 },
     ]);
     view.rerender(
       <List
@@ -158,6 +167,7 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
         orientation="horizontal"
       />,
     );
+    expect(virtualizer.getOffsetForIndex).toHaveBeenCalledWith(31, "start");
     expect(list.scrollLeft).toBe(330);
 
     virtualizer.getVirtualItems.mockReturnValue([
@@ -180,7 +190,7 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
 
     virtualizer.getVirtualItems.mockReturnValue([
       { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
-      { end: 460, index: 41, key: "workflow-40", lane: 0, size: 60, start: 400 },
+      { end: 40, index: 1, key: "workflow-40", lane: 0, size: 40, start: 0 },
     ]);
     view.rerender(
       <List
@@ -190,6 +200,7 @@ describe("VirtualizedInfiniteList horizontal paging", () => {
         orientation="horizontal"
       />,
     );
+    expect(virtualizer.getOffsetForIndex).toHaveBeenCalledWith(41, "start");
     expect(list.scrollLeft).toBe(361);
   });
 

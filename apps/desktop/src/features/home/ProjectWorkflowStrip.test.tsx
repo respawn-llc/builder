@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { I18nextProvider } from "react-i18next";
 import { vi } from "vitest";
 
@@ -54,6 +55,25 @@ describe("ProjectWorkflowStrip", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delivery" }));
 
+    expect(openProject).toHaveBeenCalledWith("project-1", "workflow-1");
+  });
+
+  it("opens the selected Project Workflow board from keyboard activation", async () => {
+    const user = userEvent.setup();
+    renderStrip({
+      workflows: [
+        { description: "Delivery workflow", id: "workflow-1", isProjectDefault: false, name: "Delivery" },
+      ],
+    });
+
+    const button = screen.getByRole("button", { name: "Delivery" });
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(openProject).toHaveBeenCalledWith("project-1", "workflow-1");
+
+    openProject.mockClear();
+    button.focus();
+    await user.keyboard(" ");
     expect(openProject).toHaveBeenCalledWith("project-1", "workflow-1");
   });
 });

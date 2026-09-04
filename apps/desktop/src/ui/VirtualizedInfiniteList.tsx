@@ -610,11 +610,11 @@ function restoreLeadingAnchor({
   }
   const virtualIndex = itemStartIndex + currentIndex;
   if (orientation === "horizontal") {
-    const measuredItem = virtualizer.getVirtualItems().find((item) => item.index === virtualIndex);
-    if (measuredItem === undefined) {
+    const measuredOffset = virtualizer.getOffsetForIndex(virtualIndex, "start")?.[0];
+    if (measuredOffset === undefined) {
       return;
     }
-    const scrollOffset = measuredItem.start - anchor.inRowOffset;
+    const scrollOffset = measuredOffset - anchor.inRowOffset;
     if (element.scrollLeft === scrollOffset) {
       return;
     }
