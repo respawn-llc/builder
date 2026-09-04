@@ -49,6 +49,7 @@ function AskQuestionBody({
     <div className="chat-transcript-question-body">
       <StaticMarkdown value={presentation.Question} />
       <QuestionOptions
+        isError={tool.IsError}
         recommendedOptionIndex={presentation.RecommendedOptionIndex}
         selectedOptionNumber={selectedOptionNumber}
         suggestions={presentation.Suggestions}
@@ -75,15 +76,17 @@ function QuestionResponse({
 }
 
 function QuestionOptions({
+  isError,
   recommendedOptionIndex,
   selectedOptionNumber,
   suggestions,
 }: Readonly<{
+  isError: boolean;
   recommendedOptionIndex: number;
   selectedOptionNumber: number | null;
   suggestions: readonly string[];
 }>) {
-  if (selectedOptionNumber === null || suggestions.length === 0) return null;
+  if ((!isError && selectedOptionNumber === null) || suggestions.length === 0) return null;
   return (
     <div className="chat-transcript-question-options">
       {suggestions.map((suggestion, index) => {
