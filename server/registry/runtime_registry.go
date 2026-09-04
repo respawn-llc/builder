@@ -720,6 +720,7 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 		)
 	}
 	var snapshot PendingPromptSnapshot
+	var wakeErr error
 	entry.publicationMu.Lock()
 	projected := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
 		var admitted bool
@@ -728,6 +729,8 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	})
 	if projected {
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
+		r.publishAttentionPending(id, snapshot)
+		wakeErr = r.publishTaskQuestionWaitingForScope(scope, snapshot)
 	}
 	entry.publicationMu.Unlock()
 	if !projected {
@@ -739,8 +742,6 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 			serverapi.ErrStreamUnavailable,
 		)
 	}
-	r.publishAttentionPending(id, snapshot)
-	wakeErr := r.publishTaskQuestionWaitingForScope(scope, snapshot)
 	r.publishCurrentRuntimeActivity(id)
 	if wakeErr != nil {
 		return wakeErr

@@ -272,7 +272,7 @@ func (c *Remote) openSetupRPCConnForAttachment(
 	return conn, cleanup, state, nil
 }
 
-func (c *Remote) prepareDraftHandoff(ctx context.Context, sessionID string) (*remoteSessionControl, error) {
+func (c *Remote) prepareDraftHandoff(ctx context.Context, sessionID string) (*remoteSessionControl, bool, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	c.mu.Lock()
 	attachmentIntent := c.attachIntent
@@ -280,47 +280,47 @@ func (c *Remote) prepareDraftHandoff(ctx context.Context, sessionID string) (*re
 	attachedSessionID, attachedToSession := attachmentIntent.sessionID()
 	if attachedToSession {
 		if attachedSessionID != sessionID {
-			return nil, fmt.Errorf(
+			return nil, false, fmt.Errorf(
 				"remote is attached to session %q, cannot prepare draft handoff for session %q",
 				attachedSessionID,
 				sessionID,
 			)
 		}
-		return nil, nil
+		return nil, false, nil
 	}
 	if _, attachedToProject := attachmentIntent.projectRequest(); !attachedToProject {
-		return nil, nil
+		return nil, false, nil
 	}
 	// A Project-attached control connection loses access as soon as the Session
 	// moves. Establish the exact-Session control while the source Project still
 	// owns it so the composer draft can be persisted before TUI reattachment.
 	intent, err := newRemoteSessionAttachmentIntent(sessionID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
-		return nil, errors.New("remote client is closed")
+		return nil, false, errors.New("remote client is closed")
 	}
 	current := c.draftHandoff
 	if current != nil && current.sessionID == sessionID {
 		c.mu.Unlock()
-		return nil, nil
+		return current, false, nil
 	}
 	c.mu.Unlock()
 	conn, cleanup, state, err := c.openSetupRPCConn(ctx, intent)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if state.attachment == nil || state.attachment.session == nil {
 		cleanup()
-		return nil, errors.New("Session handoff attachment is required")
+		return nil, false, errors.New("Session handoff attachment is required")
 	}
 	handoffIntent, err := newRemoteSessionReattachmentIntent(*state.attachment.session)
 	if err != nil {
 		cleanup()
-		return nil, err
+		return nil, false, err
 	}
 	handoffControl := newRemoteControlConn(conn)
 	handoffRemote := &Remote{
@@ -338,7 +338,7 @@ func (c *Remote) prepareDraftHandoff(ctx context.Context, sessionID string) (*re
 		sessionID:      sessionID,
 		remote:         handoffRemote,
 		initialControl: handoffControl,
-	}, nil
+	}, true, nil
 }
 
 func (c *Remote) installDraftHandoff(candidate *remoteSessionControl) error {

@@ -115,18 +115,25 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 }
 
 func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
-	handoff, err := c.prepareDraftHandoff(ctx, req.SessionID)
+	handoff, installHandoff, err := c.prepareDraftHandoff(ctx, req.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	conn, route, err := c.subscribeRPC(ctx, protocol.MethodSessionSubscribeTranscript, "subscribe-session-transcript", req, req.SessionID, true)
+	subscriptionRemote := c
+	if handoff != nil {
+		subscriptionRemote = handoff.remote
+	}
+	conn, route, err := subscriptionRemote.subscribeRPC(ctx, protocol.MethodSessionSubscribeTranscript, "subscribe-session-transcript", req, req.SessionID, true)
 	if err != nil {
-		if handoff != nil {
+		if installHandoff {
 			_ = handoff.remote.Close()
 		}
 		return nil, err
 	}
-	if err := c.installDraftHandoff(handoff); err != nil {
+	if installHandoff {
+		err = c.installDraftHandoff(handoff)
+	}
+	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}

@@ -312,9 +312,7 @@
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
 - While an Agent Turn is active, every available `/prompt:*` command submits its typed identity as Steering in the current Session. Kent resolves the prompt body on the server before accepting the Steering input.
-- `/name` persists and publishes its Session value immediately while an Agent Step runs.
-- `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` return after the server durably commits the Session value and accepts its ordered live-Runtime update, without waiting for the Agent Step to end.
-- Those accepted setting commands apply to the live Runtime at the next between-step boundary, affect later provider and compaction requests, never affect the Agent Step already running, and create no transcript rows.
+- `/name`, `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) Session-setting contract.
 - `/compact` and Active-Runtime `/worktree switch`, `/wt switch`, `/worktree leave`, and `/wt leave` enter typed operational Pending Work while an Agent Step or another boundary-owning Runtime operation is active.
 - Goal follows its Goal owner. Client-local navigation, overlays, reads, detach actions, and direct Worktree management reach their direct owners while an Agent Turn is active.
 - `/resume` always enters the session picker, including when no other session exists. The originating attachment is released before the picker opens. A picker `Ctrl+C` leaves that run ownerless; it issues no second release and no interrupt.

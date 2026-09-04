@@ -2,7 +2,6 @@ package app
 
 import (
 	"core/cli/tui/ongoing"
-	"core/shared/clientui"
 	"runtime/debug"
 	"time"
 
@@ -23,7 +22,9 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		return handledUIFeatureUpdate(m, cmd)
 	case missingPromptRehydrationMsg:
-		if m.runtimeActivityProjection.State == clientui.RuntimeActivityAwaitingPrompt && !m.ask.hasCurrent() {
+		if m.matchesMissingPromptRecoveryScope(msg.scope) &&
+			m.missingPromptRecovery != nil &&
+			*m.missingPromptRecovery == msg.scope {
 			m.handleOngoingResult(ongoing.Result{
 				Action: ongoing.ResultRequestScratchRehydration,
 				Reason: ongoing.RehydrateReasonMissingPrompt,

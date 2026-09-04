@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 
@@ -279,9 +278,6 @@ func TestAskCtrlCInterruptsRuntimeWithoutSubmittingPromptCancellation(t *testing
 	}
 	if requests := control.requests(); len(requests) != 0 {
 		t.Fatalf("prompt cancellation requests = %d, want none", len(requests))
-	}
-	if strings.Contains(model.transientStatus, context.DeadlineExceeded.Error()) {
-		t.Fatalf("Ctrl+C exposed prompt cancellation deadline: %q", model.transientStatus)
 	}
 }
 

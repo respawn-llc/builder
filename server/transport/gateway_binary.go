@@ -322,10 +322,6 @@ func invokeBinaryAttachSession(
 	if err != nil {
 		return nil, err
 	}
-	state.attachedProject = binding.ProjectID
-	state.attachedWorkspaceID = binding.WorkspaceID
-	state.attachedWorkspaceRoot = binding.CanonicalRoot
-	state.attachedSession = &parsedSessionID
 	authority, err := g.sessionReattachAuthority()
 	if err != nil {
 		return nil, err
@@ -334,6 +330,10 @@ func invokeBinaryAttachSession(
 	if err != nil {
 		return nil, err
 	}
+	state.attachedProject = binding.ProjectID
+	state.attachedWorkspaceID = binding.WorkspaceID
+	state.attachedWorkspaceRoot = binding.CanonicalRoot
+	state.attachedSession = &parsedSessionID
 	return &connectionpb.AttachmentSuccess{
 		Attachment: &connectionpb.AttachmentSuccess_Session{
 			Session: &connectionpb.SessionAttachment{
