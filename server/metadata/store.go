@@ -716,6 +716,32 @@ func (s *Store) ListProjectSessionIDs(ctx context.Context, projectID string) ([]
 	return s.queries.ListProjectSessionIDs(ctx, strings.TrimSpace(projectID))
 }
 
+func (s *Store) MatchingProjectSessionIDs(ctx context.Context, projectID string, sessionIDs []string) (map[string]struct{}, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	encoded, err := json.Marshal(sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("encode session ids: %w", err)
+	}
+	matching, err := s.queries.ListMatchingProjectSessionIDs(ctx, sqlitegen.ListMatchingProjectSessionIDsParams{
+		SessionIdsJson: string(encoded),
+		ProjectID:      projectID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list matching project session ids: %w", err)
+	}
+	result := make(map[string]struct{}, len(matching))
+	for _, sessionID := range matching {
+		result[sessionID] = struct{}{}
+	}
+	return result, nil
+}
+
 func (s *Store) ListSessionsTargetingWorktree(ctx context.Context, worktreeID string) ([]WorktreeSessionBlocker, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")

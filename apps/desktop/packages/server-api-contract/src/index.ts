@@ -1,7 +1,7 @@
 export { create } from "@bufbuild/protobuf";
 export type { DescMessage, DescMethod, Message, MessageShape } from "@bufbuild/protobuf";
 export { decodeEnvelope, decodeEnvelopeCorrelation, encodeEnvelope } from "./envelope.js";
-export { decode, encode, validate } from "./message.js";
+export { decode, decodeJson, encode, encodeJson, validate } from "./message.js";
 export {
   operationName,
   subscriptionAssociations,

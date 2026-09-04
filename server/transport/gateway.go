@@ -28,6 +28,7 @@ import (
 	"core/shared/serverjsoncontract"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 )
 
 // ErrGatewayDependenciesRequired is returned by NewGateway when the supplied
@@ -132,7 +133,7 @@ type GatewayWorktreeDependencies interface {
 	WorktreeClient() apicontract.WorktreeService
 }
 
-type gatewayUnaryHandler func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response
+type gatewayUnaryHandler func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response
 
 var gatewayUnaryHandlers = routeHandlersForKind(apicontract.KindUnary, gatewayUnaryHandlerEntries)
 
@@ -528,44 +529,60 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 		return responseForError(req.ID, err)
 	}
 	route.Scope = routeScopePolicy(operation.Options.ScopePolicy)
-	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
+	prepared, resp, failed := g.preflightRouteRequest(ctx, state, route, req)
+	if failed {
 		return resp
 	}
 	handler := gatewayUnaryHandlers[req.Method]
-	return handler(g, ctx, state, req)
+	return handler(g, ctx, state, req, prepared)
 }
 
-func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TReq) (TResp, error)) protocol.Response {
-	params, err := decodeParams[TReq](req.Params)
-	if err != nil {
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
-	}
-	var validationErr error
-	if validator, ok := any(params).(interface{ ValidateRPC() error }); ok {
-		validationErr = validator.ValidateRPC()
-	} else if validator, ok := any(params).(interface{ Validate() error }); ok {
-		validationErr = validator.Validate()
-	}
-	if validationErr != nil {
-		var rpcErr interface {
-			RPCErrorCode() int
-			RPCErrorData() json.RawMessage
-		}
-		if errors.As(validationErr, &rpcErr) {
-			return responseForError(req.ID, validationErr)
-		}
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error())
+func handlePrepared[TReq any, TResp any](id string, prepared any, handler func(TReq) (TResp, error)) protocol.Response {
+	params, ok := prepared.(TReq)
+	if !ok {
+		var zero TResp
+		return completeUnaryResponse(id, zero, fmt.Errorf("prepared request has type %T", prepared), nil)
 	}
 	resp, err := handler(params)
-	if err != nil {
-		return responseForError(req.ID, err)
+	return completeUnaryResponse(id, resp, err, nil)
+}
+
+type unaryResponseEncoder func(any) (json.RawMessage, error)
+
+func generatedJSONResponseEncoder(value any) (json.RawMessage, error) {
+	message, ok := value.(proto.Message)
+	if !ok {
+		return nil, fmt.Errorf("generated response has type %T", value)
 	}
-	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+	return protoapi.EncodeJSON(message)
+}
+
+func completeUnaryResponse(id string, resp any, handlerErr error, encoder unaryResponseEncoder) protocol.Response {
+	if handlerErr != nil {
+		return responseForError(id, handlerErr)
+	}
+	if validator, ok := resp.(interface{ Validate() error }); ok {
 		if err := validator.Validate(); err != nil {
-			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+			return responseForError(id, fmt.Errorf("handler returned an invalid response: %w", err))
 		}
 	}
-	return protocol.NewSuccessResponse(req.ID, resp)
+	if encoder == nil {
+		encoder = func(value any) (json.RawMessage, error) {
+			if value == nil {
+				return nil, nil
+			}
+			return json.Marshal(value)
+		}
+	}
+	result, err := encoder(resp)
+	if err != nil {
+		return responseForError(id, fmt.Errorf("encode handler response: %w", err))
+	}
+	return protocol.Response{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      strings.TrimSpace(id),
+		Result:  result,
+	}
 }
 
 func receiveRequest(ctx context.Context, conn rpcwire.Conn) (protocol.Request, error) {

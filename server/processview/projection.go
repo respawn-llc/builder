@@ -1,6 +1,8 @@
 package processview
 
 import (
+	"strings"
+
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/textutil"
@@ -19,7 +21,7 @@ func ProcessFromSnapshot(snapshot shelltool.Snapshot) clientui.BackgroundProcess
 		FinishedAt:              snapshot.FinishedAt,
 		ExitCode:                textutil.Pointer(snapshot.ExitCode),
 		LogPath:                 snapshot.LogPath,
-		RecentOutput:            snapshot.RecentOutput,
+		RecentOutput:            strings.ToValidUTF8(snapshot.RecentOutput, "\uFFFD"),
 		OutputAvailable:         snapshot.OutputAvailable,
 		OutputRetainedFromBytes: snapshot.OutputRetainedFromBytes,
 		OutputRetainedToBytes:   snapshot.OutputRetainedToBytes,

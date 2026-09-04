@@ -19,6 +19,7 @@ import * as taskSearch from "./clientTaskSearch";
 import * as worktree from "./clientWorktree";
 import * as pendingWork from "./clientPendingWork";
 import * as project from "./clientProject";
+import * as processes from "./clientProcesses";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
@@ -137,6 +138,9 @@ export class ApiClient implements ApiService {
   }
 
   readonly chat: ChatApi;
+
+  listProcesses = async (projectID: string) => processes.listProcesses(this.#transport, projectID);
+  killProcess = async (processID: string) => processes.killProcess(this.#transport, processID);
 
   async getReadiness(): Promise<ServerReadiness> {
     const method = ServerService.method.getReadiness;

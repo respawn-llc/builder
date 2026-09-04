@@ -1,4 +1,5 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+export type { DesktopProcess } from "./processes";
 export type {
   ChatApi,
   ChatContext,

@@ -35,6 +35,7 @@ message BackgroundProcess {
   bool backgrounded = 17;
   bool kill_requested = 18;
   google.protobuf.Timestamp last_updated_at = 19 [(buf.validate.field).required = true];
+  string recent_output = 20;
 
   option (buf.validate.message).cel = {
     id: "kent.process.retained_range"
@@ -46,6 +47,14 @@ message BackgroundProcess {
 message ListRequest {
   optional string owner_session_id = 1 [(buf.validate.field).string.min_len = 1];
   optional string owner_run_id = 2 [(buf.validate.field).string.min_len = 1];
+  string project_id = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.process.list_project_id_nonblank"
+      message: "project_id must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message ListSuccess {
@@ -182,7 +191,7 @@ service ViewService {
   rpc List(ListRequest) returns (ListResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
-      scope_policy: SCOPE_POLICY_PROCESS_LIST_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED legacy_wire_name: "process.list"
     };
   }
@@ -199,7 +208,7 @@ service ControlService {
   rpc Kill(KillRequest) returns (KillResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_PROCESS_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER
+      scope_policy: SCOPE_POLICY_NONE direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED legacy_wire_name: "process.kill"
     };
   }

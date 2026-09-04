@@ -14,6 +14,7 @@ import (
 	"core/shared/config"
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
+	processpb "core/shared/protoapi/gen/kent/api/process"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
@@ -865,18 +866,52 @@ func callValidatedControlRPC[Request any, Response interface{ Validate() error }
 }
 
 func (c *Remote) ListProcesses(ctx context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
-	var resp serverapi.ProcessListResponse
-	return resp, c.call(ctx, protocol.MethodProcessList, req, &resp)
+	encodedRequest, err := protoapi.EncodeJSON(protoapi.ProcessListRequestToProto(req))
+	if err != nil {
+		return serverapi.ProcessListResponse{}, err
+	}
+	var encodedResponse json.RawMessage
+	if err := c.call(ctx, protocol.MethodProcessList, json.RawMessage(encodedRequest), &encodedResponse); err != nil {
+		return serverapi.ProcessListResponse{}, err
+	}
+	var success processpb.ListSuccess
+	if err := protoapi.DecodeJSON(encodedResponse, &success); err != nil {
+		return serverapi.ProcessListResponse{}, invalidResponseError(protocol.MethodProcessList, err)
+	}
+	response, err := protoapi.ProcessListResponseFromProto(&success)
+	if err != nil {
+		return serverapi.ProcessListResponse{}, invalidResponseError(protocol.MethodProcessList, err)
+	}
+	return response, nil
 }
 
 func (c *Remote) GetProcess(ctx context.Context, req serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error) {
-	var resp serverapi.ProcessGetResponse
-	return resp, c.call(ctx, protocol.MethodProcessGet, req, &resp)
+	encodedRequest, err := protoapi.EncodeJSON(protoapi.ProcessGetRequestToProto(req))
+	if err != nil {
+		return serverapi.ProcessGetResponse{}, err
+	}
+	var encodedResponse json.RawMessage
+	if err := c.call(ctx, protocol.MethodProcessGet, json.RawMessage(encodedRequest), &encodedResponse); err != nil {
+		return serverapi.ProcessGetResponse{}, err
+	}
+	var success processpb.GetSuccess
+	if err := protoapi.DecodeJSON(encodedResponse, &success); err != nil {
+		return serverapi.ProcessGetResponse{}, invalidResponseError(protocol.MethodProcessGet, err)
+	}
+	response, err := protoapi.ProcessGetResponseFromProto(&success)
+	if err != nil {
+		return serverapi.ProcessGetResponse{}, invalidResponseError(protocol.MethodProcessGet, err)
+	}
+	return response, nil
 }
 
 func (c *Remote) KillProcess(ctx context.Context, req serverapi.ProcessKillRequest) (serverapi.ProcessKillResponse, error) {
+	encodedRequest, err := protoapi.EncodeJSON(protoapi.ProcessKillRequestToProto(req))
+	if err != nil {
+		return serverapi.ProcessKillResponse{}, err
+	}
 	var resp serverapi.ProcessKillResponse
-	return resp, c.call(ctx, protocol.MethodProcessKill, req, &resp)
+	return resp, c.call(ctx, protocol.MethodProcessKill, json.RawMessage(encodedRequest), &resp)
 }
 
 func (c *Remote) GetInlineOutput(ctx context.Context, req serverapi.ProcessInlineOutputRequest) (serverapi.ProcessInlineOutputResponse, error) {

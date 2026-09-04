@@ -8,21 +8,22 @@ import (
 
 	"core/server/chatcontext"
 	"core/shared/apicontract"
+	"core/shared/protoapi"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
 func gatewayClientCall[C any, Req any, Resp any](getClient func(GatewayDependencies) C, call func(C, context.Context, Req) (Resp, error)) gatewayUnaryHandler {
-	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params Req) (Resp, error) {
+	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params Req) (Resp, error) {
 			return call(getClient(g.deps), ctx, params)
 		})
 	}
 }
 
 func gatewayClientCallNoResponse[C any, Req any](getClient func(GatewayDependencies) C, call func(C, context.Context, Req) error) gatewayUnaryHandler {
-	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params Req) (struct{}, error) {
+	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params Req) (struct{}, error) {
 			return struct{}{}, call(getClient(g.deps), ctx, params)
 		})
 	}
@@ -37,8 +38,8 @@ func runtimePendingWorkClient(deps GatewayDependencies) apicontract.RuntimePendi
 }
 
 var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
-	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
+	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
 			if params.Target.IsWorkspaceChat() {
 				authReady, err := newRoutePolicyExecutor(g).serverAuthReady(ctx, state)
 				if err != nil {
@@ -78,31 +79,22 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return serverapi.ChatContextResponse{Context: contextFacts}, err
 		})
 	},
-	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		params, err := decodeParams[serverapi.PromptCommandCatalogRequest](req.Params)
-		if err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
-		}
-		if err := params.Validate(); err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
-		}
-		projectID, err := g.activeProjectID(ctx, state)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		workspaceRoot, err := g.promptCommandWorkspaceRootForCatalog(ctx, state, params.SessionID)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		resp, err := catalog.GetPromptCommandCatalog(ctx, params)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		return protocol.NewSuccessResponse(req.ID, resp)
+	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
+			projectID, err := g.activeProjectID(ctx, state)
+			if err != nil {
+				return serverapi.PromptCommandCatalogResponse{}, err
+			}
+			workspaceRoot, err := g.promptCommandWorkspaceRootForCatalog(ctx, state, params.SessionID)
+			if err != nil {
+				return serverapi.PromptCommandCatalogResponse{}, err
+			}
+			catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
+			if err != nil {
+				return serverapi.PromptCommandCatalogResponse{}, err
+			}
+			return catalog.GetPromptCommandCatalog(ctx, params)
+		})
 	},
 	protocol.MethodWorkflowCreate:                 gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowCreateRequest, serverapi.WorkflowCreateResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateWorkflow),
 	protocol.MethodWorkflowCreateAndLinkProject:   gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowCreateAndLinkProjectRequest, serverapi.WorkflowCreateAndLinkProjectResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateAndLinkWorkflowToProject),
@@ -156,8 +148,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowBoardNodeCardsList:     gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowBoardNodeCardsListRequest, serverapi.WorkflowBoardNodeCardsListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowBoardNodeCards),
 	protocol.MethodWorkflowTaskGet:                gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskGetRequest, serverapi.WorkflowTaskGetResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowTask),
 	protocol.MethodWorkflowTaskObserve:            gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ObserveWorkflowTask),
-	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
+	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
 			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
 				return serverapi.ChatSettingsReadResponse{}, err
 			}
@@ -171,8 +163,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return response, nil
 		})
 	},
-	protocol.MethodChatSettingsMutate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
+	protocol.MethodChatSettingsMutate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
 			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
 				return serverapi.ChatSettingsMutationResponse{}, err
 			}
@@ -189,23 +181,17 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodSessionGetMainView:                            gatewayClientCall[apicontract.SessionViewService, serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetSessionMainView),
 	protocol.MethodSessionGetTranscriptPage:                      gatewayClientCall[apicontract.SessionViewService, serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetSessionTranscriptPage),
 	protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer: gatewayClientCall[apicontract.SessionViewService, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetLatestCommittedAssistantFinalAnswer),
-	protocol.MethodSessionGetExecutionEnvironment: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		params, err := g.sessionExecutionRequestContract.Decode(req.Params)
-		if err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, fmt.Sprintf("decode params: %v", err))
-		}
-		response, err := g.deps.SessionViewClient().GetSessionExecutionEnvironment(ctx, params)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		return protocol.NewSuccessResponse(req.ID, response)
+	protocol.MethodSessionGetExecutionEnvironment: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+			return g.deps.SessionViewClient().GetSessionExecutionEnvironment(ctx, params)
+		})
 	},
 	protocol.MethodSessionGetInitialInput:   gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.GetInitialInput),
 	protocol.MethodSessionPersistInputDraft: gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.PersistInputDraft),
 	protocol.MethodSessionRetargetWorkspace: gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.RetargetSessionWorkspace),
 	protocol.MethodSessionResolveTransition: gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.ResolveTransition),
-	protocol.MethodSessionRuntimeActivate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+	protocol.MethodSessionRuntimeActivate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ActivateSessionRuntime(ctx, params)
 			if err != nil {
@@ -218,8 +204,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return resp, nil
 		})
 	},
-	protocol.MethodSessionRuntimeRelease: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
+	protocol.MethodSessionRuntimeRelease: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		return handlePrepared(req.ID, prepared, func(params serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
 			if err == nil && (resp.Released || params.DropOwner) {
@@ -248,24 +234,30 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeGoalResume:                     gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ResumeGoal),
 	protocol.MethodRuntimeGoalComplete:                   gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.CompleteGoal),
 	protocol.MethodRuntimeGoalClear:                      gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ClearGoal),
-	protocol.MethodProcessList: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
-			resp, err := g.deps.ProcessViewClient().ListProcesses(ctx, params)
-			if err != nil {
-				return serverapi.ProcessListResponse{}, err
-			}
-			if strings.TrimSpace(params.OwnerSessionID) != "" {
-				return resp, nil
-			}
-			filtered, err := g.filterProcessesForActiveProject(ctx, state, resp.Processes)
-			if err != nil {
-				return serverapi.ProcessListResponse{}, err
-			}
-			resp.Processes = filtered
-			return resp, nil
-		})
+	protocol.MethodProcessList: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		params, ok := prepared.(serverapi.ProcessListRequest)
+		if !ok {
+			return completeUnaryResponse(req.ID, nil, fmt.Errorf("prepared request has type %T", prepared), nil)
+		}
+		response, err := g.deps.ProcessViewClient().ListProcesses(ctx, params)
+		if err != nil {
+			return completeUnaryResponse(req.ID, nil, err, nil)
+		}
+		generated, err := protoapi.ProcessListSuccessToProto(response)
+		return completeUnaryResponse(req.ID, generated, err, generatedJSONResponseEncoder)
 	},
-	protocol.MethodProcessGet:          gatewayClientCall[apicontract.ProcessViewService, serverapi.ProcessGetRequest, serverapi.ProcessGetResponse](GatewayDependencies.ProcessViewClient, apicontract.ProcessViewService.GetProcess),
+	protocol.MethodProcessGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
+		params, ok := prepared.(serverapi.ProcessGetRequest)
+		if !ok {
+			return completeUnaryResponse(req.ID, nil, fmt.Errorf("prepared request has type %T", prepared), nil)
+		}
+		response, err := g.deps.ProcessViewClient().GetProcess(ctx, params)
+		if err != nil {
+			return completeUnaryResponse(req.ID, nil, err, nil)
+		}
+		generated, err := protoapi.ProcessGetSuccessToProto(response)
+		return completeUnaryResponse(req.ID, generated, err, generatedJSONResponseEncoder)
+	},
 	protocol.MethodProcessKill:         gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.KillProcess),
 	protocol.MethodProcessInlineOutput: gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.GetInlineOutput),
 	protocol.MethodAskListPending:      gatewayClientCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, apicontract.AskViewService.ListPendingAsksBySession),
