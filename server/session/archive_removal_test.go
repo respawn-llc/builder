@@ -1,0 +1,219 @@
+package session
+
+import (
+	"archive/tar"
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"core/shared/runtimeids"
+	"github.com/klauspost/compress/zstd"
+)
+
+type archivedEntry struct {
+	typeflag byte
+	linkname string
+	body     string
+}
+
+func TestArchiveAndRemoveSessionArtifactsPreserveUnknownContent(t *testing.T) {
+	parent := t.TempDir()
+	sessionID := runtimeids.NewSessionID()
+	realSessionDir := filepath.Join(parent, "real-session")
+	if err := os.MkdirAll(filepath.Join(realSessionDir, eventLogMigrationWorkspaceDir), 0o755); err != nil {
+		t.Fatalf("create Session directories: %v", err)
+	}
+	ownedFiles := map[string]string{
+		eventsFile:                  "events",
+		eventLogPersistenceLockFile: "lock",
+		appendRecoveryFile:          "recovery",
+		sessionRunLogFile:           "steps",
+		filepath.Join(eventLogMigrationWorkspaceDir, eventLogMigrationWorkspaceMarkerFile): "migration",
+		filepath.Join(eventLogMigrationWorkspaceDir, eventLogMigrationStagedLogFile):       "staged",
+		filepath.Join(eventLogMigrationWorkspaceDir, eventLogMigrationReadyMarkerFile):     "ready",
+	}
+	for relativePath, body := range ownedFiles {
+		writeArchiveFixtureFile(t, filepath.Join(realSessionDir, relativePath), body)
+	}
+	writeArchiveFixtureFile(t, filepath.Join(realSessionDir, "notes", "personal.txt"), "unknown")
+	if err := os.Symlink("../notes/personal.txt", filepath.Join(realSessionDir, "nested-link")); err != nil {
+		t.Skipf("nested symlinks unavailable: %v", err)
+	}
+
+	sessionAlias := filepath.Join(parent, "session-alias")
+	if err := os.Symlink(realSessionDir, sessionAlias); err != nil {
+		t.Skipf("root symlinks unavailable: %v", err)
+	}
+	outputPath := filepath.Join(sessionAlias, "analysis", "session.tar.zst")
+	if err := ArchiveSessionDirectory(context.Background(), sessionID, sessionAlias, outputPath); err != nil {
+		t.Fatalf("ArchiveSessionDirectory: %v", err)
+	}
+
+	entries := decodeArchiveFixture(t, outputPath)
+	root := sessionID.String()
+	want := map[string]archivedEntry{
+		root + "/":                                       {typeflag: tar.TypeDir},
+		root + "/" + eventsFile:                          {typeflag: tar.TypeReg, body: "events"},
+		root + "/" + eventLogPersistenceLockFile:         {typeflag: tar.TypeReg, body: "lock"},
+		root + "/" + appendRecoveryFile:                  {typeflag: tar.TypeReg, body: "recovery"},
+		root + "/" + sessionRunLogFile:                   {typeflag: tar.TypeReg, body: "steps"},
+		root + "/" + eventLogMigrationWorkspaceDir + "/": {typeflag: tar.TypeDir},
+		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationWorkspaceMarkerFile: {typeflag: tar.TypeReg, body: "migration"},
+		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationStagedLogFile:       {typeflag: tar.TypeReg, body: "staged"},
+		root + "/" + eventLogMigrationWorkspaceDir + "/" + eventLogMigrationReadyMarkerFile:     {typeflag: tar.TypeReg, body: "ready"},
+		root + "/notes/":             {typeflag: tar.TypeDir},
+		root + "/notes/personal.txt": {typeflag: tar.TypeReg, body: "unknown"},
+		root + "/nested-link":        {typeflag: tar.TypeSymlink, linkname: "../notes/personal.txt"},
+		root + "/analysis/":          {typeflag: tar.TypeDir},
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("archive entries = %#v, want %#v", entries, want)
+	}
+	for name, wantEntry := range want {
+		if got, ok := entries[name]; !ok || got != wantEntry {
+			t.Fatalf("archive entry %q = %#v, %t; want %#v", name, got, ok, wantEntry)
+		}
+	}
+	schedule, err := PreflightSessionArtifactRemoval(sessionAlias)
+	if err != nil {
+		t.Fatalf("PreflightSessionArtifactRemoval: %v", err)
+	}
+	if err := os.Remove(filepath.Join(realSessionDir, appendRecoveryFile)); err != nil {
+		t.Fatalf("remove scheduled recovery artifact: %v", err)
+	}
+	if err := RemovePreflightedSessionArtifacts(schedule); err != nil {
+		t.Fatalf("RemovePreflightedSessionArtifacts: %v", err)
+	}
+	for relativePath := range ownedFiles {
+		if _, err := os.Lstat(filepath.Join(realSessionDir, relativePath)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("owned artifact %q remains: %v", relativePath, err)
+		}
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("in-Session archive was not preserved: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(realSessionDir, "notes", "personal.txt")); err != nil || string(body) != "unknown" {
+		t.Fatalf("unknown content = %q, %v", body, err)
+	}
+	if _, err := os.Lstat(filepath.Join(realSessionDir, "nested-link")); err != nil {
+		t.Fatalf("unknown symlink was not preserved: %v", err)
+	}
+}
+
+func TestPreflightSessionArtifactRemovalLeavesArtifactsOnFailure(t *testing.T) {
+	sessionDir := t.TempDir()
+	eventsPath := filepath.Join(sessionDir, eventsFile)
+	writeArchiveFixtureFile(t, eventsPath, "events")
+	requireUnwritableDirectory(t, sessionDir)
+	_, err := PreflightSessionArtifactRemoval(sessionDir)
+	var preflightErr *SessionArtifactPreflightError
+	if !errors.As(err, &preflightErr) || preflightErr.Path != eventsPath {
+		t.Fatalf("PreflightSessionArtifactRemoval error = %v, want failure for %q", err, eventsPath)
+	}
+	if body, readErr := os.ReadFile(eventsPath); readErr != nil || string(body) != "events" {
+		t.Fatalf("events after failed preflight = %q, %v", body, readErr)
+	}
+}
+
+func TestRemovePreflightedSessionArtifactsReportsExactRemainingPath(t *testing.T) {
+	sessionDir := t.TempDir()
+	eventsPath := filepath.Join(sessionDir, eventsFile)
+	writeArchiveFixtureFile(t, eventsPath, "events")
+	schedule, err := PreflightSessionArtifactRemoval(sessionDir)
+	if err != nil {
+		t.Fatalf("PreflightSessionArtifactRemoval: %v", err)
+	}
+	requireUnwritableDirectory(t, sessionDir)
+	err = RemovePreflightedSessionArtifacts(schedule)
+	var removalErr *SessionArtifactRemovalError
+	if !errors.As(err, &removalErr) || removalErr.RemainingPath != eventsPath {
+		t.Fatalf("RemovePreflightedSessionArtifacts error = %v, want failure for %q", err, eventsPath)
+	}
+}
+
+func TestArchiveSessionDirectoryReportsFilesystemFailurePaths(t *testing.T) {
+	sessionDir := t.TempDir()
+	writeArchiveFixtureFile(t, filepath.Join(sessionDir, eventsFile), "events")
+	outputDir := filepath.Join(t.TempDir(), "output")
+	if err := os.Mkdir(outputDir, 0o500); err != nil {
+		t.Fatalf("create unwritable output directory: %v", err)
+	}
+	requireUnwritableDirectory(t, outputDir)
+	outputPath := filepath.Join(outputDir, "session.tar.zst")
+	err := ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sessionDir, outputPath)
+	var pathErr *ArchivePathError
+	if !errors.As(err, &pathErr) || pathErr.Path != outputPath {
+		t.Fatalf("archive path error = %+v, want path %q", pathErr, outputPath)
+	}
+	if _, statErr := os.Lstat(outputPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output exists after failure: %v", statErr)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "missing")
+	if err = ArchiveSessionDirectory(context.Background(), runtimeids.NewSessionID(), sourcePath, filepath.Join(t.TempDir(), "source.tar.zst")); !errors.As(err, &pathErr) || pathErr.Path != sourcePath {
+		t.Fatalf("archive source error = %v, want path %q", err, sourcePath)
+	}
+	cleanupErr := (&preparedSessionArchive{outputPath: outputPath, tempPath: sessionDir}).cleanup()
+	if !errors.As(cleanupErr, &pathErr) || pathErr.Path != sessionDir {
+		t.Fatalf("archive cleanup error = %v, want path %q", cleanupErr, sessionDir)
+	}
+}
+
+func requireUnwritableDirectory(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Chmod(path, 0o500); err != nil {
+		t.Fatalf("make directory unwritable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o700) })
+	probePath := filepath.Join(path, "write-probe")
+	if err := os.WriteFile(probePath, nil, 0o600); err == nil {
+		_ = os.Remove(probePath)
+		t.Skip("directory modes are not enforced")
+	}
+}
+
+func writeArchiveFixtureFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create parent for %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func decodeArchiveFixture(t *testing.T, path string) map[string]archivedEntry {
+	t.Helper()
+	fp, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	defer fp.Close()
+	decoder, err := zstd.NewReader(fp)
+	if err != nil {
+		t.Fatalf("create Zstandard decoder: %v", err)
+	}
+	defer decoder.Close()
+	reader := tar.NewReader(decoder)
+	entries := make(map[string]archivedEntry)
+	for {
+		header, nextErr := reader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			return entries
+		}
+		if nextErr != nil {
+			t.Fatalf("read archive entry: %v", nextErr)
+		}
+		body, readErr := io.ReadAll(reader)
+		if readErr != nil {
+			t.Fatalf("read archive body %q: %v", header.Name, readErr)
+		}
+		entries[header.Name] = archivedEntry{
+			typeflag: header.Typeflag,
+			linkname: header.Linkname,
+			body:     string(body),
+		}
+	}
+}

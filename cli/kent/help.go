@@ -145,6 +145,21 @@ var (
 	rootUsage           = commandUsage{helpFile: "root.txt", includeEmbeddedFlags: true}
 	runUsage            = commandUsage{helpFile: "run.txt", includeEmbeddedFlags: true}
 	sessionIDUsage      = commandUsage{helpFile: "session_id.txt"}
+	sessionUsage        = commandUsage{helpFile: "session.txt"}
+	sessionArchiveUsage = leafCommandUsage(
+		config.Command+" session archive <session-id> --output <path> [--json]",
+		"Archive and remove a Session.",
+		"",
+		"The output path must be an absolute .tar.zst path on the Kent server and must not already exist.",
+	)
+	sessionDeleteUsage = commandUsage{
+		title: "Usage:",
+		lines: []string{
+			"  " + config.Command + " session delete <session-id> [--json]",
+			"",
+			"Permanently remove a Session without creating an archive.",
+		},
+	}
 	goalUsage           = commandUsage{helpFile: "goal.txt"}
 	goalShowUsage       = leafCommandUsage(config.Command+" goal show [--json] [--session <id>]", "Show a session's goal and status.")
 	goalSetUsage        = leafCommandUsage(config.Command+" goal set [--session <id>] <objective>", "Set the objective that guides a session.")
