@@ -122,7 +122,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		return nil, err
 	}
 	plan := result.Plan
-	if plan.Goal != nil {
+	if plan.Goal != nil && !retained {
 		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
 	}
 	agentSteer, err := agentSteerForRunPrompt(req, openingExisting)

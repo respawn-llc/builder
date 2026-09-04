@@ -19,7 +19,7 @@ func TestCurrentNodeControllerSessionOwnershipRequiresCurrentNodeBinding(t *test
 		t.Fatalf("ParseSessionID: %v", err)
 	}
 	store := &currentNodeControllerStore{
-		interrupted: []workflow.CurrentNode{{Reference: reference}},
+		interrupted:   []workflow.CurrentNode{{Reference: reference}},
 		sessionTaskID: &taskID,
 		sessionAssociation: &workflowstore.TaskSessionAssociation{
 			SessionID:   sessionID,
