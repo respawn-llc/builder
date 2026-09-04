@@ -99,16 +99,12 @@ function QuestionOptions({
             }
             key={`${String(optionNumber)}-${suggestion}`}
           >
-            {selected ? (
-              <CircleDot aria-hidden="true" className="size-4 shrink-0" />
-            ) : (
-              <Circle aria-hidden="true" className="size-4 shrink-0" />
-            )}
+            {selected ? <CircleDot className="size-4 shrink-0" /> : <Circle className="size-4 shrink-0" />}
             <span className="shrink-0">{optionNumber}.</span>
             <div className="min-w-0 flex-1">
               <StaticMarkdown value={suggestion} />
             </div>
-            {recommended ? <Star aria-hidden="true" className="size-3 shrink-0 fill-current" /> : null}
+            {recommended ? <Star className="size-3 shrink-0 fill-current" /> : null}
           </div>
         );
       })}
@@ -119,7 +115,7 @@ function QuestionOptions({
 function QuestionAnswerText({ text }: Readonly<{ text: string }>) {
   return (
     <div className="chat-transcript-question-answer">
-      <CornerDownRight aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+      <CornerDownRight className="mt-0.5 size-4 shrink-0" />
       <span className="whitespace-pre-wrap break-words select-text">{text}</span>
     </div>
   );

@@ -56,7 +56,7 @@ export function TranscriptCopyAction({
       }}
       size="icon-sm"
     >
-      <span aria-hidden="true" className="chat-transcript-copy-icon relative grid size-4 place-items-center">
+      <span className="chat-transcript-copy-icon relative grid size-4 place-items-center">
         <Copy className={cx("absolute size-4 transition-opacity", copied && "opacity-0")} />
         <Check
           className={cx(
