@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { useCallback } from "react";
 
 import { appI18n, initializeI18n } from "@/i18n";
+import type { SessionChatTarget } from "@/app-facade";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { HomeProjectContent } from "./HomeProjectContent";
 
@@ -11,20 +12,34 @@ type ProjectQueryFixture = Readonly<{
   isPending: boolean;
 }>;
 
-const fixture = vi.hoisted((): { projectQuery: ProjectQueryFixture } => ({
-  projectQuery: {
-    data: { displayName: "Kent", projectKey: "KNT" },
-    error: null,
-    isPending: false,
-  },
-}));
+const fixture = vi.hoisted(
+  (): {
+    projectQuery: ProjectQueryFixture;
+    sessions: readonly {
+      id: string;
+      category: "main" | "subagent";
+      name: string | null;
+      firstPromptPreview: string | null;
+      updatedAt: number;
+    }[];
+    sessionTargets: SessionChatTarget[];
+  } => ({
+    projectQuery: {
+      data: { displayName: "Kent", projectKey: "KNT" },
+      error: null,
+      isPending: false,
+    },
+    sessions: [],
+    sessionTargets: [],
+  }),
+);
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
   useQueryClient: () => ({ invalidateQueries: vi.fn(), resetQueries: vi.fn() }),
   useQuery: () => fixture.projectQuery,
   useInfiniteQuery: () => ({
-    data: { pages: [] },
+    data: { pages: [{ sessions: fixture.sessions }] },
     error: null,
     fetchNextPage: vi.fn(),
     hasNextPage: false,
@@ -37,7 +52,13 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 
 vi.mock("@/app-facade", async (importOriginal) => ({
   ...(await importOriginal()),
-  useAppNavigation: () => ({ selectHomeProject: vi.fn() }),
+  useAppNavigation: () => ({
+    openSessionChat: async (target: SessionChatTarget) => {
+      fixture.sessionTargets.push(target);
+    },
+    selectHomeProject: vi.fn(),
+  }),
+  useSessionChatCatalogReturn: () => null,
   useAppServices: () => ({ api: {} }),
   useOwnedSidebarRoots: () => ({ open: vi.fn() }),
 }));
@@ -74,6 +95,8 @@ beforeEach(() => {
     error: null,
     isPending: false,
   };
+  fixture.sessions = [];
+  fixture.sessionTargets = [];
 });
 
 it("renders the Task surface while selected Project metadata is pending", () => {
@@ -115,4 +138,31 @@ it("renders Tasks directly when Desktop Sessions are unavailable", () => {
   expect(
     screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
   ).toBeInTheDocument();
+});
+
+it.each([
+  ["main", "sessions"],
+  ["subagent", "subagents"],
+] as const)("opens a %s catalog row through Session Chat navigation", async (category, tabLabel) => {
+  fixture.sessions = [
+    {
+      category,
+      firstPromptPreview: "Review the change",
+      id: `${category}-session`,
+      name: "Review chat",
+      updatedAt: 1,
+    },
+  ];
+
+  render(<HomeProjectContent projectID="project-1" sessionsVisible sidebarMode="shift" />);
+  fireEvent.click(screen.getByRole("tab", { name: appI18n.t(`home.prototype.${tabLabel}`) }));
+  fireEvent.click(await screen.findByTestId("home-list-card-button"));
+
+  expect(fixture.sessionTargets).toEqual([
+    {
+      catalogOrigin: { category },
+      projectID: "project-1",
+      sessionID: `${category}-session`,
+    },
+  ]);
 });

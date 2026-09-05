@@ -1,9 +1,11 @@
 import { useTranslation } from "react-i18next";
 
 import { SidebarRootOwner, useAppNavigation, useOwnedSidebarRoots } from "@/app-facade";
+import { desktopChatEnabled } from "@/shared/feature-flags";
 import { Button } from "@/ui";
 import { TaskDetailSurface } from "./TaskDetailSurface";
 import { useExactTaskDetailDeleteDismissal } from "./taskDetailDismissal";
+import type { TaskDetailSessionChatEntry } from "./taskDetailSessionChat";
 
 export type StandaloneTaskRouteProps = Readonly<{
   taskId: string;
@@ -21,6 +23,9 @@ function OwnedStandaloneTaskRoute({ taskId }: StandaloneTaskRouteProps) {
   const { t } = useTranslation();
   const navigation = useAppNavigation();
   const { open } = useOwnedSidebarRoots();
+  const openSessionChat: TaskDetailSessionChatEntry | undefined = desktopChatEnabled
+    ? async (target) => navigation.openSessionChat(target)
+    : undefined;
   const onDeleteDismiss = useExactTaskDetailDeleteDismissal(taskId, async () => {
     await navigation.openHome();
   });
@@ -32,7 +37,13 @@ function OwnedStandaloneTaskRoute({ taskId }: StandaloneTaskRouteProps) {
           {t("app.backHome")}
         </Button>
       </header>
-      <TaskDetailSurface enabled onDeleteDismiss={onDeleteDismiss} openSidebar={open} taskId={taskId} />
+      <TaskDetailSurface
+        enabled
+        onDeleteDismiss={onDeleteDismiss}
+        openSessionChat={openSessionChat}
+        openSidebar={open}
+        taskId={taskId}
+      />
     </section>
   );
 }

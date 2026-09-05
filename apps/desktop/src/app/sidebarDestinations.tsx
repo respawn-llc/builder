@@ -6,7 +6,7 @@ import { errorMessage } from "@/api";
 import { ProjectDeleteButton, ProjectEditRoute } from "@/features/project-edit";
 import { ProcessesSidebar } from "@/features/processes";
 import { SidebarInboxNav } from "@/features/home";
-import { TaskDetailSurface } from "@/features/task-detail";
+import { TaskDetailSurface, type TaskDetailSessionChatEntry } from "@/features/task-detail";
 import { NewTaskForm } from "@/features/tasks";
 import {
   WorkflowDeleteButton,
@@ -14,6 +14,7 @@ import {
   WorkflowInspectorSidebar,
 } from "@/features/workflow-editor";
 import { LinkWorkflowSidebar, WorkflowCreateForm } from "@/features/workflows";
+import { desktopChatEnabled } from "@/shared/feature-flags";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import {
   sidebarTitle,
@@ -85,6 +86,15 @@ function TaskDetailDestination({
   navigator: SidebarPageNavigator;
   retainedState?: unknown;
 }>): ReactElement {
+  const navigation = useAppNavigation();
+  const openSessionChat: TaskDetailSessionChatEntry | undefined = desktopChatEnabled
+    ? async (target) => {
+        if (navigator.close() !== "accepted") {
+          return;
+        }
+        await navigation.openSessionChat(target);
+      }
+    : undefined;
   usePublishSidebarHeaderAction(<TaskDetailHeaderActions destination={destination} navigator={navigator} />);
   return (
     <TaskDetailSurface
@@ -92,6 +102,7 @@ function TaskDetailDestination({
       initialFocus={destination.initialFocus}
       navigator={navigator}
       onMutated={destination.onMutated}
+      openSessionChat={openSessionChat}
       retainedState={retainedState}
       sidebarDestination={destination}
       sidebarMode={destination.mode}
