@@ -254,14 +254,14 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 					},
 				}},
 			})
-			if len(hydration.CommittedRows) != 1 ||
-				hydration.CommittedRows[0].Tool == nil ||
-				hydration.CommittedRows[0].Tool.Presentation == nil ||
-				hydration.CommittedRows[0].Tool.Presentation.PatchPresentation == nil ||
-				hydration.CommittedRows[0].Tool.Presentation.PatchPresentation.Changes == nil {
-				t.Fatalf("projected deletion row = %+v", hydration.CommittedRows)
+			if len(hydration.TailSegment.Entries) != 1 ||
+				hydration.TailSegment.Entries[0].Tool == nil ||
+				hydration.TailSegment.Entries[0].Tool.Presentation == nil ||
+				hydration.TailSegment.Entries[0].Tool.Presentation.PatchPresentation == nil ||
+				hydration.TailSegment.Entries[0].Tool.Presentation.PatchPresentation.Changes == nil {
+				t.Fatalf("projected deletion row = %+v", hydration.TailSegment.Entries)
 			}
-			file := hydration.CommittedRows[0].Tool.Presentation.PatchPresentation.Changes.Files[0]
+			file := hydration.TailSegment.Entries[0].Tool.Presentation.PatchPresentation.Changes.Files[0]
 			removed = patchformat.RemovedLineCount(file)
 			if test.wantRemoved == nil {
 				if removed != nil {
@@ -283,7 +283,11 @@ const (
 
 func mustTranscriptHydration(t *testing.T, snapshot runtime.TranscriptHydrationSnapshot) clientui.TranscriptHydration {
 	t.Helper()
-	hydration, err := TranscriptHydrationFromSnapshotChecked(snapshot)
+	tailSegment, err := transcriptTailSegmentFromFactsChecked(snapshot.CommittedRows, nil, false)
+	if err != nil {
+		t.Fatalf("project transcript hydration tail: %v", err)
+	}
+	hydration, err := TranscriptHydrationFromSnapshotChecked(snapshot, tailSegment)
 	if err != nil {
 		t.Fatalf("TranscriptHydrationFromSnapshot: %v", err)
 	}
@@ -313,7 +317,7 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 }
 
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
 			StepID: transcriptProjectionStepID, Text: "Planning",
 		},
@@ -351,7 +355,7 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing.T) {
 	firstIndex, secondIndex := int64(0), int64(1)
 	firstID := runtimeids.NewReasoningTraceID()
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Kent: &firstID}, Text: "first"},
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex}}, Text: "second"},
@@ -429,10 +433,10 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 			},
 		}},
 	})
-	if len(hydration.CommittedRows) != 1 {
-		t.Fatalf("hydration rows = %+v, want one committed row", hydration.CommittedRows)
+	if len(hydration.TailSegment.Entries) != 1 {
+		t.Fatalf("hydration rows = %+v, want one committed row", hydration.TailSegment.Entries)
 	}
-	if got := hydration.CommittedRows[0].Visibility; got != clientui.EntryVisibilityHidden {
+	if got := hydration.TailSegment.Entries[0].Visibility; got != clientui.EntryVisibilityHidden {
 		t.Fatalf("hydration visibility = %q, want hidden", got)
 	}
 }
@@ -535,7 +539,7 @@ func TestRuntimeScopedToolCompletionProjectsLiveAndHydratedWithoutExactStep(t *t
 		t.Fatalf("Runtime live tool Step provenance = %+v, want absent", liveRow.Tool)
 	}
 
-	hydration, err := TranscriptHydrationFromSnapshotChecked(runtime.TranscriptHydrationSnapshot{
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{
 			{
 				Visibility: transcript.EntryVisibilityOngoing,
@@ -559,20 +563,17 @@ func TestRuntimeScopedToolCompletionProjectsLiveAndHydratedWithoutExactStep(t *t
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("hydrate Runtime-scoped rows: %v", err)
+	if len(hydration.TailSegment.Entries) != 2 {
+		t.Fatalf("Runtime hydration rows = %+v, want user and tool", hydration.TailSegment.Entries)
 	}
-	if len(hydration.CommittedRows) != 2 {
-		t.Fatalf("Runtime hydration rows = %+v, want user and tool", hydration.CommittedRows)
-	}
-	for index := range hydration.CommittedRows {
-		if err := hydration.CommittedRows[index].Validate(); err != nil {
+	for index := range hydration.TailSegment.Entries {
+		if err := hydration.TailSegment.Entries[index].Validate(); err != nil {
 			t.Fatalf("Runtime hydration row %d failed validation: %v", index, err)
 		}
 	}
-	if hydration.CommittedRows[0].User == nil || hydration.CommittedRows[0].User.StepID != nil ||
-		hydration.CommittedRows[1].Tool == nil || hydration.CommittedRows[1].Tool.StepID != nil {
-		t.Fatalf("Runtime hydration Step provenance = %+v, want absent", hydration.CommittedRows)
+	if hydration.TailSegment.Entries[0].User == nil || hydration.TailSegment.Entries[0].User.StepID != nil ||
+		hydration.TailSegment.Entries[1].Tool == nil || hydration.TailSegment.Entries[1].Tool.StepID != nil {
+		t.Fatalf("Runtime hydration Step provenance = %+v, want absent", hydration.TailSegment.Entries)
 	}
 }
 
@@ -623,13 +624,13 @@ func TestTranscriptReasoningDurationProjectsHydrationAndBoundedPage(t *testing.T
 			DurationMs:  &durationMs,
 		},
 	}
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{fact},
 	})
-	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].ReasoningTrace == nil ||
-		hydration.CommittedRows[0].ReasoningTrace.DurationMs == nil ||
-		*hydration.CommittedRows[0].ReasoningTrace.DurationMs != durationMs {
-		t.Fatalf("hydrated reasoning duration = %+v", hydration.CommittedRows)
+	if len(hydration.TailSegment.Entries) != 1 || hydration.TailSegment.Entries[0].ReasoningTrace == nil ||
+		hydration.TailSegment.Entries[0].ReasoningTrace.DurationMs == nil ||
+		*hydration.TailSegment.Entries[0].ReasoningTrace.DurationMs != durationMs {
+		t.Fatalf("hydrated reasoning duration = %+v", hydration.TailSegment.Entries)
 	}
 
 	page, err := TranscriptPageFromSegment(
@@ -775,10 +776,10 @@ func TestTranscriptProjectionCanonicalizesBlankPersistedAssistantPhase(t *testin
 			},
 		}},
 	})
-	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].Assistant == nil {
-		t.Fatalf("hydration rows = %+v, want one assistant row", hydration.CommittedRows)
+	if len(hydration.TailSegment.Entries) != 1 || hydration.TailSegment.Entries[0].Assistant == nil {
+		t.Fatalf("hydration rows = %+v, want one assistant row", hydration.TailSegment.Entries)
 	}
-	if got := hydration.CommittedRows[0].Assistant.Phase; got != transcript.AssistantPhaseFinal {
+	if got := hydration.TailSegment.Entries[0].Assistant.Phase; got != transcript.AssistantPhaseFinal {
 		t.Fatalf("persisted assistant phase = %q, want canonical final phase", got)
 	}
 }

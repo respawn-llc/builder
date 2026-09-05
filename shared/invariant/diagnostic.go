@@ -22,7 +22,7 @@ type Field string
 const (
 	FieldOperation                 Field = "operation"
 	FieldSessionID                 Field = "session_id"
-	FieldPromptID                  Field = "prompt_id"
+	FieldToolCallID                Field = "tool_call_id"
 	FieldCachedServerActivity      Field = "cached_server_activity"
 	FieldLocalProjection           Field = "local_projection"
 	FieldPendingInterrupt          Field = "pending_interrupt"
@@ -83,9 +83,9 @@ func FailureDiagnostic(scope Scope, operation string, cause error) Diagnostic {
 	}
 }
 
-func WorkflowPromptDiagnostic(operation string, promptID string, cause error) Diagnostic {
+func WorkflowPromptDiagnostic(operation string, toolCallID string, cause error) Diagnostic {
 	diagnostic := FailureDiagnostic(ScopeWorkflowExecution, operation, cause)
-	diagnostic.Fields[FieldPromptID] = promptID
+	diagnostic.Fields[FieldToolCallID] = toolCallID
 	return diagnostic
 }
 

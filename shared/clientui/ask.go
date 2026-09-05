@@ -7,7 +7,7 @@ import (
 )
 
 type PendingAsk struct {
-	PromptID               PromptID
+	ToolCallID             ToolCallID
 	SessionID              runtimeids.SessionID
 	StepID                 runtimeids.StepID
 	Question               string

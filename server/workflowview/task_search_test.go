@@ -461,8 +461,8 @@ func TestTaskSearchProjectsLiveSessionApprovalStatus(t *testing.T) {
 						Executions: []sessionruntime.TaskExecution{{
 							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
 							PendingPrompts: []sessionruntime.PendingPromptReference{{
-								ID:   "approval",
-								Kind: sessionruntime.PendingPromptKindSessionApproval,
+								ToolCallID: "approval",
+								Kind:       sessionruntime.PendingPromptKindSessionApproval,
 							}},
 						}},
 					},

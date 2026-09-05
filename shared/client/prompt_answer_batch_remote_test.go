@@ -24,30 +24,30 @@ func TestRemoteAnswerPromptBatchValidatesExactResponseIdentitySet(t *testing.T) 
 		{
 			name: "reordered exact set",
 			response: serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{
-				{PromptID: "approval-1", Outcome: serverapi.PromptAnswerBatchOutcomeSkipped},
-				{PromptID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "approval-1", Outcome: serverapi.PromptAnswerBatchOutcomeSkipped},
+				{ToolCallID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
 			}},
 		},
 		{
 			name: "missing identity",
 			response: serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{
-				{PromptID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
 			}},
 			wantErr: true,
 		},
 		{
 			name: "foreign identity",
 			response: serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{
-				{PromptID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
-				{PromptID: "foreign", Outcome: serverapi.PromptAnswerBatchOutcomeSkipped},
+				{ToolCallID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "foreign", Outcome: serverapi.PromptAnswerBatchOutcomeSkipped},
 			}},
 			wantErr: true,
 		},
 		{
 			name: "duplicate identity",
 			response: serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{
-				{PromptID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
-				{PromptID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeSkipped},
+				{ToolCallID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcomeSkipped},
 			}},
 			wantErr: true,
 		},
@@ -149,8 +149,8 @@ func TestRemoteAnswerPromptBatchDoesNotReconnectOrReplayAfterConnectionLoss(t *t
 			}
 			for _, entry := range params.Entries {
 				response.Results = append(response.Results, serverapi.PromptAnswerBatchResult{
-					PromptID: entry.PromptID,
-					Outcome:  serverapi.PromptAnswerBatchOutcomeSkipped,
+					ToolCallID: entry.ToolCallID,
+					Outcome:    serverapi.PromptAnswerBatchOutcomeSkipped,
 				})
 			}
 			if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(request.ID, response))); err != nil {
@@ -221,12 +221,12 @@ func remotePromptAnswerBatchRequest(t *testing.T) serverapi.PromptAnswerBatchReq
 		StepID:    stepID,
 		Entries: []serverapi.PromptAnswerBatchEntry{
 			{
-				PromptID:       clientui.PromptID("question-1"),
+				ToolCallID:     clientui.ToolCallID("question-1"),
 				QuestionAnswer: &serverapi.PromptQuestionAnswer{SelectedOptionNumber: &selected},
 			},
 			{
-				PromptID: clientui.PromptID("approval-1"),
-				Declined: &serverapi.PromptDeclined{},
+				ToolCallID: clientui.ToolCallID("approval-1"),
+				Declined:   &serverapi.PromptDeclined{},
 			},
 		},
 	}

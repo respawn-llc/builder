@@ -17,21 +17,26 @@ import (
 	"github.com/google/uuid"
 )
 
-func TranscriptHydrationFromSnapshot(runtimeSnapshot runtime.TranscriptHydrationSnapshot) clientui.TranscriptHydration {
-	hydration, err := TranscriptHydrationFromSnapshotChecked(runtimeSnapshot)
+func TranscriptHydrationFromSnapshot(
+	runtimeSnapshot runtime.TranscriptHydrationSnapshot,
+	tailSegment clientui.TranscriptTailSegment,
+) clientui.TranscriptHydration {
+	hydration, err := TranscriptHydrationFromSnapshotChecked(runtimeSnapshot, tailSegment)
 	if err != nil {
 		panic(err)
 	}
 	return hydration
 }
 
-func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHydrationSnapshot) (clientui.TranscriptHydration, error) {
-	rows, err := transcriptRowsFromFactsChecked(runtimeSnapshot.CommittedRows)
-	if err != nil {
-		return clientui.TranscriptHydration{}, err
+func TranscriptHydrationFromSnapshotChecked(
+	runtimeSnapshot runtime.TranscriptHydrationSnapshot,
+	tailSegment clientui.TranscriptTailSegment,
+) (clientui.TranscriptHydration, error) {
+	if err := tailSegment.Validate(); err != nil {
+		return clientui.TranscriptHydration{}, fmt.Errorf("validate transcript hydration tail segment: %w", err)
 	}
 	hydration := clientui.TranscriptHydration{
-		CommittedRows:   rows,
+		TailSegment:     tailSegment,
 		ActiveAssistant: transcriptAssistantStream(runtimeSnapshot),
 	}
 	hydration.ActiveThinkingStatus = transcriptThinkingStatusFromRuntime(runtimeSnapshot.ActiveThinkingStatus)

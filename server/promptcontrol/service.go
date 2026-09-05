@@ -26,7 +26,7 @@ type PendingPromptResponder interface {
 		context.Context,
 		runtimeids.SessionID,
 		runtimeids.StepID,
-		clientui.PromptID,
+		clientui.ToolCallID,
 	) (serverapi.PromptFollowUpSubscription, error)
 }
 
@@ -50,7 +50,7 @@ func (s *PromptControlService) AnswerPromptBatch(
 	}
 	commands := make([]sessionruntime.PromptAnswerCommand, 0, len(req.Entries))
 	for _, entry := range req.Entries {
-		command := sessionruntime.PromptAnswerCommand{PromptID: entry.PromptID}
+		command := sessionruntime.PromptAnswerCommand{ToolCallID: entry.ToolCallID}
 		switch {
 		case entry.QuestionAnswer != nil:
 			command.Payload = sessionruntime.PromptQuestionAnswerCommand{
@@ -69,7 +69,7 @@ func (s *PromptControlService) AnswerPromptBatch(
 		case entry.Declined != nil:
 			command.Payload = sessionruntime.PromptDeclinedCommand{}
 		default:
-			return serverapi.PromptAnswerBatchResponse{}, reportPromptBatchTranslationInvariant(entry.PromptID)
+			return serverapi.PromptAnswerBatchResponse{}, reportPromptBatchTranslationInvariant(entry.ToolCallID)
 		}
 		commands = append(commands, command)
 	}
@@ -85,13 +85,13 @@ func (s *PromptControlService) AnswerPromptBatch(
 		case sessionruntime.PromptAnswerOutcomeResolved:
 			response.Results = appendPromptAnswerBatchResult(
 				response.Results,
-				result.PromptID,
+				result.ToolCallID,
 				serverapi.PromptAnswerBatchOutcomeResolved,
 			)
 		case sessionruntime.PromptAnswerOutcomeSkipped:
 			response.Results = appendPromptAnswerBatchResult(
 				response.Results,
-				result.PromptID,
+				result.ToolCallID,
 				serverapi.PromptAnswerBatchOutcomeSkipped,
 			)
 		default:
@@ -117,14 +117,14 @@ func (s *PromptControlService) SubscribeFollowUp(
 	if s == nil || s.prompts == nil {
 		return nil, errors.New("prompt responder is required")
 	}
-	return s.prompts.SubscribePromptFollowUp(ctx, req.SessionID, req.StepID, req.PromptID)
+	return s.prompts.SubscribePromptFollowUp(ctx, req.SessionID, req.StepID, req.ToolCallID)
 }
 
-func reportPromptBatchTranslationInvariant(promptID clientui.PromptID) error {
-	err := fmt.Errorf("validated prompt answer batch entry %q has no disposition", promptID)
+func reportPromptBatchTranslationInvariant(toolCallID clientui.ToolCallID) error {
+	err := fmt.Errorf("validated prompt answer batch entry %q has no disposition", toolCallID)
 	invariant.NewPolicy().Check(false, invariant.WorkflowPromptDiagnostic(
 		"translate_prompt_answer_batch_entry",
-		string(promptID),
+		string(toolCallID),
 		err,
 	))
 	return err
@@ -132,12 +132,12 @@ func reportPromptBatchTranslationInvariant(promptID clientui.PromptID) error {
 
 func appendPromptAnswerBatchResult(
 	results []serverapi.PromptAnswerBatchResult,
-	promptID clientui.PromptID,
+	toolCallID clientui.ToolCallID,
 	outcome serverapi.PromptAnswerBatchOutcome,
 ) []serverapi.PromptAnswerBatchResult {
 	return append(results, serverapi.PromptAnswerBatchResult{
-		PromptID: promptID,
-		Outcome:  outcome,
+		ToolCallID: toolCallID,
+		Outcome:    outcome,
 	})
 }
 

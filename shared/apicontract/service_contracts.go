@@ -5,6 +5,7 @@ import (
 
 	authpb "core/shared/protoapi/gen/kent/api/auth"
 	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
+	chatpb "core/shared/protoapi/gen/kent/api/chat"
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
@@ -42,6 +43,12 @@ type CapabilityFactsService interface {
 
 type ChatContextService interface {
 	GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error)
+}
+
+type ChatMutationService interface {
+	Steer(ctx context.Context, req *chatpb.SteerRequest) (*chatpb.InputMutationSuccess, error)
+	Queue(ctx context.Context, req *chatpb.QueueRequest) (*chatpb.InputMutationSuccess, error)
+	Compact(ctx context.Context, req *chatpb.CompactRequest) (*chatpb.CompactionMutationSuccess, error)
 }
 
 type PromptCommandCatalogService interface {
@@ -135,8 +142,6 @@ type SessionTranscriptService interface {
 
 type SessionLaunchService interface {
 	PlanSession(ctx context.Context, req *sessionlaunchpb.SessionPlanRequest) (*sessionlaunchpb.SessionPlanSuccess, error)
-	WorkspaceChatDraft(ctx context.Context, req *sessionlaunchpb.WorkspaceChatDraftRequest) (*sessionlaunchpb.WorkspaceChatDraftSuccess, error)
-	MaterializeWorkspaceChat(ctx context.Context, req *emptypb.Empty) (*sessionlaunchpb.MaterializeWorkspaceChatSuccess, error)
 }
 
 type ChatSettingsService interface {

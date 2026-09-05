@@ -8,10 +8,11 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/runtimeinput"
 	"core/shared/textutil"
 )
 
-func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
+func TestPostTurnQueueStartsAfterActiveTurnCompletes(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}}}}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	started := make(chan struct{})
@@ -34,21 +35,12 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 		err  error
 	}, 1)
 	go func() {
-		queued, err := engine.QueueUserMessage(t.Context(), "queued input")
+		queued, err := engine.QueueUserInput(t.Context(), plainQueuedUserInput("queued input"))
 		queuedDone <- struct {
 			item QueuedUserMessage
 			err  error
 		}{item: queued, err: err}
 	}()
-	select {
-	case result := <-queuedDone:
-		t.Fatalf("post-turn Queue applied before the protected Step boundary: %+v/%v", result.item, result.err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("active turn completion: %v", err)
-	}
 	var queued QueuedUserMessage
 	select {
 	case result := <-queuedDone:
@@ -57,40 +49,81 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 		}
 		queued = result.item
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("post-turn Queue did not apply at the protected Step boundary")
+		t.Fatal("post-turn Queue did not accept while the active turn was running")
+	}
+	if calls := fakeClientCallCount(client); calls != 0 {
+		t.Fatalf("queued work model calls before active turn completion = %d, want 0", calls)
+	}
+	pending, err := engine.PendingWorkSnapshot()
+	if err != nil {
+		t.Fatalf("PendingWorkSnapshot: %v", err)
+	}
+	if len(pending.Items) != 1 ||
+		pending.Items[0].ID.String() != queued.ID ||
+		pending.Items[0].Lane != runtimeinput.PendingWorkLaneQueue {
+		t.Fatalf("active post-turn Pending Work = %+v", pending.Items)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("active turn completion: %v", err)
 	}
 	if queued.ID == "" {
 		t.Fatal("post-turn Queue accepted an empty item")
 	}
 	waitEngineLifecycleTasks(t, engine)
-	if calls := fakeClientCallCount(client); calls != 0 {
-		t.Fatalf("queued work model calls = %d, want no independent turn", calls)
+	if calls := fakeClientCallCount(client); calls != 1 {
+		t.Fatalf("queued work model calls = %d, want 1", calls)
 	}
-	if !engine.HasQueuedUserWork() {
-		t.Fatal("post-turn Queue did not remain pending for an Agent Turn")
+	if engine.HasQueuedUserWork() {
+		t.Fatal("post-turn Queue remained pending after the active turn completed")
+	}
+}
+
+func TestPostTurnQueueStartsImmediatelyWhenRuntimeIsIdle(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("queued work handled"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+	}}}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	queued, err := engine.QueueUserInput(t.Context(), plainQueuedUserInput("queued input"))
+	if err != nil {
+		t.Fatalf("QueueUserMessage: %v", err)
+	}
+	if queued.ID == "" {
+		t.Fatal("QueueUserMessage returned no Queue Item identity")
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if calls := fakeClientCallCount(client); calls != 1 {
+		t.Fatalf("queued work model calls = %d, want 1", calls)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("idle Queue item remained pending after its immediate turn")
 	}
 }
 
 func TestQueuedUserMessageCallerCancellationStopsWaitAndPreventsLaterAcceptance(t *testing.T) {
 	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), &fakeClient{}, Config{Model: "gpt-5"})
-	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
-		t.Fatalf("pause Runtime FIFO: %v", err)
-	}
 	caller, cancel := context.WithCancel(t.Context())
+	reached := make(chan struct{})
 	accept := func(commit func() (bool, error)) (bool, error) {
-		select {
-		case <-caller.Done():
-			return false, context.Cause(caller)
-		default:
-			return commit()
-		}
+		close(reached)
+		<-caller.Done()
+		return false, context.Cause(caller)
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := engine.QueueUserMessageForAutoDrainWithAcceptance(caller, "canceled input", accept)
+		_, err := engine.QueueUserInputWithAcceptance(caller, plainQueuedUserInput("canceled input"), accept)
 		done <- err
 	}()
-	waitForPendingRuntimeOperation(t, engine)
+	select {
+	case <-reached:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("Queue acceptance was not reached")
+	}
 
 	cancel()
 	select {
@@ -101,10 +134,7 @@ func TestQueuedUserMessageCallerCancellationStopsWaitAndPreventsLaterAcceptance(
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("canceled Queue caller remained blocked")
 	}
-	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
-		t.Fatalf("drain rejected Queue operation: %v", err)
-	}
 	if engine.HasQueuedUserWork() {
-		t.Fatal("canceled caller created Pending Work after the Runtime boundary")
+		t.Fatal("canceled caller created Pending Work")
 	}
 }

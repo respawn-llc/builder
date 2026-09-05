@@ -90,10 +90,10 @@ func workflowViewQuestionAnswer(answer string) tools.AskQuestionAnswer {
 
 func workflowViewApprovalRequest() tools.AskQuestionRequest {
 	return tools.AskQuestionRequest{
-		ID:       uuid.NewString(),
-		StepID:   uuid.NewString(),
-		Question: "Approve this workflow action?",
-		Approval: true,
+		ToolCallID: uuid.NewString(),
+		StepID:     uuid.NewString(),
+		Question:   "Approve this workflow action?",
+		Approval:   true,
 		ApprovalOptions: []tools.AskQuestionApprovalOption{
 			{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
 			{Decision: tools.AskQuestionApprovalDecisionDeny, Label: "Deny"},
@@ -391,7 +391,7 @@ func (f currentNodeViewFixture) newAgentAuthority(t *testing.T) (*sessionruntime
 func (f currentNodeViewFixture) startCurrentNodeQuestion(t *testing.T, started startedCurrentNodeViewTask) currentNodeViewQuestion {
 	t.Helper()
 	request := tools.AskQuestionRequest{
-		ID:                     uuid.NewString(),
+		ToolCallID:             uuid.NewString(),
 		StepID:                 uuid.NewString(),
 		Question:               "Proceed?",
 		Suggestions:            []string{"Yes", "No"},
@@ -489,8 +489,8 @@ func resolveWorkflowViewPrompt(
 		return fmt.Errorf("unsupported prompt resolution %T", resolution)
 	}
 	_, err = authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []sessionruntime.PromptAnswerCommand{{
-		PromptID: clientui.PromptID(request.ID),
-		Payload:  payload,
+		ToolCallID: clientui.ToolCallID(request.ToolCallID),
+		Payload:    payload,
 	}})
 	return err
 }

@@ -28,24 +28,41 @@ export const promptSchema = z
   .object({
     Kind: z.enum(["question", "approval"]),
     State: z.enum(["pending", "resolved"]),
-    PromptID: identifier,
+    ToolCallID: identifier,
     SessionID: identifier,
     StepID: identifier,
-    Question: text,
+    Question: z.string(),
     CreatedAt: timestamp,
     Suggestions: nullableArray(text),
     RecommendedOptionIndex: optionalNullable(z.number().int()),
     ApprovalOptions: nullableArray(z.enum(["allow_once", "allow_session", "deny"])),
-    Tool: z.object({ ToolCallID: identifier, ToolName: identifier }).strict().nullable(),
+    AccessTargets: nullableArray(z.object({ RequestedPath: text, ResolvedPath: text }).strict()),
   })
   .strict();
+
+const tailSegmentSchema = z
+  .object({
+    OlderCursor: z.number().int().positive().nullable(),
+    HasMoreAbove: z.boolean(),
+    Entries: z.array(committedRowSchema),
+  })
+  .strict()
+  .superRefine((segment, context) => {
+    if (segment.HasMoreAbove === (segment.OlderCursor === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "OlderCursor must be present exactly when older history exists.",
+        path: ["OlderCursor"],
+      });
+    }
+  });
 
 export const hydrationSchema = z
   .object({
     SessionIdentity: sessionIdentitySchema,
     SessionStatus: sessionStatusSchema,
     RuntimeReadModelUpdate: runtimeReadModelUpdateSchema,
-    CommittedRows: nullableArray(committedRowSchema),
+    TailSegment: tailSegmentSchema,
     ActiveAssistant: assistantStreamFactsSchema.extend({ Text: assistantStreamContentSchema }).nullable(),
     ActiveThinkingStatus: thinkingStatusSchema.nullable(),
     ActiveReasoningTraces: nullableArray(reasoningTraceSchema),

@@ -165,7 +165,7 @@ describe("attention notification API", () => {
           kind: "approval",
           occurred_at: "2026-06-29T12:00:00Z",
           revision: 1,
-          approval: { message: "Approve protected path?" },
+          approval: { access_targets: [{ requested_path: "../outside.txt", resolved_path: "/outside.txt" }] },
           target: {
             kind: "session_prompt",
             session_id: "session-1",
@@ -198,7 +198,9 @@ describe("attention notification API", () => {
     if (genericApproval?.type !== "pending" || genericApproval.pending.target.kind !== "session_prompt") {
       throw new Error("Expected parsed generic approval attention pending event.");
     }
-    expect(genericApproval.pending.approval?.message).toBe("Approve protected path?");
+    expect(genericApproval.pending.approval?.accessTargets).toEqual([
+      { requestedPath: "../outside.txt", resolvedPath: "/outside.txt" },
+    ]);
     expect(genericApproval.pending.workflowApproval).toBeNull();
 
     const workflowApproval = events[1];

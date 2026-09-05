@@ -41,7 +41,11 @@ func TestAgentSteerLiveEventsProjectTheCommittedMessage(t *testing.T) {
 			t.Fatalf("NewAgentSteer: %v", err)
 		}
 		message := steer.Message()
-		item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Message: message}
+		item := QueuedUserMessage{
+			ID:                    runtimeids.NewQueueItemID().String(),
+			Message:               message,
+			CanonicalPresentation: *message.Content,
+		}
 		if _, err := eng.appendQueuedUserMessageFlush(textutil.OptionalExactString("018fdd67-89ab-4cde-8123-456789abc001"), message, nil, []QueuedUserMessage{item}); err != nil {
 			t.Fatalf("appendQueuedUserMessageFlush: %v", err)
 		}

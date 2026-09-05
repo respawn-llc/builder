@@ -6,9 +6,9 @@
 - A Project has one default workspace, and that workspace must belong to the Project.
 - The same workspace path may belong to several Projects, but it may belong to one Project only once.
 - Attaching a workspace creates only the Project-workspace relationship.
-- Detaching a workspace removes the selected Project-workspace relationship together with its pre-Session Chat draft.
+- Detaching a workspace removes only the selected Project-workspace relationship.
 - Workspace files remain in place when attaching, detaching, or changing the default workspace.
-- All other artifacts remain intact after detach, including Tasks, Sessions, worktrees, retained Workflow state, and materialized Session drafts.
+- All other artifacts remain intact after detach, including Tasks, Sessions, worktrees, retained Workflow state, and ordinary Session drafts.
 - A Project Workspace catalog covers every Workspace attached to its Project.
 - Catalog reads request bounded segments and never request the complete catalog as one unbounded operation.
 - Exact Project-scoped path and Workspace ID selection remain available independently of catalog page retention.

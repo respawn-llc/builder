@@ -4,15 +4,25 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
+	"core/internal/testharness/scriptedllm"
+	"core/server/metadata"
+	"core/server/runtimewire"
+	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t *testing.T) {
@@ -87,43 +97,214 @@ func TestCompleteWorkflowTaskReturnsResultDespitePostCommitDiagnostic(t *testing
 	}
 }
 
-func TestCompleteWorkflowTaskForceComposesInterruptThenManualMove(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
+func TestCompleteWorkflowTaskForceDoesNotRecloseTaskInterruptedApproval(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	execution := newManualMoveExecutionStub(service)
-	service.currentNodeExecution = execution
-	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
-	execution.calls = nil
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	source := workflowServiceCurrentNodeReference(t, workflow.TaskID(task.Task.ID), started.CurrentNodes[0])
 
-	response, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
-		ActorKind:    serverapi.WorkflowTaskCompleteActorUser,
-		Force:        true,
-		TaskID:       task.Task.ID,
-		TransitionID: "next",
-		OutputValues: map[string]string{"prior_summary": "planned"},
-		Commentary:   "Proceed with implementation.",
+	feed := &approvalCompletionFeed{pending: make(chan struct{}, 1), resolutionStarted: make(chan struct{}, 2), resolutionRelease: make(chan struct{})}
+	t.Cleanup(feed.release)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{PersistenceRoot: metadataStore.PersistenceRoot(), StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(), PromptFeed: feed})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{AgentConcurrency: 1, AssignmentSteerer: initialBranchControllerSteerer{}},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	execution := &approvalCompletionExecution{manualMoveExecutionStub: newManualMoveExecutionStub(service), controller: controller}
+	service.currentNodeExecution = execution
+	t.Cleanup(func() {
+		if err := errors.Join(controller.Close(), authority.Close(context.Background())); err != nil {
+			t.Errorf("close Approval execution: %v", err)
+		}
+	})
+
+	sessionID := createPersistedWorkflowServiceSession(t, metadataStore, binding)
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("NewOpenSessionDescriptor: %v", err)
+	}
+	appCfg, err := config.Load(binding.CanonicalRoot, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(
+		binding.CanonicalRoot,
+		binding.CanonicalRoot,
+		metadata.ProjectWorkspaceBoundary{ProjectID: binding.ProjectID},
+	)
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	settings := appCfg.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200_000
+	settings.Reviewer.Frequency = "off"
+	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: settings, FilesystemContext: filesystemContext,
+		QuestionsEnabled: textutil.Value(true), AutoCompactionEnabled: textutil.Value(true),
+		Client: scriptedllm.NewClient(scriptedllm.Script{}),
 	})
 	if err != nil {
-		t.Fatalf("CompleteWorkflowTask: %v", err)
+		t.Fatalf("NewAgentRuntimePlan: %v", err)
 	}
-	if !reflect.DeepEqual(execution.calls, []string{"interrupt", "manual_move"}) {
-		t.Fatalf("forced completion operations = %v, want Interrupt then Manual Move", execution.calls)
+	stepID := *currentNodeCompletionStepID(t)
+	request := tools.AskQuestionRequest{
+		ToolCallID: "force-complete-pending-approval", StepID: stepID.String(), Question: "Allow access?", Approval: true,
+		ApprovalOptions: []tools.AskQuestionApprovalOption{{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}},
 	}
-	if len(execution.interruptTaskIDs) != 2 ||
-		execution.interruptTaskIDs[0] != workflow.TaskID(task.Task.ID) ||
-		execution.interruptTaskIDs[1] != workflow.TaskID(task.Task.ID) {
-		t.Fatalf("forced completion interrupt selections = %v, want Task Interrupt then Manual Move interruption", execution.interruptTaskIDs)
+	promptDone := make(chan approvalCompletionAsync[tools.AskQuestionResolution], 1)
+	handle, err := authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Runtime:    &plan,
+		Workflow: &sessionruntime.WorkflowAgentExecution{
+			Reference: sessionruntime.WorkflowExecutionRef{ProjectID: binding.ProjectID, WorkflowID: workflowID, CurrentNode: source},
+			Config: &workflowruntime.CurrentNodeExecutionConfig{
+				Contract:       workflowruntime.CompletionContract{Transitions: []workflowruntime.CompletionTransition{{ID: "next"}}},
+				CompletionMode: workflowruntime.CompletionModeTool, Controller: controller,
+				Instructions: workflowruntime.TaskInstructions{CurrentNode: source},
+			},
+		},
+		Resource: sessionruntime.OpenAgentResource{},
+		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			resolution, awaitErr := authority.AwaitPromptResolution(runCtx, scope.ID(), request)
+			promptDone <- approvalCompletionAsync[tools.AskQuestionResolution]{value: resolution, err: awaitErr}
+			return awaitErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgentExecution: %v", err)
 	}
-	if response.ForcedMove == nil ||
-		response.ForcedMove.TaskID != task.Task.ID ||
-		response.ForcedMove.TargetNodeID == "" ||
-		response.ForcedMove.Outcome.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
-		response.ForcedMove.Outcome.Applied == nil ||
-		len(response.ForcedMove.Outcome.Applied.CurrentNodes) != 1 {
-		t.Fatalf("forced completion response = %+v", response)
+	t.Cleanup(func() { _ = handle.Stop(context.Background()) })
+	select {
+	case <-feed.pending:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for pending Approval")
 	}
+
+	completionDone := make(chan approvalCompletionAsync[serverapi.WorkflowTaskCompleteResponse], 1)
+	go func() {
+		response, completeErr := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
+			ActorKind: serverapi.WorkflowTaskCompleteActorUser, Force: true, TaskID: task.Task.ID, TransitionID: "next",
+			OutputValues: map[string]string{"prior_summary": "planned"},
+		})
+		completionDone <- approvalCompletionAsync[serverapi.WorkflowTaskCompleteResponse]{value: response, err: completeErr}
+	}()
+	select {
+	case <-feed.resolutionStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Task Interrupt Approval closure")
+	}
+
+	commentary := "This stale Approval must not be accepted."
+	answerDone := make(chan approvalCompletionAsync[[]sessionruntime.PromptAnswerResult], 1)
+	go func() {
+		results, resolveErr := authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []sessionruntime.PromptAnswerCommand{{
+			ToolCallID: clientui.ToolCallID(request.ToolCallID),
+			Payload: sessionruntime.PromptApprovalAnswerCommand{Answer: tools.AskQuestionApproval{
+				Decision: tools.AskQuestionApprovalDecisionAllowOnce, Commentary: &commentary,
+			}},
+		}})
+		answerDone <- approvalCompletionAsync[[]sessionruntime.PromptAnswerResult]{value: results, err: resolveErr}
+	}()
+	select {
+	case answer := <-answerDone:
+		t.Fatalf("stale Approval completed before Task Interrupt closure: %+v", answer)
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case result := <-completionDone:
+		t.Fatalf("forced completion returned before Task Interrupt closure: %+v", result)
+	default:
+	}
+	feed.release()
+
+	var prompt approvalCompletionAsync[tools.AskQuestionResolution]
+	select {
+	case prompt = <-promptDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Task-Interrupted Approval")
+	}
+	if !errors.Is(prompt.err, context.Canceled) || prompt.value != nil {
+		t.Fatalf("Task Interrupt Approval = (%+v, %v), want cancellation without commentary", prompt.value, prompt.err)
+	}
+	var answer approvalCompletionAsync[[]sessionruntime.PromptAnswerResult]
+	select {
+	case answer = <-answerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for stale Approval answer")
+	}
+	if answer.err != nil || len(answer.value) != 1 || answer.value[0].Outcome != sessionruntime.PromptAnswerOutcomeSkipped {
+		t.Fatalf("stale Approval answer = (%+v, %v), want Skipped", answer.value, answer.err)
+	}
+	var completion approvalCompletionAsync[serverapi.WorkflowTaskCompleteResponse]
+	select {
+	case completion = <-completionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for forced completion")
+	}
+	if completion.err != nil {
+		t.Fatalf("CompleteWorkflowTask: %v", completion.err)
+	}
+	if completion.value.ForcedMove == nil || completion.value.ForcedMove.TaskID != task.Task.ID || completion.value.ForcedMove.TargetNodeID == "" || completion.value.ForcedMove.Outcome.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || completion.value.ForcedMove.Outcome.Applied == nil || len(completion.value.ForcedMove.Outcome.Applied.CurrentNodes) != 1 {
+		t.Fatalf("forced completion response = %+v, want applied move", completion.value.ForcedMove)
+	}
+	if execution.manualMoveSelections != 1 {
+		t.Fatalf("Manual Move selections = %d, want 1", execution.manualMoveSelections)
+	}
+	select {
+	case <-feed.resolutionStarted:
+		t.Fatal("Manual Move republished the Task-Interrupted Approval resolution")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+type approvalCompletionAsync[T any] struct {
+	value T
+	err   error
+}
+
+type approvalCompletionExecution struct {
+	*manualMoveExecutionStub
+	controller           *workflowexecution.CurrentNodeController
+	manualMoveSelections int
+}
+
+func (e *approvalCompletionExecution) Interrupt(ctx context.Context, selector workflowexecution.InterruptSelector) error {
+	return e.controller.Interrupt(ctx, selector)
+}
+
+func (e *approvalCompletionExecution) InterruptForManualMove(ctx context.Context, taskID workflow.TaskID, beforeSelection func() error) error {
+	e.manualMoveSelections++
+	return e.controller.InterruptForManualMove(ctx, taskID, beforeSelection)
+}
+
+type approvalCompletionFeed struct {
+	pending, resolutionStarted chan struct{}
+	resolutionRelease          chan struct{}
+	releaseOnce                sync.Once
+}
+
+func (f *approvalCompletionFeed) PromptPendingScope(sessionruntime.ExecutionScope, tools.AskQuestionRequest, time.Time) error {
+	f.pending <- struct{}{}
+	return nil
+}
+
+func (f *approvalCompletionFeed) PromptResolvedScope(sessionruntime.ExecutionScope, string) error {
+	f.resolutionStarted <- struct{}{}
+	<-f.resolutionRelease
+	return nil
+}
+
+func (f *approvalCompletionFeed) release() {
+	f.releaseOnce.Do(func() { close(f.resolutionRelease) })
 }
 
 func TestCompleteWorkflowTaskForceReturnsDependencyConfirmationManualMoveOutcome(t *testing.T) {

@@ -245,7 +245,7 @@ func (c *transcriptSubscriptionContract) validateHydration(hydration clientui.Tr
 			return err
 		}
 	}
-	for _, row := range hydration.CommittedRows {
+	for _, row := range hydration.TailSegment.Entries {
 		if err := validateCommittedRow(row); err != nil {
 			return err
 		}

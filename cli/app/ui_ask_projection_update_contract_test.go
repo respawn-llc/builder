@@ -47,7 +47,7 @@ func TestAskProjectionUpdateIgnoresLateOrMismatchedCompletion(t *testing.T) {
 			panic("stale renderer panic")
 		}
 		model, command := updateQuestionProjection(model, askEventMsg{event: testQuestionAskEvent("ask-1", "Question?")})
-		model, _ = updateQuestionProjection(model, askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
+		model, _ = updateQuestionProjection(model, askEventMsg{event: askEvent{resolvedToolCallID: "ask-1"}})
 		defer func() {
 			if recovered := recover(); recovered != "stale renderer panic" {
 				t.Fatalf("recovered panic = %#v, want stale renderer panic", recovered)
@@ -101,8 +101,8 @@ func TestAskProjectionUpdateQueuedPromotionRejectsOldCompletion(t *testing.T) {
 	if queuedBCommand != nil || queuedCCommand != nil {
 		t.Fatal("queued prompt projected before promotion")
 	}
-	model, command := updateQuestionProjection(model, askEventMsg{event: askEvent{resolvedPromptID: "ask-a"}})
-	if command != nil || model.ask.current.prompt.PromptID != "ask-b" {
+	model, command := updateQuestionProjection(model, askEventMsg{event: askEvent{resolvedToolCallID: "ask-a"}})
+	if command != nil || model.ask.current.prompt.ToolCallID != "ask-b" {
 		t.Fatal("resolving A did not promote B without overlapping projection")
 	}
 	close(gate.release)
@@ -117,8 +117,8 @@ func TestAskProjectionUpdateQueuedPromotionRejectsOldCompletion(t *testing.T) {
 	if !slices.Equal(model.ask.activeProjection.rows, []string{"Question B"}) {
 		t.Fatal("B did not install after A's stale completion")
 	}
-	model, command = updateQuestionProjection(model, askEventMsg{event: askEvent{resolvedPromptID: "ask-b"}})
-	if command == nil || model.ask.current.prompt.PromptID != "ask-c" {
+	model, command = updateQuestionProjection(model, askEventMsg{event: askEvent{resolvedToolCallID: "ask-b"}})
+	if command == nil || model.ask.current.prompt.ToolCallID != "ask-c" {
 		t.Fatal("resolving B did not preserve C as the next FIFO prompt")
 	}
 }
@@ -143,7 +143,7 @@ func TestAskProjectionUpdateHydrationReplacementRejectsOldCompletion(t *testing.
 	model, hydrationCommand := updateQuestionProjection(model, ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage, Message: hydration,
 	})
-	if model.ask.current.prompt.PromptID != "ask-b" {
+	if model.ask.current.prompt.ToolCallID != "ask-b" {
 		t.Fatal("hydration did not replace A with B")
 	}
 	close(gate.release)

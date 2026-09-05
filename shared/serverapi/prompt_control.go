@@ -16,7 +16,7 @@ type PromptAnswerBatchRequest struct {
 }
 
 type PromptAnswerBatchEntry struct {
-	PromptID       clientui.PromptID     `json:"prompt_id"`
+	ToolCallID     clientui.ToolCallID   `json:"tool_call_id"`
 	QuestionAnswer *PromptQuestionAnswer `json:"question_answer,omitempty"`
 	ApprovalAnswer *PromptApprovalAnswer `json:"approval_answer,omitempty"`
 	Declined       *PromptDeclined       `json:"declined,omitempty"`
@@ -46,8 +46,8 @@ type PromptAnswerBatchResponse struct {
 }
 
 type PromptAnswerBatchResult struct {
-	PromptID clientui.PromptID        `json:"prompt_id"`
-	Outcome  PromptAnswerBatchOutcome `json:"outcome"`
+	ToolCallID clientui.ToolCallID      `json:"tool_call_id"`
+	Outcome    PromptAnswerBatchOutcome `json:"outcome"`
 }
 
 func (r PromptAnswerBatchRequest) Validate() error {
@@ -60,21 +60,21 @@ func (r PromptAnswerBatchRequest) Validate() error {
 	if len(r.Entries) == 0 {
 		return errors.New("prompt answer batch entries are required")
 	}
-	seen := make(map[clientui.PromptID]struct{}, len(r.Entries))
+	seen := make(map[clientui.ToolCallID]struct{}, len(r.Entries))
 	for index, entry := range r.Entries {
 		if err := entry.Validate(); err != nil {
 			return fmt.Errorf("prompt answer batch entry %d: %w", index, err)
 		}
-		if _, exists := seen[entry.PromptID]; exists {
-			return fmt.Errorf("prompt answer batch prompt id %q is duplicated", entry.PromptID)
+		if _, exists := seen[entry.ToolCallID]; exists {
+			return fmt.Errorf("prompt answer batch tool call id %q is duplicated", entry.ToolCallID)
 		}
-		seen[entry.PromptID] = struct{}{}
+		seen[entry.ToolCallID] = struct{}{}
 	}
 	return nil
 }
 
 func (e PromptAnswerBatchEntry) Validate() error {
-	if err := e.PromptID.Validate(); err != nil {
+	if err := e.ToolCallID.Validate(); err != nil {
 		return err
 	}
 	memberCount := 0
@@ -112,9 +112,9 @@ func (r PromptAnswerBatchResponse) Validate() error {
 	if len(r.Results) == 0 {
 		return errors.New("prompt answer batch results are required")
 	}
-	seen := make(map[clientui.PromptID]struct{}, len(r.Results))
+	seen := make(map[clientui.ToolCallID]struct{}, len(r.Results))
 	for index, result := range r.Results {
-		if err := result.PromptID.Validate(); err != nil {
+		if err := result.ToolCallID.Validate(); err != nil {
 			return fmt.Errorf("prompt answer batch result %d: %w", index, err)
 		}
 		switch result.Outcome {
@@ -122,10 +122,10 @@ func (r PromptAnswerBatchResponse) Validate() error {
 		default:
 			return fmt.Errorf("prompt answer batch result %d outcome is invalid", index)
 		}
-		if _, exists := seen[result.PromptID]; exists {
-			return fmt.Errorf("prompt answer batch result prompt id %q is duplicated", result.PromptID)
+		if _, exists := seen[result.ToolCallID]; exists {
+			return fmt.Errorf("prompt answer batch result tool call id %q is duplicated", result.ToolCallID)
 		}
-		seen[result.PromptID] = struct{}{}
+		seen[result.ToolCallID] = struct{}{}
 	}
 	return nil
 }
@@ -144,13 +144,13 @@ func ValidatePromptAnswerBatchResponse(request PromptAnswerBatchRequest, respons
 			len(request.Entries),
 		)
 	}
-	requestIDs := make(map[clientui.PromptID]struct{}, len(request.Entries))
+	requestIDs := make(map[clientui.ToolCallID]struct{}, len(request.Entries))
 	for _, entry := range request.Entries {
-		requestIDs[entry.PromptID] = struct{}{}
+		requestIDs[entry.ToolCallID] = struct{}{}
 	}
 	for _, result := range response.Results {
-		if _, exists := requestIDs[result.PromptID]; !exists {
-			return fmt.Errorf("prompt answer batch result contains foreign prompt id %q", result.PromptID)
+		if _, exists := requestIDs[result.ToolCallID]; !exists {
+			return fmt.Errorf("prompt answer batch result contains foreign tool call id %q", result.ToolCallID)
 		}
 	}
 	return nil

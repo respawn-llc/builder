@@ -86,7 +86,9 @@ type userInjectionSelection interface {
 	userInjectionSelection()
 }
 
-type steerUserInjectionSelection struct{}
+type steerUserInjectionSelection struct {
+	queueItemIDs map[string]struct{}
+}
 
 func (steerUserInjectionSelection) userInjectionSelection() {}
 
@@ -101,8 +103,11 @@ type userInjectionCommitResult struct {
 	queueItemIDs map[string]struct{}
 }
 
-func steerUserInjections() userInjectionSelection {
-	return steerUserInjectionSelection{}
+func steerUserInjections(queueItemIDs ...map[string]struct{}) userInjectionSelection {
+	if len(queueItemIDs) == 0 {
+		return steerUserInjectionSelection{}
+	}
+	return steerUserInjectionSelection{queueItemIDs: queueItemIDs[0]}
 }
 
 type stepLoopResult struct {
@@ -138,7 +143,7 @@ type messageLifecycle interface {
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	PendingUserMessages() []QueuedUserMessage
 	PendingUserMessageEntries() []queuedUserMessage
-	QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
+	QueueUserMessage(input QueuedUserInput, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool)
 	HasPendingUserInjections() bool

@@ -481,7 +481,7 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		SessionID: askPrompt.SessionID,
 		StepID:    askPrompt.StepID,
 		Entries: []serverapi.PromptAnswerBatchEntry{{
-			PromptID:       askPrompt.PromptID,
+			ToolCallID:     askPrompt.ToolCallID,
 			QuestionAnswer: &serverapi.PromptQuestionAnswer{Freeform: &askAnswer},
 		}},
 	}); err != nil {
@@ -498,7 +498,7 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		SessionID: approvalPrompt.SessionID,
 		StepID:    approvalPrompt.StepID,
 		Entries: []serverapi.PromptAnswerBatchEntry{{
-			PromptID: approvalPrompt.PromptID,
+			ToolCallID: approvalPrompt.ToolCallID,
 			ApprovalAnswer: &serverapi.PromptApprovalAnswer{
 				Decision:   clientui.ApprovalDecisionAllowOnce,
 				Commentary: &commentary,

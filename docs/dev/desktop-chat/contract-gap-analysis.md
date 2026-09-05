@@ -140,8 +140,9 @@ runtime activity, attention, model/provider facts, or workspace identity.
 
 Desktop copies the TUI's read behavior and adds no Session-list subscription or
 polling loop. Entry and category changes read authoritative pages, reconnect
-invalidates visible pages, and local Session materialization invalidates the
-owning Project list. The client does not infer list state from transcript rows.
+invalidates visible pages, and a delivered local Session-creation result
+invalidates the owning Project list. The client does not infer list state from
+transcript rows.
 
 ### Queue Item Editing
 
@@ -156,7 +157,8 @@ The TUI specification's unbounded in-memory pending queues violate the repositor
 Prompt history storage is capped at the newest 100 entries by completed task
 `BUI-186`. TUI attach receives that bounded history through Session launch.
 Desktop still needs a typed read projection and adapter for ordinary existing
-and lazy Chat composers; it must not trim or reconstruct history client-side.
+Session and New Chat composers; it must not trim or reconstruct history
+client-side.
 
 ### Repository Path Suggestions
 
@@ -168,7 +170,7 @@ The picker shows at most seven rows and inserts the exact `@`-prefixed path, add
 
 ### Client Attachments
 
-The existing submit, Queue, and Steer contracts carry text only. TUI clipboard images rely on a client-local temporary file path, which is invalid for a remote-capable Desktop client.
+The interactive submit and Queue contracts carry typed ordinary text or a recognized prompt/Agent command. TUI clipboard images rely on a client-local temporary file path, which is invalid for a remote-capable Desktop client.
 
 Client file/image uploads, drag-and-drop, clipboard-image attachments, server-owned draft blobs, attachment persistence, and transcript attachment presentation are explicitly outside this initiative and must not produce a task in its implementation graph. Workspace `@` path references remain in scope as textual server-workspace references.
 
@@ -176,22 +178,19 @@ Client file/image uploads, drag-and-drop, clipboard-image attachments, server-ow
 
 The earlier design attached only to task-run sessions. The Home Sessions direction and desktop-only product goal require an explicit create/open contract for ordinary sessions, including project/workspace selection, model/session setup, draft behavior, and route ownership.
 
-The ratified desktop flow keeps TUI's zero-form and lazy semantics:
+The ratified desktop flow keeps the zero-form New Chat experience:
 
 - primary creation uses the project default workspace;
 - an alternate sidebar destination uses the existing cursor-paginated project workspace list;
-- each Project workspace owns at most one outstanding lazy draft, and reopening
-  New Chat for that workspace resumes it;
+- one best-effort Desktop-local unsent text value is shared across New Chats;
+- settings changes remain transient in the mounted New Chat presentation;
 - worktree selection remains post-open;
 - no name/model/provider/role fields are added;
-- no durable session exists until the first agentic trigger.
+- no durable Session exists until a qualifying action creates it.
 
-Current `SessionLaunchService.PlanSession` creates an independent session plan but `server/launch.Planner.createSession` calls `EnsureDurable` before first model use. That code/spec drift must be resolved at the server ownership boundary rather than hidden by a desktop-only workaround.
+New Chat and an existing Session are states of one Chat destination. A delivered creation result changes that destination to the created Session in place and clears the local text after the Session's ordinary draft becomes authoritative.
 
-The server therefore needs a workspace-owned draft aggregate that survives
-navigation, detach, relaunch, and server restart, and is consumed into exactly
-one Session when the first agentic trigger materializes it. Desktop must not
-create a Drafts list, orphan drafts, or a per-window persistence authority.
+The server-owned workspace Chat draft and specialized materialization mechanism are deleted. Existing Sessions retain ordinary server-owned per-Session drafts. New Chat sends its local text and complete displayed settings through intent-level Chat mutations. The server creates the Session and prepares its Runtime when required before delegating to ordinary Steer, Queue, Goal, or compaction ownership; Desktop performs no Create-plus-second-call or runtime-lifecycle orchestration.
 
 ### Thinking Status And Reasoning Traces
 
@@ -227,22 +226,22 @@ future capability is independent of initial Desktop parity. Its approved
 meaning is elapsed server time from the first nonempty update for one trace
 through that trace's commit.
 
-### Session Settings And Lazy Draft
+### Session Settings And New Chat
 
 The existing server surface provides useful but incomplete pieces:
 
 - capability facts expose `SupportsThinking` and ordered supported Thinking modes for each model;
 - readiness exposes ordered Agent role names, but not the configured descriptions or each role's effective model/Thinking summary;
 - runtime status exposes Thinking, Fast availability/enabled state, Supervisor frequency/enabled state, Questions, Auto-compaction, compaction mode, conversation freshness, and workflow linkage;
-- session launch accepts Agent and Thinking overrides, but not the complete six-setting Chat draft;
+- session launch accepts Agent and Thinking overrides, but not the complete New Chat settings aggregate;
 - runtime control can set Thinking, Fast, Questions, Auto-compaction, and Supervisor enabled state, but cannot atomically select Supervisor Off, After edits, or Always;
 - runtime/session projections do not expose the selected Agent role or explicit cache-lock state.
 
-Desktop's lazy New Session design requires one server-owned draft aggregate containing the unsent message plus Agent, Supervisor, Thinking, Fast, Questions, and Auto-compaction. First Send atomically validates and applies that complete draft, creates/launches the session, and submits the message. Partial setting application must create no session and send no prompt. Persisting six independent client settings or issuing post-launch setup mutations is not an acceptable substitute.
+New Chat reads stateless Project/workspace defaults and choices without creating server state. Setting changes remain transient in the mounted presentation. An intent-level New Chat mutation sends the local initial text plus the complete displayed Agent, Supervisor, Thinking, Fast, Questions, and Auto-compaction aggregate. The server validates it against fresh choices, rebases choices made unavailable by a configuration race to the newest applicable baseline, creates the Session when needed, prepares its Runtime when required, and delegates to the ordinary mutation owner.
 
-The same server-owned aggregate persists after a session exists. Desktop adds no GUI-local or per-window draft store and no live collaborative composer synchronization. Simultaneous multi-client draft editing is not a product mode; the server remains the sole persisted draft authority.
+New Chat uses one best-effort Desktop-local text value across all New Chats. Mounted presentations may diverge and overwrite it without synchronization. After a delivered creation result, the created Session's ordinary server-owned per-Session draft becomes authoritative and the local New Chat value clears.
 
-After launch, non-Agent settings use runtime controls. Supervisor requires one typed atomic mode operation shared by TUI and Desktop; clients must not compose separate enablement and frequency mutations. Agent remains immutable after the first model dispatch.
+After creation, non-Agent settings use runtime controls. Supervisor requires one typed atomic mode operation shared by TUI and Desktop; clients must not compose separate enablement and frequency mutations. Agent remains immutable after the first model dispatch.
 
 The current Fast, Supervisor, and Questions control paths append committed system-feedback entries, while Auto-compaction follows a different path. Desktop settings changes create no transcript rows. The shared server control seam must be normalized so control state and Sonner failures own feedback without client-specific hidden rows.
 
@@ -262,9 +261,9 @@ Provider, workspace/worktree/branch, compaction count, raw Run/Workflow IDs, and
 
 The runtime main view and transcript feed already expose authoritative context-window usage and typed compaction lifecycle. Runtime control already accepts manual compaction with an optional guidance string.
 
-Desktop preserves the terminal `/compact` flow instead of adding a separate guidance form. Bare `/compact` requests manual compaction without guidance; text after the command is passed as guidance through the same typed operation.
+Desktop preserves the terminal `/compact` flow instead of adding a separate guidance form. One typed lexical invocation carries the exact invoked token, separator whitespace, and raw guidance. The server validates that value, reconstructs the byte-exact draft, and derives normalized manual-compaction guidance from the same authority. Bare `/compact` requests manual compaction without guidance.
 
-When no Agent Step is active, manual compaction may start immediately. During an Agent Step, both the slash command and Context button must enter the same server-owned Steer/Pending Work path as other next-boundary control. The item executes after the current Agent Step and before the next Agent Step. It must not wait for turn completion and must never become a model-visible user message.
+When no Agent Step is active, manual compaction may start immediately. During an Agent Step, both the slash command and Context button must be admitted through the current Active Session Runtime into the same server-owned Steer/Pending Work path as other next-boundary control. The item executes after the current Agent Step and before the next Agent Step. It must not wait for turn completion and must never become a model-visible user message.
 
 Pending Work must therefore represent a typed compaction control item rather than relying on display-text parsing. The Desktop client renders that item in its familiar `/compact` form, including optional guidance. Repeated requests remain distinct Steer items; neither client nor server silently coalesces them.
 
@@ -274,9 +273,9 @@ The pop-up reproduces the TUI Context summary without its detailed instruction, 
 
 An open pop-up consumes the ordinary Session-status and context-usage broadcasts already used by Chat. Desktop must not add a Context-specific poll, refresh timer, or reconciliation state machine. Facts not changed by an ordinary broadcast refresh through the next standard authoritative snapshot.
 
-Lazy New Chat needs the same facts before a Session runtime exists. The server-owned Chat draft must project the effective draft Agent's context window, automatic-compaction threshold, and Auto-compaction state. Desktop presents zero used tokens and zero compactions until materialization. Agent or setting changes that alter the effective context contract update this one draft projection.
+New Chat hides Context until Session creation succeeds.
 
-Manual compaction is unavailable before the first Agent Step. A pre-Session `/compact` must remain a recognized command and return the typed unavailable or too-soon outcome without materializing a Session. Desktop must not create a throwaway Session merely to reject compaction.
+Manual compaction is unavailable before the first Agent Step. A New Chat `/compact` remains recognized, creates an ordinary Session, and then uses normal manual-compaction admission; the fresh Session may reject it as unavailable or too soon.
 
 The remaining contract work is that threshold projection and the Desktop command adapter, plus a typed step-boundary compaction Steer item in the server-owned Pending Work contract. The current TUI has separate immediate dispatch and client-local turn-drain command paths; those are not the Desktop architecture and do not satisfy the next-Agent-Step contract.
 
@@ -323,9 +322,7 @@ Sessions. That behavior is authoritative. Desktop must expose the same Goal
 affordance and mutation controls there rather than inventing a workflow-specific
 read-only mode.
 
-Goal Set currently requires an existing Session ID. Lazy New Chat therefore
-needs a first-agentic-trigger flow that materializes the Session and then applies
-the Goal operation. Product does not require rollback if later Goal validation
+Goal Set requires an existing Session internally. New Chat therefore sends the complete initial state through an intent-level Goal mutation; the server establishes the ordinary Session, returns its identity, and applies the Goal operation without exposing creation orchestration to Desktop. Product does not require rollback if later Goal validation
 or admission fails: the Session remains, Goal work does not start for the failed
 request, the Goal draft remains available in the open sidebar, and the error is
 surfaced. Once Goal work is accepted, later provider, tool, or runtime failure

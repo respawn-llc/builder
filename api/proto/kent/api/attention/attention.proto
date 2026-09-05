@@ -5,6 +5,7 @@ package kent.api.attention;
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
+import "kent/api/prompt/prompt.proto";
 import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
 
@@ -61,7 +62,7 @@ message QuestionState {
 }
 
 message ApprovalState {
-  string message = 1 [
+  optional string message = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
       id: "kent.attention.approval_message_nonblank"
@@ -69,6 +70,13 @@ message ApprovalState {
       expression: "this.trim() != ''"
     }
   ];
+  repeated kent.api.prompt.FileAccessTarget access_targets = 2 [(buf.validate.field).repeated.items.required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.attention.approval_presentation"
+    message: "approval must carry either message copy or access targets"
+    expression: "has(this.message) != (size(this.access_targets) > 0)"
+  };
 }
 
 message Notification {

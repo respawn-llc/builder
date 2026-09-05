@@ -36,7 +36,7 @@ func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req servera
 		if item.Request.Approval {
 			continue
 		}
-		promptID, stepID, err := pendingPromptIdentity(item.Request.ID, item.Request.StepID)
+		toolCallID, stepID, err := pendingToolCallIdentity(item.Request.ToolCallID, item.Request.StepID)
 		if err != nil {
 			return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask identity: %w", err)
 		}
@@ -47,12 +47,12 @@ func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req servera
 		if err != nil {
 			return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf(
 				"pending ask %q: %w",
-				item.Request.ID,
+				item.Request.ToolCallID,
 				err,
 			)
 		}
 		asks = append(asks, clientui.PendingAsk{
-			PromptID:               promptID,
+			ToolCallID:             toolCallID,
 			SessionID:              sessionID,
 			StepID:                 stepID,
 			Question:               item.Request.Question,

@@ -67,14 +67,14 @@ func HandleTaskQuestion(ctx context.Context, awaiter QuestionAwaiter, attention 
 	}
 	askReq := req.Question
 	if askReq.Origin != askquestion.AskQuestionOriginModelTool || askReq.QuestionBatch == nil {
-		return nil, fmt.Errorf("workflow task question missing batch metadata: operation=ask_question task_id=%s node_id=%s step_id=%s call_id=%s ask_id=%s approval=%t", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.StepID, askReq.ToolCallID, askReq.ID, askReq.Approval)
+		return nil, fmt.Errorf("workflow task question missing batch metadata: operation=ask_question task_id=%s node_id=%s step_id=%s call_id=%s approval=%t", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.StepID, askReq.ToolCallID, askReq.Approval)
 	}
 	askReq.AttentionTarget = TaskQuestionAttentionTarget(req.Context, *askReq.QuestionBatch)
 	resolution, askErr := awaiter.AwaitPromptResolution(ctx, req.Context.SessionID, askReq)
 	if attention != nil {
-		attention.MarkTaskQuestionCleared(*askReq.QuestionBatch, askReq.ID)
+		attention.MarkTaskQuestionCleared(*askReq.QuestionBatch, askReq.ToolCallID)
 		if askquestion.ShouldSkipRemainingQuestionBatch(askErr, context.Cause(ctx)) {
-			MarkTaskQuestionBatchSkipped(attention, *askReq.QuestionBatch, askReq.ID)
+			MarkTaskQuestionBatchSkipped(attention, *askReq.QuestionBatch, askReq.ToolCallID)
 		}
 	}
 	return resolution, askErr
@@ -89,13 +89,13 @@ func HandleTaskApprovalQuestion(ctx context.Context, awaiter QuestionAwaiter, at
 	}
 	askReq := req.Question
 	if !askReq.Approval {
-		return nil, fmt.Errorf("workflow task approval question requires approval prompt: task_id=%s node_id=%s ask_id=%s", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.ID)
+		return nil, fmt.Errorf("workflow task approval question requires approval prompt: task_id=%s node_id=%s tool_call_id=%s", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.ToolCallID)
 	}
-	target := TaskApprovalQuestionAttentionTarget(req.Context, askReq.ID)
+	target := TaskApprovalQuestionAttentionTarget(req.Context, askReq.ToolCallID)
 	askReq.AttentionTarget = target
 	resolution, askErr := awaiter.AwaitPromptResolution(ctx, req.Context.SessionID, askReq)
 	if attention != nil {
-		attention.MarkTaskApprovalQuestionCleared(*target, askReq.ID)
+		attention.MarkTaskApprovalQuestionCleared(*target, askReq.ToolCallID)
 	}
 	return resolution, askErr
 }
@@ -117,19 +117,19 @@ func MarkTaskQuestionBatchSkipped(attention QuestionAttentionRegistry, batch ask
 	if attention == nil {
 		return
 	}
-	for _, askID := range batch.BatchPromptIDs {
+	for _, askID := range batch.BatchToolCallIDs {
 		if askID == "" || askID == materializedAskID {
 			continue
 		}
 		skipped := batch
-		skipped.BatchPromptIDs = append([]string(nil), batch.BatchPromptIDs...)
-		skipped.PromptID = askID
+		skipped.BatchToolCallIDs = append([]string(nil), batch.BatchToolCallIDs...)
+		skipped.ToolCallID = askID
 		attention.MarkTaskQuestionSkipped(skipped)
 	}
 }
 
 func TaskQuestionAttentionTarget(context TaskQuestionContext, batch askquestion.AskQuestionBatchMetadata) *clientui.AttentionNotificationTarget {
-	return taskQuestionAttentionTarget(context, clientui.AttentionNotificationFocusQuestion, append([]string(nil), batch.BatchPromptIDs...))
+	return taskQuestionAttentionTarget(context, clientui.AttentionNotificationFocusQuestion, append([]string(nil), batch.BatchToolCallIDs...))
 }
 
 func TaskApprovalQuestionAttentionTarget(context TaskQuestionContext, askID string) *clientui.AttentionNotificationTarget {

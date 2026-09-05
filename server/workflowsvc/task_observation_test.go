@@ -155,19 +155,19 @@ func TestTaskQuestionResolvesLiveAccessThroughAuthoritativeApprovalView(t *testi
 	createdAt := time.UnixMilli(42).UTC()
 	service := &Service{readModels: ReadModels{
 		Approvals: observationApprovalViewStub{approvals: []clientui.PendingApproval{{
-			PromptID:  clientui.PromptID(questionID),
-			SessionID: sessionID,
-			StepID:    stepID,
-			Question:  message,
-			Options:   []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
-			CreatedAt: createdAt,
+			ToolCallID: clientui.ToolCallID(questionID),
+			SessionID:  sessionID,
+			StepID:     stepID,
+			Question:   message,
+			Options:    []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
+			CreatedAt:  createdAt,
 		}}},
 	}}
 	item := serverapi.WorkflowAttentionItem{
 		Kind:    string(serverapi.WorkflowTaskAttentionKindQuestion),
 		Message: &message,
 		Question: &serverapi.WorkflowAttentionQuestionPrompt{
-			SessionID: sessionID, StepID: stepID, PromptID: clientui.PromptID(questionID),
+			SessionID: sessionID, StepID: stepID, ToolCallID: clientui.ToolCallID(questionID),
 			Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
 			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce},
 		},

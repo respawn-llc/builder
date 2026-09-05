@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -237,24 +239,13 @@ func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
 	}
 
 	requestID := runtimeids.NewCompactionRequestID()
-	var failed *CompactionStatus
-	engine.cfg.OnEvent = func(event Event) {
-		if event.Kind == EventCompactionFailed && event.Compaction != nil {
-			copyStatus := *event.Compaction
-			failed = &copyStatus
-		}
-	}
 	if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
 		context.Background(),
 		requestID,
 		runtimeinput.ManualCompactionAdmission{},
 		nil,
-	); err != nil {
-		t.Fatalf("manual compaction admission: %v", err)
-	}
-	waitEngineLifecycleTasks(t, engine)
-	if failed == nil || failed.RequestID == nil || *failed.RequestID != requestID {
-		t.Fatalf("disabled compaction status = %+v, want request %s", failed, requestID)
+	); !errors.Is(err, serverapi.ErrManualCompactionDisabled) {
+		t.Fatalf("manual compaction admission error = %v, want disabled", err)
 	}
 	if len(client.calls) != 0 || len(client.compactionCalls) != 0 {
 		t.Fatalf(

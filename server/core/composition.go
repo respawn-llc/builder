@@ -14,6 +14,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
 	"core/server/chatcontext"
+	"core/server/chatmutation"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -214,8 +215,23 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithDebugMode(cfg.Settings.Debug).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
 		WithNavigationTargetResolver(metadataStore)
+	chatOperationOwner, err := chatmutation.NewOperationOwner(
+		chatmutation.DefaultAttachmentFinalizationTimeout,
+	)
+	if err != nil {
+		sleepManager.Close()
+		_ = worktreeService.Close()
+		_ = runtimeAuthority.Close(context.Background())
+		closeRootLeaseOnFailure()
+		_ = metadataStore.Close()
+		if runtimeSupport.Background != nil {
+			_ = runtimeSupport.Background.Close()
+		}
+		return nil, fmt.Errorf("Chat operation owner: %w", err)
+	}
 	var workflowRuntimeStarter *workflowrunner.Starter
 	cleanupNewFailure := func() {
+		_ = chatOperationOwner.Close()
 		sleepManager.Close()
 		_ = worktreeService.Close()
 		if workflowController != nil {
@@ -385,7 +401,47 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowRuntimeStarter:  workflowRuntimeStarter,
 		worktreeService:         worktreeService,
 		sleepManager:            sleepManager,
+		chatOperationOwner:      chatOperationOwner,
 	})}
+	chatTargets := chatmutation.NewTargetResolver(
+		metadataStore,
+		func(
+			ctx context.Context,
+			projectID string,
+			workspaceID string,
+		) (chatmutation.SessionCreationService, error) {
+			return core.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, workspaceID)
+		},
+	)
+	chatRuntimes := chatmutation.NewRuntimePlanner(
+		runtimeAuthority,
+		func(
+			ctx context.Context,
+			sessionID runtimeids.SessionID,
+		) (chatmutation.PersistedSessionPlanner, error) {
+			binding, err := metadataStore.ResolveSessionNavigationBinding(ctx, sessionID.String())
+			if err != nil {
+				return nil, err
+			}
+			projectCtx, err := core.resolveProjectContext(
+				ctx,
+				binding.ProjectID,
+				binding.WorkspaceID,
+				"",
+			)
+			if err != nil {
+				return nil, err
+			}
+			return core.sessionLaunchServiceForProjectContext(projectCtx), nil
+		},
+		sessionRuntimeAPI,
+	)
+	core.bundles.Chat.mutations = chatmutation.NewService(
+		chatOperationOwner,
+		chatTargets,
+		chatRuntimes,
+		runtimeControlService,
+	)
 	if strings.TrimSpace(cfg.WorkspaceRoot) != "" {
 		binding, err := metadataStore.EnsureWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
 		if err != nil && !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
@@ -598,9 +654,9 @@ func (r authorityPromptResponder) SubscribePromptFollowUp(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	stepID runtimeids.StepID,
-	promptID clientui.PromptID,
+	toolCallID clientui.ToolCallID,
 ) (serverapi.PromptFollowUpSubscription, error) {
-	return r.authority.SubscribePromptFollowUp(ctx, sessionID, stepID, promptID)
+	return r.authority.SubscribePromptFollowUp(ctx, sessionID, stepID, toolCallID)
 }
 
 type authorityStepLifecycle struct {
@@ -668,12 +724,12 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 	}
 	out := make([]workflowview.PendingPromptSnapshot, 0, len(items))
 	for _, item := range items {
-		promptID := clientui.PromptID(item.Request.ID)
+		toolCallID := clientui.ToolCallID(item.Request.ToolCallID)
 		stepID, err := runtimeids.ParseStepID(item.Request.StepID)
 		if err != nil {
-			return nil, fmt.Errorf("session %q pending prompt %q step identity: %w", sessionID, item.Request.ID, err)
+			return nil, fmt.Errorf("session %q pending prompt %q step identity: %w", sessionID, item.Request.ToolCallID, err)
 		}
-		if err := promptID.Validate(); err != nil {
+		if err := toolCallID.Validate(); err != nil {
 			return nil, fmt.Errorf("session %q pending prompt identity: %w", sessionID, err)
 		}
 		recommendedOptionIndex, err := promptcontrol.DecodeLegacyRecommendedOptionIndex(
@@ -681,14 +737,14 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 			len(item.Request.Suggestions),
 		)
 		if err != nil {
-			return nil, fmt.Errorf("session %q pending prompt %q: %w", sessionID, item.Request.ID, err)
+			return nil, fmt.Errorf("session %q pending prompt %q: %w", sessionID, item.Request.ToolCallID, err)
 		}
 		decisions := make([]clientui.ApprovalDecision, 0, len(item.Request.ApprovalOptions))
 		for _, option := range item.Request.ApprovalOptions {
 			decisions = append(decisions, clientui.ApprovalDecision(option.Decision))
 		}
 		out = append(out, workflowview.PendingPromptSnapshot{
-			PromptID:               promptID,
+			ToolCallID:             toolCallID,
 			SessionID:              typedSessionID,
 			StepID:                 stepID,
 			CreatedAt:              item.CreatedAt,
@@ -697,6 +753,7 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 			RecommendedOptionIndex: recommendedOptionIndex,
 			Approval:               item.Request.Approval,
 			ApprovalDecisions:      decisions,
+			AccessTargets:          append([]clientui.FileAccessTarget(nil), item.Request.AccessTargets...),
 		})
 	}
 	return out, nil

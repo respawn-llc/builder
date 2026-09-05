@@ -114,7 +114,7 @@ describe("workflow board schemas", () => {
 
   it("preserves pending-ask recommendation presence and rejects invalid indexes", () => {
     const pendingAsk = {
-      PromptID: "ask-1",
+      ToolCallID: "ask-1",
       SessionID: "session-1",
       StepID: "11111111-1111-4111-8111-111111111111",
       Question: "Choose?",

@@ -1,7 +1,7 @@
 package clientui
 
 type PromptAnswer struct {
-	PromptID             string
+	ToolCallID           ToolCallID
 	ErrorMessage         string
 	Answer               string
 	SelectedOptionNumber *int

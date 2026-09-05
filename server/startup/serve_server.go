@@ -450,6 +450,7 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp *onboard
 	)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
+		panicOnMetadataMigrationFailure(err)
 		return d.activationError(resp, err)
 	}
 	d.rootLease = nil
@@ -623,6 +624,12 @@ func (d *startupGatewayDependencies) ChatSettingsClient() apicontract.ChatSettin
 	}
 	return nil
 }
+func (d *startupGatewayDependencies) ChatMutationClient() apicontract.ChatMutationService {
+	if c := d.activeCore(); c != nil {
+		return c.ChatMutationClient()
+	}
+	return nil
+}
 func (d *startupGatewayDependencies) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLifecycleClient()
@@ -650,18 +657,6 @@ func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspace(ctx 
 func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (apicontract.SessionLaunchService, error) {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, workspaceID)
-	}
-	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
-}
-func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (chatcontext.WorkspaceOwner, error) {
-	if c := d.activeCore(); c != nil {
-		return c.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, workspaceRoot)
-	}
-	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
-}
-func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (chatcontext.WorkspaceOwner, error) {
-	if c := d.activeCore(); c != nil {
-		return c.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }

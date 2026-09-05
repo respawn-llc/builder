@@ -24,7 +24,7 @@
 - Each nonempty package segment must start with an ASCII lowercase letter and contain only ASCII lowercase letters, digits, or underscores.
 - Service and method identifiers convert from PascalCase to lower snake case by splitting before an uppercase letter when a lowercase letter or digit precedes it, and before the final uppercase letter of an uppercase run when a lowercase letter follows it.
 - Digits remain in their surrounding token.
-- `APIStatus` becomes `api_status`, `UUID` becomes `uuid`, `HTTP2Server` becomes `http2_server`, and `MaterializeWorkspaceChat` becomes `materialize_workspace_chat`.
+- `APIStatus` becomes `api_status`, `UUID` becomes `uuid`, `HTTP2Server` becomes `http2_server`, and `SubmitUserTurn` becomes `submit_user_turn`.
 - Both Go and TypeScript must apply the same operation-name validation and conversion.
 - The generated request and response contract must not contain a generic application request ID.
 - Multiplexed call and result envelopes may carry opaque connection-local correlation values.
@@ -34,8 +34,8 @@
 - Server Update Status, Workflow Task Search, Runtime Submit User Turn, Runtime Submit User Shell Command, Runtime Compact Context, Runtime Interrupt, Runtime Live Stop, Runtime Live Wait, and Runtime Live Watch use dedicated unary connections.
 - Subscription, progress, and notification connection behavior derives from operation kind.
 - A dedicated unary call owns one WebSocket and performs the applicable handshake, authentication, and attachment steps on that connection.
-- Caller cancellation closes a dedicated unary connection and stops only that caller's waiting and delivery.
-- Closing a caller connection must not cancel, pause, retry, replay, authorize, or otherwise change server-owned work.
+- Caller cancellation closes a dedicated unary connection and stops that caller's waiting and delivery.
+- Caller cancellation never terminates a Chat Operation, rolls back a committed Session, changes accepted work, changes the client's multiplexed control connection, or changes another operation.
 - The transport must not add a cancel-frame variant for server-owned work.
 - Call, notification, subscription, progress, authentication, attachment, and cancellation semantics remain owned by their operation specifications.
 - Subscription and progress operations use the terminal completion and failure behavior defined by their owning operation specifications. Transport framing adds no generic terminal product outcome.

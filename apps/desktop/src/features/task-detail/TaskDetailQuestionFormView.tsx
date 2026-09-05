@@ -9,7 +9,12 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage, type ApprovalDecision, type QuestionAttentionItem } from "@/api";
+import {
+  errorMessage,
+  type ApprovalDecision,
+  type FileAccessTarget,
+  type QuestionAttentionItem,
+} from "@/api";
 import type { QuestionAnswerInput } from "@/api";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, RadioGroup, RadioGroupItem, showStatusToast, StaticMarkdown } from "@/ui";
@@ -44,13 +49,12 @@ export function QuestionFormView({
   registerPrimaryControl?: ((control: PromptPrimaryControl) => () => void) | undefined;
   selectionState: QuestionSelectionState;
 }>) {
-  const approvalDecisions =
-    attention.question.kind === "approval" ? attention.question.approvalDecisions : null;
-  if (approvalDecisions !== null) {
+  if (attention.question.kind === "approval") {
     return (
       <ApprovalQuestionForm
+        accessTargets={attention.question.accessTargets}
         answerQuestion={answerQuestion}
-        approvalDecisions={approvalDecisions}
+        approvalDecisions={attention.question.approvalDecisions}
         attention={attention}
         disabled={disabled}
         onSelectionStateChange={onSelectionStateChange}
@@ -120,7 +124,7 @@ function OrdinaryQuestionForm({
       failureTitle: t("states.error"),
       input: () => ({
         kind: "ordinary",
-        promptID: attention.question.promptID,
+        toolCallID: attention.question.toolCallID,
         sessionID: attention.question.sessionID,
         stepID: attention.question.stepID,
         selectedOptionNumber: selectedOption,
@@ -193,6 +197,7 @@ function selectedOptionFromRadioValue(value: string, suggestions: readonly strin
 }
 
 function ApprovalQuestionForm({
+  accessTargets,
   answerQuestion,
   approvalDecisions,
   attention,
@@ -202,6 +207,7 @@ function ApprovalQuestionForm({
   registerPrimaryControl,
   selectionState,
 }: Readonly<{
+  accessTargets: readonly FileAccessTarget[];
   answerQuestion: QuestionAnswerMutation;
   approvalDecisions: readonly ApprovalDecision[];
   attention: QuestionAttentionItem;
@@ -230,7 +236,7 @@ function ApprovalQuestionForm({
       failureTitle: t("states.error"),
       input: () => ({
         kind: "approval",
-        promptID: attention.question.promptID,
+        toolCallID: attention.question.toolCallID,
         sessionID: attention.question.sessionID,
         stepID: attention.question.stepID,
         decision: selectedDecision,
@@ -242,6 +248,7 @@ function ApprovalQuestionForm({
 
   return (
     <QuestionFormFrame
+      accessTargets={accessTargets}
       answer={answer}
       answerID={answerID}
       canSubmit={canSubmit}
@@ -273,6 +280,7 @@ function ApprovalQuestionForm({
 }
 
 function QuestionFormFrame({
+  accessTargets,
   answer,
   answerID,
   answerRef,
@@ -286,6 +294,7 @@ function QuestionFormFrame({
   radioValue,
   submitting,
 }: Readonly<{
+  accessTargets?: readonly FileAccessTarget[] | undefined;
   answer: string;
   answerID: string;
   answerRef?: RefCallback<HTMLTextAreaElement> | undefined;
@@ -301,6 +310,7 @@ function QuestionFormFrame({
 }>) {
   const { t } = useTranslation();
   const submitDisabled = interactionDisabled || !canSubmit;
+  const hasAccessTargets = accessTargets !== undefined && accessTargets.length > 0;
   const formShortcut = useTextFieldSubmitShortcut({
     available: !submitDisabled,
     kind: "form",
@@ -316,7 +326,18 @@ function QuestionFormFrame({
         }
       }}
     >
-      {question !== undefined && question.length > 0 ? (
+      {hasAccessTargets ? <div>{t("task.accessApprovalIntro", { count: accessTargets.length })}</div> : null}
+      {accessTargets?.map((target, index) => (
+        <div
+          className="min-w-0 text-[var(--color-on-island)]"
+          key={`${String(index)}:${target.requestedPath}`}
+        >
+          - {target.requestedPath}
+          {target.requestedPath === target.resolvedPath ? null : ` → ${target.resolvedPath}`}
+        </div>
+      ))}
+      {hasAccessTargets ? <div>{t("task.accessApprovalQuestion")}</div> : null}
+      {!hasAccessTargets && question !== undefined && question.length > 0 ? (
         <div className="min-w-0 text-[var(--color-on-island)]">
           <StaticMarkdown value={question} />
         </div>
@@ -471,7 +492,7 @@ async function submitQuestionAnswer({
   } catch (error: unknown) {
     showStatusToast({
       body: errorMessage(error),
-      id: `task-question-answer-failed:${attention.question.promptID}`,
+      id: `task-question-answer-failed:${attention.question.toolCallID}`,
       title: failureTitle,
       tone: "danger",
     });

@@ -46,17 +46,17 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	for _, prompt := range prompts {
 		switch prompt.Kind {
 		case clientui.TranscriptPromptKindQuestion:
-			if prompt.PromptID != "ask-remote-1" {
+			if prompt.ToolCallID != "ask-remote-1" {
 				t.Fatalf("unexpected question prompt: %+v", prompt)
 			}
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
-				PromptID:       string(prompt.PromptID),
+				ToolCallID:     prompt.ToolCallID,
 				FreeformAnswer: "done",
 			})
 		case clientui.TranscriptPromptKindApproval:
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
-				PromptID: string(prompt.PromptID),
-				Approval: &clientui.ApprovalPromptAnswer{Decision: clientui.ApprovalDecisionAllowOnce},
+				ToolCallID: prompt.ToolCallID,
+				Approval:   &clientui.ApprovalPromptAnswer{Decision: clientui.ApprovalDecisionAllowOnce},
 			})
 		default:
 			t.Fatalf("unexpected prompt: %+v", prompt)
@@ -138,12 +138,12 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 
 }
 
-func waitForRemoteTranscriptPrompt(t *testing.T, events <-chan ongoingTranscriptEvent, promptID clientui.PromptID, earlyFailures ...<-chan error) clientui.TranscriptPrompt {
+func waitForRemoteTranscriptPrompt(t *testing.T, events <-chan ongoingTranscriptEvent, toolCallID clientui.ToolCallID, earlyFailures ...<-chan error) clientui.TranscriptPrompt {
 	t.Helper()
-	return waitForRemoteTranscriptPrompts(t, events, 1, promptID, earlyFailures...)[0]
+	return waitForRemoteTranscriptPrompts(t, events, 1, toolCallID, earlyFailures...)[0]
 }
 
-func waitForRemoteTranscriptPrompts(t *testing.T, events <-chan ongoingTranscriptEvent, count int, promptID clientui.PromptID, earlyFailures ...<-chan error) []clientui.TranscriptPrompt {
+func waitForRemoteTranscriptPrompts(t *testing.T, events <-chan ongoingTranscriptEvent, count int, toolCallID clientui.ToolCallID, earlyFailures ...<-chan error) []clientui.TranscriptPrompt {
 	t.Helper()
 	if count < 1 {
 		t.Fatal("remote transcript prompt count must be positive")
@@ -180,7 +180,7 @@ func waitForRemoteTranscriptPrompts(t *testing.T, events <-chan ongoingTranscrip
 				}
 			}
 			for _, prompt := range candidates {
-				if promptID == "" || prompt.PromptID == promptID {
+				if toolCallID == "" || prompt.ToolCallID == toolCallID {
 					prompts = append(prompts, prompt)
 					if len(prompts) == count {
 						return prompts
@@ -188,10 +188,10 @@ func waitForRemoteTranscriptPrompts(t *testing.T, events <-chan ongoingTranscrip
 				}
 			}
 		case err := <-earlyFailure:
-			t.Fatalf("prompt %q failed before publication: %v", promptID, err)
+			t.Fatalf("prompt %q failed before publication: %v", toolCallID, err)
 			return nil
 		case <-deadline:
-			t.Fatalf("timed out waiting for %d transcript prompt(s) %q after messages %+v", count, promptID, seen)
+			t.Fatalf("timed out waiting for %d transcript prompt(s) %q after messages %+v", count, toolCallID, seen)
 			return nil
 		}
 	}
@@ -249,7 +249,7 @@ func waitForRemoteTranscriptAssistantFinal(
 			var rows []clientui.TranscriptCommittedRow
 			switch evt.Message.Kind() {
 			case clientui.TranscriptMessageHydration:
-				rows = evt.Message.Payload().(clientui.TranscriptHydration).CommittedRows
+				rows = evt.Message.Payload().(clientui.TranscriptHydration).TailSegment.Entries
 			case clientui.TranscriptMessageCommittedRow:
 				rows = []clientui.TranscriptCommittedRow{
 					evt.Message.Payload().(clientui.TranscriptCommittedRow),

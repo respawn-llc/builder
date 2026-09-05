@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"core/server/runtime"
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -33,8 +34,8 @@ type PromptAnswerPayload interface {
 }
 
 type PromptAnswerCommand struct {
-	PromptID clientui.PromptID
-	Payload  PromptAnswerPayload
+	ToolCallID clientui.ToolCallID
+	Payload    PromptAnswerPayload
 }
 
 type PromptAnswerOutcome string
@@ -45,8 +46,8 @@ const (
 )
 
 type PromptAnswerResult struct {
-	PromptID clientui.PromptID
-	Outcome  PromptAnswerOutcome
+	ToolCallID clientui.ToolCallID
+	Outcome    PromptAnswerOutcome
 }
 
 type preparedPromptAnswer struct {
@@ -90,13 +91,24 @@ func (a *Authority) ResolvePromptBatch(
 	if execution == nil {
 		return skippedPromptAnswerResults(commands), nil
 	}
-	return execution.prompts.ResolvePromptBatch(ctx, stepID, commands)
+	return execution.prompts.resolvePromptBatch(ctx, stepID, commands, func(answer preparedPromptAnswer) (bool, error) {
+		return a.resolveExactApproval(ctx, execution, answer)
+	})
 }
 
 func (s *executionPromptStore) ResolvePromptBatch(
 	ctx context.Context,
 	stepID runtimeids.StepID,
 	commands []PromptAnswerCommand,
+) ([]PromptAnswerResult, error) {
+	return s.resolvePromptBatch(ctx, stepID, commands, nil)
+}
+
+func (s *executionPromptStore) resolvePromptBatch(
+	ctx context.Context,
+	stepID runtimeids.StepID,
+	commands []PromptAnswerCommand,
+	resolveApproval func(preparedPromptAnswer) (bool, error),
 ) ([]PromptAnswerResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -114,15 +126,15 @@ func (s *executionPromptStore) ResolvePromptBatch(
 		return nil, err
 	}
 	results := skippedPromptAnswerResults(commands)
-	resultIndexes := make(map[clientui.PromptID]int, len(results))
+	resultIndexes := make(map[clientui.ToolCallID]int, len(results))
 	for index, result := range results {
-		resultIndexes[result.PromptID] = index
+		resultIndexes[result.ToolCallID] = index
 	}
 
 	prepared := make([]preparedPromptAnswer, 0, len(commands))
 	s.mu.RLock()
 	for _, command := range commands {
-		entry := s.pending[string(command.PromptID)]
+		entry := s.pending[string(command.ToolCallID)]
 		if entry == nil || entry.snapshot.Request.StepID != stepID.String() {
 			continue
 		}
@@ -145,15 +157,21 @@ func (s *executionPromptStore) ResolvePromptBatch(
 	sort.Slice(prepared, func(i, j int) bool {
 		left := prepared[i].entry.snapshot
 		right := prepared[j].entry.snapshot
-		return PendingPromptOrderLess(left.CreatedAt, left.Request.ID, right.CreatedAt, right.Request.ID)
+		return PendingPromptOrderLess(left.CreatedAt, left.Request.ToolCallID, right.CreatedAt, right.Request.ToolCallID)
 	})
 	for _, answer := range prepared {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		resolved, err := s.resolvePreparedPromptAnswer(answer)
+		var resolved bool
+		var err error
+		if answer.entry.snapshot.Request.Approval && resolveApproval != nil {
+			resolved, err = resolveApproval(answer)
+		} else {
+			resolved, err = s.resolvePreparedPromptAnswer(ctx, answer)
+		}
 		if resolved {
-			results[resultIndexes[answer.command.PromptID]].Outcome = PromptAnswerOutcomeResolved
+			results[resultIndexes[answer.command.ToolCallID]].Outcome = PromptAnswerOutcomeResolved
 		}
 		if err != nil {
 			return nil, err
@@ -162,19 +180,58 @@ func (s *executionPromptStore) ResolvePromptBatch(
 	return results, nil
 }
 
-func (s *executionPromptStore) resolvePreparedPromptAnswer(answer preparedPromptAnswer) (bool, error) {
+func (s *executionPromptStore) resolvePreparedPromptAnswer(ctx context.Context, answer preparedPromptAnswer) (bool, error) {
+	if answer.entry.snapshot.Request.Approval {
+		if answer.entry.approval == nil {
+			return false, errors.New("pending Approval lifecycle is required")
+		}
+		return s.resolveApproval(ctx, answer, nil)
+	}
 	s.mu.Lock()
-	if s.pending[string(answer.command.PromptID)] != answer.entry {
+	if s.pending[string(answer.command.ToolCallID)] != answer.entry {
 		s.mu.Unlock()
 		return false, nil
 	}
-	s.resolvePromptFollowUpLocked(answer.stepID, answer.command.PromptID, answer.questionBatch)
-	removed := s.removePromptEntryLocked(string(answer.command.PromptID), answer.entry)
+	s.resolvePromptFollowUpLocked(answer.stepID, answer.command.ToolCallID, answer.questionBatch)
+	removed := s.removePromptEntryLocked(string(answer.command.ToolCallID), answer.entry)
 	s.mu.Unlock()
 	if !removed {
 		return false, nil
 	}
 	return true, s.deliverPromptResolution(answer.entry, answer.resolution, answer.submitErr)
+}
+
+func (a *Authority) resolveExactApproval(
+	ctx context.Context,
+	execution *execution,
+	answer preparedPromptAnswer,
+) (bool, error) {
+	execution.exactMu.Lock()
+	defer execution.exactMu.Unlock()
+	a.mu.Lock()
+	live := a.byScope[execution.scope.ID()] == execution
+	a.mu.Unlock()
+	if !live || execution.resource == nil {
+		return false, nil
+	}
+	return execution.prompts.resolveApproval(ctx, answer, func() error {
+		approval, ok := answer.resolution.(tools.AskQuestionApproval)
+		if !ok || approval.Decision == tools.AskQuestionApprovalDecisionDeny || approval.Commentary == nil {
+			return nil
+		}
+		identity := tools.ExecutionIdentity{
+			RunID:      answer.entry.snapshot.Request.RunID,
+			StepID:     answer.entry.snapshot.Request.StepID,
+			ToolCallID: answer.command.ToolCallID,
+		}
+		return execution.resource.withEngine(
+			context.Background(),
+			execution.resource.ref,
+			func(_ context.Context, engine *runtime.Engine) error {
+				return engine.SubmitExactApprovalCommentary(identity, *approval.Commentary)
+			},
+		)
+	})
 }
 
 func (s *executionPromptStore) removePromptEntryLocked(requestID string, expected *executionPromptEntry) bool {
@@ -192,7 +249,11 @@ func (s *executionPromptStore) deliverPromptResolution(
 ) error {
 	<-entry.publicationDone
 	publicationErr := s.publishResolved(entry.snapshot)
-	entry.response <- executionPromptResult{resolution: resolution, err: submitErr}
+	result := resolvedExecutionPromptResult(resolution)
+	if submitErr != nil {
+		result = declinedExecutionPromptResult(submitErr)
+	}
+	entry.response <- result
 	return publicationErr
 }
 
@@ -246,9 +307,9 @@ func validatePromptAnswerCommands(commands []PromptAnswerCommand) error {
 	if len(commands) == 0 {
 		return errors.New("prompt answer commands are required")
 	}
-	seen := make(map[clientui.PromptID]struct{}, len(commands))
+	seen := make(map[clientui.ToolCallID]struct{}, len(commands))
 	for index, command := range commands {
-		if err := command.PromptID.Validate(); err != nil {
+		if err := command.ToolCallID.Validate(); err != nil {
 			return fmt.Errorf("prompt answer command %d: %w", index, err)
 		}
 		switch answer := command.Payload.(type) {
@@ -264,10 +325,10 @@ func validatePromptAnswerCommands(commands []PromptAnswerCommand) error {
 		default:
 			return fmt.Errorf("prompt answer command %d has an invalid payload variant", index)
 		}
-		if _, exists := seen[command.PromptID]; exists {
-			return fmt.Errorf("prompt answer command prompt id %q is duplicated", command.PromptID)
+		if _, exists := seen[command.ToolCallID]; exists {
+			return fmt.Errorf("prompt answer command tool call id %q is duplicated", command.ToolCallID)
 		}
-		seen[command.PromptID] = struct{}{}
+		seen[command.ToolCallID] = struct{}{}
 	}
 	return nil
 }
@@ -276,8 +337,8 @@ func skippedPromptAnswerResults(commands []PromptAnswerCommand) []PromptAnswerRe
 	results := make([]PromptAnswerResult, 0, len(commands))
 	for _, command := range commands {
 		results = append(results, PromptAnswerResult{
-			PromptID: command.PromptID,
-			Outcome:  PromptAnswerOutcomeSkipped,
+			ToolCallID: command.ToolCallID,
+			Outcome:    PromptAnswerOutcomeSkipped,
 		})
 	}
 	return results

@@ -12,7 +12,7 @@ import (
 func TestChatSettingsReadContract(t *testing.T) {
 	sessionID := mustChatSettingsSessionID(t, "session-1")
 	for _, request := range []ChatSettingsReadRequest{
-		{Target: LazyChatSettingsTarget("project-1", "workspace-1")},
+		{Target: NewChatSettingsTarget("project-1", "workspace-1")},
 		{Target: SessionChatSettingsTarget(sessionID)},
 	} {
 		encoded, err := json.Marshal(request)
@@ -29,7 +29,7 @@ func TestChatSettingsReadContract(t *testing.T) {
 	}
 	for _, raw := range []string{
 		`{}`,
-		`{"target":{"kind":"lazy","project_id":"project-1"}}`,
+		`{"target":{"kind":"new_chat","project_id":"project-1"}}`,
 		`{"target":{"kind":"session","session_id":"session-1","project_id":"project-1"}}`,
 		`{"target":{"kind":"session","session_id":"../escape"}}`,
 	} {
@@ -39,14 +39,14 @@ func TestChatSettingsReadContract(t *testing.T) {
 		}
 	}
 
-	lazy := LazyChatSettingsTarget("project-1", "workspace-1")
-	if err := (ChatSettingsReadResponse{}).ValidateForTarget(lazy); err != nil {
-		t.Fatalf("lazy response: %v", err)
+	newChat := NewChatSettingsTarget("project-1", "workspace-1")
+	if err := (ChatSettingsReadResponse{}).ValidateForTarget(newChat); err != nil {
+		t.Fatalf("New Chat response: %v", err)
 	}
 	if err := (ChatSettingsReadResponse{
 		Session: &ChatSettingsSessionFacts{SessionID: sessionID},
-	}).ValidateForTarget(lazy); err == nil {
-		t.Fatal("lazy response accepted Session facts")
+	}).ValidateForTarget(newChat); err == nil {
+		t.Fatal("New Chat response accepted Session facts")
 	}
 	session := SessionChatSettingsTarget(sessionID)
 	if err := (ChatSettingsReadResponse{}).ValidateForTarget(session); err == nil {
@@ -56,6 +56,40 @@ func TestChatSettingsReadContract(t *testing.T) {
 		Session: &ChatSettingsSessionFacts{SessionID: sessionID},
 	}).ValidateForTarget(session); err != nil {
 		t.Fatalf("materialized response: %v", err)
+	}
+}
+
+func TestChatSettingsMutationRequiresSession(t *testing.T) {
+	sessionID := mustChatSettingsSessionID(t, "session-1")
+	enabled := true
+	request := ChatSettingsMutationRequest{
+		SessionID: sessionID,
+		Operation: ChatSettingsMutationOperation{
+			Kind:    ChatSettingsMutationQuestions,
+			Enabled: &enabled,
+		},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded ChatSettingsMutationRequest
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.SessionID != sessionID {
+		t.Fatalf("Session ID = %q, want %q", decoded.SessionID, sessionID)
+	}
+
+	for _, raw := range []string{
+		`{"operation":{"kind":"questions","enabled":true}}`,
+		`{"session_id":"../escape","operation":{"kind":"questions","enabled":true}}`,
+		`{"session_id":"session-1","operation":{"kind":"questions","enabled":true},"target":{"kind":"new_chat","project_id":"project-1","workspace_id":"workspace-1"}}`,
+	} {
+		var request ChatSettingsMutationRequest
+		if err := json.Unmarshal([]byte(raw), &request); err == nil {
+			t.Fatalf("Unmarshal(%s) unexpectedly succeeded", raw)
+		}
 	}
 }
 

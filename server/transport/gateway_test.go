@@ -19,9 +19,11 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
+	"core/server/chatmutation"
 	"core/server/core"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	remoteclient "core/shared/client"
@@ -29,6 +31,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
+	chatpb "core/shared/protoapi/gen/kent/api/chat"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
@@ -43,6 +46,319 @@ import (
 
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+type gatewayChatLifecycleDependencies struct {
+	GatewayDependencies
+	chat apicontract.ChatMutationService
+}
+
+func (d *gatewayChatLifecycleDependencies) ChatMutationClient() apicontract.ChatMutationService {
+	return d.chat
+}
+
+type gatewayChatLifecycleResolver struct {
+	started chan context.Context
+	proceed chan struct{}
+	target  chatmutation.ResolvedTarget
+}
+
+func (r *gatewayChatLifecycleResolver) Resolve(
+	ctx context.Context,
+	_ chatmutation.TargetResolutionRequest,
+) (chatmutation.ResolvedTarget, error) {
+	r.started <- ctx
+	select {
+	case <-r.proceed:
+		return r.target, nil
+	case <-ctx.Done():
+		return chatmutation.ResolvedTarget{}, context.Cause(ctx)
+	}
+}
+
+type gatewayChatLifecyclePlanner struct {
+	attachment chatmutation.RuntimeAttachment
+}
+
+func (p gatewayChatLifecyclePlanner) Open(
+	context.Context,
+	runtimeids.SessionID,
+) (chatmutation.RuntimeAttachment, error) {
+	return p.attachment, nil
+}
+
+type gatewayChatLifecycleAttachment struct {
+	sessionID runtimeids.SessionID
+	released  chan sessionruntime.RuntimeReleasePolicy
+}
+
+func (a *gatewayChatLifecycleAttachment) SessionID() runtimeids.SessionID {
+	return a.sessionID
+}
+
+func (a *gatewayChatLifecycleAttachment) Release(
+	_ context.Context,
+	policy sessionruntime.RuntimeReleasePolicy,
+) error {
+	a.released <- policy
+	return nil
+}
+
+type gatewayChatLifecycleAdmission struct {
+	queueItemID runtimeids.QueueItemID
+}
+
+func (a gatewayChatLifecycleAdmission) AdmitChatUserTurn(
+	context.Context,
+	serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.ChatInputAdmissionResult, error) {
+	return serverapi.ChatInputAdmissionResult{
+		QueueItemID: a.queueItemID,
+		Accepted:    true,
+	}, nil
+}
+
+func (gatewayChatLifecycleAdmission) AdmitChatQueuedUserInput(
+	context.Context,
+	serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.ChatInputAdmissionResult, error) {
+	panic("unexpected Queue admission")
+}
+
+func (gatewayChatLifecycleAdmission) AdmitManualCompaction(
+	context.Context,
+	serverapi.RuntimeCompactContextRequest,
+) (bool, error) {
+	panic("unexpected compaction admission")
+}
+
+type gatewayChatAuthorizationService struct {
+	sessionID string
+}
+
+func (s gatewayChatAuthorizationService) Steer(
+	context.Context,
+	*chatpb.SteerRequest,
+) (*chatpb.InputMutationSuccess, error) {
+	return &chatpb.InputMutationSuccess{
+		Session: &chatpb.ExistingSessionTarget{SessionId: s.sessionID},
+		Outcome: &chatpb.InputMutationSuccess_Accepted{
+			Accepted: &chatpb.InputAccepted{
+				QueueItem: &chatpb.QueueItemIdentity{Id: runtimeids.NewQueueItemID().String()},
+			},
+		},
+	}, nil
+}
+
+func (gatewayChatAuthorizationService) Queue(
+	context.Context,
+	*chatpb.QueueRequest,
+) (*chatpb.InputMutationSuccess, error) {
+	panic("unexpected Queue")
+}
+
+func (gatewayChatAuthorizationService) Compact(
+	context.Context,
+	*chatpb.CompactRequest,
+) (*chatpb.CompactionMutationSuccess, error) {
+	panic("unexpected Compact")
+}
+
+func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	gateway, err := NewGateway(
+		&gatewayChatLifecycleDependencies{
+			GatewayDependencies: fixture.appCore,
+			chat: gatewayChatAuthorizationService{
+				sessionID: fixture.ownSessionID,
+			},
+		},
+		gatewayTestIdentity(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	t.Cleanup(server.Close)
+	method := chatpb.File_kent_api_chat_chat_proto.Services().
+		ByName("ChatService").
+		Methods().
+		ByName("Steer")
+
+	for _, test := range []struct {
+		name     string
+		target   *chatpb.ChatTarget
+		attached bool
+		wantCode string
+	}{
+		{
+			name: "projectless existing Session outside startup Project",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
+			}},
+		},
+		{
+			name: "attached Project existing Session",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
+			}},
+			attached: true,
+		},
+		{
+			name: "attached Project rejects foreign Session",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
+			}},
+			attached: true,
+			wantCode: "session_not_found",
+		},
+		{
+			name:     "exact New Chat binding",
+			target:   routePolicyNewChatTarget(fixture.bindingA.ProjectID, fixture.bindingA.WorkspaceID),
+			attached: true,
+		},
+		{
+			name:     "mismatched New Chat binding",
+			target:   routePolicyNewChatTarget(fixture.bindingB.ProjectID, fixture.bindingB.WorkspaceID),
+			attached: true,
+			wantCode: "workspace_not_registered",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := dialGateway(t, server)
+			t.Cleanup(func() { _ = conn.Close() })
+			handshakeGateway(t, conn)
+			if test.attached {
+				requireGatewayProjectAttachment(
+					t,
+					conn,
+					"attach-project",
+					&connectionpb.AttachProjectRequest{ProjectId: fixture.bindingA.ProjectID},
+				)
+			}
+			result := &chatpb.SteerResult{}
+			callGatewayDescriptor(
+				t,
+				conn,
+				"authorize-chat",
+				method,
+				&chatpb.SteerRequest{
+					Target: test.target,
+					Activation: &chatpb.Activation{
+						Input: &chatpb.Activation_Text{Text: "continue"},
+					},
+				},
+				result,
+			)
+			classified, err := protoapi.ClassifyResult(result)
+			if err != nil {
+				t.Fatalf("classify Chat result: %v", err)
+			}
+			if test.wantCode == "" {
+				if classified.Outcome != protoapi.OperationSuccess {
+					t.Fatalf("outcome = %+v, want success", classified)
+				}
+				return
+			}
+			if classified.Failure == nil || classified.Failure.Code != test.wantCode {
+				t.Fatalf("failure = %+v, want code %q", classified.Failure, test.wantCode)
+			}
+		})
+	}
+}
+
+func TestGatewayDisconnectStopsDeliveryWithoutCancelingChatOperation(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	t.Cleanup(func() { _ = appCore.Close() })
+	store := createGatewayAuthoritativeSession(t, appCore)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse Session ID: %v", err)
+	}
+	owner, err := chatmutation.NewOperationOwner(time.Second)
+	if err != nil {
+		t.Fatalf("NewOperationOwner: %v", err)
+	}
+	t.Cleanup(func() { _ = owner.Close() })
+	resolver := &gatewayChatLifecycleResolver{
+		started: make(chan context.Context, 1),
+		proceed: make(chan struct{}),
+		target:  chatmutation.ResolvedTarget{SessionID: sessionID},
+	}
+	attachment := &gatewayChatLifecycleAttachment{
+		sessionID: sessionID,
+		released:  make(chan sessionruntime.RuntimeReleasePolicy, 1),
+	}
+	service := chatmutation.NewService(
+		owner,
+		resolver,
+		gatewayChatLifecyclePlanner{attachment: attachment},
+		gatewayChatLifecycleAdmission{queueItemID: runtimeids.NewQueueItemID()},
+	)
+	gateway, err := NewGateway(
+		&gatewayChatLifecycleDependencies{GatewayDependencies: appCore, chat: service},
+		gatewayTestIdentity(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	t.Cleanup(server.Close)
+	conn := dialGateway(t, server)
+	handshakeGateway(t, conn)
+
+	method := chatpb.File_kent_api_chat_chat_proto.Services().
+		ByName("ChatService").
+		Methods().
+		ByName("Steer")
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil {
+		t.Fatalf("resolve Chat operation: %v", err)
+	}
+	payload, err := protoapi.Marshal(&chatpb.SteerRequest{
+		Target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+			Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+		}},
+		Activation: &chatpb.Activation{
+			Input: &chatpb.Activation_Text{Text: "continue"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal Chat request: %v", err)
+	}
+	correlation := "disconnect-chat"
+	envelope, err := protoapi.EncodeEnvelope(&sharedpb.Envelope{
+		Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
+			Operation:   operation.Name,
+			Correlation: &correlation,
+			Payload:     payload,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode Chat request: %v", err)
+	}
+	if err := websocket.Message.Send(conn, envelope); err != nil {
+		t.Fatalf("send Chat request: %v", err)
+	}
+
+	operationCtx := <-resolver.started
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close caller connection: %v", err)
+	}
+	select {
+	case <-operationCtx.Done():
+		t.Fatalf("Gateway disconnect canceled Chat operation: %v", context.Cause(operationCtx))
+	default:
+	}
+	close(resolver.proceed)
+	select {
+	case policy := <-attachment.released:
+		if policy != sessionruntime.RuntimeReleaseDetach {
+			t.Fatalf("release policy = %v, want detach", policy)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat operation did not finish after Gateway disconnect")
+	}
+}
 
 func gatewaySessionExecutionTarget(t *testing.T, conn *websocket.Conn, requestID, sessionID string) clientui.SessionExecutionTarget {
 	t.Helper()
@@ -287,7 +603,10 @@ func TestCancellationMessageRoundTripsThroughRemoteClient(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	_, err = remote.GetChatContext(context.Background(), serverapi.NewWorkspaceChatContextRequest())
+	_, err = remote.GetChatContext(
+		context.Background(),
+		serverapi.NewSessionChatContextRequest(runtimeids.NewSessionID()),
+	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("GetChatContext error = %v, want context.Canceled", err)
 	}
@@ -1303,7 +1622,7 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	}
 }
 
-func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
+func TestGatewayAuthorizesNewChatAndSessionSettingsTargets(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
@@ -1329,23 +1648,23 @@ func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	lazy, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
-		Target: serverapi.LazyChatSettingsTarget(appCore.ProjectID(), workspace.ID),
+	newChat, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
+		Target: serverapi.NewChatSettingsTarget(appCore.ProjectID(), workspace.ID),
 	})
 	if err != nil {
-		t.Fatalf("ReadChatSettings lazy: %v", err)
+		t.Fatalf("ReadChatSettings New Chat: %v", err)
 	}
-	if lazy.Session != nil {
-		t.Fatalf("lazy response has Session facts: %+v", lazy.Session)
+	if newChat.Session != nil {
+		t.Fatalf("New Chat response has Session facts: %+v", newChat.Session)
 	}
-	materialized, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
+	sessionSettings, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
 		Target: serverapi.SessionChatSettingsTarget(sessionID),
 	})
 	if err != nil {
 		t.Fatalf("ReadChatSettings Session: %v", err)
 	}
-	if materialized.Session == nil || materialized.Session.SessionID != sessionID {
-		t.Fatalf("materialized response = %+v", materialized.Session)
+	if sessionSettings.Session == nil || sessionSettings.Session.SessionID != sessionID {
+		t.Fatalf("Session settings response = %+v", sessionSettings.Session)
 	}
 
 	conn := dialGateway(t, server)
@@ -1358,11 +1677,11 @@ func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
 		"chat-settings-project-mismatch",
 		protocol.MethodChatSettingsRead,
 		serverapi.ChatSettingsReadRequest{
-			Target: serverapi.LazyChatSettingsTarget("project-foreign", workspace.ID),
+			Target: serverapi.NewChatSettingsTarget("project-foreign", workspace.ID),
 		},
 	)
 	if mismatched.Code == 0 {
-		t.Fatalf("lazy project mismatch unexpectedly succeeded")
+		t.Fatalf("New Chat project mismatch unexpectedly succeeded")
 	}
 }
 

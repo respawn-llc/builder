@@ -12,12 +12,12 @@ import (
 	"core/server/metadata"
 	"core/server/runtimewire"
 	brand "core/shared/config"
+	"core/shared/protoapi"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type chatSettingsBoundaryLLMClient struct {
@@ -67,7 +67,7 @@ func (c *chatSettingsBoundaryLLMClient) unblock() {
 	c.releaseOnce.Do(func() { close(c.release) })
 }
 
-func TestMaterializedChatSettingsMutationReturnsAfterRuntimeAcceptance(t *testing.T) {
+func TestChatSettingsMutationReturnsAfterRuntimeAcceptance(t *testing.T) {
 	workspace := t.TempDir()
 	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
 		WorkspaceRoot: workspace,
@@ -107,11 +107,20 @@ func TestMaterializedChatSettingsMutationReturnsAfterRuntimeAcceptance(t *testin
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	materialized, err := launch.MaterializeWorkspaceChat(t.Context(), &emptypb.Empty{})
+	intent, err := protoapi.SessionLaunchIntentToProto(
+		serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	)
 	if err != nil {
-		t.Fatalf("MaterializeWorkspaceChat: %v", err)
+		t.Fatalf("convert Session launch intent: %v", err)
 	}
-	sessionID, err := runtimeids.ParseSessionID(materialized.SessionId)
+	planned, err := launch.PlanSession(t.Context(), &sessionlaunchpb.SessionPlanRequest{
+		Mode:   sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
+		Intent: intent,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(planned.Plan.SessionId)
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
@@ -168,7 +177,7 @@ func TestMaterializedChatSettingsMutationReturnsAfterRuntimeAcceptance(t *testin
 	mutationDone := make(chan mutationResult, 1)
 	go func() {
 		response, mutationErr := chatSettings.MutateChatSettings(t.Context(), serverapi.ChatSettingsMutationRequest{
-			Target: serverapi.SessionChatSettingsTarget(sessionID),
+			SessionID: sessionID,
 			Operation: serverapi.ChatSettingsMutationOperation{
 				Kind:    serverapi.ChatSettingsMutationQuestions,
 				Enabled: textutil.Value(requestedQuestions),

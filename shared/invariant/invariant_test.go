@@ -74,14 +74,14 @@ func TestPolicyPanicModePanicsWithDiagnostic(t *testing.T) {
 	}))
 }
 
-func TestWorkflowPromptDiagnosticCarriesPromptIdentity(t *testing.T) {
-	diagnostic := WorkflowPromptDiagnostic("resolve_prompt", "prompt-1", testingError{})
+func TestWorkflowPromptDiagnosticCarriesToolCallIdentity(t *testing.T) {
+	diagnostic := WorkflowPromptDiagnostic("resolve_prompt", "call-1", testingError{})
 
 	if diagnostic.Scope != ScopeWorkflowExecution {
 		t.Fatalf("scope = %q, want %q", diagnostic.Scope, ScopeWorkflowExecution)
 	}
 	assertDiagnosticField(t, diagnostic, FieldOperation, "resolve_prompt")
-	assertDiagnosticField(t, diagnostic, FieldPromptID, "prompt-1")
+	assertDiagnosticField(t, diagnostic, FieldToolCallID, "call-1")
 	if diagnostic.Fields[FieldInvariantError] == "" {
 		t.Fatal("invariant cause is missing")
 	}

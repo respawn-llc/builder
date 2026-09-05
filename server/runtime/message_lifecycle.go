@@ -405,7 +405,7 @@ func handoffRequestFromToolCall(call llm.ToolCall) (*handoffRequest, bool) {
 }
 
 func queuedUserMessageText(message QueuedUserMessage) (string, error) {
-	text, err := message.DisplayText()
+	text, err := message.ExecutionText()
 	if err != nil {
 		return "", err
 	}
@@ -496,11 +496,11 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var claim *queuedUserMessageClaim
-	switch selection.(type) {
+	switch selected := selection.(type) {
 	case allPendingUserInjectionSelection:
 		claim = m.queue.ClaimAll()
 	case steerUserInjectionSelection:
-		claim = m.queue.ClaimSteers()
+		claim = m.queue.ClaimSteersAndIDs(selected.queueItemIDs)
 	default:
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
@@ -547,6 +547,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(
 		}
 		committedQueueItemIDs := queuedUserMessageIDSet(group.queueItems)
 		m.queue.FinalizeClaimItems(claim, committedQueueItemIDs)
+		e.unmarkQueuedUserInjectionForAutoDrainSet(committedQueueItemIDs)
 		if result.queueItemIDs == nil {
 			result.queueItemIDs = committedQueueItemIDs
 		} else {
@@ -595,11 +596,11 @@ func (m *defaultMessageLifecycle) failDefinitelyUncommittedSteerClaim(
 	return restorationErr
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessage(input QueuedUserInput, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.Queue(text, association...)
+	return m.queue.Queue(input, association...)
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {

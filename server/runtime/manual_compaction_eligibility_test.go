@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -15,7 +16,7 @@ func completeManualEligibilityAgentStep(t *testing.T, engine *Engine) {
 	engine.compactionRuntimeState().SetManualCompactionEligible(true)
 }
 
-func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
+func TestManualCompactionRejectsTooSoonBeforeScheduling(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant: llm.Message{
@@ -30,13 +31,21 @@ func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 	})
 	engine.compactionRuntimeState().SetManualCompactionEligible(false)
 
-	var events []Event
-	engine.cfg.OnEvent = func(event Event) {
-		events = append(events, event)
+	requestID := runtimeids.NewCompactionRequestID()
+	if _, err := engine.CompactContextAdmissionForRequestWithAcceptance(
+		t.Context(),
+		requestID,
+		runtimeinput.ManualCompactionAdmission{},
+		nil,
+	); !errors.Is(err, ErrManualCompactionTooSoon) {
+		t.Fatalf("fresh-session compaction error = %v, want too soon", err)
 	}
-	scheduleManualCompactionAndWait(t, engine)
-	if !hasEventKind(events, EventCompactionFailed) {
-		t.Fatalf("fresh-session compaction events = %+v, want failed event", events)
+	pending, err := engine.PendingWorkSnapshot()
+	if err != nil {
+		t.Fatalf("PendingWorkSnapshot: %v", err)
+	}
+	if len(pending.Items) != 0 {
+		t.Fatalf("fresh-session compaction changed Pending Work: %+v", pending.Items)
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()

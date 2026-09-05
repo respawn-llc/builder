@@ -24,18 +24,20 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 		{name: "non-normalized step identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.StepID = " " + request.StepID + " " }},
 		{name: "request run mismatch", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.RunID = "run-other" }},
 		{name: "request step mismatch", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.StepID = "step-other" }},
-		{name: "metadata prompt identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.PromptID = "other" }},
+		{name: "metadata tool call identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.ToolCallID = "other" }},
 		{name: "prepared count", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.PreparedPromptCount = 3 }},
 		{name: "candidate ordinal", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.CandidateOrdinal = 2 }},
 		{name: "candidate identity", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.BatchPromptIDs = []string{"other", "ask-2"}
+			request.QuestionBatch.BatchToolCallIDs = []string{"other", "ask-2"}
 		}},
-		{name: "blank candidate id", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.BatchPromptIDs = []string{"", "ask-2"} }},
+		{name: "blank candidate id", mutate: func(request *tools.AskQuestionRequest) {
+			request.QuestionBatch.BatchToolCallIDs = []string{"", "ask-2"}
+		}},
 		{name: "non-normalized candidate id", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.BatchPromptIDs = []string{" ask-1 ", "ask-2"}
+			request.QuestionBatch.BatchToolCallIDs = []string{" ask-1 ", "ask-2"}
 		}},
 		{name: "duplicate candidate id", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.BatchPromptIDs = []string{"ask-1", "ask-1"}
+			request.QuestionBatch.BatchToolCallIDs = []string{"ask-1", "ask-1"}
 		}},
 	}
 	for _, test := range tests {
@@ -59,8 +61,8 @@ func TestValidatedQuestionBatchDescriptorOwnsSuccessorIdentityWithoutDirectObser
 	if err != nil {
 		t.Fatalf("validate QuestionBatch: %v", err)
 	}
-	request.QuestionBatch.BatchPromptIDs[1] = "mutated"
-	if got, want := descriptor.successorPromptIDs(), []string{"ask-2"}; !equalPromptBatchStrings(got, want) {
+	request.QuestionBatch.BatchToolCallIDs[1] = "mutated"
+	if got, want := descriptor.successorToolCallIDs(), []string{"ask-2"}; !equalPromptBatchStrings(got, want) {
 		t.Fatalf("successor IDs = %v, want immutable %v", got, want)
 	}
 	store, _ := newPromptBatchStore(t)

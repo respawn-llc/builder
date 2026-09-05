@@ -40,7 +40,11 @@ func ProjectChatSettings(input ChatSettingsProjectionInput) (serverapi.ChatSetti
 	selectedModel := selected.Choice.Model
 	selectedSettings := selected.Settings
 	if cachingLocked {
-		selectedRole = normalizeWorkspaceChatDraftAgent(input.Agent)
+		normalizedAgent, ok := session.NormalizeChatAgent(input.Agent)
+		if !ok {
+			return serverapi.ChatSettings{}, errors.New("caching-locked Chat Agent is invalid")
+		}
+		selectedRole = normalizedAgent
 		selectedModel = input.Locked.Model
 		lockedSettings, err := lockedPreparedChatSettings(
 			*input.Locked,

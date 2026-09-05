@@ -33,13 +33,13 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 	update := transcriptTestRuntimeReadModelUpdate(t)
 	streamID := transcriptTestAssistantStreamID(t)
 	prompt := TranscriptPrompt{
-		Kind:      TranscriptPromptKindQuestion,
-		Status:    TranscriptPromptStatusPending,
-		PromptID:  PromptID("prompt-1"),
-		SessionID: transcriptTestSessionID(t),
-		StepID:    transcriptTestStepID(t),
-		Question:  "Choose a strategy",
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		Kind:       TranscriptPromptKindQuestion,
+		Status:     TranscriptPromptStatusPending,
+		ToolCallID: ToolCallID("prompt-1"),
+		SessionID:  transcriptTestSessionID(t),
+		StepID:     transcriptTestStepID(t),
+		Question:   "Choose a strategy",
+		CreatedAt:  time.Unix(1_700_000_000, 0),
 	}
 	queueText := "queued input"
 	fastModeEnabled := true
@@ -52,7 +52,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			RuntimeReadModelUpdate: update,
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
-			CommittedRows:          []TranscriptCommittedRow{},
+			TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		}), TranscriptMessageHydration},
 		{"committed row", NewTranscriptEvent(TranscriptCommittedRow{
 			Visibility: transcript.EntryVisibilityOngoing,

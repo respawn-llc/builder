@@ -403,11 +403,48 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
 		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, compactErr := engine.CompactContextAdmissionForRequestWithAcceptance(runCtx, req.RequestID, req.Admission, attempt.Accept)
-			return compactErr
+			return admitManualCompaction(runCtx, engine, req, attempt.Accept)
 		})
 		return struct{}{}, attempt.Accepted(), commandErr
 	})
+	return err
+}
+
+func (s *Service) AdmitManualCompaction(
+	ctx context.Context,
+	req serverapi.RuntimeCompactContextRequest,
+) (bool, error) {
+	if err := req.Validate(); err != nil {
+		return false, err
+	}
+	attempt := newRuntimeCommandAttempt(ctx)
+	defer attempt.Finish()
+	commandErr := s.withRuntime(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		workflowState, stateErr := engine.WorkflowSessionState()
+		if stateErr != nil {
+			return stateErr
+		}
+		active := engine.ActiveRun()
+		if workflowState != nil && (active == nil || active.ActiveKind != runtime.ActiveKindWorkflowTurn) {
+			return serverapi.ErrRuntimeUnavailable
+		}
+		return admitManualCompaction(runCtx, engine, req, attempt.Accept)
+	})
+	return attempt.Accepted(), commandErr
+}
+
+func admitManualCompaction(
+	ctx context.Context,
+	engine *runtime.Engine,
+	req serverapi.RuntimeCompactContextRequest,
+	accept runtime.CommandAcceptance,
+) error {
+	_, err := engine.CompactContextAdmissionForRequestWithAcceptance(
+		ctx,
+		req.RequestID,
+		req.Admission,
+		accept,
+	)
 	return err
 }
 

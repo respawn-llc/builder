@@ -81,7 +81,7 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessagePrompt:
 		prompt := message.Payload().(clientui.TranscriptPrompt)
 		if prompt.Status == clientui.TranscriptPromptStatusResolved {
-			return m.askController().resolvePrompt(string(prompt.PromptID))
+			return m.askController().resolvePrompt(string(prompt.ToolCallID))
 		}
 		cmd := m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
 		m.reconcileMissingPromptRecoveryScope()
@@ -303,21 +303,18 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 		return nil
 	}
 	localText := m.injectedQueue[index].Text
-	var cmd tea.Cmd
-	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
-		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
-	}
+	m.removeInjectedQueueItemsByIDs(ids)
 	if state.Status != clientui.QueuedUserMessageFailed {
-		return cmd
+		return nil
 	}
 	m.inputController().restoreInjectedTextIntoInput(localText)
-	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(
+	return m.sendTransientStatusWithNoticeID(
 		"queued message was not submitted; restored to input",
 		uiStatusNoticeError,
 		transientStatusDuration,
 		uiStatusNoticeReplace,
 		"",
-	))
+	)
 }
 
 func (m *uiModel) applyTranscriptHumanInputInterrupted(event clientui.TranscriptHumanInputInterrupted) tea.Cmd {
@@ -335,10 +332,8 @@ func (m *uiModel) applyTranscriptHumanInputInterrupted(event clientui.Transcript
 		}
 		texts = append(texts, item.Text)
 	}
+	m.removeInjectedQueueItemsByIDs(ids)
 	var cmd tea.Cmd
-	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
-		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
-	}
 	m.inputController().restoreServerOrderedTextBeforeComposer(strings.Join(texts, "\n\n"))
 	if m.hasPendingInterrupt() {
 		cmd = tea.Batch(cmd, m.acknowledgePendingInterrupt())
@@ -372,17 +367,17 @@ func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt
 	cmds := make([]tea.Cmd, 0, len(prompts)+1)
 	present := make(map[string]struct{}, len(prompts))
 	for _, prompt := range prompts {
-		present[string(prompt.PromptID)] = struct{}{}
+		present[string(prompt.ToolCallID)] = struct{}{}
 	}
 	var stale []string
 	if m.ask.hasCurrent() {
-		id := m.ask.current.promptID()
+		id := m.ask.current.toolCallID()
 		if _, exists := present[id]; !exists {
 			stale = append(stale, id)
 		}
 	}
 	for _, queued := range m.ask.queue {
-		id := queued.promptID()
+		id := queued.toolCallID()
 		if _, exists := present[id]; !exists {
 			stale = append(stale, id)
 		}

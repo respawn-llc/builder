@@ -21,8 +21,6 @@ import (
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/serverapi"
-
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type Core struct {
@@ -34,14 +32,6 @@ type Core struct {
 type unregisteredSessionLaunchClient struct{}
 
 func (unregisteredSessionLaunchClient) PlanSession(context.Context, *sessionlaunchpb.SessionPlanRequest) (*sessionlaunchpb.SessionPlanSuccess, error) {
-	return nil, serverapi.ErrWorkspaceNotRegistered
-}
-
-func (unregisteredSessionLaunchClient) WorkspaceChatDraft(context.Context, *sessionlaunchpb.WorkspaceChatDraftRequest) (*sessionlaunchpb.WorkspaceChatDraftSuccess, error) {
-	return nil, serverapi.ErrWorkspaceNotRegistered
-}
-
-func (unregisteredSessionLaunchClient) MaterializeWorkspaceChat(context.Context, *emptypb.Empty) (*sessionlaunchpb.MaterializeWorkspaceChatSuccess, error) {
 	return nil, serverapi.ErrWorkspaceNotRegistered
 }
 
@@ -122,22 +112,6 @@ func (s *Core) SessionLaunchClientForProjectWorkspace(ctx context.Context, proje
 		return nil, err
 	}
 	return s.sessionLaunchClientForProjectContext(projectCtx), nil
-}
-
-func (s *Core) WorkspaceChatContextOwnerForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (chatcontext.WorkspaceOwner, error) {
-	projectCtx, err := s.resolveProjectContext(ctx, projectID, workspaceID, "")
-	if err != nil {
-		return nil, err
-	}
-	return s.sessionLaunchServiceForProjectContext(projectCtx), nil
-}
-
-func (s *Core) WorkspaceChatContextOwnerForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (chatcontext.WorkspaceOwner, error) {
-	projectCtx, err := s.resolveProjectContext(ctx, projectID, "", workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
-	return s.sessionLaunchServiceForProjectContext(projectCtx), nil
 }
 
 func (s *Core) RunPromptClientForProject(ctx context.Context, projectID string) (apicontract.RunPromptService, error) {
@@ -306,9 +280,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	if cached := s.safeBundles().Sessions.sessionServices[scopeKey]; cached != nil {
 		return cached
 	}
-	service := s.newSessionLaunchService(projectCtx).
-		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
-		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...)
+	service := s.newSessionLaunchService(projectCtx)
 	s.safeBundles().Sessions.sessionServices[scopeKey] = service
 	return service
 }
@@ -427,6 +399,13 @@ func (s *Core) SessionChatContextOwner() chatcontext.SessionOwner {
 
 func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {
 	return chatSettingsService{core: s}
+}
+
+func (s *Core) ChatMutationClient() apicontract.ChatMutationService {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Chat.mutations
 }
 
 func (s *Core) ProjectID() string {

@@ -42,32 +42,33 @@ func (s *ApprovalViewService) ListPendingApprovalsBySession(_ context.Context, r
 		if !item.Request.Approval {
 			continue
 		}
-		promptID, stepID, err := pendingPromptIdentity(item.Request.ID, item.Request.StepID)
+		toolCallID, stepID, err := pendingToolCallIdentity(item.Request.ToolCallID, item.Request.StepID)
 		if err != nil {
 			return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending approval identity: %w", err)
 		}
 		approvals = append(approvals, clientui.PendingApproval{
-			PromptID:  promptID,
-			SessionID: sessionID,
-			StepID:    stepID,
-			Question:  item.Request.Question,
-			Options:   approvalOptionsFromRequest(item.Request.ApprovalOptions),
-			CreatedAt: item.CreatedAt,
+			ToolCallID:    toolCallID,
+			SessionID:     sessionID,
+			StepID:        stepID,
+			Question:      item.Request.Question,
+			Options:       approvalOptionsFromRequest(item.Request.ApprovalOptions),
+			AccessTargets: append([]clientui.FileAccessTarget(nil), item.Request.AccessTargets...),
+			CreatedAt:     item.CreatedAt,
 		})
 	}
 	return serverapi.ApprovalListPendingBySessionResponse{Approvals: approvals}, nil
 }
 
-func pendingPromptIdentity(rawPromptID, rawStepID string) (clientui.PromptID, runtimeids.StepID, error) {
-	promptID := clientui.PromptID(rawPromptID)
-	if err := promptID.Validate(); err != nil {
+func pendingToolCallIdentity(rawToolCallID, rawStepID string) (clientui.ToolCallID, runtimeids.StepID, error) {
+	toolCallID := clientui.ToolCallID(rawToolCallID)
+	if err := toolCallID.Validate(); err != nil {
 		return "", runtimeids.StepID{}, err
 	}
 	stepID, err := runtimeids.ParseStepID(rawStepID)
 	if err != nil {
 		return "", runtimeids.StepID{}, err
 	}
-	return promptID, stepID, nil
+	return toolCallID, stepID, nil
 }
 
 func approvalOptionsFromRequest(options []askquestion.AskQuestionApprovalOption) []clientui.ApprovalOption {

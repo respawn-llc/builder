@@ -16,7 +16,7 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
 			RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
-			CommittedRows:          []TranscriptCommittedRow{},
+			TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 			ActiveStep: &TranscriptStepState{
 				RunID:      runID,
 				StepID:     stepID,
@@ -110,13 +110,13 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			name: "prompt step",
 			mutate: func(hydration *TranscriptHydration) {
 				hydration.PendingPrompts = []TranscriptPrompt{{
-					Kind:      TranscriptPromptKindQuestion,
-					Status:    TranscriptPromptStatusPending,
-					PromptID:  PromptID("prompt-1"),
-					SessionID: hydration.SessionIdentity.SessionID,
-					StepID:    otherStepID,
-					Question:  "Choose",
-					CreatedAt: time.Unix(1_700_000_000, 0),
+					Kind:       TranscriptPromptKindQuestion,
+					Status:     TranscriptPromptStatusPending,
+					ToolCallID: ToolCallID("prompt-1"),
+					SessionID:  hydration.SessionIdentity.SessionID,
+					StepID:     otherStepID,
+					Question:   "Choose",
+					CreatedAt:  time.Unix(1_700_000_000, 0),
 				}}
 			},
 		},
@@ -124,13 +124,13 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			name: "prompt session",
 			mutate: func(hydration *TranscriptHydration) {
 				hydration.PendingPrompts = []TranscriptPrompt{{
-					Kind:      TranscriptPromptKindQuestion,
-					Status:    TranscriptPromptStatusPending,
-					PromptID:  PromptID("prompt-1"),
-					SessionID: otherSessionID,
-					StepID:    stepID,
-					Question:  "Choose",
-					CreatedAt: time.Unix(1_700_000_000, 0),
+					Kind:       TranscriptPromptKindQuestion,
+					Status:     TranscriptPromptStatusPending,
+					ToolCallID: ToolCallID("prompt-1"),
+					SessionID:  otherSessionID,
+					StepID:     stepID,
+					Question:   "Choose",
+					CreatedAt:  time.Unix(1_700_000_000, 0),
 				}}
 			},
 		},
@@ -156,24 +156,53 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 	}
 }
 
+func TestTranscriptHydrationRequiresClosedTailSegmentOlderBoundary(t *testing.T) {
+	olderCursor := int64(17)
+	valid := TranscriptHydration{
+		SessionIdentity:        transcriptTestSessionIdentity(t),
+		SessionStatus:          transcriptTestSessionStatus(),
+		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
+		TailSegment: TranscriptTailSegment{
+			HasMoreAbove: true,
+			OlderCursor:  &olderCursor,
+			Entries:      []TranscriptCommittedRow{},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid hydration tail rejected: %v", err)
+	}
+
+	missingCursor := valid
+	missingCursor.TailSegment.OlderCursor = nil
+	if err := missingCursor.Validate(); err == nil {
+		t.Fatal("hydration tail with older history but no cursor was accepted")
+	}
+
+	unexpectedCursor := valid
+	unexpectedCursor.TailSegment.HasMoreAbove = false
+	if err := unexpectedCursor.Validate(); err == nil {
+		t.Fatal("hydration tail with no older history but a cursor was accepted")
+	}
+}
+
 func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *testing.T) {
 	valid := func() TranscriptHydration {
 		return TranscriptHydration{
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
 			RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
-			CommittedRows:          []TranscriptCommittedRow{},
+			TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		}
 	}
 
 	resolvedPrompt := TranscriptPrompt{
-		Kind:      TranscriptPromptKindQuestion,
-		Status:    TranscriptPromptStatusResolved,
-		PromptID:  PromptID("prompt-1"),
-		SessionID: transcriptTestSessionID(t),
-		StepID:    transcriptTestStepID(t),
-		Question:  "Choose a strategy",
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		Kind:       TranscriptPromptKindQuestion,
+		Status:     TranscriptPromptStatusResolved,
+		ToolCallID: ToolCallID("prompt-1"),
+		SessionID:  transcriptTestSessionID(t),
+		StepID:     transcriptTestStepID(t),
+		Question:   "Choose a strategy",
+		CreatedAt:  time.Unix(1_700_000_000, 0),
 	}
 	terminalBackground := TranscriptBackgroundActivity{
 		ActivityID:  transcriptTestBackgroundActivityID(t),
@@ -187,7 +216,7 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 	tests := []TranscriptHydration{
 		func() TranscriptHydration {
 			hydration := valid()
-			hydration.CommittedRows = nil
+			hydration.TailSegment.Entries = nil
 			return hydration
 		}(),
 		func() TranscriptHydration {
@@ -210,25 +239,25 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 
 func TestTranscriptHydrationRequiresPromptsOrderedByCreationThenID(t *testing.T) {
 	createdAt := time.Unix(1_700_000_000, 0)
-	prompt := func(id PromptID, created time.Time) TranscriptPrompt {
+	prompt := func(id ToolCallID, created time.Time) TranscriptPrompt {
 		return TranscriptPrompt{
-			Kind:      TranscriptPromptKindQuestion,
-			Status:    TranscriptPromptStatusPending,
-			PromptID:  id,
-			SessionID: transcriptTestSessionID(t),
-			StepID:    transcriptTestStepID(t),
-			Question:  "Choose a strategy",
-			CreatedAt: created,
+			Kind:       TranscriptPromptKindQuestion,
+			Status:     TranscriptPromptStatusPending,
+			ToolCallID: id,
+			SessionID:  transcriptTestSessionID(t),
+			StepID:     transcriptTestStepID(t),
+			Question:   "Choose a strategy",
+			CreatedAt:  created,
 		}
 	}
 	hydration := TranscriptHydration{
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
 		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
-		CommittedRows:          []TranscriptCommittedRow{},
+		TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		PendingPrompts: []TranscriptPrompt{
-			prompt(PromptID("prompt-b"), createdAt),
-			prompt(PromptID("prompt-a"), createdAt),
+			prompt(ToolCallID("prompt-b"), createdAt),
+			prompt(ToolCallID("prompt-a"), createdAt),
 		},
 	}
 	if err := hydration.Validate(); err == nil {

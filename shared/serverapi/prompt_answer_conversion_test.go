@@ -19,11 +19,11 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 		answer   PromptAnswer
 		expected PromptAnswerBatchEntry
 	}{
-		{name: "question", answer: QuestionPromptAnswer(question), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", QuestionAnswer: &question}},
-		{name: "approval", answer: ApprovalPromptAnswer(approval), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", ApprovalAnswer: &approval}},
-		{name: "declined", answer: DeclinedPromptAnswer(), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", Declined: &PromptDeclined{}}},
-		{name: "question absent optional text", answer: QuestionPromptAnswer(optionOnly), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", QuestionAnswer: &optionOnly}},
-		{name: "approval absent optional text", answer: ApprovalPromptAnswer(deny), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", ApprovalAnswer: &deny}},
+		{name: "question", answer: QuestionPromptAnswer(question), expected: PromptAnswerBatchEntry{ToolCallID: "prompt-1", QuestionAnswer: &question}},
+		{name: "approval", answer: ApprovalPromptAnswer(approval), expected: PromptAnswerBatchEntry{ToolCallID: "prompt-1", ApprovalAnswer: &approval}},
+		{name: "declined", answer: DeclinedPromptAnswer(), expected: PromptAnswerBatchEntry{ToolCallID: "prompt-1", Declined: &PromptDeclined{}}},
+		{name: "question absent optional text", answer: QuestionPromptAnswer(optionOnly), expected: PromptAnswerBatchEntry{ToolCallID: "prompt-1", QuestionAnswer: &optionOnly}},
+		{name: "approval absent optional text", answer: ApprovalPromptAnswer(deny), expected: PromptAnswerBatchEntry{ToolCallID: "prompt-1", ApprovalAnswer: &deny}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

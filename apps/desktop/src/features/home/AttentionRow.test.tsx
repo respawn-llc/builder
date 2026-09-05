@@ -101,7 +101,7 @@ const questionAttention = {
   message: "Choose",
   question: {
     kind: "ordinary",
-    promptID: "prompt-1",
+    toolCallID: "prompt-1",
     recommendedOptionIndex: null,
     sessionID: "session-1",
     stepID: "step-1",

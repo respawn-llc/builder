@@ -9,9 +9,9 @@ import (
 )
 
 type PromptFollowUpWatchRequest struct {
-	SessionID runtimeids.SessionID `json:"session_id"`
-	StepID    runtimeids.StepID    `json:"step_id"`
-	PromptID  clientui.PromptID    `json:"prompt_id"`
+	SessionID  runtimeids.SessionID `json:"session_id"`
+	StepID     runtimeids.StepID    `json:"step_id"`
+	ToolCallID clientui.ToolCallID  `json:"tool_call_id"`
 }
 
 func (r PromptFollowUpWatchRequest) Validate() error {
@@ -21,7 +21,7 @@ func (r PromptFollowUpWatchRequest) Validate() error {
 	if r.StepID.IsZero() {
 		return errors.New("step_id is required")
 	}
-	return r.PromptID.Validate()
+	return r.ToolCallID.Validate()
 }
 
 type PromptFollowUpEventKind string

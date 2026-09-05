@@ -452,8 +452,8 @@ func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, 
 }
 
 func (s *Surface) hydrationImmutableLines(hydration clientui.TranscriptHydration, width int, themeName string) []string {
-	lines := make([]string, 0, len(hydration.CommittedRows))
-	for _, row := range hydration.CommittedRows {
+	lines := make([]string, 0, len(hydration.TailSegment.Entries))
+	for _, row := range hydration.TailSegment.Entries {
 		if !committedRowVisibleInOngoing(row) {
 			continue
 		}

@@ -11,7 +11,8 @@ import (
 )
 
 type failure struct {
-	Message string
+	Message          string
+	denialCommentary *tools.DenialCommentaryPresentation
 }
 
 func (f failure) Error() string {
@@ -19,10 +20,13 @@ func (f failure) Error() string {
 	if message == "" {
 		return "Edit failed."
 	}
-	if strings.HasPrefix(message, "Edit failed:") {
-		return message
+	if !strings.HasPrefix(message, "Edit failed:") {
+		message = "Edit failed: " + message
 	}
-	return "Edit failed: " + message
+	if f.denialCommentary != nil {
+		return f.denialCommentary.Append(message)
+	}
+	return message
 }
 
 func failf(format string, args ...any) error {
@@ -60,10 +64,10 @@ func editFileAccessFailure(outcome tools.FileAccessOutcome) error {
 	case tools.FileAccessDeniedOutsideWorkspace:
 		return failf("no file edit permission for %s. edit target outside workspace", path)
 	case tools.FileAccessDeniedByUser:
-		if outcome.Commentary == nil {
-			return failf("user denied the edit for %s.", path)
+		presentation := tools.DenialCommentaryPresentation{Commentary: outcome.Commentary}
+		return failure{
+			Message: fmt.Sprintf("user denied the edit for %s.", path), denialCommentary: &presentation,
 		}
-		return failf("user denied the edit for %s.\nUser said: %s", path, strings.TrimSpace(*outcome.Commentary))
 	case tools.FileAccessApprovalFailed:
 		if outcome.Cause == nil {
 			return failf("file edit approval failed for %s.", path)

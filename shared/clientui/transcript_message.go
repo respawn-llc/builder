@@ -117,7 +117,7 @@ type TranscriptHydration struct {
 	SessionIdentity        TranscriptSessionIdentity
 	SessionStatus          TranscriptSessionStatus
 	RuntimeReadModelUpdate RuntimeReadModelUpdate
-	CommittedRows          []TranscriptCommittedRow
+	TailSegment            TranscriptTailSegment
 	ActiveAssistant        *TranscriptAssistantStream
 	ActiveThinkingStatus   *TranscriptThinkingStatusUpdate
 	ActiveReasoningTraces  []TranscriptReasoningTraceUpdate
@@ -128,6 +128,12 @@ type TranscriptHydration struct {
 	BackgroundActivities   []TranscriptBackgroundActivity
 	ContextUsage           *TranscriptContextUsage
 	GoalStatus             *TranscriptGoalStatus
+}
+
+type TranscriptTailSegment struct {
+	OlderCursor  *int64
+	HasMoreAbove bool
+	Entries      []TranscriptCommittedRow
 }
 
 func NewTranscriptMessage(sequence uint64, event TranscriptEvent) TranscriptMessage {
