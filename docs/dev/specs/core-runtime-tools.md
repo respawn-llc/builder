@@ -82,7 +82,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - If a non-empty selected Working Directory exists but is not a directory, Kent must not launch the command and must return `<normalized absolute path> is not a directory, so the shell command was not executed. Please select an existing working directory`.
 - An empty selected Working Directory is validated by the shell manager and never falls back to Kent's server process working directory.
 - An `exec_command` failure never adds the `exec_command failed:` prefix to its model-visible error.
-- Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
+- Commands have no lifetime limit. For `exec_command`, omitted `yield_time_ms` uses the default wait, explicit `null` waits until completion, `0` backgrounds immediately, and a positive duration waits up to that many milliseconds before backgrounding a command that remains running.
+- This wait policy applies only to new command launches. An output check with no requested wait may return available output immediately.
 - Kent does not limit concurrent command processes, including background processes visible through `/ps`.
 - A foreground command may run while later short Session settings, human input, and model-visible notices are accepted and applied.
 - Kent applies a foreground command's terminal output or typed failure before another provider request starts.
