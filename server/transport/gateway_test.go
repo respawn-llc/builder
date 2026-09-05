@@ -131,6 +131,141 @@ func (gatewayChatLifecycleAdmission) AdmitManualCompaction(
 	panic("unexpected compaction admission")
 }
 
+type gatewayChatAuthorizationService struct {
+	sessionID string
+}
+
+func (s gatewayChatAuthorizationService) Steer(
+	context.Context,
+	*chatpb.SteerRequest,
+) (*chatpb.InputMutationSuccess, error) {
+	return &chatpb.InputMutationSuccess{
+		Session: &chatpb.ExistingSessionTarget{SessionId: s.sessionID},
+		Outcome: &chatpb.InputMutationSuccess_Accepted{
+			Accepted: &chatpb.InputAccepted{
+				QueueItem: &chatpb.QueueItemIdentity{Id: runtimeids.NewQueueItemID().String()},
+			},
+		},
+	}, nil
+}
+
+func (gatewayChatAuthorizationService) Queue(
+	context.Context,
+	*chatpb.QueueRequest,
+) (*chatpb.InputMutationSuccess, error) {
+	panic("unexpected Queue")
+}
+
+func (gatewayChatAuthorizationService) Compact(
+	context.Context,
+	*chatpb.CompactRequest,
+) (*chatpb.CompactionMutationSuccess, error) {
+	panic("unexpected Compact")
+}
+
+func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	gateway, err := NewGateway(
+		&gatewayChatLifecycleDependencies{
+			GatewayDependencies: fixture.appCore,
+			chat: gatewayChatAuthorizationService{
+				sessionID: fixture.ownSessionID,
+			},
+		},
+		gatewayTestIdentity(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	t.Cleanup(server.Close)
+	method := chatpb.File_kent_api_chat_chat_proto.Services().
+		ByName("ChatService").
+		Methods().
+		ByName("Steer")
+
+	for _, test := range []struct {
+		name     string
+		target   *chatpb.ChatTarget
+		attached bool
+		wantCode string
+	}{
+		{
+			name: "projectless existing Session outside startup Project",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
+			}},
+		},
+		{
+			name: "attached Project existing Session",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
+			}},
+			attached: true,
+		},
+		{
+			name: "attached Project rejects foreign Session",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
+			}},
+			attached: true,
+			wantCode: "session_not_found",
+		},
+		{
+			name:     "exact New Chat binding",
+			target:   routePolicyNewChatTarget(fixture.bindingA.ProjectID, fixture.bindingA.WorkspaceID),
+			attached: true,
+		},
+		{
+			name:     "mismatched New Chat binding",
+			target:   routePolicyNewChatTarget(fixture.bindingB.ProjectID, fixture.bindingB.WorkspaceID),
+			attached: true,
+			wantCode: "workspace_not_registered",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := dialGateway(t, server)
+			t.Cleanup(func() { _ = conn.Close() })
+			handshakeGateway(t, conn)
+			if test.attached {
+				requireGatewayProjectAttachment(
+					t,
+					conn,
+					"attach-project",
+					&connectionpb.AttachProjectRequest{ProjectId: fixture.bindingA.ProjectID},
+				)
+			}
+			result := &chatpb.SteerResult{}
+			callGatewayDescriptor(
+				t,
+				conn,
+				"authorize-chat",
+				method,
+				&chatpb.SteerRequest{
+					Target: test.target,
+					Activation: &chatpb.Activation{
+						Input: &chatpb.Activation_Text{Text: "continue"},
+					},
+				},
+				result,
+			)
+			classified, err := protoapi.ClassifyResult(result)
+			if err != nil {
+				t.Fatalf("classify Chat result: %v", err)
+			}
+			if test.wantCode == "" {
+				if classified.Outcome != protoapi.OperationSuccess {
+					t.Fatalf("outcome = %+v, want success", classified)
+				}
+				return
+			}
+			if classified.Failure == nil || classified.Failure.Code != test.wantCode {
+				t.Fatalf("failure = %+v, want code %q", classified.Failure, test.wantCode)
+			}
+		})
+	}
+}
+
 func TestGatewayDisconnectStopsDeliveryWithoutCancelingChatOperation(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	t.Cleanup(func() { _ = appCore.Close() })

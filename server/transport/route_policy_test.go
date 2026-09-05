@@ -87,121 +87,38 @@ func TestRoutePolicyAllowsStatelessScopesWithoutGateway(t *testing.T) {
 	}
 }
 
-func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
-	fixture := newRoutePolicyFixture(t)
-	method := chatpb.File_kent_api_chat_chat_proto.Services().
-		ByName("ChatService").
-		Methods().
-		ByName("Steer")
-	operation, err := protoapi.OperationFromDescriptor(method)
-	if err != nil {
-		t.Fatalf("resolve Chat operation: %v", err)
-	}
-	binding, exists := fixture.gateway.registration.BinaryBinding(operation.Name)
-	if !exists {
-		t.Fatalf("Chat operation %q has no binary binding", operation.Name)
-	}
-	executor := newRoutePolicyExecutor(fixture.gateway)
+func TestChatTargetSemanticUnion(t *testing.T) {
+	sessionID := runtimeids.NewSessionID().String()
 	for _, test := range []struct {
-		name         string
-		target       *chatpb.ChatTarget
-		state        *connectionState
-		wantCode     string
-		wantScopeErr bool
+		name    string
+		target  *chatpb.ChatTarget
+		wantErr bool
 	}{
 		{
-			name: "projectless existing Session outside startup Project",
+			name: "existing Session",
 			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
-				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID},
 			}},
-			state: &connectionState{},
 		},
 		{
-			name: "attached Project existing Session",
-			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
-				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
-			}},
-			state: &connectionState{attachedProject: fixture.bindingA.ProjectID},
+			name:   "New Chat",
+			target: routePolicyNewChatTarget("project-1", "workspace-1"),
 		},
 		{
-			name: "attached Project rejects foreign Session",
-			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
-				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
-			}},
-			state:    &connectionState{attachedProject: fixture.bindingA.ProjectID},
-			wantCode: "session_not_found",
-		},
-		{
-			name: "exact New Chat binding",
-			target: routePolicyNewChatTarget(
-				fixture.bindingA.ProjectID,
-				fixture.bindingA.WorkspaceID,
-			),
-			state: &connectionState{
-				attachedProject:     fixture.bindingA.ProjectID,
-				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
-			},
-		},
-		{
-			name: "mismatched New Chat binding",
-			target: routePolicyNewChatTarget(
-				fixture.bindingB.ProjectID,
-				fixture.bindingB.WorkspaceID,
-			),
-			state: &connectionState{
-				attachedProject:     fixture.bindingA.ProjectID,
-				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
-			},
-			wantCode: "workspace_not_registered",
-		},
-		{
-			name:         "missing target arm",
-			target:       &chatpb.ChatTarget{},
-			state:        &connectionState{},
-			wantScopeErr: true,
+			name:    "missing target arm",
+			target:  &chatpb.ChatTarget{},
+			wantErr: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := &chatpb.SteerRequest{
+			_, err := protoapi.ChatTargetFromRequest(&chatpb.SteerRequest{
 				Target: test.target,
 				Activation: &chatpb.Activation{
 					Input: &chatpb.Activation_Text{Text: "continue"},
 				},
-			}
-			scope, scopeErr := binding.scope(request)
-			if test.wantScopeErr {
-				if scopeErr == nil {
-					t.Fatal("Chat binding accepted malformed target")
-				}
-				return
-			}
-			if scopeErr != nil {
-				t.Fatalf("resolve Chat scope: %v", scopeErr)
-			}
-			authErr := executor.authorizeScopeFacts(
-				t.Context(),
-				test.state,
-				routeScopePolicy(binding.operation.Options.ScopePolicy),
-				binding.operation.Name,
-				scope,
-			)
-			if test.wantCode == "" {
-				if authErr != nil {
-					t.Fatalf("authorize Chat target: %v", authErr)
-				}
-				return
-			}
-			if authErr == nil {
-				t.Fatal("Chat target unexpectedly authorized")
-			}
-			classified, err := protoapi.ClassifyResult(
-				binding.failure(fixture.gateway, test.state, request, authErr),
-			)
-			if err != nil {
-				t.Fatalf("classify Chat authorization failure: %v", err)
-			}
-			if classified.Failure == nil || classified.Failure.Code != test.wantCode {
-				t.Fatalf("failure = %+v, want code %q", classified.Failure, test.wantCode)
+			})
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ChatTargetFromRequest error = %v, want error %t", err, test.wantErr)
 			}
 		})
 	}
