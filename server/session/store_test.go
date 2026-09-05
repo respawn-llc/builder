@@ -168,17 +168,6 @@ func TestNewLazyMaterializedEventLogReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestBackfillLockedContextBudgetWithoutLockedContractDoesNotPersistLazyStore(t *testing.T) {
-	store := newSessionTestLazyStore(t)
-
-	if err := store.BackfillLockedContextBudget(1000, 50); err != nil {
-		t.Fatalf("BackfillLockedContextBudget: %v", err)
-	}
-	if _, err := os.Stat(store.Dir()); !os.IsNotExist(err) {
-		t.Fatalf("expected no session dir after no-op backfill, stat err=%v", err)
-	}
-}
-
 func TestAppendTypedRecordMonotonicSequence(t *testing.T) {
 	store := newSessionTestStore(t)
 
@@ -305,8 +294,6 @@ func TestLockedPromptFacingMutationsPreserveLifetimeFields(t *testing.T) {
 		SystemPrompt:    "prompt B",
 		HasSystemPrompt: true,
 		ToolPreambles:   &toolPreambles,
-		ContextWindow:   200,
-		ContextPercent:  60,
 	})
 	if err != nil {
 		t.Fatalf("refresh main: %v", err)

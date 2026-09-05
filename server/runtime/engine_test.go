@@ -811,7 +811,7 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 	}
 }
 
-func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(t *testing.T) {
+func TestCurrentContextWindowPreservesSystemPromptAndCacheAcrossResume(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
@@ -827,12 +827,8 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 	if _, err := firstEngine.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	locked := store.Meta().Locked
-	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
-		t.Fatalf("expected locked context budget, got %+v", locked)
-	}
-	if got := firstEngine.estimatedToolCallsForLockedContext(*locked); got != 185 {
-		t.Fatalf("estimated tool calls = %d, want 185", got)
+	if got := firstEngine.LiveChatContextSnapshot().Policy.ContextWindowTokens; got != 272_000 {
+		t.Fatalf("context window = %d, want 272000", got)
 	}
 	firstPrompt := firstClient.calls[0].SystemPrompt
 	if strings.TrimSpace(firstPrompt) == "" {
@@ -848,34 +844,22 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 		Usage:     llm.Usage{WindowTokens: 400_000},
 	}}}
 	resumedEngine := mustNewTestEngine(t, store, resumedClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:               "gpt-5",
-		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ContextWindowTokens: 400_000,
+		Model:                         "gpt-5",
+		EnabledTools:                  []toolspec.ID{toolspec.ToolExecCommand},
+		ContextWindowTokens:           400_000,
+		EffectiveContextWindowPercent: 80,
 	})
 	if _, err := resumedEngine.SubmitUserMessage(context.Background(), "second"); err != nil {
 		t.Fatalf("submit second: %v", err)
 	}
-	if strings.TrimSpace(resumedClient.calls[0].SystemPrompt) == "" {
-		t.Fatal("expected resumed system prompt to stay non-empty")
+	if resumedClient.calls[0].SystemPrompt != firstPrompt {
+		t.Fatal("system prompt changed after resuming with a new context budget")
 	}
 	if resumedClient.calls[0].PromptCacheKey != firstPromptCacheKey {
 		t.Fatalf("expected resumed prompt cache key = %q, got %q", firstPromptCacheKey, resumedClient.calls[0].PromptCacheKey)
 	}
-	if got := resumedEngine.estimatedToolCallsForLockedContext(*store.Meta().Locked); got != 185 {
-		t.Fatalf("resumed estimated tool calls = %d, want 185", got)
-	}
-
-	alteredLocked := *store.Meta().Locked
-	alteredLocked.ContextWindow = 400_000
-	if got := resumedEngine.estimatedToolCallsForLockedContext(alteredLocked); got != 271 {
-		t.Fatalf("altered estimated tool calls = %d, want 271", got)
-	}
-	alteredPrompt, err := resumedEngine.systemPrompt(alteredLocked)
-	if err != nil {
-		t.Fatalf("altered system prompt: %v", err)
-	}
-	if alteredPrompt != firstPrompt {
-		t.Fatal("expected locked system prompt snapshot to stay stable when locked context budget changes")
+	if got := resumedEngine.LiveChatContextSnapshot().Policy.ContextWindowTokens; got != 400_000 {
+		t.Fatalf("resumed context window = %d, want 400000", got)
 	}
 }
 

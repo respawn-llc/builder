@@ -15,16 +15,12 @@ func ResolvePolicy(
 	effectiveCapabilities llm.ProviderCapabilities,
 	locked *session.LockedContract,
 ) Policy {
-	configuredWindow := settings.ModelContextWindow
-	if configuredWindow <= 0 {
-		configuredWindow = config.DefaultOnboardingSettings().ModelContextWindow
+	window := settings.ModelContextWindow
+	if window <= 0 {
+		window = config.DefaultOnboardingSettings().ModelContextWindow
 	}
-	window := configuredWindow
 	capabilities := effectiveCapabilities
 	if locked != nil {
-		if locked.ContextWindow > 0 {
-			window = locked.ContextWindow
-		}
 		if lockedCapabilities, present := llm.ProviderCapabilitiesFromLocked(locked); present {
 			capabilities = lockedCapabilities
 		}

@@ -28,14 +28,13 @@ func TestResolvePolicyUsesUnlockedFinalSettings(t *testing.T) {
 	}
 }
 
-func TestResolvePolicyPreservesLockedContinuityAndCurrentThreshold(t *testing.T) {
+func TestResolvePolicyUsesCurrentBudgetAndPreservesProviderCapabilities(t *testing.T) {
 	t.Parallel()
 	settings := config.DefaultOnboardingSettings()
 	settings.ModelContextWindow = 300_000
 	settings.ContextCompactionThresholdTokens = 250_000
 	settings.CompactionMode = config.CompactionModeNative
 	locked := &session.LockedContract{
-		ContextWindow: 120_000,
 		ProviderContract: session.LockedProviderCapabilities{
 			ProviderID:               "openai-compatible",
 			SupportsResponsesCompact: false,
@@ -47,10 +46,10 @@ func TestResolvePolicyPreservesLockedContinuityAndCurrentThreshold(t *testing.T)
 		SupportsResponsesCompact: true,
 	}, locked)
 
-	if got.ContextWindowTokens != 120_000 ||
-		got.AutomaticThresholdTokens != 120_000 ||
+	if got.ContextWindowTokens != 300_000 ||
+		got.AutomaticThresholdTokens != 250_000 ||
 		got.CompactionMode != serverapi.ChatContextCompactionModeLocal {
-		t.Fatalf("ResolvePolicy() = %+v, want locked window/capabilities and clamped current threshold", got)
+		t.Fatalf("ResolvePolicy() = %+v, want current budget and preserved provider capabilities", got)
 	}
 }
 

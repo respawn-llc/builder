@@ -2081,8 +2081,6 @@ func TestCompletedWorkflowSessionDoesNotStartBackgroundContinuation(t *testing.T
 	if err := fixture.store.MarkModelDispatchLocked(session.LockedContract{
 		Model:                  "gpt-5",
 		Temperature:            1,
-		ContextWindow:          200000,
-		ContextPercent:         95,
 		EnabledTools:           []string{string(toolspec.ToolAskQuestion)},
 		HasEnabledTools:        true,
 		WorkflowCompletionMode: &mode,

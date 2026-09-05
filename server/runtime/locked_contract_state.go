@@ -65,8 +65,6 @@ func (s *lockedContractState) ApplyMainPromptSnapshot(locked session.LockedContr
 			SystemPrompt:    locked.SystemPrompt,
 			HasSystemPrompt: locked.HasSystemPrompt,
 			ToolPreambles:   locked.ToolPreambles,
-			ContextWindow:   locked.ContextWindow,
-			ContextPercent:  locked.ContextPercent,
 		})
 	})
 }

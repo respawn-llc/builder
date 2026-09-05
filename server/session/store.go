@@ -1221,37 +1221,6 @@ func (s *Store) ResetLockedContractForCompactionBoundary() error {
 	return err
 }
 
-func (s *Store) BackfillLockedContextBudget(contextWindow, contextPercent int) error {
-	if contextWindow <= 0 || contextPercent <= 0 {
-		return nil
-	}
-	s.mutationMu.Lock()
-	defer s.mutationMu.Unlock()
-	s.mu.Lock()
-	if s.meta.Locked == nil {
-		s.mu.Unlock()
-		return nil
-	}
-	setContextWindow := s.meta.Locked.ContextWindow <= 0
-	setContextPercent := s.meta.Locked.ContextPercent <= 0
-	if !setContextWindow && !setContextPercent {
-		s.mu.Unlock()
-		return nil
-	}
-	if err := s.requireMetadataPersistenceLocked(); err != nil {
-		s.mu.Unlock()
-		return err
-	}
-	if setContextWindow {
-		s.meta.Locked.ContextWindow = contextWindow
-	}
-	if setContextPercent {
-		s.meta.Locked.ContextPercent = contextPercent
-	}
-	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
-}
-
 func (s *Store) BackfillLockedProviderContract(contract LockedProviderCapabilities) error {
 	if strings.TrimSpace(contract.ProviderID) == "" {
 		return nil

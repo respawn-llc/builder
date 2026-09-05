@@ -32,15 +32,6 @@ func (e *Engine) ensureMainPromptFacingContractFresh(ctx context.Context, locked
 	}
 	next := locked
 	next.ToolPreambles = e.promptRefreshToolPreambles(reloaded.Settings.ToolPreambles)
-	if reloaded.Settings.ModelContextWindow > 0 {
-		next.ContextWindow = reloaded.Settings.ModelContextWindow
-	}
-	if next.ContextPercent <= 0 {
-		next.ContextPercent = e.cfg.EffectiveContextWindowPercent
-	}
-	if next.ContextWindow <= 0 {
-		next.ContextWindow = e.cfg.ContextWindowTokens
-	}
 	prompt, err := e.buildSystemPromptSnapshotFromConfig(next, e.systemPromptWorkspaceRoot(), systemPromptSnapshotOptions{
 		WorkspaceRoot:     e.systemPromptWorkspaceRoot(),
 		GlobalConfigDir:   e.cfg.GlobalConfigDir,
@@ -53,8 +44,6 @@ func (e *Engine) ensureMainPromptFacingContractFresh(ctx context.Context, locked
 		SystemPrompt:    prompt,
 		HasSystemPrompt: true,
 		ToolPreambles:   next.ToolPreambles,
-		ContextWindow:   next.ContextWindow,
-		ContextPercent:  next.ContextPercent,
 	})
 	if commitErr := e.applyLockedContractMutationResult(result, err, e.lockedContractState().ApplyMainPromptSnapshot); commitErr != nil {
 		return session.LockedContract{}, commitErr
@@ -103,9 +92,8 @@ func (e *Engine) reloadPromptFacingSnapshotConfig(ctx context.Context) (PromptFa
 	}
 	return PromptFacingSnapshotConfig{
 		Settings: config.Settings{
-			SystemPromptFiles:  e.cfg.SystemPromptFiles,
-			ToolPreambles:      e.cfg.ToolPreambles,
-			ModelContextWindow: e.cfg.ContextWindowTokens,
+			SystemPromptFiles: e.cfg.SystemPromptFiles,
+			ToolPreambles:     e.cfg.ToolPreambles,
 			Reviewer: config.ReviewerSettings{
 				SystemPromptFile: e.cfg.Reviewer.SystemPromptFile,
 			},

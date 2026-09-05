@@ -131,8 +131,7 @@ func TestPlanLaunchSessionLoadsEffectiveAuthWhenLockedProviderContractIsAbsent(t
 	containerDir := t.TempDir()
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
-		Model:         cfg.Settings.Model,
-		ContextWindow: cfg.Settings.ModelContextWindow,
+		Model: cfg.Settings.Model,
 	}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}

@@ -17,8 +17,6 @@ type LockedContract struct {
 	HasSystemPrompt        bool                                    `json:"has_system_prompt,omitempty"`
 	ReviewerPrompt         string                                  `json:"reviewer_prompt,omitempty"`
 	HasReviewerPrompt      bool                                    `json:"has_reviewer_prompt,omitempty"`
-	ContextWindow          int                                     `json:"context_window,omitempty"`
-	ContextPercent         int                                     `json:"context_percent,omitempty"`
 	EnabledTools           []string                                `json:"enabled_tools,omitempty"`
 	HasEnabledTools        bool                                    `json:"has_enabled_tools,omitempty"`
 	WebSearchMode          string                                  `json:"web_search_mode,omitempty"`
@@ -41,12 +39,6 @@ func (c LockedContract) WithMainPromptSnapshot(snapshot LockedMainPromptSnapshot
 	c.SystemPrompt = snapshot.SystemPrompt
 	c.HasSystemPrompt = snapshot.HasSystemPrompt
 	c.ToolPreambles = snapshot.ToolPreambles
-	if snapshot.ContextWindow > 0 {
-		c.ContextWindow = snapshot.ContextWindow
-	}
-	if snapshot.ContextPercent > 0 {
-		c.ContextPercent = snapshot.ContextPercent
-	}
 	return c
 }
 
@@ -72,8 +64,6 @@ type LockedMainPromptSnapshot struct {
 	SystemPrompt    string
 	HasSystemPrompt bool
 	ToolPreambles   *bool
-	ContextWindow   int
-	ContextPercent  int
 }
 
 type LockedReviewerPromptSnapshot struct {

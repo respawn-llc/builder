@@ -210,8 +210,8 @@ func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 
 func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	if err := fixture.store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5", ContextWindow: 20, ContextPercent: 95}); err != nil {
-		t.Fatalf("lock Session context window: %v", err)
+	if err := fixture.store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5"}); err != nil {
+		t.Fatalf("lock Session model: %v", err)
 	}
 	calls := 0
 	factory := runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
@@ -219,8 +219,8 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		if req.Purpose != runtimewire.RuntimeClientPurposeMain {
 			t.Fatalf("factory purpose = %v, want main", req.Purpose)
 		}
-		if req.ActiveSettings.ModelContextWindow != 20 {
-			t.Fatalf("factory context window = %d, want locked Session window 20", req.ActiveSettings.ModelContextWindow)
+		if req.ActiveSettings.ModelContextWindow != 40 {
+			t.Fatalf("factory context window = %d, want current configured window 40", req.ActiveSettings.ModelContextWindow)
 		}
 		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})

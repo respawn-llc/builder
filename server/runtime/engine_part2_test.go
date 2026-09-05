@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -139,10 +140,8 @@ func TestBuildSystemPromptSnapshotForRootDoesNotUseMutexTakingWorkspaceAccessor(
 	eng.mu.Lock()
 	go func() {
 		prompt, err := eng.buildSystemPromptSnapshotForRoot(session.LockedContract{
-			Model:          "gpt-5",
-			Temperature:    1,
-			ContextWindow:  272_000,
-			ContextPercent: 95,
+			Model:       "gpt-5",
+			Temperature: 1,
 			ToolPreambles: func() *bool {
 				enabled := false
 				return &enabled
@@ -252,8 +251,6 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 		Model:          "gpt-5",
 		Temperature:    1,
 		MaxOutputToken: 0,
-		ContextWindow:  272_000,
-		ContextPercent: 95,
 		ToolPreambles: func() *bool {
 			enabled := false
 			return &enabled
@@ -274,6 +271,7 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 	eng := mustNewExecTestEngine(t, store, client, Config{
 		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand},
 		TranscriptWorkingDir: workspace,
+		ContextWindowTokens:  272_000,
 	})
 	if snapshot := store.Meta().Locked.SystemPrompt; snapshot != "" {
 		t.Fatalf("system prompt snapshot before first dispatch = %q, want empty", snapshot)
@@ -432,40 +430,45 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	}
 }
 
-func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
-	store := mustCreateTestSession(t)
-	if err := store.MarkModelDispatchLocked(session.LockedContract{
-		Model:          "gpt-5",
-		Temperature:    1,
-		MaxOutputToken: 0,
-	}); err != nil {
-		t.Fatalf("mark locked: %v", err)
-	}
-
-	firstEngine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:               "gpt-5",
-		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ContextWindowTokens: 272_000,
-	})
-	locked := store.Meta().Locked
-	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
-		t.Fatalf("expected legacy lock backfilled from first resume config, got %+v", locked)
-	}
-	if got := firstEngine.estimatedToolCallsForLockedContext(*locked); got != 185 {
-		t.Fatalf("first estimated tool calls = %d, want 185", got)
-	}
-
-	secondEngine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:               "gpt-5",
-		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ContextWindowTokens: 400_000,
-	})
-	locked = store.Meta().Locked
-	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
-		t.Fatalf("expected legacy lock backfill to stay pinned, got %+v", locked)
-	}
-	if got := secondEngine.estimatedToolCallsForLockedContext(*locked); got != 185 {
-		t.Fatalf("second estimated tool calls = %d, want 185", got)
+func TestUnsnapshottedSystemPromptUsesCurrentContextBudget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, test := range []struct {
+		name    string
+		window  int
+		percent int
+		want    int
+	}{
+		{name: "initial budget", window: 272_000, percent: 95, want: 185},
+		{name: "larger window", window: 400_000, percent: 95, want: 271},
+		{name: "changed percentage", window: 400_000, percent: 80, want: 229},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			promptPath := filepath.Join(workspace, "budget.md")
+			writeTestFile(t, promptPath, "{{.EstimatedToolCallsForContext}}")
+			store := mustCreateTestSession(t, workspace)
+			if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5"}); err != nil {
+				t.Fatalf("mark locked: %v", err)
+			}
+			client := &fakeClient{responses: []llm.Response{{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
+			}}}
+			eng := mustNewExecTestEngine(t, store, client, Config{
+				ContextWindowTokens:           test.window,
+				EffectiveContextWindowPercent: test.percent,
+				SystemPromptFiles:             []config.SystemPromptFile{{Path: promptPath, Scope: config.SystemPromptFileScopeWorkspaceConfig}},
+			})
+			if _, err := eng.SubmitUserMessage(t.Context(), "hello"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			got, err := strconv.Atoi(client.calls[0].SystemPrompt)
+			if err != nil {
+				t.Fatalf("parse rendered tool-call estimate: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("estimated tool calls = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 

@@ -21,30 +21,24 @@ type systemPromptSnapshotOptions struct {
 }
 
 func (e *Engine) buildSystemPromptSnapshotForRoot(locked session.LockedContract, workspaceRoot string) (string, error) {
-	fallback := promptContextBudget{window: e.cfg.ContextWindowTokens, percent: e.cfg.EffectiveContextWindowPercent}
 	enabledTools := toolIDsFromNames(locked.EnabledTools)
 	if len(enabledTools) == 0 && !locked.HasEnabledTools {
 		enabledTools = e.cfg.EnabledTools
 	}
-	return buildSystemPromptSnapshotFromConfig(locked, workspaceRoot, systemPromptSnapshotOptions{
+	return e.buildSystemPromptSnapshotFromConfig(locked, workspaceRoot, systemPromptSnapshotOptions{
 		WorkspaceRoot:     workspaceRoot,
 		GlobalConfigDir:   e.cfg.GlobalConfigDir,
 		SystemPromptFiles: e.cfg.SystemPromptFiles,
-	}, enabledTools, fallback)
+	}, enabledTools)
 }
 
 func (e *Engine) buildSystemPromptSnapshotFromConfig(locked session.LockedContract, workspaceRoot string, opts systemPromptSnapshotOptions, enabledTools []toolspec.ID) (string, error) {
-	fallback := promptContextBudget{window: e.cfg.ContextWindowTokens, percent: e.cfg.EffectiveContextWindowPercent}
-	return buildSystemPromptSnapshotFromConfig(locked, workspaceRoot, opts, enabledTools, fallback)
-}
-
-func buildSystemPromptSnapshotFromConfig(locked session.LockedContract, workspaceRoot string, opts systemPromptSnapshotOptions, enabledTools []toolspec.ID, fallback promptContextBudget) (string, error) {
 	includeToolPreambles := true
 	if locked.ToolPreambles != nil {
 		includeToolPreambles = *locked.ToolPreambles
 	}
 	args := prompts.SystemPromptTemplateArgs{
-		EstimatedToolCallsForContext: estimatedToolCallsForLockedContextWithFallback(locked, fallback),
+		EstimatedToolCallsForContext: config.EstimatedToolCallsForContextWindow(e.cfg.ContextWindowTokens, e.cfg.EffectiveContextWindowPercent),
 		EditingToolName:              editingToolName(enabledTools),
 	}
 	opts.WorkspaceRoot = workspaceRoot
@@ -60,18 +54,6 @@ func buildSystemPromptSnapshotFromConfig(locked session.LockedContract, workspac
 		return rendered, nil
 	}
 	return prompts.WithToolPreambles(prompts.BaseSystemPrompt(args), includeToolPreambles), nil
-}
-
-func estimatedToolCallsForLockedContextWithFallback(locked session.LockedContract, fallback promptContextBudget) int {
-	window := fallback.window
-	percent := fallback.percent
-	if locked.ContextWindow > 0 {
-		window = locked.ContextWindow
-	}
-	if locked.ContextPercent > 0 {
-		percent = locked.ContextPercent
-	}
-	return config.EstimatedToolCallsForContextWindow(window, percent)
 }
 
 func editingToolName(enabled []toolspec.ID) string {

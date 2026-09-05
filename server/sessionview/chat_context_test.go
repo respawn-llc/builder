@@ -91,7 +91,7 @@ func TestReadDormantSessionChatContextUsesExactExecutionRootAndBoundedFacts(t *t
 	}
 }
 
-func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuity(t *testing.T) {
+func TestReadDormantSessionChatContextUsesCurrentRoleBudgetWithLockedProvider(t *testing.T) {
 	executionRoot := t.TempDir()
 	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
 	role := "worker"
@@ -99,8 +99,7 @@ func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuit
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
-		Model:         "locked-model",
-		ContextWindow: 90_000,
+		Model: "locked-model",
 		ProviderContract: session.LockedProviderCapabilities{
 			ProviderID:               "locked-provider",
 			SupportsResponsesCompact: false,
@@ -145,10 +144,10 @@ func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuit
 	if err != nil {
 		t.Fatalf("ReadSessionChatContext: %v", err)
 	}
-	if got.ContextWindowTokens != 90_000 ||
-		got.AutomaticThresholdTokens != 90_000 ||
+	if got.ContextWindowTokens != 140_000 ||
+		got.AutomaticThresholdTokens != 110_000 ||
 		got.CompactionMode != serverapi.ChatContextCompactionModeLocal {
-		t.Fatalf("locked/current result = %+v, want locked window/capabilities and current role threshold/mode", got)
+		t.Fatalf("locked/current result = %+v, want current role budget/mode and preserved provider capabilities", got)
 	}
 	if authReader.calls != 0 {
 		t.Fatalf("locked Session made %d auth loads, want 0", authReader.calls)

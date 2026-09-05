@@ -316,13 +316,6 @@ func New(
 
 	meta := store.Meta()
 	if meta.Locked != nil {
-		if meta.Locked.ContextWindow <= 0 || meta.Locked.ContextPercent <= 0 {
-			budget := eng.promptContextBudgetFromConfig()
-			if err := store.BackfillLockedContextBudget(budget.window, budget.percent); err != nil {
-				return nil, err
-			}
-			meta = store.Meta()
-		}
 		if strings.TrimSpace(meta.Locked.ProviderContract.ProviderID) == "" {
 			caps, err := eng.providerCapabilities(context.Background())
 			if err != nil {

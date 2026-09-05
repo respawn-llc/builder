@@ -153,9 +153,6 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
-		if locked := store.Meta().Locked; locked != nil && locked.ContextWindow > 0 {
-			req.ActiveSettings.ModelContextWindow = locked.ContextWindow
-		}
 		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 		if planErr != nil {
 			return nil, nil, planErr
