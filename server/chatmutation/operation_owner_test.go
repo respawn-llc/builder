@@ -13,6 +13,8 @@ import (
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func TestOperationOwnerShutdownRejectsCancelsAndJoins(t *testing.T) {
@@ -120,9 +122,16 @@ type lifecyclePersistedSessions struct {
 
 func (s lifecyclePersistedSessions) ResolvePersistedSession(
 	ctx context.Context,
-	_ string,
+	requestedSessionID string,
 ) (session.PersistedSessionRecord, error) {
 	s.recorder.operationStage("target resolution", ctx)
+	if requestedSessionID != s.sessionID.String() {
+		s.recorder.t.Fatalf(
+			"resolved Session ID = %q, want %q",
+			requestedSessionID,
+			s.sessionID,
+		)
+	}
 	return session.PersistedSessionRecord{
 		SessionDir: "/tmp/" + s.sessionID.String(),
 		Meta:       &session.Meta{SessionID: s.sessionID.String()},
@@ -130,15 +139,26 @@ func (s lifecyclePersistedSessions) ResolvePersistedSession(
 }
 
 type lifecycleCreation struct {
-	recorder  *lifecycleRecorder
-	sessionID runtimeids.SessionID
+	recorder         *lifecycleRecorder
+	sessionID        runtimeids.SessionID
+	expectedSettings *chatpb.InitialChatSettings
+	expectedDraft    string
 }
 
 func (s lifecycleCreation) PlanSession(
 	ctx context.Context,
-	_ *sessionlaunchpb.SessionPlanRequest,
+	request *sessionlaunchpb.SessionPlanRequest,
 ) (*sessionlaunchpb.SessionPlanSuccess, error) {
 	s.recorder.operationStage("Session creation", ctx)
+	if !proto.Equal(request.InitialChatSettings, s.expectedSettings) ||
+		request.InitialInputDraft == nil ||
+		*request.InitialInputDraft != s.expectedDraft {
+		s.recorder.t.Fatalf(
+			"initial Chat creation = settings:%+v draft:%v",
+			request.InitialChatSettings,
+			request.InitialInputDraft,
+		)
+	}
 	return &sessionlaunchpb.SessionPlanSuccess{
 		Plan: &sessionlaunchpb.SessionPlan{SessionId: s.sessionID.String()},
 	}, nil
@@ -255,11 +275,27 @@ func TestServiceCarriesOneOperationContextAcrossChatLifecycle(t *testing.T) {
 				marker: marker,
 				stages: make(map[string]struct{}),
 			}
+			newChatTarget := validNewChatTarget()
 			targets := NewTargetResolver(
 				lifecyclePersistedSessions{recorder: recorder, sessionID: sessionID},
-				func(ctx context.Context, _, _ string) (SessionCreationService, error) {
+				func(ctx context.Context, projectID, workspaceID string) (SessionCreationService, error) {
 					recorder.operationStage("target resolution", ctx)
-					return lifecycleCreation{recorder: recorder, sessionID: sessionID}, nil
+					if projectID != newChatTarget.ProjectId ||
+						workspaceID != newChatTarget.WorkspaceId {
+						t.Fatalf(
+							"Session creation target = %q/%q, want %q/%q",
+							projectID,
+							workspaceID,
+							newChatTarget.ProjectId,
+							newChatTarget.WorkspaceId,
+						)
+					}
+					return lifecycleCreation{
+						recorder:         recorder,
+						sessionID:        sessionID,
+						expectedSettings: newChatTarget.InitialSettings,
+						expectedDraft:    "continue",
+					}, nil
 				},
 			)
 			attachment := &lifecycleAttachment{recorder: recorder, sessionID: sessionID}
@@ -279,7 +315,7 @@ func TestServiceCarriesOneOperationContextAcrossChatLifecycle(t *testing.T) {
 				},
 			}
 			if test.newChat {
-				target.Target = &chatpb.ChatTarget_NewChat{NewChat: validNewChatTarget()}
+				target.Target = &chatpb.ChatTarget_NewChat{NewChat: newChatTarget}
 			}
 
 			result, err := service.Steer(caller, &chatpb.SteerRequest{

@@ -89,11 +89,25 @@ func TestRoutePolicyAllowsStatelessScopesWithoutGateway(t *testing.T) {
 
 func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
 	fixture := newRoutePolicyFixture(t)
+	method := chatpb.File_kent_api_chat_chat_proto.Services().
+		ByName("ChatService").
+		Methods().
+		ByName("Steer")
+	operation, err := protoapi.OperationFromDescriptor(method)
+	if err != nil {
+		t.Fatalf("resolve Chat operation: %v", err)
+	}
+	binding, exists := fixture.gateway.registration.BinaryBinding(operation.Name)
+	if !exists {
+		t.Fatalf("Chat operation %q has no binary binding", operation.Name)
+	}
+	executor := newRoutePolicyExecutor(fixture.gateway)
 	for _, test := range []struct {
-		name    string
-		target  *chatpb.ChatTarget
-		state   *connectionState
-		wantErr bool
+		name         string
+		target       *chatpb.ChatTarget
+		state        *connectionState
+		wantCode     string
+		wantScopeErr bool
 	}{
 		{
 			name: "projectless existing Session outside startup Project",
@@ -114,8 +128,8 @@ func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
 			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
 				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
 			}},
-			state:   &connectionState{attachedProject: fixture.bindingA.ProjectID},
-			wantErr: true,
+			state:    &connectionState{attachedProject: fixture.bindingA.ProjectID},
+			wantCode: "session_not_found",
 		},
 		{
 			name: "exact New Chat binding",
@@ -138,19 +152,200 @@ func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
 				attachedProject:     fixture.bindingA.ProjectID,
 				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
 			},
+			wantCode: "workspace_not_registered",
+		},
+		{
+			name:         "missing target arm",
+			target:       &chatpb.ChatTarget{},
+			state:        &connectionState{},
+			wantScopeErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := &chatpb.SteerRequest{
+				Target: test.target,
+				Activation: &chatpb.Activation{
+					Input: &chatpb.Activation_Text{Text: "continue"},
+				},
+			}
+			scope, scopeErr := binding.scope(request)
+			if test.wantScopeErr {
+				if scopeErr == nil {
+					t.Fatal("Chat binding accepted malformed target")
+				}
+				return
+			}
+			if scopeErr != nil {
+				t.Fatalf("resolve Chat scope: %v", scopeErr)
+			}
+			authErr := executor.authorizeScopeFacts(
+				t.Context(),
+				test.state,
+				routeScopePolicy(binding.operation.Options.ScopePolicy),
+				binding.operation.Name,
+				scope,
+			)
+			if test.wantCode == "" {
+				if authErr != nil {
+					t.Fatalf("authorize Chat target: %v", authErr)
+				}
+				return
+			}
+			if authErr == nil {
+				t.Fatal("Chat target unexpectedly authorized")
+			}
+			classified, err := protoapi.ClassifyResult(
+				binding.failure(fixture.gateway, test.state, request, authErr),
+			)
+			if err != nil {
+				t.Fatalf("classify Chat authorization failure: %v", err)
+			}
+			if classified.Failure == nil || classified.Failure.Code != test.wantCode {
+				t.Fatalf("failure = %+v, want code %q", classified.Failure, test.wantCode)
+			}
+		})
+	}
+}
+
+func TestChatResultClassification(t *testing.T) {
+	sessionID := runtimeids.NewSessionID().String()
+	queueItemID := runtimeids.NewQueueItemID().String()
+	for _, test := range []struct {
+		name        string
+		result      *chatpb.SteerResult
+		wantOutcome protoapi.OperationOutcome
+		wantCode    string
+		wantErr     bool
+	}{
+		{
+			name:        "accepted",
+			result:      chatSteerSuccessResult(sessionID, queueItemID, true),
+			wantOutcome: protoapi.OperationSuccess,
+		},
+		{
+			name:        "not accepted",
+			result:      chatSteerSuccessResult(sessionID, queueItemID, false),
+			wantOutcome: protoapi.OperationSuccess,
+		},
+		{
+			name: "typed failure",
+			result: &chatpb.SteerResult{Outcome: &chatpb.SteerResult_Error{
+				Error: &chatpb.ChatOperationError{
+					Code: "session_not_found",
+					Detail: &chatpb.ChatOperationError_SessionNotFound{
+						SessionNotFound: &chatpb.SessionNotFoundDetails{SessionId: sessionID},
+					},
+				},
+			}},
+			wantOutcome: protoapi.OperationKnownFailure,
+			wantCode:    "session_not_found",
+		},
+		{
+			name: "malformed success",
+			result: &chatpb.SteerResult{Outcome: &chatpb.SteerResult_Success{
+				Success: &chatpb.InputMutationSuccess{
+					Outcome: &chatpb.InputMutationSuccess_Accepted{
+						Accepted: &chatpb.InputAccepted{
+							QueueItem: &chatpb.QueueItemIdentity{Id: queueItemID},
+						},
+					},
+				},
+			}},
 			wantErr: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := fixture.gateway.requireChatTargetAccess(t.Context(), test.state, test.target)
-			if test.wantErr && err == nil {
-				t.Fatal("Chat target unexpectedly authorized")
+			classified, err := protoapi.ClassifyResult(test.result)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ClassifyResult error = %v, want error %t", err, test.wantErr)
 			}
-			if !test.wantErr && err != nil {
-				t.Fatalf("authorize Chat target: %v", err)
+			if test.wantErr {
+				return
+			}
+			if classified.Outcome != test.wantOutcome {
+				t.Fatalf("outcome = %v, want %v", classified.Outcome, test.wantOutcome)
+			}
+			if test.wantCode != "" &&
+				(classified.Failure == nil || classified.Failure.Code != test.wantCode) {
+				t.Fatalf("failure = %+v, want code %q", classified.Failure, test.wantCode)
 			}
 		})
 	}
+}
+
+func TestBinaryChatFailureMapsAgentPreparationCategories(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	request := &chatpb.SteerRequest{
+		Target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+			Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+		}},
+	}
+	for _, test := range []struct {
+		category serverapi.ChatSettingsAgentPreparationCategory
+		want     chatsettingspb.AgentPreparationCategory
+	}{
+		{
+			category: serverapi.ChatSettingsAgentInvalidConfiguration,
+			want: chatsettingspb.
+				AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_INVALID_CONFIGURATION,
+		},
+		{
+			category: serverapi.ChatSettingsAgentProviderUnavailable,
+			want: chatsettingspb.
+				AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_PROVIDER_UNAVAILABLE,
+		},
+		{
+			category: serverapi.ChatSettingsAgentInternalPreparation,
+			want: chatsettingspb.
+				AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_INTERNAL_PREPARATION,
+		},
+	} {
+		t.Run(string(test.category), func(t *testing.T) {
+			detail := binaryChatFailure(
+				nil,
+				nil,
+				request,
+				&serverapi.ChatSettingsAgentPreparationError{
+					Agent:    "reviewer",
+					Category: test.category,
+				},
+			)
+			preparation, ok := detail.(*chatsettingspb.AgentPreparationDetails)
+			if !ok ||
+				preparation.Agent != "reviewer" ||
+				preparation.Category != test.want {
+				t.Fatalf("Agent preparation details = %+v", preparation)
+			}
+		})
+	}
+}
+
+func chatSteerSuccessResult(
+	sessionID string,
+	queueItemID string,
+	accepted bool,
+) *chatpb.SteerResult {
+	success := &chatpb.InputMutationSuccess{
+		Session: &chatpb.ExistingSessionTarget{SessionId: sessionID},
+	}
+	if accepted {
+		success.Outcome = &chatpb.InputMutationSuccess_Accepted{
+			Accepted: &chatpb.InputAccepted{
+				QueueItem: &chatpb.QueueItemIdentity{Id: queueItemID},
+			},
+		}
+	} else {
+		success.Outcome = &chatpb.InputMutationSuccess_NotAccepted{
+			NotAccepted: &chatpb.InputNotAccepted{
+				Reason: &chatpb.InputNotAccepted_PendingWorkCapacity{
+					PendingWorkCapacity: &chatpb.PendingWorkCapacityDetails{},
+				},
+			},
+		}
+	}
+	return &chatpb.SteerResult{Outcome: &chatpb.SteerResult_Success{
+		Success: success,
+	}}
 }
 
 func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {

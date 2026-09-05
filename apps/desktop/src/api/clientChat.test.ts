@@ -3,8 +3,15 @@ import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { z } from "zod";
 import { create } from "@app/server-api-contract";
-import { ChatService } from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
-import { AgentPreparationCategory } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
+import {
+  ChatService,
+  InitialChatSettingsSchema,
+  QueueRequestSchema,
+} from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
+import {
+  AgentPreparationCategory,
+  SupervisorValue,
+} from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
 import {
   BackgroundShellOutputMode,
   CacheWarningMode,
@@ -499,7 +506,7 @@ describe("Desktop Chat mutation adapter", () => {
     },
   } as const;
 
-  it("constructs representative targets and exact lexical requests", async () => {
+  it("constructs representative targets, exact lexical requests, and New Chat rejection", async () => {
     const transport = new FakeRpcTransport([
       {
         descriptor: ChatService.method.steer,
@@ -548,10 +555,14 @@ describe("Desktop Chat mutation adapter", () => {
       separatorWhitespace: "\t",
       arguments: "working tree",
     });
-    await chat.compact(newChatTarget, {
+    const rejected = await chat.compact(newChatTarget, {
       token: "/compact",
       separatorWhitespace: " \t",
       rawGuidance: " keep   decisions ",
+    });
+    expect(rejected).toEqual({
+      sessionID,
+      outcome: { kind: "not_accepted", reason: { kind: "too_soon" } },
     });
 
     expect(transport.attachedProjectDescriptorCalls.map(({ request }) => request)).toMatchObject([
@@ -566,7 +577,6 @@ describe("Desktop Chat mutation adapter", () => {
             value: {
               projectId: "project-1",
               workspaceId: "workspace-1",
-              initialSettings: { agentRole: "default", thinking: "high", fast: true },
             },
           },
         },
@@ -590,9 +600,41 @@ describe("Desktop Chat mutation adapter", () => {
         },
       },
     ]);
+    expect(transport.attachedProjectDescriptorCalls.map(({ request }) => request)).toContainEqual(
+      create(QueueRequestSchema, {
+        target: {
+          target: {
+            case: "newChat",
+            value: {
+              projectId: "project-1",
+              workspaceId: "workspace-1",
+              initialSettings: create(InitialChatSettingsSchema, {
+                agentRole: "default",
+                supervisor: SupervisorValue.AFTER_EDITS,
+                thinking: "high",
+                fast: true,
+                questionsEnabled: false,
+                autoCompactionEnabled: true,
+              }),
+            },
+          },
+        },
+        activation: {
+          input: {
+            case: "command",
+            value: {
+              catalogIdentity: "builtin:review",
+              token: "/review",
+              separatorWhitespace: "\t",
+              arguments: "working tree",
+            },
+          },
+        },
+      }),
+    );
   });
 
-  it("projects accepted identities, typed diagnostics, rejections, and shared errors", async () => {
+  it("projects accepted identities, typed diagnostics, and shared errors", async () => {
     const transport = new FakeRpcTransport([
       {
         descriptor: ChatService.method.queue,
@@ -670,9 +712,17 @@ describe("Desktop Chat mutation adapter", () => {
         },
       ]),
     ).chat;
-    await expect(failingChat.queue(sessionTarget, { kind: "text", text: "continue" })).rejects.toBeInstanceOf(
-      ChatOperationError,
-    );
+    const error = await failingChat
+      .queue(sessionTarget, { kind: "text", text: "continue" })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(ChatOperationError);
+    expect(error).toMatchObject({
+      detail: {
+        kind: "agent_preparation",
+        agent: "reviewer",
+        category: "provider_unavailable",
+      },
+    });
   });
 
   it("rejects mismatched attachments, returned Sessions, and malformed identities", async () => {
