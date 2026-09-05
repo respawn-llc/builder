@@ -1047,7 +1047,7 @@ type WorkflowWorktreeGitFacts struct {
 	Bare           bool    `json:"bare"`
 	LockedReason   *string `json:"locked_reason"`
 	PrunableReason *string `json:"prunable_reason"`
-	IsMain         bool    `json:"is_main"`
+	IsMainWorktree bool    `json:"is_main_worktree"`
 	PathAvailable  bool    `json:"path_available"`
 }
 

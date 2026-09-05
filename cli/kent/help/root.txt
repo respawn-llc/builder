@@ -8,6 +8,7 @@ Commands:
   run         Run a headless subagent prompt or control an active run.
   serve       Run the Kent server in the foreground.
   service     Manage the Kent's system service.
+  session     Archive or delete Sessions.
   session-id  Print the session ID of the current agent session.
   goal        Show or change a session goal.
   questions   List answered Questions from one Session.

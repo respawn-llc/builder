@@ -12,6 +12,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -402,4 +403,12 @@ func (c *recordingSessionLifecycleClient) ResolveTransition(ctx context.Context,
 		return serverapi.SessionResolveTransitionResponse{}, errors.New("unexpected ResolveTransition call")
 	}
 	return c.resolveTransition(ctx, req)
+}
+
+func (*recordingSessionLifecycleClient) ArchiveSession(context.Context, *sessionlaunchpb.SessionArchiveRequest) (*sessionlaunchpb.SessionArchiveSuccess, error) {
+	return nil, errors.New("unexpected ArchiveSession call")
+}
+
+func (*recordingSessionLifecycleClient) DeleteSession(context.Context, *sessionlaunchpb.SessionDeleteRequest) (*sessionlaunchpb.SessionDeleteSuccess, error) {
+	return nil, errors.New("unexpected DeleteSession call")
 }

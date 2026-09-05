@@ -95,6 +95,7 @@ import type {
   PendingWorkRestoration,
 } from "./pendingWork";
 import type { ChatApi } from "./chat";
+import type { DesktopProcess } from "./processes";
 
 export type ApiConnectionSource = Readonly<{
   snapshot(): ConnectionSnapshot;
@@ -109,6 +110,8 @@ export interface ApiService {
   readonly connection: ApiConnectionSource;
   readonly chat: ChatApi;
 
+  listProcesses(projectID: string): Promise<readonly DesktopProcess[]>;
+  killProcess(processID: string): Promise<void>;
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string | null): Promise<ProjectPage>;
   listSessionPage(projectID: string, category: SessionCategory, offset: number): Promise<SessionCatalogPage>;

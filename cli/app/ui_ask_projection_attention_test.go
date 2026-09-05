@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -108,8 +109,11 @@ func TestAskInitialProjectionReadinessKeepsHelpAndGlobalCtrlC(t *testing.T) {
 		}
 	})
 
-	t.Run("ctrl c uses global runtime handling", func(t *testing.T) {
-		model, control := newProjectedPromptTestUIModel(t)
+	t.Run("ctrl c interrupts the pending question before projection completes", func(t *testing.T) {
+		client := &runtimeControlFakeClient{}
+		control := newRecordingPromptControl()
+		model := newProjectedTestUIModel(client)
+		model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
 		model = sizedTestUIModel(model, 64, 20)
 		next, _ := model.Update(askEventMsg{event: testQuestionAskEvent("ask-1", "Question?")})
 		pending := next.(*uiModel)
@@ -119,8 +123,12 @@ func TestAskInitialProjectionReadinessKeepsHelpAndGlobalCtrlC(t *testing.T) {
 		if updated.ask.current == nil || updated.ask.activeDelivery != nil {
 			t.Fatal("pending ctrl-c answered or cancelled the invisible prompt")
 		}
-		if updated.exitAction != UIActionExit || command == nil {
-			t.Fatal("pending ctrl-c did not reach global runtime/terminal handling")
+		if updated.exitAction == UIActionExit || command == nil {
+			t.Fatal("pending ctrl-c exited instead of interrupting the Question execution")
+		}
+		_ = collectCmdMessages(t, command)
+		if client.interruptCalls != 1 {
+			t.Fatalf("runtime interrupt calls = %d, want one", client.interruptCalls)
 		}
 		if len(control.batchRequests) != 0 {
 			t.Fatal("pending ctrl-c sent an invisible prompt answer")

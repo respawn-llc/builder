@@ -197,7 +197,7 @@
 - The editor determines its rendered lines and cursor position.
 - Kent can use a drawn cursor only for verified cursor drift, wrap mismatch, or Alternate Screen corruption that native cursor placement cannot fix.
 - All user text uses one authoritative submission path. The user's action selects Send/Steer or Queue intent. For Send/Steer, Kent determines from live state whether the submission starts an Agent Turn or becomes a Steer.
-- Queue/send hotkey is `Tab`; `Ctrl+Enter` is a compatibility alias.
+- Queue/send hotkey is `Tab`; `Ctrl+Enter` is an alias.
 - Known `Ctrl+Enter` CSI encodings normalize to the same queue action.
 - Clipboard paste hotkeys are `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D`; explicit system clipboard reads save images to temporary PNG files and insert the path, or insert text at the active cursor. Terminal bracketed paste remains ordinary text input and never causes a system clipboard read.
 - Runtime acceptance, protected Agent Steps, Steering drains, and the separate post-turn Queue follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
@@ -220,7 +220,8 @@
 - The TUI has no standalone per-item discard affordance for operational Pending Work.
 - Pending queues are lost on process exit. The backend overload invariant is owned by the Runtime Steering specification.
 - A mid-turn message becomes durable only when Kent delivers it.
-- The server-published Run lifecycle is the TUI liveness authority for `Ctrl+C`: while the Run lifecycle is Running, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same Run exits locally. A later Running lifecycle with a different Run or Step identity sends a new Interrupt. The server revalidates that Interrupt targets an active Agent Turn. A submission already sent to the server may start or continue after the client detaches.
+- The server-published Run lifecycle and the current server-published pending Question or Approval are the TUI liveness authorities for `Ctrl+C`. While either identifies live work, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same execution exits locally. A later Running lifecycle with a different Run or Step identity sends a new Interrupt. The server revalidates that Interrupt targets an active Agent execution, including one waiting for a Question or Approval. A submission already sent to the server may start or continue after the client detaches.
+- When a live Runtime projection reports a prompt wait but the corresponding pending prompt is absent, Ongoing Mode requests Scratch Rehydration to recover the authoritative prompt. The execution remains interruptible while that projection is being recovered.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.
@@ -240,6 +241,9 @@
 - A target change takes effect before the next model work begins and becomes part of the model's worktree context.
 - Worktree changes do not append synthetic transcript notes.
 - Git determines worktree topology. Kent adds the associations needed for Projects and Sessions.
+- Main Workspace and Git main worktree are independent topology identities.
+- When the Main Workspace is a linked worktree, the Git main worktree remains an ordinary row without a special marker.
+- When the Git main worktree is available and not current, it offers the ordinary switch action.
 - Only one modification can apply to a worktree at a time.
 - A competing modification waits for the earlier modification and then evaluates the current state again.
 - If the earlier operation deleted the worktree, a later request to enter it fails because the worktree is absent. A later request to delete it again succeeds without another change.
@@ -250,13 +254,16 @@
 - A rejected deletion leaves Session targets, Kent worktree information, Git state, and branch state unchanged.
 - A busy target does not delay create, enter, leave, or delete operations for unrelated worktrees.
 - Worktree list returns one complete result in Git's native order. It does not use pagination.
-- List rows have three exhaustive states: registered rows combine Git and Kent facts, external rows contain only Git facts and carry an `External` marker, and missing rows contain only orphaned Kent facts and carry a `Missing` warning. Registered and external rows preserve Git's native order; missing rows follow in Kent metadata creation order. Listing never creates metadata for external rows or deletes missing rows.
+- List rows have four exhaustive states: the Main Workspace row contains live Git facts and no Kent Worktree ID; registered rows combine Git and Kent facts; external rows contain only Git facts and carry an `External` marker; missing rows contain only orphaned Kent Worktree facts and carry a `Missing` warning. The Main Workspace, registered, and external rows preserve Git's native order; missing rows follow in Kent metadata creation order. Listing never creates metadata for external rows or deletes missing rows.
+- A persisted Session whose Worktree root equals its Main Workspace is normalized to Main Workspace identity. Kent preserves its Workspace and Working Directory and clears its pending enter or exit context for the obsolete Worktree association.
 - Non-Kent Git worktrees are manageable. Explicitly entering one adopts it into Kent metadata before applying the ordinary session-target switch.
 - Worktree selector resolution gives exact Kent IDs precedence over exact branch names, display names, and paths. List/create prefer concise branch or display selectors only when resolving that text returns the same row; registered rows then fall back to their full Kent ID, while external rows fall back to a unique trailing path component and then the full canonical path. IDs and paths are omitted from normal list output unless needed for disambiguation.
 - Supported aliases preserve safety semantics: `/worktree status`, `/worktree remove`, `/worktree rm`.
 - `/worktree switch <selector>` and `/wt switch <selector>` enter the selected target.
 - `/worktree leave` and `/wt leave` return the Session to its main workspace.
 - Worktree deletion retargets Sessions before it removes the worktree.
+- Kent never offers deletion for the Main Workspace row or the Git main worktree.
+- Delete preview and deletion of the Git main worktree report `worktree blocked`, change no state, and include no blocker-detail payload.
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.
 - Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion.
@@ -305,8 +312,7 @@
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
 - While an Agent Turn is active, every available `/prompt:*` command submits its typed identity as Steering in the current Session. Kent resolves the prompt body on the server before accepting the Steering input.
-- `/name`, `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` persist and publish their Session value immediately while an Agent Step runs.
-- Those immediate setting commands affect later provider and compaction requests, never the Agent Step already running, and create no transcript rows.
+- `/name`, `/thinking`, `/fast`, `/supervisor`, `/questions`, and `/autocompaction` follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) Session-setting contract.
 - `/compact` and Active-Runtime `/worktree switch`, `/wt switch`, `/worktree leave`, and `/wt leave` enter typed operational Pending Work while an Agent Step or another boundary-owning Runtime operation is active.
 - Goal follows its Goal owner. Client-local navigation, overlays, reads, detach actions, and direct Worktree management reach their direct owners while an Agent Turn is active.
 - `/resume` always enters the session picker, including when no other session exists. The originating attachment is released before the picker opens. A picker `Ctrl+C` leaves that run ownerless; it issues no second release and no interrupt.
@@ -362,7 +368,7 @@
 
 ## Client Lifecycle Hooks
 
-- Protocol 64 clients advertise support for the `live_run_finished` transcript event during handshake. Kent suppresses that event for clients without the capability and preserves contiguous transcript sequence numbers for those clients.
+- The transcript stream publishes `live_run_finished` with contiguous transcript sequence numbers.
 - A controlling TUI can run one configured local command for Session lifecycle events.
 - Hook processing never delays transcript delivery, model work, or TUI rendering.
 - At most 64 lifecycle events can wait for launch. Kent silently drops a new event when this capacity is full.

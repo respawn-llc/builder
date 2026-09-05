@@ -157,17 +157,16 @@ type Engine struct {
 	outputMutationMu sync.Mutex
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
-	queuedUserWorkMu           sync.Mutex
-	queuedUserWorkScheduled    bool
-	queuedUserWorkCompletion   runtimeDeferred[struct{}]
-	queuedUserWorkPauseCount   int
-	queuedUserWorkAutoDrainIDs map[string]struct{}
-	liveRun                    *liveRunCoordinator
-	activeStepGoalMutationsMu  sync.Mutex
-	activeStepGoalMutations    map[string][]activeStepGoalMutation
-	pendingGoalLoopStart       bool
-	diagnostics                *diagnosticDedupeStore
-	toolCallStarts             *pendingToolCallStartStore
+	queuedUserWorkMu          sync.Mutex
+	queuedUserWorkScheduled   bool
+	queuedUserWorkCompletion  runtimeDeferred[struct{}]
+	queuedUserWorkPauseCount  int
+	liveRun                   *liveRunCoordinator
+	activeStepGoalMutationsMu sync.Mutex
+	activeStepGoalMutations   map[string][]activeStepGoalMutation
+	pendingGoalLoopStart      bool
+	diagnostics               *diagnosticDedupeStore
+	toolCallStarts            *pendingToolCallStartStore
 
 	usageState           *usageTrackingState
 	goalLoop             *goalLoopState
@@ -564,9 +563,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		var item QueuedUserMessage
 		livePublication := false
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
-			if !e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
-				e.markQueuedUserInjectionForAutoDrain(queueItemID)
-			}) {
+			if !e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID)) {
 				return false, nil
 			}
 			livePublication = true
@@ -583,7 +580,6 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 			if queueErr != nil {
 				queueItemID := mustQueueItemID(liveItem.ID)
 				e.liveRun.finishQueueItemPublication(queueItemID)
-				e.unmarkQueuedUserInjectionForAutoDrain(liveItem.ID)
 				e.completeLiveRunQueueItems(map[string]struct{}{liveItem.ID: {}})
 				return false, queueErr
 			}
@@ -625,7 +621,6 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		})
 		if queueErr == nil {
 			item = queued
-			e.markQueuedUserInjectionForAutoDrain(item.ID)
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		}
 		e.outputMutationMu.Unlock()
@@ -689,6 +684,19 @@ func (e *Engine) Interrupt() error {
 		}
 	}
 	return nil
+}
+
+func (e *Engine) PersistInterruption() error {
+	return e.steerInterruption(steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeInterruption),
+			Content:     textutil.Value(interruptMessage),
+		}},
+	))
 }
 
 func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant llm.Message, err error) {

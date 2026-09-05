@@ -531,3 +531,35 @@ func TestScratchRehydrationResultRequestsTranscriptReopen(t *testing.T) {
 		t.Fatalf("post-reopen hydration result=%+v err=%v, want accepted hydration", result, err)
 	}
 }
+
+func TestAwaitingPromptWithoutPromptRequestsTranscriptRehydration(t *testing.T) {
+	var out bytes.Buffer
+	surface := ongoing.NewSurface(&out)
+	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	reopened := 0
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(surface),
+		withUIOngoingTranscriptController(controller),
+		WithUIOngoingTranscriptReopen(func() { reopened++ }),
+	), 40, 10)
+	activity := runtimeTupleTestRunningActivity()
+	activity.State = clientui.RuntimeActivityAwaitingPrompt
+	command := m.applyAdmittedTranscriptMessageState(
+		runtimeTupleTestUpdateMessage(2, 2, activity),
+		runtimeTupleMergeResult{
+			decision: runtimeTupleApply,
+			project:  true,
+			view:     runtimeTupleTestView(2, activity),
+		},
+	)
+	if command == nil {
+		t.Fatal("awaiting-prompt activity without a prompt did not schedule recovery")
+	}
+	for _, message := range collectCmdMessages(t, command) {
+		next, _ := m.Update(message)
+		m = next.(*uiModel)
+	}
+	if reopened != 1 {
+		t.Fatalf("transcript reopen requests = %d, want one", reopened)
+	}
+}

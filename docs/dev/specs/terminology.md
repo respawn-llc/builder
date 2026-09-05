@@ -66,6 +66,14 @@ The directory Kent uses as the shell working directory and relative-path base fo
 
 The Workspace root or current managed Worktree root that contains a Session's Working Directory. It is the Workspace root when the Session does not use a managed Worktree.
 
+### Main Workspace
+
+The Workspace root a Session uses when it is not targeting another Worktree. Main Workspace identity belongs to Kent and does not indicate Git's main worktree.
+
+### Git main worktree
+
+Git's non-linked worktree prepared by `git init` or `git clone`. A repository has one Git main worktree when it is not bare. The Git main worktree can differ from the Main Workspace when the Workspace root is a linked worktree.
+
 ### Workflow Draft
 
 A Workflow definition that users can save while validation reports graph or Project errors. A Workflow Draft must have valid identifiers, valid references, unique keys, supported values, and exactly one Start Node.
@@ -210,7 +218,7 @@ A durable Kent conversation associated with an Agent Node on a Task and, during 
 
 ### Compaction Mode
 
-The implementation used to compact a Session's context. The modes are disabled, local, and provider-native.
+The strategy used to compact a Session's context. The modes are disabled, local, and provider-native.
 
 ### Compaction Trigger
 
@@ -352,7 +360,7 @@ Comparing retained or received transcript data to emitted terminal content to de
 
 ### Scratch Rehydration
 
-Recovery that erases the Mutable Band, reopens the Session, and appends the active transcript segment below existing Scrollback. It does not inspect or change the Immutable Area.
+Recovery that erases the Mutable Band, reopens the Session, and appends the active transcript segment below Scrollback. It does not inspect or change the Immutable Area.
 
 ## Runtime Steering And Goals
 

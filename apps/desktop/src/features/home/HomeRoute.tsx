@@ -1,32 +1,19 @@
-import { memo, useCallback, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import type { AttentionItem } from "@/api";
 import { errorMessage } from "@/api";
-import { basename, formatRelativeTime, projectKeyFromName } from "@/app-facade";
+import { basename, projectKeyFromName } from "@/app-facade";
 import { useAppNavigation } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
-import {
-  SidebarRootOwner,
-  useOwnedSidebarRoots,
-  type SidebarMode,
-  type SidebarRootController,
-} from "@/app-facade";
-import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
+import { SidebarRootOwner, useOwnedSidebarRoots, type SidebarMode } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { desktopChatEnabled } from "@/shared/feature-flags";
-import {
-  ErrorState,
-  homeListCardListMaxWidthClassName,
-  islandSurfaceClassName,
-  LoadingState,
-  VirtualizedInfiniteList,
-} from "@/ui";
-import { cx } from "@/ui";
+import { ErrorState, homeListCardListMaxWidthClassName, LoadingState, VirtualizedInfiniteList } from "@/ui";
 import { HomeSidebar, type HomeSidebarCategory } from "./HomeSidebar";
 import { HomeProjectContent } from "./HomeProjectContent";
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
@@ -38,6 +25,7 @@ import {
   useProjectCreationEvents,
   useProjectPages,
 } from "./useHomeData";
+import { AttentionRow } from "./AttentionRow";
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";
 export function HomeRoute({ selectedProjectID }: Readonly<{ selectedProjectID: string | null }>) {
@@ -270,88 +258,6 @@ function AttentionList({ items, query, sidebarMode }: AttentionListProps) {
       paddingStart={16}
       renderItem={(item) => <AttentionRow item={item} openSidebar={open} sidebarMode={sidebarMode} />}
     />
-  );
-}
-
-const AttentionRow = memo(function AttentionRow({
-  item,
-  openSidebar,
-  sidebarMode,
-}: Readonly<{
-  item: AttentionItem;
-  openSidebar: SidebarRootController["open"];
-  sidebarMode: SidebarMode;
-}>) {
-  const { t } = useTranslation();
-  const message =
-    item.message ??
-    (item.kind === "approval"
-      ? t("app.attention.approvalFallback")
-      : t("app.attention.interruptedCurrentNodeFallback"));
-  return (
-    <button
-      className={cx(
-        "grid w-full min-w-0 gap-[var(--space-2)] rounded-[var(--radius-l)] p-[var(--space-3)] text-left text-[var(--color-on-island)]",
-        islandSurfaceClassName(1),
-      )}
-      data-testid="attention-row"
-      onClick={() => {
-        openSidebar({
-          kind: "taskDetail",
-          initialFocus: taskDetailInitialFocusFromAttentionItem(item),
-          inboxNav: true,
-          mode: sidebarMode,
-          onMutated: undefined,
-          taskID: item.taskID,
-        });
-      }}
-      type="button"
-    >
-      <div
-        className="flex min-w-0 flex-wrap items-center gap-[var(--space-2)]"
-        data-testid="attention-row-meta"
-      >
-        {item.taskShortID.length > 0 ? (
-          <span className="min-w-0 truncate font-mono text-sm text-[var(--color-muted)]">
-            {item.taskShortID}
-          </span>
-        ) : null}
-      </div>
-      {item.taskTitle.length > 0 ? <strong className="min-w-0 truncate">{item.taskTitle}</strong> : null}
-      <span className="min-w-0 line-clamp-5 text-sm break-words">{message}</span>
-      <span className="text-sm text-[var(--color-muted)]">{formatRelativeTime(item.occurredAt)}</span>
-    </button>
-  );
-}, attentionRowPropsEqual);
-
-function attentionRowPropsEqual(
-  previous: Readonly<{
-    item: AttentionItem;
-    openSidebar: SidebarRootController["open"];
-    sidebarMode: SidebarMode;
-  }>,
-  next: Readonly<{
-    item: AttentionItem;
-    openSidebar: SidebarRootController["open"];
-    sidebarMode: SidebarMode;
-  }>,
-): boolean {
-  return (
-    previous.openSidebar === next.openSidebar &&
-    previous.sidebarMode === next.sidebarMode &&
-    attentionItemsEqual(previous.item, next.item)
-  );
-}
-
-function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): boolean {
-  return (
-    previous.id === next.id &&
-    previous.kind === next.kind &&
-    previous.taskID === next.taskID &&
-    previous.taskShortID === next.taskShortID &&
-    previous.taskTitle === next.taskTitle &&
-    previous.message === next.message &&
-    previous.occurredAt === next.occurredAt
   );
 }
 

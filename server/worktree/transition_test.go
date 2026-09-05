@@ -4,23 +4,257 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/sessionservice"
+	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/worktreecontract"
+
+	"github.com/google/uuid"
 )
 
 type externalIndeterminateWorktreeError struct{ error }
 
 func (*externalIndeterminateWorktreeError) WorktreeTransitionIndeterminate() {}
+
+type emptySessionRetargetProcessSource struct{}
+
+func (emptySessionRetargetProcessSource) List() []shelltool.Snapshot { return nil }
+
+type scheduledSessionRetargeterStub struct {
+	request    metadata.SessionWorkspaceRetargetRequest
+	resolve    func(context.Context) (metadata.SessionWorkspaceRetargetRequest, error)
+	origin     serverapi.RuntimeStepOrigin
+	operation  worktreecontract.OperationID
+	completion func(error)
+}
+
+func (*scheduledSessionRetargeterStub) RetargetWorkspace(
+	context.Context,
+	metadata.SessionWorkspaceRetargetRequest,
+) (metadata.SessionWorkspaceRetargetResult, error) {
+	return metadata.SessionWorkspaceRetargetResult{}, errors.New("unexpected synchronous Session retarget")
+}
+
+func (s *scheduledSessionRetargeterStub) ScheduleWorkspaceRetargetWithCompletion(
+	_ context.Context,
+	request metadata.SessionWorkspaceRetargetRequest,
+	origin serverapi.RuntimeStepOrigin,
+	operation worktreecontract.OperationID,
+	completion func(error),
+) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error) {
+	s.request = request
+	s.origin = origin
+	s.operation = operation
+	s.completion = completion
+	return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{OperationID: operation}, nil
+}
+
+func (s *scheduledSessionRetargeterStub) ScheduleWorkspaceRetargetResolutionWithCompletion(
+	_ context.Context,
+	sessionID string,
+	origin serverapi.RuntimeStepOrigin,
+	operation worktreecontract.OperationID,
+	resolve func(context.Context) (metadata.SessionWorkspaceRetargetRequest, error),
+	completion func(error),
+) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error) {
+	s.request.SessionID = sessionID
+	s.resolve = resolve
+	s.origin = origin
+	s.operation = operation
+	s.completion = completion
+	return serverapi.SessionWorkspaceRetargetScheduledAcknowledgement{OperationID: operation}, nil
+}
+
+func TestEnterWorktreeSchedulesCrossWorkspaceResolutionBeforeSelectorExists(t *testing.T) {
+	env := newServiceTestEnv(t)
+	sourceSession := createNonGitSourceSession(t, env)
+	retargeter := &scheduledSessionRetargeterStub{}
+	env.service.sessionRetargeter = retargeter
+	operationID := clientui.NewWorktreeTransitionID()
+	runID, stepID := uuid.NewString(), uuid.NewString()
+	requestCtx, cancelRequest := context.WithCancel(t.Context())
+
+	ack, err := env.service.EnterWorktree(requestCtx, &worktreepb.EnterRequest{
+		OperationId: operationID.String(),
+		SessionId:   sourceSession.Meta().SessionID,
+		Selector:    "feature/created-after-acceptance",
+		TargetWorkspace: &worktreepb.TransitionWorkspace{
+			WorkspaceId:   env.binding.WorkspaceID,
+			WorkspaceRoot: env.workspaceRoot,
+		},
+		Origin: &worktreepb.TransitionRuntimeStepOrigin{RunId: runID, StepId: stepID},
+	})
+	if err != nil {
+		t.Fatalf("EnterWorktree before selector exists: %v", err)
+	}
+	if ack.GetOperationId() != operationID.String() {
+		t.Fatalf("ack operation = %q, want %q", ack.GetOperationId(), operationID)
+	}
+	cancelRequest()
+	next := mustCreateWorktree(t, env, "feature/created-after-acceptance")
+	if retargeter.resolve == nil {
+		t.Fatal("scheduled transition did not retain target resolution")
+	}
+	request, err := retargeter.resolve(context.Background())
+	if err != nil {
+		t.Fatalf("resolve scheduled target after caller cancellation: %v", err)
+	}
+	if request.SessionID != sourceSession.Meta().SessionID ||
+		request.TargetWorktreeID == nil ||
+		*request.TargetWorktreeID != next.WorktreeID {
+		t.Fatalf("resolved Session retarget = %+v, want Worktree %q", request, next.WorktreeID)
+	}
+}
+
+func TestEnterWorktreeSchedulesCrossProjectRetargetFromNonGitWorkspace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	next := mustCreateWorktree(t, env, "feature/scheduled-cross-project-enter")
+	sourceSession := createNonGitSourceSession(t, env)
+	retargeter := &scheduledSessionRetargeterStub{}
+	env.service.sessionRetargeter = retargeter
+	operationID := clientui.NewWorktreeTransitionID()
+	runID, stepID := uuid.NewString(), uuid.NewString()
+
+	ack, err := env.service.EnterWorktree(t.Context(), &worktreepb.EnterRequest{
+		OperationId: operationID.String(),
+		SessionId:   sourceSession.Meta().SessionID,
+		Selector:    next.DisplayName,
+		TargetWorkspace: &worktreepb.TransitionWorkspace{
+			WorkspaceId:   env.binding.WorkspaceID,
+			WorkspaceRoot: env.workspaceRoot,
+		},
+		Origin: &worktreepb.TransitionRuntimeStepOrigin{RunId: runID, StepId: stepID},
+	})
+	if err != nil {
+		t.Fatalf("EnterWorktree: %v", err)
+	}
+	if ack.GetOperationId() != operationID.String() {
+		t.Fatalf("ack operation = %q, want %q", ack.GetOperationId(), operationID)
+	}
+	if retargeter.resolve == nil {
+		t.Fatal("scheduled transition did not retain target resolution")
+	}
+	retargeter.request, err = retargeter.resolve(t.Context())
+	if err != nil {
+		t.Fatalf("resolve scheduled Session retarget: %v", err)
+	}
+	if retargeter.request.SessionID != sourceSession.Meta().SessionID ||
+		retargeter.request.WorkspaceRoot != env.workspaceRoot ||
+		retargeter.request.ProjectID == nil ||
+		*retargeter.request.ProjectID != env.binding.ProjectID ||
+		retargeter.request.TargetWorktreeID == nil ||
+		*retargeter.request.TargetWorktreeID != next.WorktreeID {
+		t.Fatalf("scheduled Session retarget = %+v", retargeter.request)
+	}
+	if retargeter.origin.RunID != runID ||
+		retargeter.origin.StepID != stepID ||
+		retargeter.operation.String() != operationID.String() ||
+		retargeter.completion == nil {
+		t.Fatalf("scheduled transition context = origin:%+v operation:%s completion:%t", retargeter.origin, retargeter.operation.String(), retargeter.completion != nil)
+	}
+	retargeter.completion(nil)
+	if len(env.publisher.outcomes) != 1 || env.publisher.outcomes[0].State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("transition outcomes = %+v, want one completed outcome", env.publisher.outcomes)
+	}
+}
+
+func TestEnterWorktreeMovesDormantSessionFromNonGitWorkspaceAcrossProjects(t *testing.T) {
+	env := newServiceTestEnv(t)
+	next := mustCreateWorktree(t, env, "feature/cross-project-enter")
+	sourceSession := createNonGitSourceSession(t, env)
+	env.service.sessionRetargeter = sessionservice.NewSessionWorkspaceRetargeter(
+		env.store,
+		env.authority,
+		env.publisher,
+		emptySessionRetargetProcessSource{},
+	)
+	operationID := clientui.NewWorktreeTransitionID()
+
+	ack, err := env.service.EnterWorktree(t.Context(), &worktreepb.EnterRequest{
+		OperationId: operationID.String(),
+		SessionId:   sourceSession.Meta().SessionID,
+		Selector:    next.DisplayName,
+		TargetWorkspace: &worktreepb.TransitionWorkspace{
+			WorkspaceId:   env.binding.WorkspaceID,
+			WorkspaceRoot: env.workspaceRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnterWorktree: %v", err)
+	}
+	if ack.GetOperationId() != operationID.String() {
+		t.Fatalf("ack operation = %q, want %q", ack.GetOperationId(), operationID)
+	}
+	target, err := env.store.ResolveSessionExecutionTarget(t.Context(), sourceSession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.WorkspaceID != env.binding.WorkspaceID || sessionTargetWorktreeID(target) != next.WorktreeID {
+		t.Fatalf("retargeted execution target = %+v, want workspace %q worktree %q", target, env.binding.WorkspaceID, next.WorktreeID)
+	}
+	if target.EffectiveWorkdir != next.CanonicalRoot {
+		t.Fatalf("effective workdir = %q, want %q", target.EffectiveWorkdir, next.CanonicalRoot)
+	}
+	belongs, err := env.store.SessionBelongsToProject(t.Context(), sourceSession.Meta().SessionID, env.binding.ProjectID)
+	if err != nil {
+		t.Fatalf("SessionBelongsToProject: %v", err)
+	}
+	if !belongs {
+		t.Fatal("session did not move to the target project")
+	}
+	reopened, err := session.OpenByID(
+		env.cfg.PersistenceRoot,
+		sourceSession.Meta().SessionID,
+		env.store.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.OpenByID retargeted session: %v", err)
+	}
+	if reopened.Meta().WorktreeReminder == nil ||
+		reopened.Meta().WorktreeReminder.WorktreePath != next.CanonicalRoot {
+		t.Fatalf("persisted worktree reminder = %+v, want target %q", reopened.Meta().WorktreeReminder, next.CanonicalRoot)
+	}
+	if len(env.publisher.outcomes) != 1 || env.publisher.outcomes[0].State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("transition outcomes = %+v, want one completed outcome", env.publisher.outcomes)
+	}
+}
+
+func createNonGitSourceSession(t *testing.T, env *serviceTestEnv) *session.Store {
+	t.Helper()
+	sourceRoot := t.TempDir()
+	sourceBinding, err := env.store.CreateProjectForWorkspace(t.Context(), sourceRoot, "Non Git Source")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace source: %v", err)
+	}
+	sourceSessionsDir := filepath.Join(env.cfg.PersistenceRoot, "projects", sourceBinding.ProjectID, "sessions")
+	sourceSession, err := session.Create(
+		sourceSessionsDir,
+		filepath.Base(sourceSessionsDir),
+		sourceRoot,
+		sessioncontract.SessionCategoryMain,
+		env.store.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create source: %v", err)
+	}
+	if err := sourceSession.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable source: %v", err)
+	}
+	return sourceSession
+}
 
 func TestWorktreeTransitionTerminalCases(t *testing.T) {
 	writeFailure, syncFailure, publicationFailure, rollbackFailure := errors.New("write target"), errors.New("synchronize target"), errors.New("publish Session identity"), errors.New("rollback target")
@@ -79,7 +313,15 @@ func TestWorktreeTransitionTerminalCases(t *testing.T) {
 			var ack *worktreepb.ScheduledAcknowledgement
 			var runErr error
 			if test.selector {
-				ack, runErr = env.service.EnterWorktree(t.Context(), &worktreepb.EnterRequest{OperationId: operationID.String(), SessionId: request.sessionID, Selector: "missing-worktree"})
+				ack, runErr = env.service.EnterWorktree(t.Context(), &worktreepb.EnterRequest{
+					OperationId: operationID.String(),
+					SessionId:   request.sessionID,
+					Selector:    "missing-worktree",
+					TargetWorkspace: &worktreepb.TransitionWorkspace{
+						WorkspaceId:   env.binding.WorkspaceID,
+						WorkspaceRoot: env.workspaceRoot,
+					},
+				})
 			} else {
 				ack, runErr = env.service.runWorktreeTransition(t.Context(), request,
 					runtimeinput.PendingWorkWorktreeTransition{Transition: runtimeinput.PendingWorkWorktreeTransitionEnter, Selector: &request.selector},

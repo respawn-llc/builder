@@ -308,6 +308,12 @@ export function validateToolPresentationOwner(
     });
   }
 }
+export const questionAnswerSchema = z
+  .object({
+    SelectedOptionNumber: optionalNullable(z.number().int()),
+    Freeform: optionalNullable(z.string()),
+  })
+  .strict();
 export const toolRowSchema = z
   .object({
     StepID: optionalIdentifier,
@@ -318,6 +324,7 @@ export const toolRowSchema = z
     ResultSummary: optionalText,
     CondensedText: optionalText,
     Presentation: optionalNullable(toolMetaSchema),
+    QuestionAnswer: optionalNullable(questionAnswerSchema),
   })
   .strict()
   .superRefine(validateToolPresentationOwner);
@@ -404,7 +411,7 @@ export const noticeSchema = z
     CompactLabel: optionalText,
   })
   .strict();
-export const committedRowSchema = z
+const committedRowBaseSchema = z
   .object({
     Visibility: z.enum(["ongoing", "ongoing_collapsed", "detail", "hidden"]),
     Integrity: z.union([z.literal(0), z.literal(1), z.literal(2)]),
@@ -435,6 +442,38 @@ export const committedRowSchema = z
     ReviewerError: z.object({ ID: identifier, StepID: identifier, Detail: identifier }).strict().nullable(),
   })
   .strict();
+export const committedRowSchema = committedRowBaseSchema.superRefine((row, context) => {
+  if (row.Kind !== "tool") return;
+  const tool = row.Tool;
+  if (tool === null) return;
+  const presentation = tool.Presentation;
+  if (presentation?.Presentation === undefined) return;
+  if (presentation.Presentation !== "ask_question") return;
+
+  const recommendation = presentation.RecommendedOptionIndex;
+  if (recommendation < 0 || recommendation > presentation.Suggestions.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["Tool", "Presentation", "RecommendedOptionIndex"],
+      message: "Ask Question recommendation is outside the offered option range.",
+    });
+  }
+  if (tool.IsError) {
+    if (tool.Text.trim().length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["Tool", "Text"],
+        message: "Failed Ask Question rows require nonblank tool text.",
+      });
+    }
+  } else if (tool.QuestionAnswer == null) {
+    context.addIssue({
+      code: "custom",
+      path: ["Tool", "QuestionAnswer"],
+      message: "Successful Ask Question rows require typed answer facts.",
+    });
+  }
+});
 export const pageSchema = z
   .object({
     transcript: z

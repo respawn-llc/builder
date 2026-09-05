@@ -13,7 +13,6 @@ import (
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	rpccontract "core/shared/apicontract"
-	"core/shared/clientui"
 	"core/shared/protoapi"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
@@ -344,45 +343,10 @@ func TestRoutePolicyAuthorizesProcessScopesWithoutWebSocket(t *testing.T) {
 	}
 
 	listRoute := routeForTest(t, protocol.MethodProcessList)
-	if err := executor.authorizeScope(ctx, state, listRoute, serverapi.ProcessListRequest{}); err != nil {
-		t.Fatalf("process list without owner: %v", err)
-	}
-	if err := executor.authorizeScope(ctx, state, listRoute, serverapi.ProcessListRequest{OwnerSessionID: fixture.ownSessionID}); err != nil {
-		t.Fatalf("process list own owner: %v", err)
-	}
-	if err := executor.authorizeScope(ctx, state, listRoute, serverapi.ProcessListRequest{OwnerSessionID: fixture.foreignSessionID}); err == nil {
-		t.Fatal("process list foreign owner unexpectedly allowed")
-	}
-}
-
-func TestFilterProcessesForActiveProjectSkipsWhenActiveProjectUnset(t *testing.T) {
-	appCore, server := newUnboundGatewayTestServer(t)
-	server.Close()
-	gateway, err := NewGateway(appCore, gatewayTestIdentity())
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	filtered, err := gateway.filterProcessesForActiveProject(context.Background(), &connectionState{}, []clientui.BackgroundProcess{{ID: "proc-1", OwnerSessionID: "session-1"}})
-	if err != nil {
-		t.Fatalf("filter error = %v, want nil", err)
-	}
-	if len(filtered) != 0 {
-		t.Fatalf("filtered processes = %+v, want empty without active project", filtered)
-	}
-}
-
-func TestFilterProcessesForActiveProjectSkipsStaleOwnerSessions(t *testing.T) {
-	fixture := newRoutePolicyFixture(t)
-	filtered, err := fixture.gateway.filterProcessesForActiveProject(
-		context.Background(),
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		[]clientui.BackgroundProcess{{ID: "proc-1", OwnerSessionID: "missing-session"}},
-	)
-	if err != nil {
-		t.Fatalf("filter error = %v, want nil", err)
-	}
-	if len(filtered) != 0 {
-		t.Fatalf("filtered processes = %+v, want empty for stale owner", filtered)
+	if err := executor.authorizeScope(ctx, state, listRoute, serverapi.ProcessListRequest{
+		ProjectID: fixture.bindingA.ProjectID,
+	}); err != nil {
+		t.Fatalf("project-scoped process list: %v", err)
 	}
 }
 

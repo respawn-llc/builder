@@ -30,6 +30,8 @@ type RuntimeControl struct {
 type Service struct {
 	Client         apicontract.WorktreeService
 	SessionID      string
+	WorkspaceID    string
+	WorkspaceRoot  string
 	Runtime        RuntimeControl
 	ResolveContext func() (context.Context, context.CancelFunc)
 	NewOperationID func() worktreecontract.OperationID
@@ -87,6 +89,10 @@ func (s Service) Enter(selector string) (*worktreepb.ScheduledAcknowledgement, e
 			OperationId: operationID.String(),
 			SessionId:   s.SessionID,
 			Selector:    runtimeinput.NormalizePendingWorkArgument(selector),
+			TargetWorkspace: &worktreepb.TransitionWorkspace{
+				WorkspaceId:   strings.TrimSpace(s.WorkspaceID),
+				WorkspaceRoot: strings.TrimSpace(s.WorkspaceRoot),
+			},
 		})
 	})
 }

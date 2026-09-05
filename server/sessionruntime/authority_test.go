@@ -16,7 +16,6 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
@@ -83,29 +82,118 @@ type ownerlessRetirementLLMClient struct {
 	releaseFirst chan struct{}
 }
 
-func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
-	authority := NewAuthority(AuthorityOptions{})
-	started := make(chan struct{})
-	stopped := make(chan struct{})
-	if !authority.launchLifecycleTask(func(ctx context.Context) {
-		close(started)
-		<-ctx.Done()
-		close(stopped)
-	}) {
-		t.Fatal("authority rejected lifecycle task before close")
-	}
-	<-started
+func TestDestructiveSessionAdmissionHasOneAtomicWinner(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	lifecycle := &authorityAutoReleaseLifecycle{}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "open-client", &plan)
 
-	if err := authority.Close(context.Background()); err != nil {
-		t.Fatalf("close authority: %v", err)
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- authority.WithRuntime(
+			context.Background(),
+			attachment.Resource(),
+			func(context.Context, *runtime.Engine) error {
+				close(callbackEntered)
+				<-releaseCallback
+				return nil
+			},
+		)
+	}()
+	<-callbackEntered
+
+	destructiveCalled := false
+	err := authority.WithDestructiveSessionAdmission(
+		context.Background(),
+		sessionID,
+		func(context.Context) error {
+			destructiveCalled = true
+			return nil
+		},
+	)
+	var inUse *SessionInUseError
+	if !errors.As(err, &inUse) || inUse.SessionID != sessionID {
+		t.Fatalf("destructive admission error = %v, want SessionInUseError for %s", err, sessionID)
 	}
+	if destructiveCalled {
+		t.Fatal("destructive callback ran after the Runtime callback won admission")
+	}
+	if _, resolveErr := fixture.metadata.ResolvePersistedSession(t.Context(), sessionID.String()); resolveErr != nil {
+		t.Fatalf("callback-winning Session was mutated: %v", resolveErr)
+	}
+	close(releaseCallback)
+	if err := <-callbackDone; err != nil {
+		t.Fatalf("Runtime callback: %v", err)
+	}
+
+	deleted := make(chan struct{})
+	releaseDeletion := make(chan struct{})
+	var releaseDeletionOnce sync.Once
+	releaseDestructiveDeletion := func() {
+		releaseDeletionOnce.Do(func() { close(releaseDeletion) })
+	}
+	t.Cleanup(releaseDestructiveDeletion)
+	deletionDone := make(chan error, 1)
+	go func() {
+		deletionDone <- authority.WithDestructiveSessionAdmission(
+			context.Background(),
+			sessionID,
+			func(ctx context.Context) error {
+				record, resolveErr := fixture.metadata.ResolvePersistedSession(ctx, sessionID.String())
+				if resolveErr != nil {
+					return resolveErr
+				}
+				schedule, preflightErr := session.PreflightSessionArtifactRemoval(record.SessionDir)
+				if preflightErr != nil {
+					return preflightErr
+				}
+				if deleteErr := fixture.metadata.DeleteSession(ctx, sessionID.String()); deleteErr != nil {
+					return deleteErr
+				}
+				close(deleted)
+				<-releaseDeletion
+				return session.RemovePreflightedSessionArtifacts(schedule)
+			},
+		)
+	}()
 	select {
-	case <-stopped:
-	default:
-		t.Fatal("Authority.Close returned before its lifecycle task stopped")
+	case <-deleted:
+	case err := <-deletionDone:
+		t.Fatalf("destructive admission completed before deletion callback entered: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("destructive deletion callback did not enter")
 	}
-	if authority.launchLifecycleTask(func(context.Context) {}) {
-		t.Fatal("closed authority accepted another lifecycle task")
+
+	if runtimeErr := authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(context.Context, *runtime.Engine) error { return nil },
+	); !errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("Runtime use while destructive admission was held = %v, want Runtime unavailable", runtimeErr)
+	}
+	releaseDestructiveDeletion()
+	if err := <-deletionDone; err != nil {
+		t.Fatalf("destructive deletion: %v", err)
+	}
+	if _, openErr := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "recreate-client",
+		Runtime:   &plan,
+	}); !errors.Is(openErr, session.ErrSessionNotFound) {
+		t.Fatalf("Runtime recreation error = %v, want Session not found", openErr)
 	}
 }
 
@@ -493,7 +581,7 @@ func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
-	if err := os.Mkdir(filepath.Join(fixture.store.Dir(), runlog.RunLogFileName), 0o755); err != nil {
+	if err := os.Mkdir(session.RunLogPath(fixture.store.Dir()), 0o755); err != nil {
 		t.Fatalf("replace run log with directory: %v", err)
 	}
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -2612,6 +2700,99 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	close(releaseExecution)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
+	}
+}
+
+func TestPendingPromptKeepsExactExecutionInterruptibleWithoutActiveRuntimeStep(t *testing.T) {
+	tests := []struct {
+		name      string
+		interrupt func(context.Context, *Authority, runtimeids.SessionID) (bool, error)
+	}{
+		{
+			name: "runtime interrupt",
+			interrupt: func(ctx context.Context, authority *Authority, sessionID runtimeids.SessionID) (bool, error) {
+				return authority.InterruptCurrentAgentTurn(ctx, sessionID, nil)
+			},
+		},
+		{
+			name: "live stop",
+			interrupt: func(ctx context.Context, authority *Authority, sessionID runtimeids.SessionID) (bool, error) {
+				return authority.InterruptCurrentLiveRun(ctx, sessionID)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID := lifecycleSessionID(t, fixture)
+			feed := make(authorityPromptFeed, 2)
+			authority := NewAuthority(AuthorityOptions{
+				PersistenceRoot: fixture.config.PersistenceRoot,
+				StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+				PromptFeed:      feed,
+			})
+			t.Cleanup(func() {
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
+			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+			request := tools.AskQuestionRequest{
+				ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
+			}
+			awaitDone := make(chan error, 1)
+			handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
+				Descriptor: mustOpenSessionDescriptor(t, sessionID),
+				Runtime:    &plan,
+				Workflow:   workflowExecutionRefForTest(t, "task-prompt-interrupt", "node-prompt-interrupt", nil),
+				Resource:   OpenAgentResource{},
+				Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
+					_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
+					awaitDone <- awaitErr
+					return awaitErr
+				},
+			})
+			if err != nil {
+				t.Fatalf("start agent execution: %v", err)
+			}
+			if pending := <-feed; pending.scopeID != handle.Scope().ID() || pending.requestID != request.ID || pending.resolved {
+				t.Fatalf("pending prompt = %+v", pending)
+			}
+			var engine *runtime.Engine
+			if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+				engine = current
+				return nil
+			}); err != nil {
+				t.Fatalf("capture Runtime before interruption: %v", err)
+			}
+
+			interrupted, err := test.interrupt(context.Background(), authority, sessionID)
+			if err != nil || !interrupted {
+				t.Fatalf("interrupt pending prompt = (%t, %v), want accepted", interrupted, err)
+			}
+			if err := <-awaitDone; !errors.Is(err, context.Canceled) {
+				t.Fatalf("pending prompt result = %v, want context canceled", err)
+			}
+			if resolved := <-feed; resolved.requestID != request.ID || !resolved.resolved {
+				t.Fatalf("resolved prompt = %+v", resolved)
+			}
+			page, err := engine.TranscriptNewestSegmentPage()
+			if err != nil {
+				t.Fatalf("read interrupted transcript: %v", err)
+			}
+			var interruptionCount int
+			for _, entry := range page.Snapshot.Entries {
+				if entry.MessageType == llm.MessageTypeInterruption {
+					interruptionCount++
+				}
+			}
+			if interruptionCount != 1 {
+				t.Fatalf("interruption entries = %d, want 1", interruptionCount)
+			}
+			if _, err := handle.Wait(context.Background()); !errors.Is(err, context.Canceled) {
+				t.Fatalf("wait interrupted execution = %v, want context canceled", err)
+			}
+		})
 	}
 }
 

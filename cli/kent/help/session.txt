@@ -1,0 +1,9 @@
+Usage of kent session:
+  kent session archive <session-id> --output <absolute-path>.tar.zst [--json]
+  kent session delete <session-id> [--json]
+
+Archive and remove a Session, or delete it without an archive.
+
+Archive requires an absolute .tar.zst output path on the Kent server and never replaces an existing destination.
+
+Sessions in use cannot be archived or deleted. An agent cannot target its own Session.

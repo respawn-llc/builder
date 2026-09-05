@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import type { TaskDetailSessionChatEntry } from "@/features/task-detail";
 import { appI18n } from "@/i18n";
 import {
   mountTaskDetailSurface,
@@ -89,6 +90,44 @@ it("keeps Interrupt generic when a Script is the live target", async () => {
   const flow = await screen.findByTestId("task-detail-action-flow");
   const interrupt = within(flow).getByRole("button", { name: appI18n.t("board.interrupt") });
   expect(within(flow).getAllByRole("button").at(-1)).toBe(interrupt);
+});
+
+it("replaces Open in CLI with Open Chat for every live Session", async () => {
+  const targets: Parameters<TaskDetailSessionChatEntry>[0][] = [];
+  mountTaskDetailSurface(taskDetailResponse, {
+    openSessionChat: async (target) => {
+      targets.push(target);
+    },
+  });
+
+  const flow = await screen.findByTestId("task-detail-action-flow");
+  const openChatButtons = [
+    within(flow).getByRole("button", {
+      name: appI18n.t("task.openChat", { name: "Review chat" }),
+    }),
+    within(flow).getByRole("button", {
+      name: appI18n.t("task.openChat", { name: "Implementation" }),
+    }),
+  ];
+  expect(
+    within(flow).queryByRole("button", {
+      name: appI18n.t("task.openInCli", { name: "Review chat" }),
+    }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(flow).queryByRole("button", {
+      name: appI18n.t("task.openInCli", { name: "Implementation" }),
+    }),
+  ).not.toBeInTheDocument();
+  const user = userEvent.setup();
+  for (const openChat of openChatButtons) {
+    await user.click(openChat);
+  }
+
+  expect(targets).toEqual([
+    { projectID: "project-1", sessionID: "session-1" },
+    { projectID: "project-1", sessionID: "session-2" },
+  ]);
 });
 
 it("disables Start while its request is pending and while disconnected", async () => {

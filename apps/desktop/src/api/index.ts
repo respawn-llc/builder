@@ -1,4 +1,5 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+export type { DesktopProcess } from "./processes";
 export type {
   ChatApi,
   ChatContext,
@@ -10,8 +11,8 @@ export type {
   ChatSessionTarget,
   ChatSettings,
   ChatSettingsTarget,
-  ChatTranscriptCommittedRow,
   ChatTranscriptCompletion,
+  ChatTranscriptCommittedRow,
   ChatTranscriptHandler,
   ChatTranscriptKind,
   ChatTranscriptMessage,

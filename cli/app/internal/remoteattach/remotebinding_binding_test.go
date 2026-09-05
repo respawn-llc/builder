@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/serverapi"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -151,16 +153,62 @@ func TestBindSessionReplacesTheProjectScopedConnection(t *testing.T) {
 	requireRemoteUsable(t, bound)
 }
 
+func TestBindSessionPromotesPreparedHandoffWithoutDialing(t *testing.T) {
+	server := newRemoteBindingServer(t, remoteBindingServerOptions{
+		rootID:        "root",
+		projectID:     "project-1",
+		workspaceID:   "workspace-1",
+		workspaceRoot: "/workspace",
+	})
+	current, err := client.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		"project-1",
+	)
+	if err != nil {
+		t.Fatalf("dial Project remote: %v", err)
+	}
+	t.Cleanup(func() { _ = current.Close() })
+	subscription, err := current.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionTranscript: %v", err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+
+	var dialed atomic.Bool
+	bound, err := bindSession(context.Background(), current, "session-1", "root", func(context.Context, string) (*client.Remote, error) {
+		dialed.Store(true)
+		return nil, errors.New("Session dialer must not run when a prepared handoff exists")
+	})
+	if err != nil {
+		t.Fatalf("bind Session from prepared handoff: %v", err)
+	}
+	t.Cleanup(func() { _ = bound.Close() })
+	if dialed.Load() {
+		t.Fatal("bind Session dialed instead of promoting the prepared handoff")
+	}
+	if bound == current {
+		t.Fatal("bind Session retained the Project-scoped remote")
+	}
+	requireRemoteUsable(t, bound)
+}
+
 type remoteBindingServerOptions struct {
-	rootID     string
-	ackErr     error
-	ackStarted chan struct{}
-	releaseAck <-chan struct{}
+	rootID        string
+	projectID     string
+	workspaceID   string
+	workspaceRoot string
+	ackErr        error
+	ackStarted    chan struct{}
+	releaseAck    <-chan struct{}
 }
 
 type remoteBindingServer struct {
 	*httptest.Server
 	closed     chan struct{}
+	closedOnce sync.Once
 	closeCount atomic.Int32
 }
 
@@ -170,7 +218,7 @@ func newRemoteBindingServer(t *testing.T, options remoteBindingServerOptions) *r
 	server.Server = httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
 		defer func() {
 			server.closeCount.Add(1)
-			close(server.closed)
+			server.closedOnce.Do(func() { close(server.closed) })
 		}()
 		handshaken := false
 		for event := range conn.Events() {
@@ -190,7 +238,9 @@ func newRemoteBindingServer(t *testing.T, options remoteBindingServerOptions) *r
 				return
 			}
 			var response protocol.Response
-			switch {
+			switch request.Method {
+			case protocol.MethodSessionSubscribeTranscript:
+				response = protocol.NewSuccessResponse(request.ID, protocol.SubscribeResponse{})
 			default:
 				response = protocol.NewErrorResponse(request.ID, protocol.ErrCodeMethodNotFound, "unexpected test method")
 			}
@@ -249,6 +299,62 @@ func serveRemoteBindingBinary(
 	}
 	if !handshaken {
 		return false, errors.New("Handshake must be the first binary operation")
+	}
+
+	attachProjectMethod := connectionpb.File_kent_api_connection_connection_proto.Services().
+		ByName("ConnectionService").Methods().ByName("AttachProject")
+	attachProjectOperation, err := protoapi.OperationFromDescriptor(attachProjectMethod)
+	if err != nil {
+		return false, err
+	}
+	if call.Operation == attachProjectOperation.Name {
+		var request connectionpb.AttachProjectRequest
+		if err := protoapi.Decode(call.Payload, &request); err != nil {
+			return false, err
+		}
+		result := &connectionpb.AttachProjectResult{
+			Outcome: &connectionpb.AttachProjectResult_Success{
+				Success: &connectionpb.AttachmentSuccess{
+					Attachment: &connectionpb.AttachmentSuccess_Project{
+						Project: &connectionpb.ProjectAttachment{
+							ProjectId:     options.projectID,
+							WorkspaceId:   options.workspaceID,
+							WorkspaceRoot: options.workspaceRoot,
+						},
+					},
+				},
+			},
+		}
+		return false, sendRemoteBindingBinaryResult(ctx, conn, call, result)
+	}
+
+	attachSessionMethod := connectionpb.File_kent_api_connection_connection_proto.Services().
+		ByName("ConnectionService").Methods().ByName("AttachSession")
+	attachSessionOperation, err := protoapi.OperationFromDescriptor(attachSessionMethod)
+	if err != nil {
+		return false, err
+	}
+	if call.Operation == attachSessionOperation.Name {
+		var request connectionpb.AttachSessionRequest
+		if err := protoapi.Decode(call.Payload, &request); err != nil {
+			return false, err
+		}
+		result := &connectionpb.AttachSessionResult{
+			Outcome: &connectionpb.AttachSessionResult_Success{
+				Success: &connectionpb.AttachmentSuccess{
+					Attachment: &connectionpb.AttachmentSuccess_Session{
+						Session: &connectionpb.SessionAttachment{
+							ProjectId:          options.projectID,
+							WorkspaceId:        options.workspaceID,
+							WorkspaceRoot:      options.workspaceRoot,
+							SessionId:          request.SessionId,
+							ReattachCapability: "reattach-capability",
+						},
+					},
+				},
+			},
+		}
+		return false, sendRemoteBindingBinaryResult(ctx, conn, call, result)
 	}
 
 	readinessMethod := serverpb.File_kent_api_server_server_proto.Services().

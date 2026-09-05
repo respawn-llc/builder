@@ -43,7 +43,6 @@ type WorktreeRecord struct {
 	CanonicalRoot         string
 	DisplayName           string
 	Availability          string
-	IsMain                bool
 	Managed               bool
 	CreatedBranch         bool
 	OriginSessionID       string
@@ -528,7 +527,7 @@ func (s *Store) ListWorktreeRecordsByWorkspaceID(ctx context.Context, workspaceI
 	}
 	out := make([]WorktreeRecord, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs))
+		out = append(out, worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs))
 	}
 	return out, nil
 }
@@ -560,7 +559,7 @@ func (s *Store) GetWorktreeRecordByID(ctx context.Context, worktreeID string) (W
 	if err != nil {
 		return WorktreeRecord{}, fmt.Errorf("get worktree by id: %w", err)
 	}
-	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
+	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
 }
 
 func (s *Store) GetWorktreeRecordByCanonicalRoot(ctx context.Context, worktreeRoot string) (WorktreeRecord, error) {
@@ -575,7 +574,7 @@ func (s *Store) GetWorktreeRecordByCanonicalRoot(ctx context.Context, worktreeRo
 	if err != nil {
 		return WorktreeRecord{}, fmt.Errorf("get worktree by canonical root: %w", err)
 	}
-	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
+	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
 }
 
 func (s *Store) UpsertWorktreeRecord(ctx context.Context, record WorktreeRecord) error {
@@ -697,8 +696,7 @@ func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update Session
 	return nil
 }
 
-// DeleteSessionRecordByID removes a session metadata row and dependent records.
-func (s *Store) DeleteSessionRecordByID(ctx context.Context, sessionID string) error {
+func (s *Store) DeleteFailedSessionCreationRecordByID(ctx context.Context, sessionID string) error {
 	if s == nil || s.db == nil {
 		return errors.New("metadata store is required")
 	}
@@ -2960,14 +2958,13 @@ func sessionExecutionTargetFromRow(row sqlitegen.GetSessionExecutionTargetByIDRo
 	}
 }
 
-func worktreeRecordFromParts(id string, workspaceID string, canonicalRoot string, isMain bool, managed bool, createdBranch bool, originSessionID string, gitMetadataJSON string, creationBaseCommitOID sql.NullString, createdAtUnixMs int64, updatedAtUnixMs int64) WorktreeRecord {
+func worktreeRecordFromParts(id string, workspaceID string, canonicalRoot string, managed bool, createdBranch bool, originSessionID string, gitMetadataJSON string, creationBaseCommitOID sql.NullString, createdAtUnixMs int64, updatedAtUnixMs int64) WorktreeRecord {
 	return WorktreeRecord{
 		ID:                    id,
 		WorkspaceID:           workspaceID,
 		CanonicalRoot:         canonicalRoot,
 		DisplayName:           displayNameForPath(canonicalRoot),
 		Availability:          availabilityForOptionalPath(canonicalRoot),
-		IsMain:                isMain,
 		Managed:               managed,
 		CreatedBranch:         createdBranch,
 		OriginSessionID:       originSessionID,

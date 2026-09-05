@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const eventsFile = "events.jsonl"
-
 var ErrSessionNotFound = sessioncontract.ErrSessionNotFound
 
 var ErrGoalAgentOverwriteBlocked = errors.New("agent goal set cannot overwrite an active or paused goal")
@@ -453,6 +451,7 @@ type ArtifactRelocationTarget struct {
 	WorkspaceContainer string
 	UpdatedAt          time.Time
 	RebindReminder     *SessionRebindReminder
+	WorktreeReminder   *WorktreeReminderState
 }
 
 func (s *Store) RunArtifactRelocation(target ArtifactRelocationTarget, relocate func() error) error {
@@ -499,7 +498,7 @@ func (s *Store) RunArtifactRelocation(target ArtifactRelocationTarget, relocate 
 	}
 	s.meta.WorkspaceRoot = target.WorkspaceRoot
 	s.meta.WorkspaceContainer = target.WorkspaceContainer
-	s.meta.WorktreeReminder = nil
+	s.meta.WorktreeReminder = CloneWorktreeReminderState(target.WorktreeReminder)
 	if target.RebindReminder != nil {
 		s.meta.RebindReminder = CloneSessionRebindReminder(target.RebindReminder)
 	}

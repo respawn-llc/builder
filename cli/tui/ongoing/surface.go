@@ -87,6 +87,7 @@ const (
 	RehydrateReasonSequenceGap   RehydrateReason = "sequence_gap"
 	RehydrateReasonQueueOverflow RehydrateReason = "queue_overflow"
 	RehydrateReasonWidthChange   RehydrateReason = "width_change"
+	RehydrateReasonMissingPrompt RehydrateReason = "missing_prompt"
 )
 
 type TerminalResizePolicy uint8

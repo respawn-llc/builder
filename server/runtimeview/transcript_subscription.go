@@ -7,6 +7,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -724,14 +725,15 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowTool
 		row.Tool = &clientui.TranscriptToolRow{
-			StepID:        optionalRuntimeTranscriptStepID(fact.StepID, "committed tool row"),
-			ToolCallID:    clientui.ToolCallID(strings.TrimSpace(fact.Tool.ToolCallID)),
-			ToolName:      strings.TrimSpace(fact.Tool.ToolName),
-			Text:          fact.Tool.Text,
-			IsError:       fact.Tool.IsError,
-			ResultSummary: optionalNonBlankString(fact.Tool.ResultSummary),
-			CondensedText: optionalNonBlankString(fact.Tool.CondensedText),
-			Presentation:  cloneToolCallMeta(fact.Tool.Presentation),
+			StepID:         optionalRuntimeTranscriptStepID(fact.StepID, "committed tool row"),
+			ToolCallID:     clientui.ToolCallID(strings.TrimSpace(fact.Tool.ToolCallID)),
+			ToolName:       strings.TrimSpace(fact.Tool.ToolName),
+			Text:           fact.Tool.Text,
+			IsError:        fact.Tool.IsError,
+			ResultSummary:  optionalNonBlankString(fact.Tool.ResultSummary),
+			CondensedText:  optionalNonBlankString(fact.Tool.CondensedText),
+			Presentation:   cloneToolCallMeta(fact.Tool.Presentation),
+			QuestionAnswer: transcriptQuestionAnswerFromRuntime(fact.Tool.QuestionAnswer),
 		}
 	case runtime.TranscriptCommittedRowFactReasoningTrace:
 		if fact.ReasoningTrace == nil {
@@ -773,6 +775,16 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		panic(fmt.Sprintf("runtime transcript row fact has unknown kind %q", fact.Kind))
 	}
 	return row
+}
+
+func transcriptQuestionAnswerFromRuntime(answer *tools.AskQuestionAnswer) *clientui.TranscriptQuestionAnswer {
+	if answer == nil {
+		return nil
+	}
+	return &clientui.TranscriptQuestionAnswer{
+		SelectedOptionNumber: textutil.Pointer(answer.SelectedOptionNumber),
+		Freeform:             textutil.Pointer(answer.Freeform),
+	}
 }
 
 func transcriptReasoningTraceIdentityFromRuntime(identity *runtime.TranscriptReasoningTraceIdentity) *clientui.TranscriptReasoningTraceIdentity {

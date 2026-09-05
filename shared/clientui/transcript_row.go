@@ -52,14 +52,20 @@ type TranscriptAssistantRow struct {
 }
 
 type TranscriptToolRow struct {
-	StepID        *runtimeids.StepID
-	ToolCallID    ToolCallID
-	ToolName      string
-	Text          string
-	IsError       bool
-	ResultSummary *string
-	CondensedText *string
-	Presentation  *transcript.ToolCallMeta
+	StepID         *runtimeids.StepID
+	ToolCallID     ToolCallID
+	ToolName       string
+	Text           string
+	IsError        bool
+	ResultSummary  *string
+	CondensedText  *string
+	Presentation   *transcript.ToolCallMeta
+	QuestionAnswer *TranscriptQuestionAnswer `json:"QuestionAnswer,omitempty"`
+}
+
+type TranscriptQuestionAnswer struct {
+	SelectedOptionNumber *int
+	Freeform             *string
 }
 
 type TranscriptReasoningTraceRow struct {

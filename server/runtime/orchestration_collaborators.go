@@ -86,9 +86,7 @@ type userInjectionSelection interface {
 	userInjectionSelection()
 }
 
-type steerUserInjectionSelection struct {
-	queueItemIDs map[string]struct{}
-}
+type steerUserInjectionSelection struct{}
 
 func (steerUserInjectionSelection) userInjectionSelection() {}
 
@@ -96,27 +94,15 @@ type allPendingUserInjectionSelection struct{}
 
 func (allPendingUserInjectionSelection) userInjectionSelection() {}
 
-type userInjectionFlushDisposition uint8
-
-const (
-	userInjectionFlushContinue userInjectionFlushDisposition = iota
-	userInjectionFlushStopped
-)
-
 type userInjectionCommitResult struct {
 	flushed      int
 	startedStep  bool
 	receipt      session.CommitReceipt
 	queueItemIDs map[string]struct{}
-	disposition  userInjectionFlushDisposition
 }
 
-type queuedUserFlushStoppedError struct{}
-
-func (*queuedUserFlushStoppedError) Error() string { return "queued user flush stopped" }
-
-func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
-	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
+func steerUserInjections() userInjectionSelection {
+	return steerUserInjectionSelection{}
 }
 
 type stepLoopResult struct {
@@ -152,11 +138,11 @@ type messageLifecycle interface {
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	PendingUserMessages() []QueuedUserMessage
 	PendingUserMessageEntries() []queuedUserMessage
-	RestorePendingUserInjections(items []queuedUserMessage)
 	QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (queuedUserMessage, bool)
 	HasPendingUserInjections() bool
+	HasPendingUserSteers() bool
 }
 
 type reviewerPipeline interface {

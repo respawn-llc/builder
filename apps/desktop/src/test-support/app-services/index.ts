@@ -14,6 +14,7 @@ import {
   AppServicesProvider,
   StatusProvider,
   TaskSearchMemoryProvider,
+  WindowFocusProvider,
   WindowChromeTitleProvider,
   type AppLogger,
   type AppLogLevel,
@@ -74,9 +75,11 @@ export function TestAppProviders({
       { client: queryClient },
       createElement(AppServicesProvider, {
         services,
-        children: createElement(WindowChromeTitleProvider, {
-          children: createElement(StatusProvider, {
-            children: createElement(TaskSearchMemoryProvider, { children }),
+        children: createElement(WindowFocusProvider, {
+          children: createElement(WindowChromeTitleProvider, {
+            children: createElement(StatusProvider, {
+              children: createElement(TaskSearchMemoryProvider, { children }),
+            }),
           }),
         }),
       }),

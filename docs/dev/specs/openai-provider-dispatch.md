@@ -13,7 +13,7 @@
 
 - Only ChatGPT Codex OAuth dispatches send Codex turn metadata, `x-codex-routing-hint`, or `x-codex-turn-state`.
 - Codex turn metadata is one object at `client_metadata["x-codex-turn-metadata"]`.
-- Codex turn metadata contains `session_id`, `thread_id`, `turn_id`, and `window_id`. It contains `request_kind` only when the operation has an approved request kind.
+- Codex turn metadata contains `session_id`, `thread_id`, `turn_id`, and `window_id`. It contains `request_kind` only when the operation has a supported request kind.
 - A main-agent or subagent dispatch maps its own Kent Session ID to `session_id` and `thread_id`, its live Agent Turn Run ID to `turn_id`, and `<Session ID>:<compaction generation>` to `window_id`.
 - Each subagent sends only its own Session and Agent Turn identities.
 - A Reviewer dispatch maps `<Kent Session ID>/supervisor` to `session_id` and `thread_id`, copies the enclosing main Agent Turn Run ID to `turn_id`, and maps `<Kent Session ID>/supervisor:<main compaction generation>` to `window_id`.

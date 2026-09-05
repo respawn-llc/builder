@@ -8,6 +8,7 @@ import (
 
 	"core/server/core"
 	"core/shared/apicontract"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
@@ -35,6 +36,14 @@ func (s *lifecycleResultGatewayService) RetargetSessionWorkspace(context.Context
 func (s *lifecycleResultGatewayService) ResolveTransition(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionDirective, error) {
 	s.last = req
 	return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
+}
+
+func (*lifecycleResultGatewayService) ArchiveSession(context.Context, *sessionlaunchpb.SessionArchiveRequest) (*sessionlaunchpb.SessionArchiveSuccess, error) {
+	return nil, nil
+}
+
+func (*lifecycleResultGatewayService) DeleteSession(context.Context, *sessionlaunchpb.SessionDeleteRequest) (*sessionlaunchpb.SessionDeleteSuccess, error) {
+	return nil, nil
 }
 
 type lifecycleResultGatewayDependencies struct {

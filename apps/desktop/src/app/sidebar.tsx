@@ -360,6 +360,9 @@ function sidebarContentClassName(kind: SidebarDestination["kind"]): string {
   if (kind === "workflowEditor") {
     return `${base} top-[var(--app-sidebar-header-height)] overflow-hidden p-[var(--space-2)]`;
   }
+  if (kind === "processes") {
+    return `${base} top-[var(--app-sidebar-header-height)] overflow-hidden`;
+  }
   if (kind === "taskDetail" || kind === "projectEdit") {
     return `${base} top-0 overflow-hidden`;
   }

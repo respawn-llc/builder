@@ -459,7 +459,10 @@ func (s *transcriptRuntimeState) ToolCompletionSnapshot(callID string) (tools.Re
 		chat.mu.Lock()
 		defer chat.mu.Unlock()
 		result, ok := chat.toolCompletions[strings.TrimSpace(callID)]
-		return result, ok
+		if !ok {
+			return tools.Result{}, false
+		}
+		return result, true
 	}
 	return tools.Result{}, false
 }
@@ -489,6 +492,15 @@ func (s *transcriptRuntimeState) AppendCommittedEntryWithVisibility(role, text s
 	s.chatProjection().appendLocalEntryRecord(ChatEntry{Visibility: visibility, Role: role, Text: text}, nil, provenances...)
 }
 
+func (s *transcriptRuntimeState) AppendCommittedCacheWarning(warning transcript.CacheWarning, visibility transcript.EntryVisibility, provenances ...*TranscriptCommittedRowProvenance) {
+	s.chatProjection().appendLocalEntryRecord(ChatEntry{
+		Visibility:   visibility,
+		Role:         cacheWarningTranscriptRole,
+		Text:         transcript.CacheWarningText(warning),
+		CacheWarning: copyCacheWarning(&warning),
+	}, nil, provenances...)
+}
+
 func (s *transcriptRuntimeState) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) assistantStreamingAppend {
 	return s.chatProjection().appendStreamingDelta(stepID, baseRevision, baseCommittedEntryCount, delta, phase)
 }
@@ -499,13 +511,14 @@ func (s *transcriptRuntimeState) RecordAssistantStreamFinalization(committedEntr
 
 func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToolCompletion, provenance *TranscriptCommittedRowProvenance) {
 	s.chatProjection().recordToolCompletionWithProviderItems(tools.Result{
-		CallID:        completion.CallID,
-		Name:          toolspec.ID(completion.Name),
-		IsError:       completion.IsError,
-		Output:        completion.Output,
-		Summary:       completion.Summary,
-		CondensedText: completion.CondensedText,
-		Presentation:  completion.Presentation,
+		CallID:         completion.CallID,
+		Name:           toolspec.ID(completion.Name),
+		IsError:        completion.IsError,
+		Output:         completion.Output,
+		Summary:        completion.Summary,
+		CondensedText:  completion.CondensedText,
+		Presentation:   completion.Presentation,
+		QuestionAnswer: cloneAskQuestionAnswer(completion.QuestionAnswer),
 	}, completion.ProviderItems, provenance)
 }
 
@@ -544,5 +557,5 @@ func (s *transcriptRuntimeState) ClearStreamingError() {
 
 func applyPersistedCacheWarningToTranscript(state *transcriptRuntimeState, record session.CacheWarningRecord, mode config.CacheWarningMode, provenance ...*TranscriptCommittedRowProvenance) {
 	warning := cacheWarningFromSessionRecord(record)
-	state.AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), cacheWarningEntryVisibility(mode), provenance...)
+	state.AppendCommittedCacheWarning(warning, cacheWarningEntryVisibility(mode), provenance...)
 }

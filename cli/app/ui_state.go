@@ -44,7 +44,14 @@ type uiRuntimeFeatureState struct {
 	runtimeContextUsage        clientui.RuntimeContextUsage
 	runtimeContextUsageSession string
 	runtimeActivityProjection  clientui.RuntimeActivity
+	missingPromptRecovery      *missingPromptRecoveryScope
 	logger                     uiLogger
+}
+
+type missingPromptRecoveryScope struct {
+	sessionID string
+	runID     runtimeids.RunID
+	stepID    runtimeids.StepID
 }
 
 type uiInputFeatureState struct {

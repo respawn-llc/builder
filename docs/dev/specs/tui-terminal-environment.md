@@ -8,7 +8,7 @@
 
 ## Size Degradation
 
-- Below 40 columns by 10 rows, the TUI leaves its owned frame blank. Existing Scrollback remains unchanged.
+- Below 40 columns by 10 rows, the TUI leaves its owned frame blank. Scrollback remains unchanged.
 - Rendering resumes when the terminal reaches the minimum size.
 - The same size rule applies to every TUI surface.
 - At or above the minimum, every surface remains usable. Content that exceeds the height can scroll. Every unbounded list uses Infinite Scroll and never loads the complete list. Horizontal content wraps and does not overflow or disappear off-screen. The status line follows its priority ladder.

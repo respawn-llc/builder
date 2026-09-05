@@ -376,11 +376,11 @@ func (e *Engine) SetThinkingLevel(ctx context.Context, level string) error {
 	return err
 }
 
-// ApplyPreparedChatSettings updates the exact live runtime in one ordered
-// operation after Chat Settings has completed all fallible preparation and
+// AcceptPreparedChatSettings accepts one ordered update for the exact live
+// runtime after Chat Settings has completed all fallible preparation and
 // persistence.
-func (e *Engine) ApplyPreparedChatSettings(settings session.ChatSettings) error {
-	_, err := awaitEngineRuntimeOperation(context.Background(), e, func(context.Context) (struct{}, error) {
+func (e *Engine) AcceptPreparedChatSettings(settings session.ChatSettings) error {
+	_, accepted := trySubmitEngineRuntimeOperation(e, func(context.Context) (struct{}, error) {
 		e.mu.Lock()
 		e.cfg.ThinkingLevel = strings.TrimSpace(settings.Thinking)
 		e.cfg.FastModeEnabled = settings.Fast
@@ -396,7 +396,10 @@ func (e *Engine) ApplyPreparedChatSettings(settings session.ChatSettings) error 
 		e.mu.Unlock()
 		return struct{}{}, nil
 	})
-	return err
+	if !accepted {
+		return ErrEngineClosed
+	}
+	return nil
 }
 
 // SetWorkflowThinkingValue applies a workflow-owned thinking value through the

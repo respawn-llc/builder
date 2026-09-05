@@ -286,6 +286,8 @@ function projectWorktreeFailure(method: DescMethod, failure: WorktreeFailure): R
 function hasDeletableBranch(preview: WorktreeDeletePreview): boolean {
   const topology = required(preview.worktree).topology;
   switch (topology.case) {
+    case "mainWorkspace":
+      return false;
     case "registered":
     case "external":
       return topology.value.git?.branchName !== undefined;

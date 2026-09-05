@@ -143,11 +143,19 @@ func TestCacheWarningSnapshotProjectionPreservesDetailVisibility(t *testing.T) {
 		Visibility: transcript.EntryVisibilityDetail,
 		Role:       cacheWarningTranscriptRole,
 		Text:       "cache warning",
+		CacheWarning: &transcript.CacheWarning{
+			Scope:  transcript.CacheWarningScopeConversation,
+			Reason: transcript.CacheWarningReasonNonPostfix,
+		},
 	}}})
 
 	if len(facts) != 1 ||
 		facts[0].Visibility != transcript.EntryVisibilityDetail ||
-		facts[0].Integrity != transcript.RowIntegrityValid {
+		facts[0].Integrity != transcript.RowIntegrityValid ||
+		facts[0].Notice == nil ||
+		facts[0].Notice.CacheWarning == nil ||
+		facts[0].Notice.CacheWarning.Scope != string(transcript.CacheWarningScopeConversation) ||
+		facts[0].Notice.CacheWarning.Reason != string(transcript.CacheWarningReasonNonPostfix) {
 		t.Fatalf("cache warning facts = %+v, want one valid detail-only row", facts)
 	}
 }

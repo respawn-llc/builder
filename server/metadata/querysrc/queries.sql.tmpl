@@ -1824,7 +1824,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -1833,7 +1832,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.workspace_id = sqlc.arg(workspace_id)
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC;
 
@@ -1848,7 +1846,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -1857,7 +1854,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.id = sqlc.arg(id)
 LIMIT 1;
 
@@ -1866,7 +1862,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -1875,7 +1870,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.canonical_root_path = sqlc.arg(canonical_root_path)
 LIMIT 1;
 
@@ -2526,7 +2520,7 @@ UPDATE sessions
 SET
     project_id = sqlc.arg(target_project_id),
     workspace_id = sqlc.arg(target_workspace_id),
-    worktree_id = NULL,
+    worktree_id = sqlc.narg(target_worktree_id),
     cwd_relpath = '.',
     artifact_relpath = sqlc.arg(target_artifact_relpath),
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
@@ -2536,14 +2530,22 @@ SET
                 CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
                 '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
                 '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
-                '$.worktree_reminder', json('null')
+                '$.worktree_reminder',
+                CASE WHEN CAST(sqlc.narg(worktree_reminder_json) AS TEXT) IS NULL
+                    THEN json('null')
+                    ELSE json(CAST(sqlc.narg(worktree_reminder_json) AS TEXT))
+                END
             )
         ELSE
             json_set(
                 CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
                 '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
                 '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
-                '$.worktree_reminder', json('null'),
+                '$.worktree_reminder',
+                CASE WHEN CAST(sqlc.narg(worktree_reminder_json) AS TEXT) IS NULL
+                    THEN json('null')
+                    ELSE json(CAST(sqlc.narg(worktree_reminder_json) AS TEXT))
+                END,
                 '$.rebind_reminder', json(CAST(sqlc.narg(rebind_reminder_json) AS TEXT))
             )
         END,
@@ -2560,6 +2562,71 @@ SET
     worktree_id = sqlc.narg(worktree_id),
     cwd_relpath = sqlc.arg(cwd_relpath)
 WHERE id = sqlc.arg(session_id);
+
+-- name: GetSessionDeletionState :one
+SELECT
+    CAST(EXISTS (
+        SELECT 1
+        FROM sessions session
+        WHERE session.id = sqlc.arg(session_id)
+    ) AS INTEGER) AS session_exists,
+    CAST(
+        EXISTS (
+            SELECT 1
+            FROM task_current_nodes current_node
+            JOIN workflow_task_status_records status
+                ON status.task_id = current_node.task_id
+            WHERE current_node.session_id = sqlc.arg(session_id)
+              AND status.is_done = 0
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM task_pending_approvals approval
+            WHERE approval.source_session_id = sqlc.arg(session_id)
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM task_pending_approval_branches branch
+            WHERE (
+                json_extract(
+                    branch.context_source_resolution_json,
+                    '$.target_session.kind'
+                ) = 'reuse'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.target_session.session_id'
+                ) = sqlc.arg(session_id)
+            )
+            OR (
+                json_extract(
+                    branch.context_source_resolution_json,
+                    '$.active_source.kind'
+                ) = 'exact'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.active_source.session_id'
+                ) = sqlc.arg(session_id)
+            )
+            OR (
+                json_type(
+                    branch.context_source_resolution_json,
+                    '$.target_session'
+                ) IS NULL
+                AND json_type(
+                    branch.context_source_resolution_json,
+                    '$.active_source'
+                ) IS NULL
+                AND json_type(
+                    branch.context_source_resolution_json,
+                    '$.session_id'
+                ) = 'text'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.session_id'
+                ) = sqlc.arg(session_id)
+            )
+        )
+    AS INTEGER) AS session_in_use;
 
 -- name: DeleteSessionRecordByID :execrows
 DELETE FROM sessions

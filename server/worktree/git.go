@@ -37,7 +37,7 @@ type GitWorktree struct {
 	LockedReason   string       `json:"locked_reason,omitempty"`
 	PrunableReason string       `json:"prunable_reason,omitempty"`
 	DirtyFileCount int          `json:"-"`
-	IsMain         bool         `json:"-"`
+	IsMainWorktree bool         `json:"-"`
 }
 
 func (w GitWorktree) validateHead() error {
@@ -811,7 +811,7 @@ func (i *GitInspector) List(ctx context.Context, workspaceRoot string) ([]GitWor
 			Cause: cause,
 		}
 	}
-	return parseGitWorktreeListPorcelain(string(output), canonicalRoot)
+	return parseGitWorktreeListPorcelain(string(output))
 }
 
 func (i *GitInspector) BranchExists(ctx context.Context, workspaceRoot string, branchName string) (bool, error) {
@@ -1249,11 +1249,7 @@ func formatGitRunError(exitCode int, err error, output []byte, args ...string) e
 	return fmt.Errorf("git %s: %s", strings.Join(args, " "), trimmed)
 }
 
-func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWorktree, error) {
-	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
+func parseGitWorktreeListPorcelain(body string) ([]GitWorktree, error) {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 	entries := make([]GitWorktree, 0, 4)
 	current := GitWorktree{}
@@ -1270,7 +1266,7 @@ func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWork
 			return err
 		}
 		current.Root = canonicalRoot
-		current.IsMain = canonicalRoot == canonicalWorkspaceRoot
+		current.IsMainWorktree = len(entries) == 0 && !current.Bare
 		if err := current.validateHead(); err != nil {
 			return err
 		}

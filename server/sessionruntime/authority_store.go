@@ -23,6 +23,14 @@ const (
 	SessionStartBlockMaintenance SessionStartBlockReason = iota + 1
 )
 
+type SessionInUseError struct {
+	SessionID runtimeids.SessionID
+}
+
+func (e *SessionInUseError) Error() string {
+	return fmt.Sprintf("Session %q is in use", e.SessionID)
+}
+
 type SessionStartBlockRelease interface {
 	AuthorizeMaintenance(context.Context) context.Context
 	Close(context.Context) error
@@ -289,6 +297,79 @@ func maintenanceAuthorized(ctx context.Context, block *sessionAdmissionBlock) bo
 
 func sessionStartsBlockedError(sessionID runtimeids.SessionID) error {
 	return errors.Join(ErrSessionStartsBlocked, fmt.Errorf("session %s starts are blocked", sessionID))
+}
+
+func (a *Authority) WithDestructiveSessionAdmission(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	callback func(context.Context) error,
+) (resultErr error) {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if sessionID.IsZero() {
+		return errors.New("session id is required")
+	}
+	if callback == nil {
+		return errors.New("destructive Session callback is required")
+	}
+	release, err := a.BlockSessionStarts(
+		ctx,
+		[]runtimeids.SessionID{sessionID},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, release.Close(context.Background()))
+	}()
+
+	gate := a.gateFor(sessionID)
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return err
+	}
+	defer gate.lock.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return ErrAuthorityClosed
+	}
+	resource := a.resources[sessionID]
+	a.mu.Unlock()
+	if resource != nil {
+		resource.mu.Lock()
+		if resource.state != AgentResourceReady ||
+			resource.current != nil ||
+			resource.callbacks != 0 ||
+			resource.steps != 0 ||
+			resource.engine == nil ||
+			!resource.engine.BeginRetirement() {
+			resource.mu.Unlock()
+			return &SessionInUseError{SessionID: sessionID}
+		}
+		closed, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+		if closeErr != nil {
+			return closeErr
+		}
+		if !closed {
+			return a.invariant(
+				"destructive Session admission",
+				fmt.Errorf("Session %s Runtime did not close after retirement", sessionID),
+			)
+		}
+	}
+	return callback(ctx)
 }
 
 func (a *Authority) WithSessionStore(ctx context.Context, descriptor session.SessionDescriptor, callback func(context.Context, *session.Store) error) error {

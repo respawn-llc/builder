@@ -114,6 +114,14 @@ message AttachSessionRequest {
       expression: "this == this.trim()"
     }
   ];
+  optional string reattach_capability = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.connection.attach_session.reattach_capability.trimmed"
+      message: "reattach_capability must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
 }
 
 message WorkspaceIDSelection {
@@ -148,6 +156,7 @@ message SessionAttachment {
   string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
   string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
   string session_id = 4 [(buf.validate.field).string.min_len = 1];
+  string reattach_capability = 5 [(buf.validate.field).string.min_len = 1];
 }
 
 message SessionAttachmentTargetDetails {

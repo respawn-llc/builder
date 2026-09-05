@@ -273,7 +273,7 @@ func sessionToolCompletionRecordFromStored(
 		Summary:        completion.Summary,
 		CondensedText:  completion.CondensedText,
 		Presentation:   completion.Presentation,
-		QuestionAnswer: completion.QuestionAnswer,
+		QuestionAnswer: cloneAskQuestionAnswer(completion.QuestionAnswer),
 	}
 	return sessionToolCompletionRecordFromRuntime(result, completion.ProviderItems)
 }

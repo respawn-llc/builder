@@ -18,6 +18,7 @@ import {
 } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
+import type { TaskDetailSessionChatEntry } from "./taskDetailSessionChat";
 import { TaskDetailInboxRow } from "./TaskDetailInboxRow";
 import { TaskDetailBodyIslands } from "./TaskDetailBodyIslands";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
@@ -72,6 +73,7 @@ export function TaskDetailList({
   mutations,
   newCommentBody,
   onDraftChange,
+  openSessionChat,
   onDescriptionPresentationChange,
   onAddDependency,
   onRemoveDependency,
@@ -102,6 +104,7 @@ export function TaskDetailList({
   mutations: ReturnType<typeof useTaskMutations>;
   newCommentBody: string;
   onDraftChange: (draft: TaskDraft) => void;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
   onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
   onAddDependency: (direction: TaskDependencyDirection) => void;
   onRemoveDependency: (pair: TaskDependencyPair) => void;
@@ -251,6 +254,7 @@ export function TaskDetailList({
           noActivityTitle={t("task.noActivityTitle")}
           noCommentsTitle={t("task.noCommentsTitle")}
           onDraftChange={onDraftChange}
+          openSessionChat={openSessionChat}
           onDescriptionPresentationChange={onDescriptionPresentationChange}
           onAddDependency={onAddDependency}
           onRemoveDependency={onRemoveDependency}
@@ -300,6 +304,7 @@ type TaskDetailListRowProps = Readonly<{
   noActivityTitle: string;
   noCommentsTitle: string;
   onDraftChange: (draft: TaskDraft) => void;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
   onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
   onAddDependency: (direction: TaskDependencyDirection) => void;
   onRemoveDependency: (pair: TaskDependencyPair) => void;
@@ -378,6 +383,7 @@ function BodyRow({
   draftDirty,
   mutations,
   onDraftChange,
+  openSessionChat,
   onDescriptionPresentationChange,
   onSaveDraft,
   descriptionPresentation,
@@ -399,7 +405,14 @@ function BodyRow({
           submitting={updatePending}
         />
       }
-      metadata={<PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />}
+      metadata={
+        <PropertiesIsland
+          detail={detail}
+          disabled={disabled}
+          mutations={mutations}
+          openSessionChat={openSessionChat}
+        />
+      }
     />
   );
 }

@@ -30,6 +30,7 @@ import { useConnectionSnapshot } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
+import { useWindowFocus } from "@/app-facade";
 
 export function AttentionController() {
   return (
@@ -102,9 +103,14 @@ function useAttentionSurfacePresenter() {
   const { open } = useOwnedSidebarRoots();
   const status = useStatusController();
   const connection = useConnectionSnapshot();
-  const focusedRef = useRef<boolean | null>(null);
+  const windowFocused = useWindowFocus();
+  const focusedRef = useRef<boolean | null>(windowFocused);
   const reconciledGenerationRef = useRef(connection.generation);
   const surfacedRef = useRef(new Map<string, SurfaceRecord>());
+
+  useEffect(() => {
+    focusedRef.current = windowFocused;
+  }, [windowFocused]);
 
   const openTarget = useCallback(
     async (target: AttentionNotificationWorkflowTaskTarget | NativeNotificationTarget): Promise<void> => {
@@ -275,43 +281,6 @@ function useAttentionSurfacePresenter() {
       }
     });
   }, [api, bridge.notifications, logger, status]);
-
-  useEffect(() => {
-    let active = true;
-    void bridge.window
-      .isFocused()
-      .then((focused) => {
-        if (active) {
-          focusedRef.current = focused;
-        }
-      })
-      .catch(async (error: unknown) => {
-        await logger.append("warn", "Reading native window focus state failed.", {
-          error: errorMessage(error),
-        });
-      });
-    let unlisten: (() => void) | null = null;
-    void bridge.window
-      .onFocusChanged((focused) => {
-        focusedRef.current = focused;
-      })
-      .then((nextUnlisten) => {
-        if (active) {
-          unlisten = nextUnlisten;
-        } else {
-          nextUnlisten();
-        }
-      })
-      .catch(async (error: unknown) => {
-        await logger.append("warn", "Listening for native window focus changes failed.", {
-          error: errorMessage(error),
-        });
-      });
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, [bridge.window, logger]);
 
   useEffect(() => {
     if (!bridge.capabilities.notifications.basic) {

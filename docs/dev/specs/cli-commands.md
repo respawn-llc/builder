@@ -5,8 +5,8 @@
 - The CLI provides complete control of Kent's supported command surfaces for operators and agents.
 - CLI command grouping is not a compatibility contract. Documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
-- Long flags are rendered with double dashes in help, examples, and Kent-authored diagnostics. Single-dash long flags remain accepted for compatibility; standard-library parser failures retain their native formatting.
-- Workflow and Task commands report remote-close failures to stderr after command work finishes. A close failure does not change a successful exit code, and an operation failure keeps its existing nonzero exit code.
+- Long flags are rendered with double dashes in help, examples, and Kent-authored diagnostics. The parser also accepts single-dash long flags; standard-library parser failures retain their native formatting.
+- Workflow and Task commands report remote-close failures to stderr after command work finishes. A close failure does not change a successful exit code, and an operation failure keeps its nonzero exit code.
 - JSON mode for every TUI command prints exactly one final JSON object to stdout and uses quiet progress behavior.
 
 ## Project And Workspace Commands
@@ -107,6 +107,48 @@
 - A self-agent rebind ignores Session-owned background commands. Those commands continue in the directories where they started.
 - A cross-Project move either changes both Session location and artifact location or leaves both unchanged.
 
+## Session Archive And Deletion
+
+- `kent session archive <session-id> --output <path>` creates an external analysis artifact and then removes the Session from Kent.
+- `kent session delete <session-id>` removes the Session without creating an artifact.
+- Archive output is an absolute path on the server filesystem and must end in `.tar.zst`.
+- Archive creates missing output parent directories and fails without changing an existing destination.
+- The tar+Zstandard archive has one top-level directory named with the Session ID and preserves each Session entry at its relative path. Nested symbolic links remain symbolic links.
+- An archive output path inside the source Session directory is supported.
+- The in-Session `.tar.zst` artifact survives Session removal at the requested path.
+- Archive removes the Session only after the artifact is complete. A failure before that leaves the Session available.
+- If the artifact is complete but Session removal fails, the valid artifact and Session both remain and the diagnostic directs the operator to `kent session delete <session-id>`.
+- If the Session is removed but artifact cleanup fails, the Session remains absent and the diagnostic names the remaining path to remove manually.
+- Archive does not overwrite or rename a published artifact on retry.
+- Archive requires no confirmation flag.
+- Delete is non-interactive and requires a hidden `--confirm` flag.
+- Public documentation, command help, and the documentation site omit delete's `--confirm` flag.
+- Without confirmation, delete makes no server request and reports exactly `Session deletion was not confirmed. Rerun with --confirm to delete session <session-id>.`
+- The missing-confirmation diagnostic is the only product surface that reveals delete's `--confirm` flag.
+- Archive and delete reject a Session in use by live execution, unfinished Workflow work, or a pending Approval.
+- A Session retained only by a terminal Task is eligible.
+- An agent cannot archive or delete the Session identified by its own `KENT_SESSION_ID`.
+- Self-targeting reports exactly `You're trying to delete your own session, which is effectively a suicide. Don't do it, you still have things worth living for! Seek help immediately via ask_question, or exclude your session if this is accidental`.
+- An otherwise-idle Session remains eligible when it is open in a client.
+- Delete and archive never remove unknown files or directories from a Session directory.
+- Kent removes the Session directory only when it is empty; a non-empty directory remains without making the removed Session visible or resumable.
+- A missing Session fails with a readable message.
+- A connected archive caller waits without a fixed mutation deadline.
+- After caller cancellation or disconnection, an accepted archive continues under the Kent server lifetime for at most five additional minutes.
+- Kent cancels an archive that remains after that grace period.
+- Detached archive work has no durable job status, reconnectable outcome, retry, or restart recovery.
+- Caller cancellation or disconnection after delete acceptance stops only that caller's waiting and delivery. The accepted delete continues until completion or server shutdown.
+- Successful plain output is exactly `done`.
+- Plain archive and delete emit no progress output.
+- Both commands accept `--json`.
+- Successful JSON uses `status: "ok"` and includes `session_id`; archive success also includes `output_path`.
+- Failed JSON uses `status: "error"` and includes `code`, `message`, and `session_id`.
+- Stable failure codes are `confirmation_required`, `session_not_found`, `session_in_use`, `self_session_forbidden`, `invalid_output_path`, `output_exists`, and `request_failed`.
+- `confirmation_required` and `self_session_forbidden` are CLI-local outcomes decided before any remote connection or request.
+- Uncommon server, filesystem, cleanup, transport, and response failures use `request_failed` and preserve the returned error message.
+- JSON mode emits exactly one final object to stdout and remains quiet while the command runs.
+- Successful operations exit 0, operational failures exit 1, and usage failures exit 2.
+
 ## Question Commands
 
 - `kent question` shows the first pending ordinary Question or live internal access request. `kent questions` is an alias.
@@ -122,8 +164,8 @@
 - Access-option labels come from the authoritative internal Approval request.
 - The show command writes `No questions pending` and succeeds when no ordinary Question or access request is pending.
 - `kent question answer` requires `--option <one-based-number>`, non-blank `--commentary <text>`, or both.
-- An ordinary Question preserves the existing option and freeform answer behavior.
-- A live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object to its typed Approval decision and includes optional `--commentary` directly in the existing Approval answer.
+- An ordinary Question supports numbered options and freeform answers.
+- A live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object to its typed Approval decision and includes optional `--commentary` directly in the Approval answer.
 - Commentary alone never implies an access decision.
 - `kent question answer` writes `No pending questions at the moment for that session` and exits with status 1 when no ordinary Question or access request is pending.
 - After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions and access requests again.
@@ -213,8 +255,9 @@ To respond, run: kent run steer <source-session-id> "message"
 - A present malformed `KENT_SESSION_ID` fails Run steer before submission. An absent or blank value uses human-steer behavior.
 - Prompt history stores the complete wrapped message.
 - `kent run stop <session-id>` interrupts an active Session regardless of client origin.
+- An exact Agent execution waiting for a Question or access request is active for Run stop even when it has no active model or tool step.
 - Run stop requires a Session ID, rejects attempts by a Session to target itself, prints `Stopped` when accepted, and prints `No active execution` as a successful no-op for idle or nonexistent Sessions.
-- Run stop returns after direct exact-live cancellation. Pending human Steering for the stopped execution is removed when that execution unwinds; the CLI neither waits for that cleanup nor promises restoration.
+- Run stop returns after direct exact-live cancellation. Cancellation closes pending Question and access-request calls through the ordinary interrupted execution outcome. Pending human Steering for the stopped execution is removed when that execution unwinds; the CLI neither waits for that cleanup nor promises restoration.
 - `kent run wait <session-id>` waits for an active Session's final result.
 - `kent run wait …` always selects the Run wait command. A headless prompt beginning with `wait` uses `kent run -- wait …`.
 - Run wait requires a canonical UUIDv4 Session ID, rejects attempts by a Session to target itself, and fails without final-answer output if no execution is active.
@@ -231,7 +274,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - An attention event triggers another pending projection. Run watch returns a Question or access request only when that projection contains it.
 - If a prompt is resolved before the event-triggered projection, Run watch continues toward another observable prompt or terminal outcome.
 - If Run watch starts with no active execution and no pending Question or access request, it fails with the no-active-execution error.
-- Run watch does not return a historical result and does not wait for a later execution to start.
+- Run watch does not return a result from an earlier execution and does not wait for another execution to start.
 - Run watch is Session-scoped. It does not target Script Nodes or follow a Session's Task into Script work.
 - Run watch renders a Question through the same live-prompt presentation as `kent question --session`.
 - Run watch then prints a blank line and a directly targeted answer template.
@@ -239,7 +282,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - A freeform Question uses `Answer with: kent question answer --session <session-id> --commentary "<answer>"`.
 - An access request always uses the numbered-option answer template. Its labels come from the authoritative live prompt.
 - Run watch renders a Final answer and continuation hint through the same presentation as Run wait.
-- Human Run wait and watch preserve the existing no-final-result presentation and exit code 1.
+- Human Run wait and watch use the no-final-result presentation and exit code 1.
 - Run watch prints authoritative reason and diagnostic text for Execution error and Interrupted outcomes.
 - Human Run watch exits 0 after a Question or Final answer, 1 after an Execution error, and 130 after an Interrupted outcome or explicit stop.
 - Run control commands accept only `--persistence-root`, plus `--output-mode=json` for wait and watch.
@@ -268,12 +311,12 @@ To respond, run: kent run steer <source-session-id> "message"
 - Task watch returns when a projection reports that the Task is done.
 - Task watch ignores Workflow Transition Approvals and successful intermediate Node completion.
 - Typed stream, cancellation, and observation failures remain failures.
-- Human Task observation output and exit behavior remain unchanged when JSON mode is absent.
+- Without JSON mode, Task observation uses the human output and exit behavior specified above.
 
 ## Observation JSON
 
 - `kent run wait --output-mode=json <session-id>`, `kent run watch --output-mode=json <session-id>`, `kent task wait <task> --json`, and `kent task watch <task> --json` use the same observation envelope.
-- Run wait makes a hard cutover from its previous JSON envelope. It does not emit `continue_id`, a rendered continuation command, or compatibility fields.
+- Run wait JSON does not emit `continue_id`, a rendered continuation command, or compatibility fields.
 - Headless `kent run --output-mode=json` retains its separate contract.
 - JSON mode is recognizable only when the authoritative flag parser has accepted the command's JSON-enabling flag before a parse failure, or after parsing succeeds with that mode enabled.
 - A flag-shaped token consumed as another flag's value does not enable JSON mode.
@@ -290,7 +333,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - A freeform Question uses an empty `suggestions` array.
 - An access-request Question maps its authoritative ordered option labels to `suggestions` and omits `recommended_option_index`.
 - A Final answer outcome may contain `result`, `session_name`, `warnings`, and `duration_ms`.
-- The existing typed Run no-final-result fact is projected only in JSON as a successful Final answer with omitted `result`; its server contract and human presentation remain unchanged.
+- The typed Run no-final-result fact is projected only in JSON as a successful Final answer with omitted `result`. Human output uses the no-final-result presentation and exit code 1.
 - Execution error and Interrupted outcomes contain `reason` and optional `diagnostic`.
 - A Task Question outcome may contain `node_key` and does not repeat `answer_target.session_id` as an outcome-level `session_id`.
 - Non-Question Task outcomes may contain `node_key`, `session_id`, and `script_path` when those typed facts apply.
@@ -345,7 +388,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - An omitted offset starts at the beginning. Any non-negative offset is accepted. A negative offset is invalid.
 - `--limit` defaults to 100 and accepts 1 through 100.
 - Callers may change the limit between requests.
-- An offset at or beyond the current end succeeds with the command's existing empty-result output and no next offset.
+- An offset at or beyond the current end succeeds with the command's empty-result output and no next offset.
 - When more results exist, `next_offset` equals the request offset plus the number of results returned.
 - Human output writes ``Next offset: `<n>` `` to stderr only when more results exist.
 - Machine-readable request contracts use `offset` and `limit`; responses use optional `next_offset`.
@@ -367,7 +410,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Node membership in graph editing JSON uses `group_id` only. Graph inspect never emits `group_key`, and graph apply rejects `group_key` rather than treating it as an alternate membership reference.
 - Graph apply ignores unknown JSON object fields. Unknown or misspelled authored fields are not preserved when Kent saves the complete submitted graph.
 - Graph apply uses the installed JSON library's duplicate-field semantics. It rejects trailing JSON values and missing required fields before it contacts the server.
-- Graph apply loads the current Workflow and compares Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a legacy identity in the stale document no longer exists or now belongs to another entity type.
+- Graph apply loads the current Workflow and compares Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a persisted noncanonical identity in the stale document does not exist or belongs to another entity type.
 - For a current-version document, graph apply preserves submitted identities that match existing graph entities of the same type, preserves submitted collection order, and rejects additions without canonical bare UUID v4 identities before save.
 - Graph apply submits the document to the server's graph-save operation. A non-destructive graph that has no blocker saves immediately.
 - When confirmation is required, an unconfirmed graph apply reports the impact and changes nothing. With `--confirm`, the command confirms the impact returned by that invocation and retries the save.
@@ -375,14 +418,14 @@ To respond, run: kent run steer <source-session-id> "message"
 - Graph-save impact lists every removed graph entity by stable entity type and persistent identity. It reports Task references as aggregate counts and never materializes an unbounded Task-reference collection.
 - Graph-save blockers identify every affected graph entity by stable entity type and persistent identity.
 - Removed Node Groups appear in impact and aggregate counts. Removing a Node Group alone does not require confirmation.
-- Existing confirmation requirements for removed Nodes, Transition Groups, and Transition Branches remain unchanged.
+- Removing Nodes, Transition Groups, or Transition Branches requires graph-save confirmation according to the reported removal impact.
 - Retained Sessions and completed Session-to-Node provenance do not own a deleted Node's lifetime. Current Node and Pending Approval references remain graph-edit blockers.
 - Graph apply rejects a stale expected Workflow Version even when the submitted graph equals the current graph. A metadata-only Workflow update makes an earlier graph editing document stale.
 - Applying a graph that equals the current authored graph returns `unchanged`, exits successfully, and does not increment Workflow Version.
 - In JSON mode, graph apply emits one outcome envelope with `saved`, `unchanged`, `confirmation_required`, `blocked`, `invalid_document`, or `request_failed`.
 - A stale Workflow Version uses outcome `blocked` and blocker code `version_changed`.
 - Graph apply exits `0` for `saved` or `unchanged`, `1` when no save occurs for a typed product or operational outcome, and `2` for invalid command usage.
-- Existing high-level Node and Edge commands use graph save for their non-destructive operations and preserve their success output contracts. When one requires destructive confirmation, it changes nothing and directs the caller to graph apply.
+- High-level Node and Edge commands use graph save for their non-destructive operations and preserve their success output contracts. When one requires destructive confirmation, it changes nothing and directs the caller to graph apply.
 - `kent workflow delete <workflow>` reports deletion impact and makes no changes unless `--confirm` is present.
 - A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts.
 - If impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
@@ -392,7 +435,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - `kent workflow edge add|update` accepts `--target-assignee-param <key>=<description>` and `--target-thinking-param <key>=<description>` to create or edit the corresponding Protected Parameter while enabling it in the same command or while it is already enabled.
 - An empty description after `=` is valid.
 - Repeatable `--param <key>=<description>` and `--clear-params` mutate ordinary Parameters only and never delete or convert Protected Parameters.
-- Workflow Node mutation keeps the Agent Node's configured Assignee required, uses the existing `--agent` flag, and does not enable selection for incoming Edges.
+- Workflow Node mutation keeps the Agent Node's configured Assignee required, uses `--agent`, and does not enable selection for incoming Edges.
 - Workflow inspection identifies Protected Parameter purposes.
 - Human and JSON `kent task show` expose effective Assignee and thinking for Agent Current Nodes and omit them for non-Agent Current Nodes.
 - `kent task move` accepts an optional Transition Key plus structured values keyed by Node Key and output name through inline JSON or a JSON file.
@@ -422,7 +465,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - `shell_command` Workflow completion instructs an agent to run `kent task complete`.
 - In an agent Session, Task complete resolves the assigned Task and Current Node from the current Session and requires the matching Exact Execution Scope, Run, and Agent Step from the Kent execution environment.
 - Outside an agent Session, Task complete requires `--force` plus a Session or Task selector. It does not select an idle completion authority.
-- Human `kent task complete --force` composes existing Workflow operations: Interrupt the selected Task's live execution, wait until that Interrupt completes, then invoke the same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values.
+- Human `kent task complete --force` composes Workflow operations: Interrupt the selected Task's live execution, wait until that Interrupt completes, then invoke the same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values.
 - Forced Task complete may begin while the selected Task is executing. It adds no completion-specific gate, fallback, or lifecycle state.
 - The plain-text `kent task complete` acknowledgement omits identifiers.
 - Task complete accepts dynamic Parameter flags, repeatable `--param name=value`, and `--json` or `--json-file` completion payload input.
@@ -430,7 +473,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Live agent completion uses the completion acknowledgement. Forced human completion uses the ordinary Manual Move outcome after its Interrupt phase.
 - Neither acknowledgement promises that another Agent Turn will occur.
 - It does not expose Approval or Transition state.
-- JSON completion output retains its existing field set and does not include the plain-text acknowledgement.
+- JSON completion output does not include the plain-text acknowledgement.
 
 ### Labels and Task listing
 

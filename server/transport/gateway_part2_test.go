@@ -2,27 +2,40 @@ package transport
 
 import (
 	"context"
-	serverbootstrap "core/server/bootstrap"
-	"core/server/core"
-	"core/server/metadata"
-	"core/server/session"
-	shelltool "core/server/tools/shell"
-	remoteclient "core/shared/client"
-	"core/shared/config"
-	connectionpb "core/shared/protoapi/gen/kent/api/connection"
-	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
-	"core/shared/serverapi"
-	"core/shared/sessioncontract"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	serverbootstrap "core/server/bootstrap"
+	"core/server/core"
+	"core/server/llm"
+	"core/server/metadata"
+	"core/server/runtimewire"
+	"core/server/session"
+	shelltool "core/server/tools/shell"
+	remoteclient "core/shared/client"
+	"core/shared/clientui"
+	"core/shared/config"
+	connectionpb "core/shared/protoapi/gen/kent/api/connection"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/runtimeinput"
+	"core/shared/serverapi"
+	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func newGatewayTestServerForConfig(t *testing.T, cfg config.App) (*core.Core, *httptest.Server) {
+	return newGatewayTestServerForConfigOptions(t, cfg, core.Options{})
+}
+
+func newGatewayTestServerForConfigOptions(t *testing.T, cfg config.App, options core.Options) (*core.Core, *httptest.Server) {
 	t.Helper()
 	authSupport := newGatewayTestAuthSupport(t, true)
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
@@ -30,9 +43,9 @@ func newGatewayTestServerForConfig(t *testing.T, cfg config.App) (*core.Core, *h
 		t.Fatalf("BuildRuntimeSupport: %v", err)
 	}
 	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-	appCore, err := core.New(cfg, authSupport, runtimeSupport)
+	appCore, err := core.NewWithContextOptions(context.Background(), cfg, authSupport, runtimeSupport, options)
 	if err != nil {
-		t.Fatalf("core.New: %v", err)
+		t.Fatalf("core.NewWithContextOptions: %v", err)
 	}
 	t.Cleanup(func() { _ = appCore.Close() })
 	gateway, err := NewGateway(appCore, gatewayTestIdentity())
@@ -60,6 +73,289 @@ func registerGatewayTestBinding(t *testing.T, cfg config.App) metadata.Binding {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
 	return binding
+}
+
+type gatewaySelfRebindLLMClient struct {
+	mu       sync.Mutex
+	run      func() error
+	requests int
+}
+
+func (c *gatewaySelfRebindLLMClient) Generate(context.Context, llm.Request, llm.StreamCallbacks) (llm.Response, error) {
+	c.mu.Lock()
+	c.requests++
+	firstRequest := c.requests == 1
+	run := c.run
+	c.mu.Unlock()
+	if firstRequest && run == nil {
+		return llm.Response{}, errors.New("self-rebind callback is required")
+	}
+	if firstRequest {
+		if err := run(); err != nil {
+			return llm.Response{}, err
+		}
+	}
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("scheduled"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (c *gatewaySelfRebindLLMClient) requestCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.requests
+}
+
+func (*gatewaySelfRebindLLMClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
+func (c *gatewaySelfRebindLLMClient) setRun(run func() error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.run = run
+}
+
+func TestGatewayProjectRemoteContinuesAfterActiveStepScheduledCrossProjectMove(t *testing.T) {
+	home := t.TempDir()
+	sourceWorkspace := t.TempDir()
+	targetWorkspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureGatewayTestServerPort(t)
+
+	sourceConfig := resolveGatewayTestConfig(t, sourceWorkspace)
+	sourceBinding := registerGatewayTestBinding(t, sourceConfig.Config)
+	targetConfig := resolveGatewayTestConfig(t, targetWorkspace)
+	targetBinding := registerGatewayTestBinding(t, targetConfig.Config)
+
+	modelClient := &gatewaySelfRebindLLMClient{}
+	appCore, server := newGatewayTestServerForConfigOptions(t, sourceConfig.Config, core.Options{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return modelClient, nil
+		}),
+	})
+	movedSession := createGatewayAuthoritativeSession(t, appCore)
+	_ = activateGatewayController(t, appCore, movedSession.Meta().SessionID)
+	foreignSession, err := session.Create(
+		filepath.Join(targetConfig.Config.PersistenceRoot, "projects", targetBinding.ProjectID, "sessions"),
+		"target",
+		targetConfig.Config.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create foreign: %v", err)
+	}
+	if err := foreignSession.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable foreign: %v", err)
+	}
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		sourceBinding.ProjectID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	transcript, err := remote.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: movedSession.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionTranscript: %v", err)
+	}
+	defer func() { _ = transcript.Close() }()
+	hydration, err := transcript.Next(context.Background())
+	if err != nil {
+		t.Fatalf("receive transcript hydration: %v", err)
+	}
+	if hydration.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("first transcript message kind = %q, want hydration", hydration.Kind())
+	}
+
+	modelClient.setRun(func() error {
+		activeView, err := remote.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{
+			SessionID: movedSession.Meta().SessionID,
+		})
+		if err != nil {
+			return err
+		}
+		active := activeView.MainView.Activity.ActiveStep
+		if active == nil {
+			return errors.New("originating Agent Step is required")
+		}
+		response, err := remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
+			SessionID:     movedSession.Meta().SessionID,
+			WorkspaceRoot: targetConfig.Config.WorkspaceRoot,
+			ProjectID:     &targetBinding.ProjectID,
+			Origin: &serverapi.RuntimeStepOrigin{
+				RunID:  active.RunID.String(),
+				StepID: active.StepID.String(),
+			},
+		})
+		if err != nil {
+			return err
+		}
+		if response.Scheduled == nil {
+			return errors.New("active-step Session rebind completed synchronously")
+		}
+		acknowledgedView, err := remote.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{
+			SessionID: movedSession.Meta().SessionID,
+		})
+		if err != nil {
+			return err
+		}
+		if got := acknowledgedView.MainView.Session.ExecutionTarget.WorkspaceID; got != sourceBinding.WorkspaceID {
+			return fmt.Errorf("acknowledged Session Workspace = %q, want source %q before Step boundary", got, sourceBinding.WorkspaceID)
+		}
+		return nil
+	})
+	submission, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+		SessionID: movedSession.Meta().SessionID,
+		Input:     runtimeinput.Text("move this Session"),
+	})
+	if err != nil {
+		t.Fatalf("SubmitUserTurn with self-rebind: %v", err)
+	}
+	if submission.ResultKind != clientui.UserTurnResultKindQueued {
+		t.Fatalf("self-rebind submission result = %q, want queued", submission.ResultKind)
+	}
+	identityContext, cancelIdentity := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelIdentity()
+	for {
+		identityMessage, err := transcript.Next(identityContext)
+		if err != nil {
+			t.Fatalf("receive moved Session identity: %v", err)
+		}
+		if identityMessage.Kind() != clientui.TranscriptMessageSessionIdentity {
+			continue
+		}
+		identity, ok := identityMessage.Payload().(clientui.TranscriptSessionIdentity)
+		if !ok || identity.ExecutionTarget == nil || identity.ExecutionTarget.WorkspaceID != targetBinding.WorkspaceID {
+			t.Fatalf("moved Session identity = %#v, want target Workspace %q", identityMessage.Payload(), targetBinding.WorkspaceID)
+		}
+		break
+	}
+
+	const draft = "survives the handoff"
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+		SessionID: movedSession.Meta().SessionID,
+		Input:     draft,
+	}); err != nil {
+		t.Fatalf("PersistInputDraft after cross-Project move: %v", err)
+	}
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+		SessionID: foreignSession.Meta().SessionID,
+		Input:     "must remain inaccessible",
+	}); err == nil {
+		t.Fatal("unrelated target-Project Session draft mutation unexpectedly allowed")
+	}
+
+	destination, found, err := remote.TakeSessionHandoff(
+		context.Background(),
+		movedSession.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("take Session handoff after move: %v", err)
+	}
+	if !found {
+		t.Fatal("transcript subscription did not prepare a Session handoff")
+	}
+	if err := remote.Close(); err != nil {
+		t.Fatalf("close source Project remote: %v", err)
+	}
+	defer func() { _ = destination.Close() }()
+	binding, present := destination.ProjectBinding()
+	if !present ||
+		binding.ProjectID != targetBinding.ProjectID ||
+		binding.WorkspaceID != targetBinding.WorkspaceID {
+		t.Fatalf("reattached Session binding = %+v present=%t, want target binding", binding, present)
+	}
+	initialInput, err := destination.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
+		SessionID: movedSession.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("GetInitialInput after reattach: %v", err)
+	}
+	if initialInput.Input != draft {
+		t.Fatalf("reattached draft = %q, want %q", initialInput.Input, draft)
+	}
+	waitForGatewayCondition(t, "source Runtime retirement", func() bool {
+		view, viewErr := destination.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{
+			SessionID: movedSession.Meta().SessionID,
+		})
+		return viewErr == nil && view.MainView.Activity.State == clientui.RuntimeActivityUnavailable
+	})
+	if got := modelClient.requestCount(); got != 1 {
+		t.Fatalf("provider requests after self-rebind = %d, want 1", got)
+	}
+}
+
+func TestGatewaySessionReattachCapabilitySurvivesGatewayReplacement(t *testing.T) {
+	home := t.TempDir()
+	sourceWorkspace := t.TempDir()
+	targetWorkspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureGatewayTestServerPort(t)
+
+	sourceConfig := resolveGatewayTestConfig(t, sourceWorkspace)
+	sourceBinding := registerGatewayTestBinding(t, sourceConfig.Config)
+	targetConfig := resolveGatewayTestConfig(t, targetWorkspace)
+	targetBinding := registerGatewayTestBinding(t, targetConfig.Config)
+	appCore, _ := newGatewayTestServerForConfig(t, sourceConfig.Config)
+	movedSession := createGatewayAuthoritativeSession(t, appCore)
+
+	firstGateway, err := NewGateway(appCore, gatewayTestIdentity())
+	if err != nil {
+		t.Fatalf("NewGateway first: %v", err)
+	}
+	firstAttachment, err := invokeBinaryAttachSession(
+		firstGateway,
+		t.Context(),
+		&connectionState{attachedProject: sourceBinding.ProjectID},
+		&connectionpb.AttachSessionRequest{SessionId: movedSession.Meta().SessionID},
+	)
+	if err != nil {
+		t.Fatalf("attach Session before move: %v", err)
+	}
+	capability := firstAttachment.GetSession().GetReattachCapability()
+
+	if _, err := appCore.SessionLifecycleClient().RetargetSessionWorkspace(
+		t.Context(),
+		serverapi.SessionRetargetWorkspaceRequest{
+			SessionID:     movedSession.Meta().SessionID,
+			WorkspaceRoot: targetConfig.Config.WorkspaceRoot,
+			ProjectID:     &targetBinding.ProjectID,
+		},
+	); err != nil {
+		t.Fatalf("move Session: %v", err)
+	}
+
+	replacementGateway, err := NewGateway(appCore, gatewayTestIdentity())
+	if err != nil {
+		t.Fatalf("NewGateway replacement: %v", err)
+	}
+	attachment, err := invokeBinaryAttachSession(
+		replacementGateway,
+		t.Context(),
+		&connectionState{attachedProject: sourceBinding.ProjectID},
+		&connectionpb.AttachSessionRequest{
+			SessionId:          movedSession.Meta().SessionID,
+			ReattachCapability: &capability,
+		},
+	)
+	if err != nil {
+		t.Fatalf("reattach moved Session through replacement Gateway: %v", err)
+	}
+	if got := attachment.GetSession().GetProjectId(); got != targetBinding.ProjectID {
+		t.Fatalf("reattached Project = %q, want %q", got, targetBinding.ProjectID)
+	}
 }
 
 func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *testing.T) {
@@ -163,7 +459,7 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	}
 }
 
-func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
+func TestGatewayScopesProcessViewsAndAllowsGlobalKill(t *testing.T) {
 	home := t.TempDir()
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
@@ -200,6 +496,8 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 		Command:        []string{"/bin/sh", "-lc", "printf own\\n; sleep 1"},
 		DisplayCommand: "printf own; sleep 1",
 		OwnerSessionID: storeA.Meta().SessionID,
+		OwnerRunID:     "run-a",
+		OwnerStepID:    "step-a",
 		Workdir:        appCore.Config().WorkspaceRoot,
 		YieldTime:      time.Millisecond,
 	})
@@ -210,6 +508,8 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 		Command:        []string{"/bin/sh", "-lc", "printf foreign\\n; sleep 1"},
 		DisplayCommand: "printf foreign; sleep 1",
 		OwnerSessionID: storeB.Meta().SessionID,
+		OwnerRunID:     "run-b",
+		OwnerStepID:    "step-b",
 		Workdir:        resolvedB.Config.WorkspaceRoot,
 		YieldTime:      time.Millisecond,
 	})
@@ -223,7 +523,9 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	listed, err := remote.ListProcesses(context.Background(), serverapi.ProcessListRequest{})
+	listed, err := remote.ListProcesses(context.Background(), serverapi.ProcessListRequest{
+		ProjectID: bindingA.ProjectID,
+	})
 	if err != nil {
 		t.Fatalf("ListProcesses: %v", err)
 	}
@@ -236,8 +538,8 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	if _, err := remote.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: foreignResult.SessionID, MaxChars: 128}); err == nil {
 		t.Fatal("expected foreign process inline output to be rejected")
 	}
-	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err == nil {
-		t.Fatal("expected foreign process kill to be rejected")
+	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err != nil {
+		t.Fatalf("expected globally identified foreign process kill to succeed, got %v", err)
 	}
 	if _, err := remote.GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: ownResult.SessionID}); err != nil {
 		t.Fatalf("expected own process get to succeed, got %v", err)

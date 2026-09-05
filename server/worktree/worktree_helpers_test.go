@@ -76,11 +76,11 @@ func TestGitMetadataDecodesLegacySingleBranchField(t *testing.T) {
 func TestWorktreeReminderTransitionRejectsPresentPreviousTargetWithEmptyWorktreeID(t *testing.T) {
 	previous := &syncedWorktree{
 		record: metadata.WorktreeRecord{CanonicalRoot: "/repo/worktree"},
-		git:    GitWorktree{IsMain: false},
+		git:    GitWorktree{IsMainWorktree: false},
 	}
 	next := syncedWorktree{
 		record: metadata.WorktreeRecord{CanonicalRoot: "/repo"},
-		git:    GitWorktree{IsMain: true},
+		git:    GitWorktree{IsMainWorktree: true},
 	}
 	previousTarget := clientui.SessionExecutionTarget{
 		WorkspaceRoot: "/repo",

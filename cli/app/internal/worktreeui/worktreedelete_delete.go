@@ -24,6 +24,9 @@ type PreviewLine struct {
 }
 
 func DeleteActions(target Item) []DeleteAction {
+	if !CanDelete(target) {
+		return []DeleteAction{DeleteActionCancel}
+	}
 	actions := []DeleteAction{DeleteActionCancel, DeleteActionDelete}
 	if DeleteCanAutoDeleteBranch(target) || target.BranchName != nil {
 		actions = append(actions, DeleteActionDeleteBranch)

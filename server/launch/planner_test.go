@@ -36,8 +36,8 @@ func (s *failingUpdateMetadataExecutionTargetStore) UpdateSessionExecutionTarget
 	return s.updateErr
 }
 
-func (s *failingUpdateMetadataExecutionTargetStore) DeleteSessionRecordByID(ctx context.Context, sessionID string) error {
-	return s.base.DeleteSessionRecordByID(ctx, sessionID)
+func (s *failingUpdateMetadataExecutionTargetStore) DeleteFailedSessionCreationRecordByID(ctx context.Context, sessionID string) error {
+	return s.base.DeleteFailedSessionCreationRecordByID(ctx, sessionID)
 }
 
 func (s *failingUpdateMetadataExecutionTargetStore) Close() error {
@@ -856,6 +856,103 @@ func TestPlannerNewChildSessionResolvesPreviousSessionAcrossProjectContainers(t 
 	}
 	if childMeta.Continuation == nil || childMeta.Continuation.OpenAIBaseURL == nil || *childMeta.Continuation.OpenAIBaseURL != "http://foreign.local/v1" {
 		t.Fatalf("continuation = %+v, want source session continuation copied", childMeta.Continuation)
+	}
+}
+
+func TestPlannerInitializesChildFromSourceMetadataWithoutOpeningSessionDirectory(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       Mode
+		origin     func(runtimeids.SessionID) serverapi.SessionCreateOrigin
+		assertMeta func(*testing.T, session.Meta, runtimeids.SessionID)
+	}{
+		{
+			name: "previous session",
+			mode: ModeInteractive,
+			origin: func(sourceID runtimeids.SessionID) serverapi.SessionCreateOrigin {
+				return serverapi.PreviousSessionCreateOrigin(sourceID)
+			},
+			assertMeta: func(t *testing.T, meta session.Meta, sourceID runtimeids.SessionID) {
+				t.Helper()
+				if meta.PreviousSessionID == nil || *meta.PreviousSessionID != sourceID {
+					t.Fatalf("previous session id = %v, want %q", meta.PreviousSessionID, sourceID)
+				}
+				if meta.Locked == nil || meta.Locked.Model != "source-model" {
+					t.Fatalf("locked contract = %+v, want source model", meta.Locked)
+				}
+				if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL == nil || *meta.Continuation.OpenAIBaseURL != "https://source.example/v1" {
+					t.Fatalf("continuation = %+v, want source continuation", meta.Continuation)
+				}
+			},
+		},
+		{
+			name: "parent agent",
+			mode: ModeHeadless,
+			origin: func(sourceID runtimeids.SessionID) serverapi.SessionCreateOrigin {
+				return serverapi.ParentAgentSessionCreateOrigin(sourceID)
+			},
+			assertMeta: func(t *testing.T, meta session.Meta, sourceID runtimeids.SessionID) {
+				t.Helper()
+				if meta.ParentAgentSessionID == nil || *meta.ParentAgentSessionID != sourceID {
+					t.Fatalf("parent agent session id = %v, want %q", meta.ParentAgentSessionID, sourceID)
+				}
+				if meta.Locked != nil {
+					t.Fatalf("locked contract = %+v, want fresh parent-agent contract", meta.Locked)
+				}
+				if meta.Continuation != nil {
+					t.Fatalf("continuation = %+v, want fresh parent-agent continuation", meta.Continuation)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			containerDir := filepath.Join(root, "projects", "project-a", "sessions")
+			persistence := sessiontest.NewPersistence()
+			source := createTestSessionInContainer(t, containerDir, "source-workspace", "/tmp/source-workspace", persistence.Options()...)
+			if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "source-model"}); err != nil {
+				t.Fatalf("MarkModelDispatchLocked source: %v", err)
+			}
+			if err := source.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: textutil.Value("https://source.example/v1")}); err != nil {
+				t.Fatalf("SetContinuationContext source: %v", err)
+			}
+			record, err := persistence.ResolvePersistedSession(context.Background(), source.Meta().SessionID)
+			if err != nil {
+				t.Fatalf("ResolvePersistedSession source: %v", err)
+			}
+			record.SessionDir = filepath.Join(t.TempDir(), "must-not-open")
+			resolver := &metadataOnlyAncestryResolver{
+				base: persistence,
+				records: map[string]session.PersistedSessionRecord{
+					source.Meta().SessionID: record,
+				},
+			}
+			planner := newPersistenceBackedTestPlanner(config.App{
+				WorkspaceRoot:   "/tmp/child-workspace",
+				PersistenceRoot: root,
+				Settings: config.Settings{
+					Model:            "gpt-5",
+					MaxSubagentDepth: 2,
+				},
+			}, containerDir, persistence)
+			planner.PersistedSessions = resolver
+			sourceID := mustTypedIntentSessionID(t, source.Meta().SessionID)
+
+			plan, err := planner.PlanSession(context.Background(), SessionRequest{
+				Mode:   test.mode,
+				Intent: serverapi.CreateNewSessionLaunchIntent(test.origin(sourceID)),
+			})
+			if err != nil {
+				t.Fatalf("PlanSession child: %v", err)
+			}
+			childMeta := testStoreForPlannerPlan(t, planner, plan).Meta()
+			if childMeta.WorkspaceRoot != "/tmp/source-workspace" || childMeta.WorkspaceContainer != "source-workspace" {
+				t.Fatalf("child workspace = root %q container %q, want source metadata", childMeta.WorkspaceRoot, childMeta.WorkspaceContainer)
+			}
+			test.assertMeta(t, childMeta, sourceID)
+		})
 	}
 }
 

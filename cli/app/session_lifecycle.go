@@ -341,6 +341,7 @@ func prepareSessionUIRun(
 	return runtimePlan, uiLoopRequest{
 		ctx:                          ctx,
 		wiring:                       runtimePlan.Wiring,
+		projectID:                    strings.TrimSpace(server.ProjectID()),
 		active:                       plan.ActiveSettings,
 		commandRegistry:              commandRegistry,
 		initialPrompt:                initialPrompt,

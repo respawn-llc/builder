@@ -71,9 +71,22 @@ func (l uiViewLayout) renderWorktreeList(width, height int, style uiStyles) []st
 			content = append(content, "")
 		}
 	}
-	footer := []string{style.meta.Render(truncateQueuedMessageLine("Esc/q close | Enter switch | c create | d delete | x delete+branch | PgUp/PgDn/Home/End move | r refresh", width))}
+	footerText := "Esc/q close | Enter switch | c create"
+	if worktreeDeleteActionsAvailableForSelection(m) {
+		footerText += " | d delete | x delete+branch"
+	}
+	footerText += " | PgUp/PgDn/Home/End move | r refresh"
+	footer := []string{style.meta.Render(truncateQueuedMessageLine(footerText, width))}
 	lines := append(append(header, content...), footer...)
 	return l.renderChatContentLines(lines, width, style)
+}
+
+func worktreeDeleteActionsAvailableForSelection(m *uiModel) bool {
+	if m == nil {
+		return false
+	}
+	target, ok := m.selectedWorktreeRow()
+	return ok && worktreeui.CanDelete(target)
 }
 
 func worktreeOverlaySummary(target clientui.SessionExecutionTarget) string {
@@ -150,7 +163,7 @@ func renderWorktreeBadges(item worktreeui.Item, selected bool, theme string) []s
 	if item.IsCurrent {
 		badges = append(badges, badge("current", p.secondary))
 	}
-	if item.IsMain {
+	if item.IsMainWorkspace {
 		badges = append(badges, badge("main", p.primary))
 	}
 	if item.Detached {
@@ -158,7 +171,7 @@ func renderWorktreeBadges(item worktreeui.Item, selected bool, theme string) []s
 	} else if branch := worktreeui.BranchName(item); branch != "" {
 		badges = append(badges, badge("branch:"+branch, p.foreground))
 	}
-	if !item.Managed && !item.IsMain {
+	if !item.Managed && !item.IsMainWorkspace {
 		badges = append(badges, badge("external", p.muted))
 	}
 	return badges

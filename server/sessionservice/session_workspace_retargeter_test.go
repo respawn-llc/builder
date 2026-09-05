@@ -3,6 +3,7 @@ package sessionservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,6 +24,8 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/worktreecontract"
+
+	"github.com/google/uuid"
 )
 
 type retargetProcessSource []shelltool.Snapshot
@@ -470,10 +473,42 @@ func (c *queuedFailureRetargetRuntimeClient) request(index int) llm.Request {
 func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.T) {
 	fixture := newRealSessionRetargetFixture(t, false)
 	targetProjectID := fixture.targetProject.ProjectID
+	targetBinding, err := fixture.metadata.AttachWorkspaceToProject(
+		t.Context(),
+		targetProjectID,
+		fixture.targetWorkspaceRoot,
+	)
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject target: %v", err)
+	}
+	targetWorktreeRoot := filepath.Join(fixture.managedBase, "scheduled-target-worktree")
+	if err := os.MkdirAll(targetWorktreeRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll target worktree: %v", err)
+	}
+	targetWorktreeID := uuid.NewString()
+	if err := fixture.metadata.UpsertWorktreeRecord(t.Context(), metadata.WorktreeRecord{
+		ID:            targetWorktreeID,
+		WorkspaceID:   targetBinding.WorkspaceID,
+		CanonicalRoot: targetWorktreeRoot,
+		DisplayName:   "scheduled-target",
+		Managed:       true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord target: %v", err)
+	}
+	worktreeReminder := session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			WorktreePath:  targetWorktreeRoot,
+			WorkspaceRoot: fixture.targetWorkspaceRoot,
+			EffectiveCwd:  targetWorktreeRoot,
+		},
+	}
 	request := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Meta().SessionID,
-		WorkspaceRoot: fixture.targetWorkspaceRoot,
-		ProjectID:     &targetProjectID,
+		SessionID:        fixture.child.Meta().SessionID,
+		WorkspaceRoot:    fixture.targetWorkspaceRoot,
+		ProjectID:        &targetProjectID,
+		TargetWorktreeID: &targetWorktreeID,
+		WorktreeReminder: &worktreeReminder,
 	}
 	processes := retargetProcessSource{{
 		ID:             "still-running",
@@ -498,17 +533,34 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	)
 	client := &selfRetargetRuntimeClient{}
 	engine := fixture.openRuntimeWithClient(t, client)
+	completed := make(chan error, 1)
+	requestCanceled := make(chan struct{})
 	client.run = func() error {
 		active := engine.ActiveRun()
 		if active == nil {
 			return errors.New("active Agent Step is required")
 		}
-		_, err := retargeter.ScheduleWorkspaceRetarget(
-			t.Context(),
-			request,
+		requestCtx, cancelRequest := context.WithCancel(t.Context())
+		_, err := retargeter.ScheduleWorkspaceRetargetResolutionWithCompletion(
+			requestCtx,
+			request.SessionID,
 			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
 			worktreecontract.NewOperationID(),
+			func(resolveCtx context.Context) (metadata.SessionWorkspaceRetargetRequest, error) {
+				select {
+				case <-requestCanceled:
+				default:
+					return metadata.SessionWorkspaceRetargetRequest{}, errors.New("target resolved before scheduled acknowledgement returned")
+				}
+				if err := context.Cause(resolveCtx); err != nil {
+					return metadata.SessionWorkspaceRetargetRequest{}, fmt.Errorf("scheduled target inherited caller cancellation: %w", err)
+				}
+				return request, nil
+			},
+			func(err error) { completed <- err },
 		)
+		cancelRequest()
+		close(requestCanceled)
 		return err
 	}
 
@@ -536,6 +588,14 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 	case <-time.After(3 * time.Second):
 		t.Fatal("moved Session identity was not published")
 	}
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatalf("scheduled retarget completion: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("scheduled retarget completion was not published")
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if !fixture.runtimeAvailable(t) {
@@ -559,8 +619,21 @@ func TestSessionWorkspaceRetargeterSchedulesSelfRebindAtStepBoundary(t *testing.
 		t.Fatalf("persisted Session rebind reminder = %+v", reminder)
 	}
 	if reminder.WorkingDirectory == nil ||
-		canonicalRetargetTestPath(t, *reminder.WorkingDirectory) != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
-		t.Fatalf("persisted Session rebind Working Directory = %v, want %q", reminder.WorkingDirectory, fixture.targetWorkspaceRoot)
+		canonicalRetargetTestPath(t, *reminder.WorkingDirectory) != canonicalRetargetTestPath(t, targetWorktreeRoot) {
+		t.Fatalf("persisted Session rebind Working Directory = %v, want %q", reminder.WorkingDirectory, targetWorktreeRoot)
+	}
+	if reopened.Meta().WorktreeReminder == nil ||
+		reopened.Meta().WorktreeReminder.WorktreePath != targetWorktreeRoot {
+		t.Fatalf("persisted Worktree reminder = %+v, want %q", reopened.Meta().WorktreeReminder, targetWorktreeRoot)
+	}
+	target, err := fixture.metadata.ResolveSessionExecutionTarget(t.Context(), fixture.childID.String())
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.Worktree == nil ||
+		target.Worktree.ID != targetWorktreeID ||
+		canonicalRetargetTestPath(t, target.EffectiveWorkdir) != canonicalRetargetTestPath(t, targetWorktreeRoot) {
+		t.Fatalf("scheduled execution target = %+v, want Worktree %q at %q", target, targetWorktreeID, targetWorktreeRoot)
 	}
 }
 
@@ -708,88 +781,117 @@ func TestSessionWorkspaceRetargeterKeepsSuccessReminderWhenRuntimeRetirementFail
 }
 
 func TestSessionWorkspaceRetargeterPublishesFailureBeforeQueuedModelWorkResumes(t *testing.T) {
-	fixture := newRealSessionRetargetFixture(t, false)
-	targetProjectID := fixture.targetProject.ProjectID
-	request := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Meta().SessionID,
-		WorkspaceRoot: fixture.targetWorkspaceRoot,
-		ProjectID:     &targetProjectID,
-	}
-	applyErr := errors.New("target boundary unavailable")
-	retargeter := fixture.retargeter(
-		failingSessionRetargetBoundary{Store: fixture.metadata, err: applyErr},
-		retargetProcessSource{},
-	)
-	client := &queuedFailureRetargetRuntimeClient{
-		scheduled:     make(chan struct{}),
-		releaseFirst:  make(chan struct{}),
-		secondStarted: make(chan struct{}),
-	}
-	engine := fixture.openRuntimeWithClient(t, client)
-	client.run = func() error {
-		active := engine.ActiveRun()
-		if active == nil {
-			return errors.New("active Agent Step is required")
-		}
-		_, err := retargeter.ScheduleWorkspaceRetarget(
-			t.Context(),
-			request,
-			serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
-			worktreecontract.NewOperationID(),
-		)
-		return err
-	}
+	for _, test := range []struct {
+		name     string
+		metadata func(*metadata.Store, error) sessionRetargetMetadata
+	}{
+		{
+			name: "apply failure",
+			metadata: func(store *metadata.Store, failure error) sessionRetargetMetadata {
+				return failingSessionRetargetBoundary{Store: store, err: failure}
+			},
+		},
+		{
+			name: "planning failure",
+			metadata: func(store *metadata.Store, failure error) sessionRetargetMetadata {
+				return failingSessionRetargetPlan{Store: store, err: failure}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRealSessionRetargetFixture(t, false)
+			targetProjectID := fixture.targetProject.ProjectID
+			request := metadata.SessionWorkspaceRetargetRequest{
+				SessionID:     fixture.child.Meta().SessionID,
+				WorkspaceRoot: fixture.targetWorkspaceRoot,
+				ProjectID:     &targetProjectID,
+			}
+			failure := errors.New("target unavailable")
+			retargeter := fixture.retargeter(test.metadata(fixture.metadata, failure), retargetProcessSource{})
+			client := &queuedFailureRetargetRuntimeClient{
+				scheduled:     make(chan struct{}),
+				releaseFirst:  make(chan struct{}),
+				secondStarted: make(chan struct{}),
+			}
+			engine := fixture.openRuntimeWithClient(t, client)
+			client.run = func() error {
+				active := engine.ActiveRun()
+				if active == nil {
+					return errors.New("active Agent Step is required")
+				}
+				_, err := retargeter.ScheduleWorkspaceRetarget(
+					t.Context(),
+					request,
+					serverapi.RuntimeStepOrigin{RunID: active.RunID, StepID: active.StepID},
+					worktreecontract.NewOperationID(),
+				)
+				return err
+			}
 
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "move this Session")
-		firstDone <- err
-	}()
-	select {
-	case <-client.scheduled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("self-rebind was not scheduled")
+			firstDone := make(chan error, 1)
+			go func() {
+				_, err := engine.SubmitUserMessage(context.Background(), "move this Session")
+				firstDone <- err
+			}()
+			select {
+			case <-client.scheduled:
+			case <-time.After(3 * time.Second):
+				t.Fatal("self-rebind was not scheduled")
+			}
+			type queuedResult struct {
+				accepted bool
+				err      error
+			}
+			queued := make(chan queuedResult, 1)
+			go func() {
+				_, accepted, err := engine.QueueUserMessageForActiveRun(
+					context.Background(),
+					"continue after the failed move",
+					nil,
+				)
+				queued <- queuedResult{accepted: accepted, err: err}
+			}()
+			close(client.releaseFirst)
+			if result := <-queued; result.err != nil || !result.accepted {
+				t.Fatalf("queue successor accepted=%t error=%v", result.accepted, result.err)
+			}
+			if err := <-firstDone; err != nil {
+				t.Fatalf("originating Agent Step: %v", err)
+			}
+			select {
+			case <-client.secondStarted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("queued user work did not resume")
+			}
+			requestAfterFailure := client.request(1)
+			for _, item := range requestAfterFailure.Items {
+				if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback {
+					return
+				}
+			}
+			messageTypes := make([]string, 0, len(requestAfterFailure.Items))
+			for _, item := range requestAfterFailure.Items {
+				if item.MessageType == nil {
+					messageTypes = append(messageTypes, "<none>")
+				} else {
+					messageTypes = append(messageTypes, string(*item.MessageType))
+				}
+			}
+			t.Fatalf("queued request lacks rebind failure notice; message types: %v", messageTypes)
+		})
 	}
-	type queuedResult struct {
-		accepted bool
-		err      error
-	}
-	queued := make(chan queuedResult, 1)
-	go func() {
-		_, accepted, err := engine.QueueUserMessageForActiveRun(
-			context.Background(),
-			"continue after the failed move",
-			nil,
-		)
-		queued <- queuedResult{accepted: accepted, err: err}
-	}()
-	close(client.releaseFirst)
-	if result := <-queued; result.err != nil || !result.accepted {
-		t.Fatalf("queue successor accepted=%t error=%v", result.accepted, result.err)
-	}
-	if err := <-firstDone; err != nil {
-		t.Fatalf("originating Agent Step: %v", err)
-	}
-	select {
-	case <-client.secondStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("queued user work did not resume")
-	}
-	requestAfterFailure := client.request(1)
-	for _, item := range requestAfterFailure.Items {
-		if item.MessageType != nil && *item.MessageType == llm.MessageTypeErrorFeedback {
-			return
-		}
-	}
-	messageTypes := make([]string, 0, len(requestAfterFailure.Items))
-	for _, item := range requestAfterFailure.Items {
-		if item.MessageType == nil {
-			messageTypes = append(messageTypes, "<none>")
-		} else {
-			messageTypes = append(messageTypes, string(*item.MessageType))
-		}
-	}
-	t.Fatalf("queued request lacks rebind failure notice; message types: %v", messageTypes)
+}
+
+type failingSessionRetargetPlan struct {
+	*metadata.Store
+	err error
+}
+
+func (s failingSessionRetargetPlan) PlanSessionWorkspaceRetarget(
+	context.Context,
+	metadata.SessionWorkspaceRetargetRequest,
+) (metadata.SessionWorkspaceRetargetPlan, error) {
+	return metadata.SessionWorkspaceRetargetPlan{}, s.err
 }
 
 func TestSessionWorkspaceRetargeterRejectsActiveCrossProjectRuntimeImmediately(t *testing.T) {

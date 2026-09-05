@@ -111,6 +111,7 @@ func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry.BackgroundExitCode = textutil.Pointer(entry.BackgroundExitCode)
 	copyEntry.WorktreeContext = session.CloneWorktreeContext(entry.WorktreeContext)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
+	copyEntry.QuestionAnswer = cloneAskQuestionAnswer(entry.QuestionAnswer)
 	copyEntry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
 	if entry.ReviewerFeedback != nil {
 		feedback := *entry.ReviewerFeedback
