@@ -268,6 +268,8 @@ More info on the [Subagents page](../headless/).
 
 `[skills]` is a file-only per-skill boolean table in `config.toml`. Disabled skills remain visible in clients but are omitted from model context. Keys are matched case-insensitively.
 
+The generated [`prompting` skill](../prompts/#prompting-skill) provides prompt-writing and agent-coordination guidance. Setting `prompting = false` in `[skills]` affects only its skill visibility; it does not change other model context.
+
 ```toml
 [skills]
 "<skill name>" = false

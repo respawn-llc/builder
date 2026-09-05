@@ -29,6 +29,12 @@ System prompt files replace Kent's built-in default "product engineer" / SWE-foc
 
 Kent snapshots the rendered system prompt on each compaction to prevent cache misses. Edits to system prompt files take effect after a successful compaction and the next model request.
 
+## Prompting Skill
+
+Kent provides a generated `prompting` skill for writing agent assignments, starting and steering runs, following up in existing Sessions, observing runs, and working with Questions. Delegation guidance lives in this on-demand skill. Available agent roles are advertised separately.
+
+Disable it with `[skills] prompting = false` in your configuration. This removes it from the model's skill catalog without changing the system prompt, available-role guidance, or other context.
+
 ## Goal Continuation
 
 After successful automatic, manual, or handoff compaction, a non-workflow session with an active goal resumes with the exact goal text and Kent's goal work and completion guidance. Paused, completed, cleared, and absent goals add no continuation guidance, and reopening a session without compaction does not add it.
@@ -43,7 +49,6 @@ System prompt files use Go template syntax with these fields:
 - `{{.DefaultSystemPromptPersonality}}` - Kent agent identity, communication style, and engineering posture.
 - `{{.DefaultSystemPromptAmbiguityAndOutputQuality}}` - opinionated product ambiguity handling and implementation quality rules.
 - `{{.DefaultSystemPromptFinalAnswerAndFormatting}}` - final response, Markdown, and formatting rules suitable for TUI.
-- `{{.DefaultSystemPromptDelegation}}` - subagent delegation guidance and examples.
 - `{{.DefaultSystemPrompt}}` - full text of the built-in Kent system prompt.
 - `{{.LaunchCommand}}` - Kent executable command, e.g. `path/to/kent.exe`.
 - `{{.EstimatedToolCallsForContext}}` - estimated function/tool-call budget before compaction/handoff, exact number that varies with model context window, like `185`.

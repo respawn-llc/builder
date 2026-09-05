@@ -24,6 +24,8 @@
 
 - Skills are discovered from `<persistence-root>/skills` (default `~/.kent/skills`), workspace `.kent/skills`, and `<persistence-root>/.generated/skills`. Global `AGENTS.md` and the global system-prompt file use the selected persistence root; an empty root means `~/.kent`. Symlinks are followed when these files are discovered or read.
 - File-only `[skills]` boolean settings enable or disable a skill for new-session model context. Disabled skills remain visible in clients.
+- The generated `prompting` skill owns on-demand prompt-writing and agent-coordination guidance. Its enabled or disabled state must affect only ordinary skill visibility; it must not select system-prompt content, role guidance, reminders, or other model context.
+- System-prompt templates must continue to accept `DefaultSystemPromptDelegation` and render it as empty text, independent of skill visibility.
 - Kent seeds preinstalled skills into `<persistence-root>/.generated/skills`. This generated directory is overwritten whenever the server starts, is not user-owned, and must not be edited. A user skill with the same normalized name shadows its generated skill.
 - Model file-edit tools refuse writes in `<persistence-root>/.generated` without requesting approval. The refusal explains that generated files are overwritten and that a skill must be shadowed from an active user skill path using the same normalized name, ID, and directory structure. This restriction does not apply to command execution or file reads.
 - Generated-file protection can identify paths by exact path, glob pattern, or regular-expression pattern. Regular-expression matching in this protection policy is an explicit exception to the repository's general ban on regex parsing and replacement.
