@@ -44,7 +44,7 @@ const tailSegmentSchema = z
   .object({
     OlderCursor: z.number().int().positive().nullable(),
     HasMoreAbove: z.boolean(),
-    Entries: nullableArray(committedRowSchema),
+    Entries: z.array(committedRowSchema),
   })
   .strict()
   .superRefine((segment, context) => {
