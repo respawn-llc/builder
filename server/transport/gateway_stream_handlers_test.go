@@ -31,7 +31,7 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 			ID:      "watch",
 			Method:  protocol.MethodPromptFollowUpWatch,
 			Params: mustJSON(t, serverapi.PromptFollowUpWatchRequest{
-				SessionID: runtimeids.NewSessionID(), StepID: stepID, PromptID: "prompt-1",
+				SessionID: runtimeids.NewSessionID(), StepID: stepID, ToolCallID: "prompt-1",
 			}),
 		},
 		func(context.Context, serverapi.PromptFollowUpWatchRequest) (*promptFollowUpRegistrationConn, error) {

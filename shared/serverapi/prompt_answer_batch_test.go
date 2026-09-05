@@ -18,22 +18,22 @@ func TestPromptAnswerBatchRequestValidatesTypedEntries(t *testing.T) {
 		StepID:    mustPromptBatchStepID(t),
 		Entries: []PromptAnswerBatchEntry{
 			{
-				PromptID: "question-1",
+				ToolCallID: "question-1",
 				QuestionAnswer: &PromptQuestionAnswer{
 					SelectedOptionNumber: &selected,
 					Freeform:             &freeform,
 				},
 			},
 			{
-				PromptID: "approval-1",
+				ToolCallID: "approval-1",
 				ApprovalAnswer: &PromptApprovalAnswer{
 					Decision:   clientui.ApprovalDecisionAllowOnce,
 					Commentary: &commentary,
 				},
 			},
 			{
-				PromptID: "question-2",
-				Declined: &PromptDeclined{},
+				ToolCallID: "question-2",
+				Declined:   &PromptDeclined{},
 			},
 		},
 	}
@@ -71,14 +71,14 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 			name: "missing session",
 			request: PromptAnswerBatchRequest{
 				StepID:  mustPromptBatchStepID(t),
-				Entries: []PromptAnswerBatchEntry{{PromptID: "question-1", QuestionAnswer: validQuestion}},
+				Entries: []PromptAnswerBatchEntry{{ToolCallID: "question-1", QuestionAnswer: validQuestion}},
 			},
 		},
 		{
 			name: "missing step",
 			request: PromptAnswerBatchRequest{
 				SessionID: mustPromptBatchSessionID(t),
-				Entries:   []PromptAnswerBatchEntry{{PromptID: "question-1", QuestionAnswer: validQuestion}},
+				Entries:   []PromptAnswerBatchEntry{{ToolCallID: "question-1", QuestionAnswer: validQuestion}},
 			},
 		},
 		{
@@ -94,8 +94,8 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
 				Entries: []PromptAnswerBatchEntry{
-					{PromptID: "question-1", QuestionAnswer: validQuestion},
-					{PromptID: "question-1", Declined: &PromptDeclined{}},
+					{ToolCallID: "question-1", QuestionAnswer: validQuestion},
+					{ToolCallID: "question-1", Declined: &PromptDeclined{}},
 				},
 			},
 		},
@@ -104,7 +104,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 			request: PromptAnswerBatchRequest{
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
-				Entries:   []PromptAnswerBatchEntry{{PromptID: " ", Declined: &PromptDeclined{}}},
+				Entries:   []PromptAnswerBatchEntry{{ToolCallID: " ", Declined: &PromptDeclined{}}},
 			},
 		},
 		{
@@ -112,7 +112,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 			request: PromptAnswerBatchRequest{
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
-				Entries:   []PromptAnswerBatchEntry{{PromptID: " question-1", Declined: &PromptDeclined{}}},
+				Entries:   []PromptAnswerBatchEntry{{ToolCallID: " question-1", Declined: &PromptDeclined{}}},
 			},
 		},
 		{
@@ -120,7 +120,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 			request: PromptAnswerBatchRequest{
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
-				Entries:   []PromptAnswerBatchEntry{{PromptID: "question-1"}},
+				Entries:   []PromptAnswerBatchEntry{{ToolCallID: "question-1"}},
 			},
 		},
 		{
@@ -129,7 +129,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
 				Entries: []PromptAnswerBatchEntry{{
-					PromptID:       "question-1",
+					ToolCallID:     "question-1",
 					QuestionAnswer: validQuestion,
 					Declined:       &PromptDeclined{},
 				}},
@@ -140,7 +140,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 			request: PromptAnswerBatchRequest{
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
-				Entries:   []PromptAnswerBatchEntry{{PromptID: "question-1", QuestionAnswer: &PromptQuestionAnswer{}}},
+				Entries:   []PromptAnswerBatchEntry{{ToolCallID: "question-1", QuestionAnswer: &PromptQuestionAnswer{}}},
 			},
 		},
 		{
@@ -149,7 +149,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
 				Entries: []PromptAnswerBatchEntry{{
-					PromptID:       "question-1",
+					ToolCallID:     "question-1",
 					QuestionAnswer: &PromptQuestionAnswer{SelectedOptionNumber: &zero},
 				}},
 			},
@@ -160,7 +160,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
 				Entries: []PromptAnswerBatchEntry{{
-					PromptID:       "question-1",
+					ToolCallID:     "question-1",
 					QuestionAnswer: &PromptQuestionAnswer{Freeform: &blank},
 				}},
 			},
@@ -171,7 +171,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
 				Entries: []PromptAnswerBatchEntry{{
-					PromptID:       "approval-1",
+					ToolCallID:     "approval-1",
 					ApprovalAnswer: &PromptApprovalAnswer{Decision: clientui.ApprovalDecision("later")},
 				}},
 			},
@@ -182,7 +182,7 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 				SessionID: mustPromptBatchSessionID(t),
 				StepID:    mustPromptBatchStepID(t),
 				Entries: []PromptAnswerBatchEntry{{
-					PromptID: "approval-1",
+					ToolCallID: "approval-1",
 					ApprovalAnswer: &PromptApprovalAnswer{
 						Decision:   clientui.ApprovalDecisionDeny,
 						Commentary: &blank,
@@ -210,7 +210,7 @@ func TestPromptAnswerBatchWireTypesUseStrongIdentitiesAndNoLegacyDispositionFiel
 	}
 
 	entryType := reflect.TypeOf(PromptAnswerBatchEntry{})
-	assertPromptBatchFieldType(t, entryType, "PromptID", reflect.TypeOf(clientui.PromptID("")))
+	assertPromptBatchFieldType(t, entryType, "ToolCallID", reflect.TypeOf(clientui.ToolCallID("")))
 	if _, exists := entryType.FieldByName("ErrorMessage"); exists {
 		t.Fatal("PromptAnswerBatchEntry unexpectedly has ErrorMessage")
 	}
@@ -230,8 +230,8 @@ func TestPromptAnswerBatchWireTypesUseStrongIdentitiesAndNoLegacyDispositionFiel
 func TestPromptAnswerBatchResponseValidationAndCorrelationIgnoreResultOrder(t *testing.T) {
 	request := validPromptAnswerBatchRequest(t)
 	response := PromptAnswerBatchResponse{Results: []PromptAnswerBatchResult{
-		{PromptID: "approval-1", Outcome: PromptAnswerBatchOutcomeSkipped},
-		{PromptID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
+		{ToolCallID: "approval-1", Outcome: PromptAnswerBatchOutcomeSkipped},
+		{ToolCallID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
 	}}
 	if err := response.Validate(); err != nil {
 		t.Fatalf("response Validate: %v", err)
@@ -247,35 +247,35 @@ func TestPromptAnswerBatchResponseValidationAndCorrelationIgnoreResultOrder(t *t
 		{
 			name: "missing identity",
 			response: PromptAnswerBatchResponse{Results: []PromptAnswerBatchResult{
-				{PromptID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
 			}},
 		},
 		{
 			name: "foreign identity",
 			response: PromptAnswerBatchResponse{Results: []PromptAnswerBatchResult{
-				{PromptID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
-				{PromptID: "foreign", Outcome: PromptAnswerBatchOutcomeSkipped},
+				{ToolCallID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "foreign", Outcome: PromptAnswerBatchOutcomeSkipped},
 			}},
 		},
 		{
 			name: "duplicate identity",
 			response: PromptAnswerBatchResponse{Results: []PromptAnswerBatchResult{
-				{PromptID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
-				{PromptID: "question-1", Outcome: PromptAnswerBatchOutcomeSkipped},
+				{ToolCallID: "question-1", Outcome: PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "question-1", Outcome: PromptAnswerBatchOutcomeSkipped},
 			}},
 		},
 		{
 			name: "blank identity",
 			response: PromptAnswerBatchResponse{Results: []PromptAnswerBatchResult{
-				{PromptID: "", Outcome: PromptAnswerBatchOutcomeResolved},
-				{PromptID: "approval-1", Outcome: PromptAnswerBatchOutcomeSkipped},
+				{ToolCallID: "", Outcome: PromptAnswerBatchOutcomeResolved},
+				{ToolCallID: "approval-1", Outcome: PromptAnswerBatchOutcomeSkipped},
 			}},
 		},
 		{
 			name: "invalid outcome",
 			response: PromptAnswerBatchResponse{Results: []PromptAnswerBatchResult{
-				{PromptID: "question-1", Outcome: PromptAnswerBatchOutcome("later")},
-				{PromptID: "approval-1", Outcome: PromptAnswerBatchOutcomeSkipped},
+				{ToolCallID: "question-1", Outcome: PromptAnswerBatchOutcome("later")},
+				{ToolCallID: "approval-1", Outcome: PromptAnswerBatchOutcomeSkipped},
 			}},
 		},
 	}
@@ -295,8 +295,8 @@ func validPromptAnswerBatchRequest(t *testing.T) PromptAnswerBatchRequest {
 		SessionID: mustPromptBatchSessionID(t),
 		StepID:    mustPromptBatchStepID(t),
 		Entries: []PromptAnswerBatchEntry{
-			{PromptID: "question-1", QuestionAnswer: &PromptQuestionAnswer{SelectedOptionNumber: &selected}},
-			{PromptID: "approval-1", Declined: &PromptDeclined{}},
+			{ToolCallID: "question-1", QuestionAnswer: &PromptQuestionAnswer{SelectedOptionNumber: &selected}},
+			{ToolCallID: "approval-1", Declined: &PromptDeclined{}},
 		},
 	}
 }

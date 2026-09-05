@@ -6,17 +6,17 @@ const batchRequest = {
   sessionID,
   stepID,
   entries: [
-    { kind: "question" as const, promptID: "q", selectedOptionNumber: 2, freeform: "because" },
-    { kind: "approval" as const, promptID: "a", decision: "allow_once" as const, commentary: null },
-    { kind: "declined" as const, promptID: "d" },
+    { kind: "question" as const, toolCallID: "q", selectedOptionNumber: 2, freeform: "because" },
+    { kind: "approval" as const, toolCallID: "a", decision: "allow_once" as const, commentary: null },
+    { kind: "declined" as const, toolCallID: "d" },
   ],
 } as const;
-const resolvedQuestion = { prompt_id: "q", outcome: "resolved" } as const;
-const skippedApproval = { prompt_id: "a", outcome: "skipped" };
-const resolvedDeclined = { prompt_id: "d", outcome: "resolved" };
+const resolvedQuestion = { tool_call_id: "q", outcome: "resolved" } as const;
+const skippedApproval = { tool_call_id: "a", outcome: "skipped" };
+const resolvedDeclined = { tool_call_id: "d", outcome: "resolved" };
 const results = [resolvedQuestion, skippedApproval, resolvedDeclined];
 describe("ApiClient prompt answer batches", () => {
-  it("encodes Question, Approval, and Declined entries and parses identity-keyed outcomes", async () => {
+  it("encodes Tool Call keyed entries and parses Tool Call keyed outcomes", async () => {
     const transport = new FakeRpcTransport([{ method: "prompt.answerBatch", result: { results } }]);
     const client = new ApiClient(transport);
     const response = await client.answerPromptBatch(batchRequest);
@@ -29,25 +29,31 @@ describe("ApiClient prompt answer batches", () => {
           session_id: sessionID,
           step_id: stepID,
           entries: [
-            { prompt_id: "q", question_answer: { selected_option_number: 2, freeform: "because" } },
-            { prompt_id: "a", approval_answer: { decision: "allow_once" } },
-            { prompt_id: "d", declined: {} },
+            { tool_call_id: "q", question_answer: { selected_option_number: 2, freeform: "because" } },
+            { tool_call_id: "a", approval_answer: { decision: "allow_once" } },
+            { tool_call_id: "d", declined: {} },
           ],
         },
       },
     ]);
     expect(response.results).toEqual([
-      { promptID: "q", outcome: "resolved" },
-      { promptID: "a", outcome: "skipped" },
-      { promptID: "d", outcome: "resolved" },
+      { toolCallID: "q", outcome: "resolved" },
+      { toolCallID: "a", outcome: "skipped" },
+      { toolCallID: "d", outcome: "resolved" },
     ]);
   });
   it.each([
-    { results: [] },
-    { results: [{ prompt_id: "foreign", outcome: "resolved" }] },
-    { results: [resolvedQuestion, { ...resolvedQuestion, outcome: "skipped" }] },
-  ])("rejects malformed result identity sets", async (result) => {
-    const client = new ApiClient(new FakeRpcTransport([{ method: "prompt.answerBatch", result }]));
+    ["missing", { results: [] }],
+    ["foreign", { results: [{ tool_call_id: "foreign", outcome: "resolved" }] }],
+    ["duplicate", { results: [resolvedQuestion, { ...resolvedQuestion, outcome: "skipped" }] }],
+    [
+      "whitespace-padded",
+      { results: [{ ...resolvedQuestion, tool_call_id: " q " }, skippedApproval, resolvedDeclined] },
+    ],
+  ])("rejects %s result identity sets", async (_case, result) => {
+    const transport = new FakeRpcTransport([{ method: "prompt.answerBatch", result }]);
+    const client = new ApiClient(transport);
     await expect(client.answerPromptBatch(batchRequest)).rejects.toThrow();
+    expect(transport.attachedSessionCalls).toHaveLength(1);
   });
 });

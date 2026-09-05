@@ -22,6 +22,7 @@ import type {
 import type {
   ApprovalQuestionPrompt,
   AttentionQuestionPrompt,
+  FileAccessTarget,
   OrdinaryQuestionPrompt,
 } from "../promptModels";
 import type {
@@ -37,6 +38,21 @@ export { workflowIDSchema } from "./workflowID";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
+const canonicalToolCallID = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim() === value);
+const verbatimNonBlankString = z.string().refine((value) => value.trim().length > 0);
+export const fileAccessTargetSchema = z
+  .object({
+    requested_path: verbatimNonBlankString,
+    resolved_path: verbatimNonBlankString,
+  })
+  .strict()
+  .transform(({ requested_path: requestedPath, resolved_path: resolvedPath }): FileAccessTarget => ({
+    requestedPath,
+    resolvedPath,
+  }));
 export const nullableGraphEntityIDSchema = z
   .string()
   .refine((value) => value.trim().length > 0)
@@ -69,10 +85,9 @@ export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
   "allow_session",
   "deny",
 ]);
-
 const ordinaryQuestionPromptSchema = z
   .object({
-    prompt_id: nonBlankString,
+    tool_call_id: canonicalToolCallID,
     session_id: nonBlankString,
     step_id: nonBlankString,
     kind: z.literal("ordinary"),
@@ -83,11 +98,12 @@ const ordinaryQuestionPromptSchema = z
 
 const approvalQuestionPromptSchema = z
   .object({
-    prompt_id: nonBlankString,
+    tool_call_id: canonicalToolCallID,
     session_id: nonBlankString,
     step_id: nonBlankString,
     kind: z.literal("approval"),
     approval_decisions: z.array(approvalDecisionSchema).min(1),
+    access_targets: z.array(fileAccessTargetSchema).optional().default([]),
   })
   .strict();
 
@@ -97,7 +113,7 @@ export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
     switch (value.kind) {
       case "ordinary":
         return {
-          promptID: value.prompt_id,
+          toolCallID: value.tool_call_id,
           sessionID: value.session_id,
           stepID: value.step_id,
           kind: "ordinary",
@@ -106,11 +122,12 @@ export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
         } satisfies OrdinaryQuestionPrompt;
       case "approval":
         return {
-          promptID: value.prompt_id,
+          toolCallID: value.tool_call_id,
           sessionID: value.session_id,
           stepID: value.step_id,
           kind: "approval",
           approvalDecisions: value.approval_decisions,
+          accessTargets: value.access_targets,
         } satisfies ApprovalQuestionPrompt;
     }
   });

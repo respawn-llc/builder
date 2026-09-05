@@ -24,8 +24,8 @@ func (s *stubAskPendingPromptSource) ListPendingPrompts(string) []registry.Pendi
 func TestServiceListsPendingAsksBySession(t *testing.T) {
 	now := time.Now().UTC()
 	svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{
-		{Request: askquestion.AskQuestionRequest{ID: "ask-1", StepID: promptViewStepID, Question: "one?", Suggestions: []string{"a", "b"}, RecommendedOptionIndex: 2}, CreatedAt: now},
-		{Request: askquestion.AskQuestionRequest{ID: "approval-1", StepID: promptViewStepID, Question: "allow?", Approval: true}, CreatedAt: now.Add(time.Second)},
+		{Request: askquestion.AskQuestionRequest{ToolCallID: "ask-1", StepID: promptViewStepID, Question: "one?", Suggestions: []string{"a", "b"}, RecommendedOptionIndex: 2}, CreatedAt: now},
+		{Request: askquestion.AskQuestionRequest{ToolCallID: "approval-1", StepID: promptViewStepID, Question: "allow?", Approval: true}, CreatedAt: now.Add(time.Second)},
 	}})
 
 	resp, err := svc.ListPendingAsksBySession(context.Background(), serverapi.AskListPendingBySessionRequest{SessionID: "session-1"})
@@ -35,7 +35,7 @@ func TestServiceListsPendingAsksBySession(t *testing.T) {
 	if len(resp.Asks) != 1 {
 		t.Fatalf("expected one pending ask, got %+v", resp)
 	}
-	if resp.Asks[0].PromptID != clientui.PromptID("ask-1") ||
+	if resp.Asks[0].ToolCallID != clientui.ToolCallID("ask-1") ||
 		resp.Asks[0].SessionID.String() != "session-1" ||
 		resp.Asks[0].StepID.String() != promptViewStepID ||
 		resp.Asks[0].RecommendedOptionIndex == nil ||
@@ -44,10 +44,10 @@ func TestServiceListsPendingAsksBySession(t *testing.T) {
 	}
 }
 
-func TestAskViewServiceRejectsMalformedPendingPromptIdentity(t *testing.T) {
+func TestAskViewServiceRejectsMalformedPendingToolCallIdentity(t *testing.T) {
 	for name, request := range map[string]askquestion.AskQuestionRequest{
-		"prompt": {ID: " ask-1", StepID: promptViewStepID, Question: "one?"},
-		"step":   {ID: "ask-1", StepID: "step-1", Question: "one?"},
+		"prompt": {ToolCallID: " ask-1", StepID: promptViewStepID, Question: "one?"},
+		"step":   {ToolCallID: "ask-1", StepID: "step-1", Question: "one?"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{{Request: request}}})
@@ -61,7 +61,7 @@ func TestAskViewServiceRejectsMalformedPendingPromptIdentity(t *testing.T) {
 func TestServiceEncodesAbsentPendingAskRecommendationAsNil(t *testing.T) {
 	svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{{
 		Request: askquestion.AskQuestionRequest{
-			ID:          "ask-1",
+			ToolCallID:  "ask-1",
 			StepID:      promptViewStepID,
 			Question:    "one?",
 			Suggestions: []string{"a"},
@@ -83,7 +83,7 @@ func TestServiceEncodesAbsentPendingAskRecommendationAsNil(t *testing.T) {
 func TestServiceRejectsInvalidPendingAskRecommendation(t *testing.T) {
 	svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{{
 		Request: askquestion.AskQuestionRequest{
-			ID:                     "ask-1",
+			ToolCallID:             "ask-1",
 			StepID:                 promptViewStepID,
 			Question:               "one?",
 			Suggestions:            []string{"a"},

@@ -252,6 +252,7 @@ export type { WorkflowGraphDraft } from "./workflowGraphModels";
 export type {
   AttentionQuestionPrompt,
   ApprovalQuestionPrompt,
+  FileAccessTarget,
   OrdinaryQuestionPrompt,
   PromptIdentity,
 } from "./promptModels";

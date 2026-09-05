@@ -4,7 +4,7 @@ import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 export type PromptAnswerKey = Readonly<{
   sessionID: PromptIdentity["sessionID"];
   stepID: PromptIdentity["stepID"];
-  promptID: PromptIdentity["promptID"];
+  toolCallID: PromptIdentity["toolCallID"];
 }>;
 
 export function promptAnswerKey(source: PromptIdentity | QuestionAttentionItem): PromptAnswerKey {
@@ -12,13 +12,13 @@ export function promptAnswerKey(source: PromptIdentity | QuestionAttentionItem):
   return Object.freeze({
     sessionID: identity.sessionID,
     stepID: identity.stepID,
-    promptID: identity.promptID,
+    toolCallID: identity.toolCallID,
   });
 }
 
 export function samePromptAnswerKey(left: PromptAnswerKey, right: PromptAnswerKey): boolean {
   return (
-    left.sessionID === right.sessionID && left.stepID === right.stepID && left.promptID === right.promptID
+    left.sessionID === right.sessionID && left.stepID === right.stepID && left.toolCallID === right.toolCallID
   );
 }
 
@@ -42,18 +42,18 @@ export class PromptAnswerKeyMap<Value> implements Iterable<readonly [PromptAnswe
   }
 
   get(key: PromptAnswerKey): Value | undefined {
-    return this.values.get(key.sessionID)?.get(key.stepID)?.get(key.promptID);
+    return this.values.get(key.sessionID)?.get(key.stepID)?.get(key.toolCallID);
   }
 
   has(key: PromptAnswerKey): boolean {
-    return this.values.get(key.sessionID)?.get(key.stepID)?.has(key.promptID) === true;
+    return this.values.get(key.sessionID)?.get(key.stepID)?.has(key.toolCallID) === true;
   }
 
   with(key: PromptAnswerKey, value: Value): PromptAnswerKeyMap<Value> {
     const sessions = new Map(this.values);
     const steps = new Map(sessions.get(key.sessionID));
     const prompts = new Map(steps.get(key.stepID));
-    prompts.set(key.promptID, value);
+    prompts.set(key.toolCallID, value);
     steps.set(key.stepID, prompts);
     sessions.set(key.sessionID, steps);
     return new PromptAnswerKeyMap(sessions);
@@ -62,13 +62,13 @@ export class PromptAnswerKeyMap<Value> implements Iterable<readonly [PromptAnswe
   without(key: PromptAnswerKey): PromptAnswerKeyMap<Value> {
     const existingSteps = this.values.get(key.sessionID);
     const existingPrompts = existingSteps?.get(key.stepID);
-    if (existingPrompts?.has(key.promptID) !== true) {
+    if (existingPrompts?.has(key.toolCallID) !== true) {
       return this;
     }
     const sessions = new Map(this.values);
     const steps = new Map(existingSteps);
     const prompts = new Map(existingPrompts);
-    prompts.delete(key.promptID);
+    prompts.delete(key.toolCallID);
     if (prompts.size === 0) {
       steps.delete(key.stepID);
     } else {
@@ -85,8 +85,8 @@ export class PromptAnswerKeyMap<Value> implements Iterable<readonly [PromptAnswe
   *[Symbol.iterator](): Iterator<readonly [PromptAnswerKey, Value]> {
     for (const [sessionID, steps] of this.values) {
       for (const [stepID, prompts] of steps) {
-        for (const [promptID, value] of prompts) {
-          yield [{ sessionID, stepID, promptID }, value] as const;
+        for (const [toolCallID, value] of prompts) {
+          yield [{ sessionID, stepID, toolCallID }, value] as const;
         }
       }
     }
@@ -131,7 +131,7 @@ export class PromptAnswerState {
     const selection = this.selections.get(key);
     if (selection === undefined) {
       throw new Error(
-        `Cannot submit prompt without selection state: session=${key.sessionID} step=${key.stepID} prompt=${key.promptID}`,
+        `Cannot submit prompt without selection state: session=${key.sessionID} step=${key.stepID} tool_call=${key.toolCallID}`,
       );
     }
     return new PromptAnswerState(

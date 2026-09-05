@@ -76,8 +76,8 @@ func TestDeclinedQuestionAllowsPreparedSuccessorToMaterialize(t *testing.T) {
 	broker := tools.NewAskQuestionBroker()
 	var materialized []string
 	broker.SetAskHandler(func(_ context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
-		materialized = append(materialized, req.ID)
-		if req.ID == "question-1" {
+		materialized = append(materialized, req.ToolCallID)
+		if req.ToolCallID == "question-1" {
 			return nil, context.Canceled
 		}
 		return tools.AskQuestionAnswer{Freeform: textutil.Value("continue")}, nil

@@ -222,7 +222,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
 		question.sessionID.String(): {{
-			PromptID:               clientui.PromptID(question.request.ID),
+			ToolCallID:             clientui.ToolCallID(question.request.ToolCallID),
 			SessionID:              question.sessionID,
 			StepID:                 mustWorkflowViewStepID(t, question.request.StepID),
 			CreatedAt:              time.UnixMilli(4_000).UTC(),
@@ -230,7 +230,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 			Suggestions:            question.request.Suggestions,
 			RecommendedOptionIndex: intPointer(question.request.RecommendedOptionIndex),
 		}, {
-			PromptID:          clientui.PromptID("unrelated-approval"),
+			ToolCallID:        clientui.ToolCallID("unrelated-approval"),
 			CreatedAt:         time.UnixMilli(4_001).UTC(),
 			Question:          "Approve unrelated action?",
 			Approval:          true,
@@ -260,7 +260,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		taskAttention.Items[0].SessionName == nil ||
 		*taskAttention.Items[0].SessionName != "Current Node session" ||
 		taskAttention.Items[0].Question == nil ||
-		taskAttention.Items[0].Question.PromptID != clientui.PromptID(question.request.ID) ||
+		taskAttention.Items[0].Question.ToolCallID != clientui.ToolCallID(question.request.ToolCallID) ||
 		taskAttention.Items[0].Question.SessionID != question.sessionID ||
 		taskAttention.Items[0].Question.StepID != mustWorkflowViewStepID(t, question.request.StepID) ||
 		taskAttention.Items[0].CurrentNode == nil ||
@@ -308,13 +308,17 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	prompt := fixture.startCurrentNodePrompt(t, started, request)
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
 		prompt.sessionID.String(): {{
-			PromptID:          clientui.PromptID(request.ID),
+			ToolCallID:        clientui.ToolCallID(request.ToolCallID),
 			SessionID:         prompt.sessionID,
 			StepID:            mustWorkflowViewStepID(t, request.StepID),
 			CreatedAt:         time.UnixMilli(4_000).UTC(),
 			Question:          request.Question,
 			Approval:          true,
 			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny},
+			AccessTargets: []clientui.FileAccessTarget{{
+				RequestedPath: "../outside.txt",
+				ResolvedPath:  "/outside.txt",
+			}},
 		}},
 	}}
 	attention, err := NewAttention(
@@ -339,10 +343,13 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	if item.Kind != "question" ||
 		item.SessionID != nil ||
 		item.Question == nil ||
-		item.Question.PromptID != clientui.PromptID(request.ID) ||
+		item.Question.ToolCallID != clientui.ToolCallID(request.ToolCallID) ||
 		item.Question.SessionID != prompt.sessionID ||
 		item.Question.StepID != mustWorkflowViewStepID(t, request.StepID) ||
 		item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval ||
+		len(item.Question.AccessTargets) != 1 ||
+		item.Question.AccessTargets[0].RequestedPath != "../outside.txt" ||
+		item.Question.AccessTargets[0].ResolvedPath != "/outside.txt" ||
 		item.CurrentNode == nil ||
 		item.CurrentNode.SessionID != nil ||
 		item.CurrentNode.NodeID != string(fixture.agentNodeID) {
@@ -364,10 +371,10 @@ func mustWorkflowViewStepID(t *testing.T, raw string) runtimeids.StepID {
 
 func TestMergeAttentionCandidatesPreservesQuestionStepIdentity(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
-	promptID := clientui.PromptID("shared-prompt")
+	toolCallID := clientui.ToolCallID("shared-prompt")
 	ids := []string{
-		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "11111111-1111-4111-8111-111111111111"), promptID),
-		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "22222222-2222-4222-8222-222222222222"), promptID),
+		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "11111111-1111-4111-8111-111111111111"), toolCallID),
+		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "22222222-2222-4222-8222-222222222222"), toolCallID),
 	}
 	items := mergeAttentionCandidates(
 		attentionPageCursor{},

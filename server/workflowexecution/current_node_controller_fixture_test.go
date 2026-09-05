@@ -900,7 +900,7 @@ func (f currentNodeQuestionFixture) answerPromptBatch(
 	ctx context.Context,
 	pending currentNodePendingPrompt,
 	stepID string,
-	promptID string,
+	toolCallID string,
 	answer askquestion.AskQuestionAnswer,
 ) (sessionruntime.PromptAnswerOutcome, error) {
 	parsedStepID, err := runtimeids.ParseStepID(stepID)
@@ -908,8 +908,8 @@ func (f currentNodeQuestionFixture) answerPromptBatch(
 		return "", err
 	}
 	results, err := f.authority.ResolvePromptBatch(ctx, pending.sessionID, parsedStepID, []sessionruntime.PromptAnswerCommand{{
-		PromptID: clientui.PromptID(promptID),
-		Payload:  sessionruntime.PromptQuestionAnswerCommand{Answer: answer},
+		ToolCallID: clientui.ToolCallID(toolCallID),
+		Payload:    sessionruntime.PromptQuestionAnswerCommand{Answer: answer},
 	}})
 	if err != nil {
 		return "", err
@@ -1115,7 +1115,7 @@ func (f currentNodeQuestionFixture) waitForAmbiguousPendingPrompt(t *testing.T, 
 	}, "timed out waiting for ambiguous workflow prompt %q on task %q", askID, taskID)
 }
 
-func (f currentNodeQuestionFixture) pendingPromptCount(taskID workflow.TaskID, promptID string) int {
+func (f currentNodeQuestionFixture) pendingPromptCount(taskID workflow.TaskID, toolCallID string) int {
 	snapshots, err := f.authority.CurrentWorkflowTaskExecutionSnapshots()
 	if err != nil {
 		return 0
@@ -1127,7 +1127,7 @@ func (f currentNodeQuestionFixture) pendingPromptCount(taskID workflow.TaskID, p
 	count := 0
 	for _, execution := range snapshot.Executions {
 		for _, pending := range execution.PendingPrompts {
-			if pending.ID == promptID {
+			if string(pending.ToolCallID) == toolCallID {
 				count++
 			}
 		}

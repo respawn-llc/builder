@@ -28,6 +28,29 @@ func TestWorkflowAttentionItemEncodesAbsentSessionNameAsNull(t *testing.T) {
 	}
 }
 
+func TestWorkflowRuntimeApprovalEncodesAccessTargetsForClients(t *testing.T) {
+	encoded, err := json.Marshal(validWorkflowAttentionRuntimeApproval(t))
+	if err != nil {
+		t.Fatalf("marshal runtime Approval: %v", err)
+	}
+	var payload struct {
+		Question struct {
+			AccessTargets []struct {
+				RequestedPath string `json:"requested_path"`
+				ResolvedPath  string `json:"resolved_path"`
+			} `json:"access_targets"`
+		} `json:"question"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode runtime Approval: %v", err)
+	}
+	if len(payload.Question.AccessTargets) != 1 ||
+		payload.Question.AccessTargets[0].RequestedPath != "../outside.txt" ||
+		payload.Question.AccessTargets[0].ResolvedPath != "/outside.txt" {
+		t.Fatalf("runtime Approval access targets = %+v", payload.Question.AccessTargets)
+	}
+}
+
 func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T) {
 	question := func(mutate func(*WorkflowAttentionItem)) WorkflowAttentionItem {
 		item := validWorkflowAttentionQuestion(t)
@@ -63,13 +86,21 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		{name: "question without question", item: question(func(item *WorkflowAttentionItem) { item.Question = nil }), want: false},
 		{name: "question without nested session", item: question(func(item *WorkflowAttentionItem) { item.Question.SessionID = runtimeids.SessionID{} }), want: false},
 		{name: "question without nested step", item: question(func(item *WorkflowAttentionItem) { item.Question.StepID = runtimeids.StepID{} }), want: false},
-		{name: "question without nested prompt", item: question(func(item *WorkflowAttentionItem) { item.Question.PromptID = "" }), want: false},
+		{name: "question without nested prompt", item: question(func(item *WorkflowAttentionItem) { item.Question.ToolCallID = "" }), want: false},
 		{name: "question with top-level session", item: question(func(item *WorkflowAttentionItem) { item.SessionID = textutil.Value("session-1") }), want: false},
 		{name: "question with current node session", item: question(func(item *WorkflowAttentionItem) { item.CurrentNode.SessionID = textutil.Value("session-1") }), want: false},
 		{name: "question with blank session name", item: question(func(item *WorkflowAttentionItem) { item.SessionName = textutil.Value("") }), want: false},
 		{name: "question with approval snapshot", item: question(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = workflowAttentionApprovalSnapshot() }), want: false},
 		{name: "question with approval identity", item: question(func(item *WorkflowAttentionItem) { item.ApprovalID = textutil.Value("approval-1") }), want: false},
 		{name: "question with detail", item: question(func(item *WorkflowAttentionItem) { item.DetailJSON = textutil.Value("{}") }), want: false},
+		{name: "ordinary question with access targets", item: question(func(item *WorkflowAttentionItem) {
+			item.Question.AccessTargets = []clientui.FileAccessTarget{{RequestedPath: "../outside.txt", ResolvedPath: "/outside.txt"}}
+		}), want: false},
+		{name: "runtime approval with invalid access target", item: func() WorkflowAttentionItem {
+			item := validWorkflowAttentionRuntimeApproval(t)
+			item.Question.AccessTargets = []clientui.FileAccessTarget{{ResolvedPath: "/outside.txt"}}
+			return item
+		}(), want: false},
 		{name: "approval without identity", item: approval(func(item *WorkflowAttentionItem) { item.ApprovalID = nil }), want: false},
 		{name: "approval without message", item: approval(func(item *WorkflowAttentionItem) { item.Message = nil }), want: true},
 		{name: "approval with blank message", item: approval(func(item *WorkflowAttentionItem) { item.Message = textutil.Value("") }), want: false},
@@ -109,6 +140,10 @@ func validWorkflowAttentionRuntimeApproval(t *testing.T) WorkflowAttentionItem {
 	item.Question.Suggestions = nil
 	item.Question.RecommendedOptionIndex = nil
 	item.Question.ApprovalDecisions = []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny}
+	item.Question.AccessTargets = []clientui.FileAccessTarget{{
+		RequestedPath: "../outside.txt",
+		ResolvedPath:  "/outside.txt",
+	}}
 	return item
 }
 
@@ -244,7 +279,7 @@ func validWorkflowAttentionQuestion(t *testing.T) WorkflowAttentionItem {
 		Question: &WorkflowAttentionQuestionPrompt{
 			SessionID:              mustPromptBatchSessionID(t),
 			StepID:                 mustPromptBatchStepID(t),
-			PromptID:               clientui.PromptID("question-1"),
+			ToolCallID:             clientui.ToolCallID("question-1"),
 			Kind:                   WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            []string{"Continue"},
 			RecommendedOptionIndex: &recommended,

@@ -869,7 +869,7 @@ func (a *Authority) startAgentExecutionUnderAdmission(
 				return a.AwaitPromptResolution(ctx, scope.ID(), req)
 			}
 		}
-		resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
+		resource.askBroker.SetLifecycleAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 			return askHandler(ctx, execution.scope, req)
 		})
 		resource.askScope = &scopeID
@@ -1292,29 +1292,90 @@ func (a *Authority) interruptCurrentAgentExecution(
 	withoutExecution func() error,
 	interrupt func(*runtime.Engine) (bool, error),
 ) (bool, error) {
+	if a == nil {
+		return false, errors.New("session runtime authority is required")
+	}
+	if sessionID.IsZero() {
+		return false, errors.New("session id is required")
+	}
 	if interrupt == nil {
 		return false, errors.New("Agent execution interrupt operation is required")
 	}
-	var interrupted bool
-	err := a.withInterruptibleAgentTurn(
-		ctx,
-		sessionID,
-		withoutExecution,
-		func(_ context.Context, engine *runtime.Engine, execution *execution) error {
-			promptPending := len(execution.prompts.pending) != 0
-			var err error
-			interrupted, err = interrupt(engine)
-			if err == nil && !interrupted && promptPending {
-				err = engine.PersistInterruption()
-				interrupted = err == nil
-			}
-			if err == nil && interrupted {
-				execution.cancel()
-			}
-			return err
-		},
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runWithoutExecution := func(missing error) (bool, error) {
+		if err := context.Cause(ctx); err != nil {
+			return false, err
+		}
+		if withoutExecution != nil {
+			return false, withoutExecution()
+		}
+		return false, missing
+	}
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	if resource == nil {
+		a.mu.Unlock()
+		return runWithoutExecution(errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("session %s has no active runtime available", sessionID),
+		))
+	}
+	resource.mu.Lock()
+	execution := resource.current
+	resource.mu.Unlock()
+	a.mu.Unlock()
+	if execution == nil {
+		return runWithoutExecution(ErrExecutionNoLongerLive)
+	}
+
+	execution.exactMu.Lock()
+	defer execution.exactMu.Unlock()
+	a.mu.Lock()
+	live := a.byScope[execution.scope.ID()] == execution
+	a.mu.Unlock()
+	if !live {
+		return false, ErrExecutionNoLongerLive
+	}
+	if err := context.Cause(ctx); err != nil {
+		return false, err
+	}
+	execution.prompts.mu.Lock()
+	promptPending := len(execution.prompts.pending) != 0
+	closure := execution.prompts.closeLocked(context.Canceled)
+	execution.prompts.mu.Unlock()
+	publicationErr := execution.prompts.publishClosure(closure)
+	execution.prompts.releaseClosure(closure)
+	publicationErr = errors.Join(
+		publicationErr,
+		execution.prompts.closeApprovals(closure, true),
 	)
-	return interrupted, err
+
+	resource.mu.Lock()
+	if resource.current != execution {
+		resource.mu.Unlock()
+		return false, errors.Join(publicationErr, ErrExecutionNoLongerLive)
+	}
+	if resource.rejectsNewUseLocked() || resource.engine == nil {
+		resource.mu.Unlock()
+		return false, errors.Join(
+			publicationErr,
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("session %s has no active runtime available", sessionID),
+		)
+	}
+	engine := resource.engine
+	interrupted, interruptErr := interrupt(engine)
+	if interruptErr == nil && !interrupted && promptPending {
+		interruptErr = engine.PersistInterruption()
+		interrupted = interruptErr == nil
+	}
+	if interruptErr == nil && interrupted {
+		execution.cancel()
+	}
+	resource.mu.Unlock()
+	return interrupted, errors.Join(publicationErr, interruptErr)
 }
 
 func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {

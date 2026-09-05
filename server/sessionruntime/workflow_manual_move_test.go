@@ -60,9 +60,9 @@ func TestAuthorityManualMoveSelectionCancelsPendingQuestionsAndClosesPromptAdmis
 	pendingErr := make(chan error, 1)
 	go func() {
 		_, promptErr := exact.execution.prompts.Await(context.Background(), askquestion.AskQuestionRequest{
-			ID:       "manual-move-pending-question",
-			StepID:   uuid.NewString(),
-			Question: "Cancel me",
+			ToolCallID: "manual-move-pending-question",
+			StepID:     uuid.NewString(),
+			Question:   "Cancel me",
 		})
 		pendingErr <- promptErr
 	}()
@@ -81,9 +81,9 @@ func TestAuthorityManualMoveSelectionCancelsPendingQuestionsAndClosesPromptAdmis
 		}
 		go func() {
 			_, promptErr := exact.execution.prompts.Await(context.Background(), askquestion.AskQuestionRequest{
-				ID:       "manual-move-admission-race",
-				StepID:   uuid.NewString(),
-				Question: "Must be rejected",
+				ToolCallID: "manual-move-admission-race",
+				StepID:     uuid.NewString(),
+				Question:   "Must be rejected",
 			})
 			admissionErr <- promptErr
 		}()
@@ -141,10 +141,10 @@ func TestAuthorityManualMoveSelectionClassifiesPendingApproval(t *testing.T) {
 	awaitErr := make(chan error, 1)
 	go func() {
 		_, promptErr := exact.execution.prompts.Await(context.Background(), askquestion.AskQuestionRequest{
-			ID:       "manual-move-approval-race",
-			StepID:   uuid.NewString(),
-			Approval: true,
-			Question: "Approve",
+			ToolCallID: "manual-move-approval-race",
+			StepID:     uuid.NewString(),
+			Approval:   true,
+			Question:   "Approve",
 		})
 		awaitErr <- promptErr
 	}()

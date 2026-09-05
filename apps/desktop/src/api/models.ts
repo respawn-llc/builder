@@ -188,7 +188,7 @@ export type BindingPlan = Readonly<{
 }>;
 
 export type PendingAsk = Readonly<{
-  promptID: string;
+  toolCallID: string;
   sessionID: string;
   stepID: string;
   question: string;

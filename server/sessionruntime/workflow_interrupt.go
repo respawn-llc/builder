@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"core/server/workflow"
@@ -43,12 +44,10 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	executions := a.workflowTaskExecutionsLocked(taskID)
 	a.mu.Unlock()
 	lockExactExecutions(executions)
-	defer unlockExactExecutions(executions)
+	lockedExecutions := executions
+	defer unlockExactExecutions(lockedExecutions)
 	a.mu.Lock()
-	if !a.exactExecutionsLiveLocked(executions) {
-		a.mu.Unlock()
-		return ErrExecutionNoLongerLive
-	}
+	executions = a.liveExactExecutionsLocked(executions)
 	locked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
 	for _, execution := range executions {
@@ -101,6 +100,9 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	for _, item := range closures {
 		item.store.releaseClosure(item.closure)
 	}
+	for _, item := range closures {
+		publicationErr = errors.Join(publicationErr, item.store.closeApprovals(item.closure, true))
+	}
 	return publicationErr
 }
 
@@ -139,9 +141,11 @@ func (a *Authority) WithWorkflowInterruptSelection(
 	}
 	a.mu.Unlock()
 	lockExactExecutions(executions)
-	defer unlockExactExecutions(executions)
+	lockedExecutions := executions
+	defer unlockExactExecutions(lockedExecutions)
 	a.mu.Lock()
-	if !a.exactExecutionsLiveLocked(executions) {
+	executions = a.liveExactExecutionsLocked(executions)
+	if len(executions) == 0 {
 		a.mu.Unlock()
 		return ErrExecutionNoLongerLive
 	}
@@ -209,5 +213,12 @@ func (a *Authority) WithWorkflowInterruptSelection(
 	for _, item := range closures {
 		item.store.releaseClosure(item.closure)
 	}
+	for _, item := range closures {
+		publicationErr = errors.Join(publicationErr, item.store.closeApprovals(item.closure, true))
+	}
 	return publicationErr
+}
+
+func (a *Authority) liveExactExecutionsLocked(executions []*execution) []*execution {
+	return slices.DeleteFunc(slices.Clone(executions), func(execution *execution) bool { return a.byScope[execution.scope.ID()] != execution })
 }

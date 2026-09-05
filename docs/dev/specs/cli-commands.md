@@ -159,13 +159,15 @@
 - If pending Task Questions belong to several Sessions, the command exits with failure, answers nothing, and lists each candidate Session name and ID.
 - A Task selector that selects the invoking agent's `KENT_SESSION_ID` is rejected.
 - The show command writes the Question or access-request text.
+- For a consolidated outside-workspace access request, show and follow-up output list each distinct path string supplied by the model once, in first-attempt order, before the access options. A repeated identical supplied path appears once. Different aliases remain separate items even when they resolve to one target. Each item shows the model-provided path and, when different, the real resolved path.
+- A consolidated outside-workspace access request begins with `Agent wants to access a batch of files, but <count> are outside workspace dir:`, renders each path item as a bullet, and ends with `Allow this access?`.
 - When ordinary suggestions or access options exist, the show command writes `Suggestions:` and a one-based numbered list.
 - An ordinary recommended suggestion ends with ` (recommended)`.
 - Access-option labels come from the authoritative internal Approval request.
 - The show command writes `No questions pending` and succeeds when no ordinary Question or access request is pending.
 - `kent question answer` requires `--option <one-based-number>`, non-blank `--commentary <text>`, or both.
 - An ordinary Question supports numbered options and freeform answers.
-- A live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object to its typed Approval decision and includes optional `--commentary` directly in the Approval answer.
+- A live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object and submits the typed decision with optional `--commentary` through the shared server-owned Approval action.
 - Commentary alone never implies an access decision.
 - `kent question answer` writes `No pending questions at the moment for that session` and exits with status 1 when no ordinary Question or access request is pending.
 - After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions and access requests again.

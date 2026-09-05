@@ -1,3 +1,5 @@
+import type { FileAccessTarget } from "./promptModels";
+
 export type AttentionNotificationKind =
   "question" | "approval" | "workflow_approval" | "interrupted_current_node";
 
@@ -40,7 +42,8 @@ export type AttentionNotificationQuestionState = Readonly<{
 }>;
 
 export type AttentionNotificationApprovalState = Readonly<{
-  message: string;
+  message?: string | undefined;
+  accessTargets: readonly FileAccessTarget[];
 }>;
 
 export type AttentionNotificationWorkflowApprovalState = Readonly<{

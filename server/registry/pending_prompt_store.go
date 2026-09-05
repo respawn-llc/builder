@@ -25,8 +25,8 @@ type pendingPromptStore struct {
 }
 
 func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) (PendingPromptSnapshot, bool) {
-	id, requestID := strings.TrimSpace(sessionID), strings.TrimSpace(req.ID)
-	if id == "" || requestID == "" {
+	id, toolCallID := strings.TrimSpace(sessionID), strings.TrimSpace(req.ToolCallID)
+	if id == "" || toolCallID == "" {
 		return PendingPromptSnapshot{}, false
 	}
 	snapshot := PendingPromptSnapshot{Request: req.Clone(), CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
@@ -35,7 +35,7 @@ func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.Session
 	if pending == nil {
 		pending = make(map[string]PendingPromptSnapshot)
 	}
-	pending[requestID] = snapshot
+	pending[toolCallID] = snapshot
 	s.sessions.Store(id, pending)
 	s.mu.Unlock()
 	return clonePendingPromptSnapshot(snapshot), true
@@ -107,7 +107,7 @@ func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromp
 		items = append(items, clonePendingPromptSnapshot(item))
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return sessionruntime.PendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ID, items[j].CreatedAt, items[j].Request.ID)
+		return sessionruntime.PendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ToolCallID, items[j].CreatedAt, items[j].Request.ToolCallID)
 	})
 	return items
 }

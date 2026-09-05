@@ -158,7 +158,7 @@ export type TaskResumeInput = Readonly<{
 
 export type OrdinaryQuestionAnswerInput = Readonly<{
   kind: "ordinary";
-  promptID: string;
+  toolCallID: string;
   sessionID: string;
   stepID: string;
   selectedOptionNumber: number | null;
@@ -167,7 +167,7 @@ export type OrdinaryQuestionAnswerInput = Readonly<{
 
 export type ApprovalQuestionAnswerInput = Readonly<{
   kind: "approval";
-  promptID: string;
+  toolCallID: string;
   sessionID: string;
   stepID: string;
   decision: ApprovalDecision;
@@ -179,19 +179,19 @@ export type QuestionAnswerInput = OrdinaryQuestionAnswerInput | ApprovalQuestion
 export type PromptAnswerBatchEntryInput =
   | Readonly<{
       kind: "question";
-      promptID: string;
+      toolCallID: string;
       selectedOptionNumber: number | null;
       freeform: string | null;
     }>
   | Readonly<{
       kind: "approval";
-      promptID: string;
+      toolCallID: string;
       decision: ApprovalDecision;
       commentary: string | null;
     }>
   | Readonly<{
       kind: "declined";
-      promptID: string;
+      toolCallID: string;
     }>;
 
 export type PromptAnswerBatchInput = Readonly<{
@@ -202,7 +202,7 @@ export type PromptAnswerBatchInput = Readonly<{
 
 export type PromptAnswerBatchResponse = Readonly<{
   results: readonly Readonly<{
-    promptID: string;
+    toolCallID: string;
     outcome: "resolved" | "skipped";
   }>[];
 }>;
