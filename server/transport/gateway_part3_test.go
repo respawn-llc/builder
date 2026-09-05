@@ -330,41 +330,6 @@ func callGatewayDescriptor(
 	result proto.Message,
 ) {
 	t.Helper()
-	operation := sendGatewayDescriptor(t, conn, correlation, method, request)
-	var responseFrame []byte
-	if err := websocket.Message.Receive(conn, &responseFrame); err != nil {
-		t.Fatalf("receive %s: %v", operation.Name, err)
-	}
-	envelope, err := protoapi.DecodeEnvelope(responseFrame)
-	if err != nil {
-		t.Fatalf("decode %s response envelope: %v", operation.Name, err)
-	}
-	if failure := envelope.GetTransportFailure(); failure != nil {
-		t.Fatalf("%s transport failure: %+v", operation.Name, failure)
-	}
-	response := envelope.GetResult()
-	if response == nil {
-		t.Fatalf("%s result is required", operation.Name)
-	}
-	if response.Operation != operation.Name || response.GetCorrelation() != correlation {
-		t.Fatalf("%s result identity = %+v", operation.Name, response)
-	}
-	if err := protoapi.Unmarshal(response.Payload, result); err != nil {
-		t.Fatalf("unmarshal %s result: %v", operation.Name, err)
-	}
-	if err := protoapi.Validate(result); err != nil {
-		t.Fatalf("validate %s result: %v", operation.Name, err)
-	}
-}
-
-func sendGatewayDescriptor(
-	t *testing.T,
-	conn *websocket.Conn,
-	correlation string,
-	method protoreflect.MethodDescriptor,
-	request proto.Message,
-) protoapi.Operation {
-	t.Helper()
 	operation, err := protoapi.OperationFromDescriptor(method)
 	if err != nil {
 		t.Fatalf("operation descriptor: %v", err)
@@ -389,7 +354,30 @@ func sendGatewayDescriptor(
 	if err := websocket.Message.Send(conn, encoded); err != nil {
 		t.Fatalf("send %s: %v", operation.Name, err)
 	}
-	return operation
+	var responseFrame []byte
+	if err := websocket.Message.Receive(conn, &responseFrame); err != nil {
+		t.Fatalf("receive %s: %v", operation.Name, err)
+	}
+	envelope, err := protoapi.DecodeEnvelope(responseFrame)
+	if err != nil {
+		t.Fatalf("decode %s response envelope: %v", operation.Name, err)
+	}
+	if failure := envelope.GetTransportFailure(); failure != nil {
+		t.Fatalf("%s transport failure: %+v", operation.Name, failure)
+	}
+	response := envelope.GetResult()
+	if response == nil {
+		t.Fatalf("%s result is required", operation.Name)
+	}
+	if response.Operation != operation.Name || response.GetCorrelation() != correlation {
+		t.Fatalf("%s result identity = %+v", operation.Name, response)
+	}
+	if err := protoapi.Unmarshal(response.Payload, result); err != nil {
+		t.Fatalf("unmarshal %s result: %v", operation.Name, err)
+	}
+	if err := protoapi.Validate(result); err != nil {
+		t.Fatalf("validate %s result: %v", operation.Name, err)
+	}
 }
 
 func callGatewayDescriptorPayload(

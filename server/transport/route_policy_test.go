@@ -14,6 +14,8 @@ import (
 	shelltool "core/server/tools/shell"
 	rpccontract "core/shared/apicontract"
 	"core/shared/protoapi"
+	chatpb "core/shared/protoapi/gen/kent/api/chat"
+	chatsettingspb "core/shared/protoapi/gen/kent/api/chat_settings"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
@@ -82,6 +84,72 @@ func TestRoutePolicyAllowsStatelessScopesWithoutGateway(t *testing.T) {
 		routeScopeParams{},
 	); err != nil {
 		t.Fatalf("authorize Project view scope: %v", err)
+	}
+}
+
+func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	for _, test := range []struct {
+		name    string
+		target  *chatpb.ChatTarget
+		state   *connectionState
+		wantErr bool
+	}{
+		{
+			name: "projectless existing Session outside startup Project",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
+			}},
+			state: &connectionState{},
+		},
+		{
+			name: "attached Project existing Session",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
+			}},
+			state: &connectionState{attachedProject: fixture.bindingA.ProjectID},
+		},
+		{
+			name: "attached Project rejects foreign Session",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
+			}},
+			state:   &connectionState{attachedProject: fixture.bindingA.ProjectID},
+			wantErr: true,
+		},
+		{
+			name: "exact New Chat binding",
+			target: routePolicyNewChatTarget(
+				fixture.bindingA.ProjectID,
+				fixture.bindingA.WorkspaceID,
+			),
+			state: &connectionState{
+				attachedProject:     fixture.bindingA.ProjectID,
+				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
+			},
+		},
+		{
+			name: "mismatched New Chat binding",
+			target: routePolicyNewChatTarget(
+				fixture.bindingB.ProjectID,
+				fixture.bindingB.WorkspaceID,
+			),
+			state: &connectionState{
+				attachedProject:     fixture.bindingA.ProjectID,
+				attachedWorkspaceID: fixture.bindingA.WorkspaceID,
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := fixture.gateway.requireChatTargetAccess(t.Context(), test.state, test.target)
+			if test.wantErr && err == nil {
+				t.Fatal("Chat target unexpectedly authorized")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("authorize Chat target: %v", err)
+			}
+		})
 	}
 }
 
@@ -543,4 +611,20 @@ func routeForTest(t *testing.T, method string) rpccontract.Route {
 		t.Fatalf("route %q missing", method)
 	}
 	return route
+}
+
+func routePolicyNewChatTarget(projectID string, workspaceID string) *chatpb.ChatTarget {
+	questions, autoCompaction := true, true
+	return &chatpb.ChatTarget{
+		Target: &chatpb.ChatTarget_NewChat{NewChat: &chatpb.NewChatTarget{
+			ProjectId:   projectID,
+			WorkspaceId: workspaceID,
+			InitialSettings: &chatpb.InitialChatSettings{
+				AgentRole:             "default",
+				Supervisor:            chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_OFF,
+				QuestionsEnabled:      &questions,
+				AutoCompactionEnabled: &autoCompaction,
+			},
+		}},
+	}
 }

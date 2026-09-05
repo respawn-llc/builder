@@ -89,10 +89,7 @@ func TestRemoteGetChatContextRejectsInvalidResponse(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	_, err = remote.GetChatContext(
-		t.Context(),
-		serverapi.NewSessionChatContextRequest(runtimeids.NewSessionID()),
-	)
+	_, err = remote.GetChatContext(t.Context(), serverapi.NewWorkspaceChatContextRequest())
 	var invalidResponse *InvalidResponseError
 	if err == nil || !errors.As(err, &invalidResponse) {
 		t.Fatalf("GetChatContext error = %v, want InvalidResponseError", err)

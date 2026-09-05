@@ -3,6 +3,8 @@ import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { z } from "zod";
 import { create } from "@app/server-api-contract";
+import { ChatService } from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
+import { AgentPreparationCategory } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
 import {
   BackgroundShellOutputMode,
   CacheWarningMode,
@@ -17,6 +19,9 @@ import {
   ToolID,
   WorkflowCompletionMode,
 } from "@app/server-api-contract/gen/kent/api/session_launch/session_launch_pb";
+
+import { requireProjectAttachment } from "./chatAttachment";
+import { ChatOperationError } from "./chatErrors";
 
 const sessionID = "123e4567-e89b-42d3-a456-426614174000";
 const target = {
@@ -468,5 +473,248 @@ describe("Desktop Chat read client", () => {
     expect(completions).toEqual([
       { code: 17, message: "subscriber overflow", reason: "subscriber_overflow" },
     ]);
+  });
+});
+
+describe("Desktop Chat mutation adapter", () => {
+  const queueItemID = "223e4567-e89b-42d3-a456-426614174000";
+  const compactionRequestID = "323e4567-e89b-42d3-a456-426614174000";
+  const sessionTarget = {
+    kind: "session",
+    projectID: "project-1",
+    workspace: { workspaceID: "workspace-1" },
+    sessionID,
+  } as const;
+  const newChatTarget = {
+    kind: "new_chat",
+    projectID: "project-1",
+    workspace: { workspaceRoot: "/workspace" },
+    initialSettings: {
+      agentRole: "default",
+      supervisor: "edits",
+      thinking: "high",
+      fast: true,
+      questionsEnabled: false,
+      autoCompactionEnabled: true,
+    },
+  } as const;
+
+  it("constructs representative targets and exact lexical requests", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        descriptor: ChatService.method.steer,
+        result: create(ChatService.method.steer.output, {
+          outcome: {
+            case: "success",
+            value: {
+              session: { sessionId: sessionID },
+              outcome: { case: "accepted", value: { queueItem: { id: queueItemID } } },
+            },
+          },
+        }),
+      },
+      {
+        descriptor: ChatService.method.queue,
+        result: create(ChatService.method.queue.output, {
+          outcome: {
+            case: "success",
+            value: {
+              session: { sessionId: sessionID },
+              outcome: { case: "accepted", value: { queueItem: { id: queueItemID } } },
+            },
+          },
+        }),
+      },
+      {
+        descriptor: ChatService.method.compact,
+        result: create(ChatService.method.compact.output, {
+          outcome: {
+            case: "success",
+            value: {
+              session: { sessionId: sessionID },
+              outcome: { case: "notAccepted", value: { reason: { case: "tooSoon", value: {} } } },
+            },
+          },
+        }),
+      },
+    ]);
+    const chat = new ApiClient(transport).chat;
+
+    await chat.steer(sessionTarget, { kind: "text", text: "continue" });
+    await chat.queue(newChatTarget, {
+      kind: "command",
+      catalogIdentity: "builtin:review",
+      token: "/review",
+      separatorWhitespace: "\t",
+      arguments: "working tree",
+    });
+    await chat.compact(newChatTarget, {
+      token: "/compact",
+      separatorWhitespace: " \t",
+      rawGuidance: " keep   decisions ",
+    });
+
+    expect(transport.attachedProjectDescriptorCalls.map(({ request }) => request)).toMatchObject([
+      {
+        target: { target: { case: "session", value: { sessionId: sessionID } } },
+        activation: { input: { case: "text", value: "continue" } },
+      },
+      {
+        target: {
+          target: {
+            case: "newChat",
+            value: {
+              projectId: "project-1",
+              workspaceId: "workspace-1",
+              initialSettings: { agentRole: "default", thinking: "high", fast: true },
+            },
+          },
+        },
+        activation: {
+          input: {
+            case: "command",
+            value: {
+              catalogIdentity: "builtin:review",
+              token: "/review",
+              separatorWhitespace: "\t",
+              arguments: "working tree",
+            },
+          },
+        },
+      },
+      {
+        invocation: {
+          token: "/compact",
+          separatorWhitespace: " \t",
+          rawGuidance: " keep   decisions ",
+        },
+      },
+    ]);
+  });
+
+  it("projects accepted identities, typed diagnostics, rejections, and shared errors", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        descriptor: ChatService.method.queue,
+        result: create(ChatService.method.queue.output, {
+          outcome: {
+            case: "success",
+            value: {
+              session: { sessionId: sessionID },
+              outcome: {
+                case: "accepted",
+                value: {
+                  queueItem: { id: queueItemID },
+                  diagnostic: {
+                    detail: {
+                      case: "promptHistoryFailure",
+                      value: { operation: "history.record", cause: "disk full" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+      },
+      {
+        descriptor: ChatService.method.compact,
+        result: create(ChatService.method.compact.output, {
+          outcome: {
+            case: "success",
+            value: {
+              session: { sessionId: sessionID },
+              outcome: {
+                case: "accepted",
+                value: { request: { id: compactionRequestID } },
+              },
+            },
+          },
+        }),
+      },
+    ]);
+    const chat = new ApiClient(transport).chat;
+
+    const queued = await chat.queue(sessionTarget, { kind: "text", text: "continue" });
+    if (queued.outcome.kind !== "accepted") throw new Error("Expected accepted Queue fixture.");
+    expect(queued.outcome.queueItemID.toJSONValue()).toBe(queueItemID);
+    expect(queued.outcome.diagnostic).toMatchObject({ kind: "prompt_history_failure" });
+
+    const compacted = await chat.compact(sessionTarget, {
+      token: "/compact",
+      separatorWhitespace: "",
+      rawGuidance: "",
+    });
+    if (compacted.outcome.kind !== "accepted") throw new Error("Expected accepted compaction fixture.");
+    expect(compacted.outcome.requestID.toJSONValue()).toBe(compactionRequestID);
+
+    const failingChat = new ApiClient(
+      new FakeRpcTransport([
+        {
+          descriptor: ChatService.method.queue,
+          result: create(ChatService.method.queue.output, {
+            outcome: {
+              case: "error",
+              value: {
+                code: "chat_settings_agent_preparation",
+                detail: {
+                  case: "chatSettingsAgentPreparation",
+                  value: {
+                    agent: "reviewer",
+                    category: AgentPreparationCategory.PROVIDER_UNAVAILABLE,
+                  },
+                },
+              },
+            },
+          }),
+        },
+      ]),
+    ).chat;
+    await expect(failingChat.queue(sessionTarget, { kind: "text", text: "continue" })).rejects.toBeInstanceOf(
+      ChatOperationError,
+    );
+  });
+
+  it("rejects mismatched attachments, returned Sessions, and malformed identities", async () => {
+    expect(() =>
+      requireProjectAttachment(
+        {
+          projectID: "other-project",
+          workspaceID: "workspace-1",
+          workspaceRoot: "/workspace",
+          workspaceSelection: { kind: "workspaceID", workspaceID: "workspace-1" },
+        },
+        sessionTarget,
+      ),
+    ).toThrow(ContractError);
+
+    for (const testCase of [
+      {
+        returnedSessionID: "423e4567-e89b-42d3-a456-426614174000",
+        returnedQueueItemID: queueItemID,
+      },
+      { returnedSessionID: sessionID, returnedQueueItemID: "not-a-queue-item-id" },
+    ]) {
+      const transport = new FakeRpcTransport([
+        {
+          descriptor: ChatService.method.steer,
+          result: create(ChatService.method.steer.output, {
+            outcome: {
+              case: "success",
+              value: {
+                session: { sessionId: testCase.returnedSessionID },
+                outcome: {
+                  case: "accepted",
+                  value: { queueItem: { id: testCase.returnedQueueItemID } },
+                },
+              },
+            },
+          }),
+        },
+      ]);
+      await expect(
+        new ApiClient(transport).chat.steer(sessionTarget, { kind: "text", text: "continue" }),
+      ).rejects.toBeInstanceOf(Error);
+    }
   });
 });
