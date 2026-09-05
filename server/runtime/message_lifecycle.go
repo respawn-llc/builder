@@ -476,7 +476,7 @@ func startsAgentStep(message llm.Message) bool {
 	return message.Role == llm.RoleUser && message.MessageType == nil ||
 		message.Role == llm.RoleDeveloper &&
 			message.MessageType != nil &&
-			*message.MessageType == llm.MessageTypeAgentSteer
+			(*message.MessageType == llm.MessageTypeAgentSteer || *message.MessageType == llm.MessageTypeReviewerFeedback)
 }
 
 func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {

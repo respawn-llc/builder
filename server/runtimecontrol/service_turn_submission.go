@@ -159,7 +159,7 @@ func (s *Service) submitUserTurn(
 		return acceptedCompactionErr
 	}
 	executeTurn := func() error {
-		return s.authority.RunCurrentHumanTurn(
+		return s.authority.RunCurrentTurn(
 			attempt.Context(),
 			descriptor,
 			attempt.Accept,

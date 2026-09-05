@@ -206,11 +206,18 @@
 - The user may submit more input and ordinary model or tool work may continue while Reviewer runs.
 - A Session runs at most one Reviewer request at a time.
 - Another eligible answer is not queued for later review while one Reviewer is active.
-- Nonempty feedback or a Reviewer failure returns later through ordinary Session mutation order and may request an ordinary continuation.
+- Reviewer failures must return through ordinary Session mutation order.
+- Empty Reviewer feedback must not start or steer an Agent Turn.
+- Nonempty Reviewer feedback must use ordinary Steering to join the active Agent Turn or start an Agent Turn through ordinary Session admission when idle.
+- Reviewer feedback must not create a separate execution mode or extend the originating Agent Turn while waiting for review.
+- An Agent Turn must become Supervisor-triggered when it accepts Reviewer feedback.
+- Ordinary input must not clear the Supervisor-triggered flag during that Agent Turn.
+- The Supervisor-triggered flag must clear when the Agent Turn ends and the Runtime becomes idle.
+- A Supervisor-triggered Agent Turn must not trigger another Reviewer request.
 - Reviewer activity is live best-effort state with values `inactive`, `invoking`, and `addressing_feedback`.
 - Reviewer activity is `invoking` while the Reviewer model request is active.
-- Nonempty Reviewer feedback moves activity to `addressing_feedback` before the ordinary main-agent follow-up begins.
-- Reviewer activity returns to `inactive` when the review succeeds without feedback, fails, is canceled, finishes addressing feedback, or the Runtime closes.
+- Reviewer activity must derive `addressing_feedback` from the active Agent Turn's Supervisor-triggered flag.
+- Reviewer activity returns to `inactive` when no Reviewer request or Supervisor-triggered Agent Turn remains, or the Runtime closes.
 - The active TUI shows Reviewer activity during `invoking` and `addressing_feedback`.
 - Reviewer activity creates no transcript lifecycle row and is not retained across Runtime replacement, reconnect, transcript hydration, or application restart.
 - Persistent Reviewer activity across later lifecycle boundaries or reconnects is outside this specification.

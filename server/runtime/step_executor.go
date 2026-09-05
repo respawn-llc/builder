@@ -509,7 +509,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if options.RefreshReviewerConfigOnResolve {
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
-			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
+			if !e.liveRun.supervisorTriggered() && s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
 				if !assistantEventEmitted {
 					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 					assistantEventEmitted = true

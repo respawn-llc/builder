@@ -68,30 +68,31 @@ type liveRunCoordinator struct {
 }
 
 type liveRunGroup struct {
-	id               runtimeids.LiveRunGroupID
-	runID            runtimeids.RunID
-	stepID           runtimeids.StepID
-	stepToolStarts   liveStepToolStartCount
-	workPerformed    bool
-	goalLoop         bool
-	status           RunStatus
-	resultKind       LiveRunResultKind
-	resultKindSet    bool
-	noFinalReason    LiveRunNoFinalAnswerReason
-	assistantMessage llm.Message
-	err              error
-	startedAt        time.Time
-	finishedAt       time.Time
-	done             chan struct{}
-	reservations     int
-	taggedQueueItems map[runtimeids.QueueItemID]struct{}
-	publishingItems  map[runtimeids.QueueItemID]struct{}
-	goalLoopHolding  bool
-	waiters          int
-	stepResultKind   LiveRunResultKind
-	stepResultSet    bool
-	stepAssistant    llm.Message
-	stepResultTaken  bool
+	supervisorTriggered bool
+	id                  runtimeids.LiveRunGroupID
+	runID               runtimeids.RunID
+	stepID              runtimeids.StepID
+	stepToolStarts      liveStepToolStartCount
+	workPerformed       bool
+	goalLoop            bool
+	status              RunStatus
+	resultKind          LiveRunResultKind
+	resultKindSet       bool
+	noFinalReason       LiveRunNoFinalAnswerReason
+	assistantMessage    llm.Message
+	err                 error
+	startedAt           time.Time
+	finishedAt          time.Time
+	done                chan struct{}
+	reservations        int
+	taggedQueueItems    map[runtimeids.QueueItemID]struct{}
+	publishingItems     map[runtimeids.QueueItemID]struct{}
+	goalLoopHolding     bool
+	waiters             int
+	stepResultKind      LiveRunResultKind
+	stepResultSet       bool
+	stepAssistant       llm.Message
+	stepResultTaken     bool
 }
 type liveRunAdmission struct {
 	group *liveRunGroup
@@ -103,6 +104,23 @@ func newLiveRunCoordinator(onCompleted ...func(LiveRunResult)) *liveRunCoordinat
 		coordinator.onCompleted = onCompleted[0]
 	}
 	return coordinator
+}
+
+func (c *liveRunCoordinator) supervisorTriggered() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.current != nil && c.current.supervisorTriggered
+}
+
+func (e *Engine) markSupervisorSteerRaw(message llm.Message) {
+	if message.MessageType == nil || *message.MessageType != llm.MessageTypeReviewerFeedback {
+		return
+	}
+	e.liveRun.mu.Lock()
+	defer e.liveRun.mu.Unlock()
+	if e.liveRun.current != nil {
+		e.liveRun.current.supervisorTriggered = true
+	}
 }
 
 func (e *Engine) HasActiveLiveRunGroup() bool {
@@ -321,6 +339,7 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Con
 		})
 		if queueErr == nil {
 			item = queuedItem
+			e.markSupervisorSteerRaw(item.Message)
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		}
 		e.outputMutationMu.Unlock()

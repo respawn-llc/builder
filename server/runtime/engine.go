@@ -110,6 +110,7 @@ type Config struct {
 	StepLifecycle         StepLifecycleSink
 	LifecycleTaskFinished func() error
 	LifecycleRuntimeAbort func() error
+	SubmitAgentSteer      func(context.Context, AgentSteer) error
 	DurabilityObserver    ResultGroupDurabilityObserver
 }
 
@@ -517,21 +518,33 @@ func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserM
 }
 
 func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueMessage(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, forceAutoDrain, accept)
+}
+
+func (e *Engine) QueueAgentSteer(ctx context.Context, steer AgentSteer, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueMessage(ctx, steer.Message(), true, accept)
+}
+
+func (e *Engine) queueMessage(ctx context.Context, message llm.Message, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (QueuedUserMessage, error) {
-		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
+		return e.queueMessageRaw(message, forceAutoDrain, accept)
 	})
 }
 
-func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueMessageRaw(message llm.Message, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if err := e.requirePendingWorkCapacity(); err != nil {
 		return QueuedUserMessage{}, err
+	}
+	liveItem := QueuedUserMessage{
+		ID:      runtimeids.NewQueueItemID().String(),
+		Message: message,
 	}
 	if !forceAutoDrain {
 		var item QueuedUserMessage
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
 			e.outputMutationMu.Lock()
-			queued, queueErr := e.messageFlow.QueueUserMessage(text)
+			queued, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem)
 			if queueErr == nil {
 				item = queued
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
@@ -548,10 +561,6 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		}
 		return item, nil
 	}
-	liveItem := QueuedUserMessage{
-		ID:      runtimeids.NewQueueItemID().String(),
-		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
-	}
 	for {
 		var item QueuedUserMessage
 		livePublication := false
@@ -567,6 +576,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 			})
 			if queueErr == nil {
 				item = queuedItem
+				e.markSupervisorSteerRaw(item.Message)
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			}
 			e.outputMutationMu.Unlock()
@@ -609,7 +619,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
 		admission := e.nextPendingWorkSteerAdmission()
 		e.outputMutationMu.Lock()
-		queued, queueErr := e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+		queued, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem, queuedUserMessageAssociation{
 			steerAdmission: admission,
 		})
 		if queueErr == nil {
@@ -938,13 +948,10 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 		}
 	}
 
-	contextBudget := e.promptContextBudgetFromConfig()
 	lock := session.LockedContract{
 		Model:             e.cfg.Model,
 		Temperature:       e.cfg.Temperature,
 		MaxOutputToken:    e.cfg.MaxTokens,
-		ContextWindow:     contextBudget.window,
-		ContextPercent:    contextBudget.percent,
 		EnabledTools:      toolspec.IDStrings(e.cfg.EnabledTools),
 		WebSearchMode:     strings.TrimSpace(e.cfg.WebSearchMode),
 		ModelCapabilities: e.cfg.ModelCapabilities,

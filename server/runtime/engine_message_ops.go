@@ -582,6 +582,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID *string, message llm.Messag
 	if projectionErr := e.applyPreparedMessageProjection(stepID, prepared, &provenance); projectionErr != nil {
 		return appended.CommitReceipt, errors.Join(appendErr, fmt.Errorf("append queued message projection: %w", projectionErr))
 	}
+	e.markSupervisorSteerRaw(message)
 	event := Event{
 		Kind:                       EventConversationUpdated,
 		CommittedTranscriptChanged: true,
@@ -599,7 +600,9 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID *string, message llm.Messag
 			CommittedProvenance:          &provenance,
 		}.withStepID(stepID)
 	}
-	e.emitRaw(event)
+	if prepared.message.Role == llm.RoleUser || e.shouldEmitCommittedMessageEvent(prepared.message) {
+		e.emitRaw(event)
+	}
 	for _, item := range normalizedItems {
 		e.emitRaw(Event{
 			Kind: EventQueuedUserMessageStatus,

@@ -6,7 +6,7 @@ import (
 	"core/shared/clientui"
 )
 
-func TestReviewerRuntimeStateReservesBeforeInvocationAndTransitionsToAddressingFeedback(t *testing.T) {
+func TestReviewerRuntimeStateReservesBeforeInvocation(t *testing.T) {
 	state := newReviewerRuntimeState(nil, nil)
 	stepID := runtimeTestStepID("reviewer-phase")
 
@@ -27,12 +27,6 @@ func TestReviewerRuntimeStateReservesBeforeInvocationAndTransitionsToAddressingF
 	}
 	if got := state.Activity(); got != clientui.ReviewerActivityInvoking {
 		t.Fatalf("started Reviewer activity = %q, want invoking", got)
-	}
-	if !state.SetAddressingFeedback(stepID) {
-		t.Fatal("SetAddressingFeedback returned false")
-	}
-	if got := state.Activity(); got != clientui.ReviewerActivityAddressingFeedback {
-		t.Fatalf("Reviewer activity after provider result = %q, want addressing_feedback", got)
 	}
 	if !state.Clear(stepID) {
 		t.Fatal("Clear returned false")

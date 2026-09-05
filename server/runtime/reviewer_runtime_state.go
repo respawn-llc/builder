@@ -74,21 +74,6 @@ func (s *reviewerRuntimeState) Start(stepID string) bool {
 	return true
 }
 
-func (s *reviewerRuntimeState) SetAddressingFeedback(stepID string) bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active == nil ||
-		s.active.String() != strings.TrimSpace(stepID) ||
-		s.phase != clientui.ReviewerActivityInvoking {
-		return false
-	}
-	s.phase = clientui.ReviewerActivityAddressingFeedback
-	return true
-}
-
 func (s *reviewerRuntimeState) Clear(stepID string) bool {
 	if s == nil {
 		return false
@@ -128,6 +113,9 @@ func (e *Engine) ReviewerActive() bool {
 func (e *Engine) ReviewerActivity() clientui.ReviewerActivity {
 	if e == nil {
 		return clientui.ReviewerActivityInactive
+	}
+	if e.liveRun != nil && e.liveRun.supervisorTriggered() {
+		return clientui.ReviewerActivityAddressingFeedback
 	}
 	return e.reviewerRuntimeState().Activity()
 }
@@ -189,24 +177,6 @@ func (e *Engine) completeReviewerActivity(stepID string) error {
 
 func (e *Engine) completeReviewerActivityRaw(stepID string) error {
 	if !e.reviewerRuntimeState().Clear(stepID) {
-		return nil
-	}
-	revision, err := e.TranscriptRevision()
-	if err != nil {
-		return err
-	}
-	return e.emitRawAtRevision(Event{
-		Kind: EventRuntimeActivityChanged,
-	}, revision)
-}
-
-func (e *Engine) setReviewerAddressingFeedback(stepID string) error {
-	if e == nil {
-		return nil
-	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
-	if !e.reviewerRuntimeState().SetAddressingFeedback(stepID) {
 		return nil
 	}
 	revision, err := e.TranscriptRevision()

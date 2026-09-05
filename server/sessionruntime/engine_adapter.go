@@ -272,6 +272,18 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		LifecycleRuntimeAbort: func() error {
 			return a.retireRuntimeAbortResource(context.Background(), resource)
 		},
+		SubmitAgentSteer: func(ctx context.Context, steer runtime.AgentSteer) error {
+			descriptor, err := session.NewOpenSessionDescriptor(resource.ref.SessionID())
+			if err != nil {
+				return err
+			}
+			return a.RunCurrentTurn(ctx, descriptor, func(commit func() (bool, error)) (bool, error) {
+				return commit()
+			}, func(ctx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) error {
+				_, err := engine.QueueAgentSteer(ctx, steer, accept)
+				return err
+			})
+		},
 		OnEvent: func(event runtime.Event) {
 			logger.Logf("%s", runlog.FormatRuntimeEvent(event))
 			if transcriptdiag.Enabled(options.Settings.Debug, os.Getenv) {

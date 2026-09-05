@@ -410,7 +410,7 @@ An atomic ordered durable unit containing one or more compatible complete tool r
 
 ### Agent Turn
 
-A complete agent run from a user submission until the runtime returns to idle. An Agent Turn is composed of one or more Agent Steps.
+A complete agent run from accepted input until the runtime returns to idle. An Agent Turn is composed of one or more Agent Steps.
 
 ### Step Boundary
 

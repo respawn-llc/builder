@@ -37,3 +37,11 @@ func NewAgentSteer(sourceSessionID runtimeids.SessionID, text string) (AgentStee
 func (s AgentSteer) Message() llm.Message {
 	return s.message
 }
+
+func supervisorSteer(suggestions []string) AgentSteer {
+	return AgentSteer{message: llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeReviewerFeedback),
+		Content:     textutil.Value(formatReviewerDeveloperInstruction(suggestions)),
+	}}
+}

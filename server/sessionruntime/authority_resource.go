@@ -905,7 +905,7 @@ func validateWorkflowAgentExecution(request *WorkflowAgentExecution) error {
 	return nil
 }
 
-func (a *Authority) RunCurrentHumanTurn(
+func (a *Authority) RunCurrentTurn(
 	ctx context.Context,
 	descriptor session.SessionDescriptor,
 	accept runtime.CommandAcceptance,
@@ -921,10 +921,10 @@ func (a *Authority) RunCurrentHumanTurn(
 		return err
 	}
 	if accept == nil {
-		return errors.New("human turn acceptance is required")
+		return errors.New("turn acceptance is required")
 	}
 	if run == nil {
-		return errors.New("human turn callback is required")
+		return errors.New("turn callback is required")
 	}
 	sessionID := descriptor.SessionID()
 	gate := a.gateFor(sessionID)
@@ -973,7 +973,7 @@ func (a *Authority) RunCurrentHumanTurn(
 			if err := current.awaitDone(ctx); err != nil {
 				return err
 			}
-			return a.RunCurrentHumanTurn(ctx, descriptor, accept, run)
+			return a.RunCurrentTurn(ctx, descriptor, accept, run)
 		}
 		runErr := resource.withEngineUnderAdmission(ctx, func(runCtx context.Context, engine *runtime.Engine) error {
 			return run(runCtx, engine, admit)
@@ -1022,7 +1022,7 @@ func (a *Authority) RunCurrentHumanTurn(
 	exactHandle, ok := handle.(executionHandle)
 	if !ok || exactHandle.execution == nil {
 		return a.invariant(
-			"run current human Agent turn",
+			"run current Agent turn",
 			fmt.Errorf("execution handle type=%T", handle),
 		)
 	}
@@ -1045,7 +1045,7 @@ func (a *Authority) RunCurrentHumanTurn(
 	default:
 	}
 	if !acceptedFresh && context.Cause(ctx) == nil && errors.Is(err, context.Canceled) {
-		return a.RunCurrentHumanTurn(ctx, descriptor, accept, run)
+		return a.RunCurrentTurn(ctx, descriptor, accept, run)
 	}
 	return err
 }

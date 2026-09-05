@@ -168,6 +168,8 @@ verbose_output = false # set true to show complete supervisor suggestions in ong
 
 Configure the supervisor agent that oversees model changes ("reviewer" is the legacy name of the feature).
 
+Supervisor reviews run asynchronously, so you can continue working after the main answer. Suggestions enter the Session as ordinary steering: they join active work or start a new turn when idle. Questions and interruption work the same way as in other turns. A turn addressing Supervisor feedback does not trigger another review.
+
 | Key                             | Type   | Default                                                         | Env                                  | Description                                                                                                                                                         |
 | ------------------------------- | ------ | --------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `reviewer.frequency`            | string | `edits`                                                         | `KENT_REVIEWER_FREQUENCY`            | Allowed: `off`, `all`, `edits`. `all` runs the reviewer after every completed assistant turn. `edits` runs it only after successful first-class file edits.         |

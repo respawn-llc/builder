@@ -391,6 +391,15 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	if cfg.EffectiveContextWindowPercent <= 0 || cfg.EffectiveContextWindowPercent > 100 {
 		cfg.EffectiveContextWindowPercent = 95
 	}
+	var engine *Engine
+	if cfg.SubmitAgentSteer == nil {
+		// This fixture owns a standalone Engine. Authority-backed submission is
+		// exercised by the Session runtime integration tests.
+		cfg.SubmitAgentSteer = func(ctx context.Context, steer AgentSteer) error {
+			_, err := engine.QueueAgentSteer(ctx, steer, nil)
+			return err
+		}
+	}
 	eventLog := mustMaterializeTestEventLog(t, store)
 	engine, err := New(store, eventLog, client, registry, cfg)
 	if err != nil {

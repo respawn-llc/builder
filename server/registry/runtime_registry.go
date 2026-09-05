@@ -249,21 +249,34 @@ func (e *authorityRuntimeEntry) retainSubscription() (uint64, error) {
 		return 0, fmt.Errorf("authority runtime subscription is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.lifecycle != authorityRuntimeEntryReady || !e.feedReady {
+	ready := e.lifecycle == authorityRuntimeEntryReady && e.feedReady
+	e.mu.Unlock()
+	if !ready {
 		return 0, fmt.Errorf("authority runtime subscription is not ready: %w", serverapi.ErrStreamUnavailable)
 	}
+	// Retaining enters the runtime authority, whose mutations can publish back
+	// into this entry. Never hold the registry lock across that callback.
 	retention, err := e.retain()
 	if err != nil {
 		return 0, err
 	}
+	e.mu.Lock()
+	if e.lifecycle != authorityRuntimeEntryReady || !e.feedReady {
+		e.mu.Unlock()
+		if err := retention.Close(); err != nil {
+			return 0, fmt.Errorf("release subscription retention after runtime drain: %w", err)
+		}
+		return 0, fmt.Errorf("authority runtime subscription drained during retention: %w", serverapi.ErrStreamUnavailable)
+	}
 	e.nextRetention++
 	id := e.nextRetention
 	if id == 0 {
+		e.mu.Unlock()
 		_ = retention.Close()
 		panic("authority runtime subscription retention id overflow")
 	}
 	e.retentions[id] = retention
+	e.mu.Unlock()
 	return id, nil
 }
 

@@ -408,35 +408,31 @@ func (e *Engine) processQueuedUserWork(
 	ctx context.Context,
 	completion runtimeDeferred[struct{}],
 ) (runtimeAbort *resultGroupFatal) {
-	reschedulePending := false
-	defer func() {
-		e.clearQueuedUserWorkScheduled(completion, nil)
-		if !reschedulePending {
-			return
+	for {
+		if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
+			e.clearQueuedUserWorkScheduled(completion, err)
+			if fatal, abort := resultGroupFatalFromError(err); abort {
+				return fatal
+			}
+			e.surfaceRunError(err)
+			return nil
 		}
-		e.ensureOrchestrationCollaborators()
-		if e.messageFlow.HasPendingUserSteers() {
-			e.scheduleQueuedUserInjectionsIfIdle()
+		_, receipt, _, err := e.submitQueuedUserMessages(ctx, steerUserInjections(), nil)
+		if err != nil {
+			if fatal, abort := resultGroupFatalFromError(err); abort {
+				e.clearQueuedUserWorkScheduled(completion, err)
+				return fatal
+			}
+			e.surfaceRunError(err)
+			if !receipt.Committed {
+				e.clearQueuedUserWorkScheduled(completion, err)
+				return nil
+			}
 		}
-	}()
-	if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
-		if fatal, abort := resultGroupFatalFromError(err); abort {
-			return fatal
+		if e.clearQueuedUserWorkScheduled(completion, nil) {
+			return nil
 		}
-		e.surfaceRunError(err)
-		return nil
 	}
-	_, receipt, _, err := e.submitQueuedUserMessages(ctx, steerUserInjections(), nil)
-	reschedulePending = receipt.Committed
-	if err != nil {
-		if fatal, abort := resultGroupFatalFromError(err); abort {
-			return fatal
-		}
-		e.surfaceRunError(err)
-		return nil
-	}
-	reschedulePending = true
-	return nil
 }
 
 func (e *Engine) HasScheduledQueuedUserWork() bool {
@@ -466,17 +462,24 @@ func (e *Engine) WaitForScheduledQueuedUserWork(ctx context.Context) error {
 func (e *Engine) clearQueuedUserWorkScheduled(
 	completion runtimeDeferred[struct{}],
 	err error,
-) {
+) bool {
 	e.queuedUserWorkMu.Lock()
 	if e.queuedUserWorkCompletion.state != completion.state {
 		e.queuedUserWorkMu.Unlock()
 		completion.complete(struct{}{}, err)
-		return
+		return true
+	}
+	// Admission schedules under this same lock. Keep the current worker and
+	// its execution owner until accepted steers have drained.
+	if err == nil && e.messageFlow.HasPendingUserSteers() {
+		e.queuedUserWorkMu.Unlock()
+		return false
 	}
 	e.queuedUserWorkScheduled = false
 	e.queuedUserWorkCompletion = runtimeDeferred[struct{}]{}
 	e.queuedUserWorkMu.Unlock()
 	completion.complete(struct{}{}, err)
+	return true
 }
 
 func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {
