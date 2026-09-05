@@ -590,7 +590,7 @@ export const pendingAskListSchema = z
       .array(
         z
           .object({
-            PromptID: z.string(),
+            ToolCallID: z.string(),
             SessionID: z.string(),
             StepID: z.string(),
             Question: z.string(),
@@ -611,7 +611,7 @@ export const pendingAskListSchema = z
             }
           })
           .transform((value): PendingAsk => ({
-            promptID: value.PromptID,
+            toolCallID: value.ToolCallID,
             sessionID: value.SessionID,
             stepID: value.StepID,
             question: value.Question,

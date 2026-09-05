@@ -21,7 +21,7 @@ export function questionAnswerBatchInput(input: QuestionAnswerInput): PromptAnsw
         ? [
             {
               kind: "approval",
-              promptID: input.promptID,
+              toolCallID: input.toolCallID,
               decision: input.decision,
               commentary: optionalText(input.commentary),
             },
@@ -29,7 +29,7 @@ export function questionAnswerBatchInput(input: QuestionAnswerInput): PromptAnsw
         : [
             {
               kind: "question",
-              promptID: input.promptID,
+              toolCallID: input.toolCallID,
               selectedOptionNumber: input.selectedOptionNumber,
               freeform: optionalText(input.freeformAnswer),
             },

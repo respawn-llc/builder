@@ -42,13 +42,13 @@ func TestTranscriptMessageJSONUsesTaggedPayloadEnvelope(t *testing.T) {
 
 func TestTranscriptPromptJSONPreservesStateKeyInBothContexts(t *testing.T) {
 	prompt := TranscriptPrompt{
-		Kind:      TranscriptPromptKindQuestion,
-		Status:    TranscriptPromptStatusResolved,
-		PromptID:  PromptID("prompt-1"),
-		SessionID: transcriptTestSessionID(t),
-		StepID:    transcriptTestStepID(t),
-		Question:  "Choose",
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		Kind:       TranscriptPromptKindQuestion,
+		Status:     TranscriptPromptStatusResolved,
+		ToolCallID: ToolCallID("prompt-1"),
+		SessionID:  transcriptTestSessionID(t),
+		StepID:     transcriptTestStepID(t),
+		Question:   "Choose",
+		CreatedAt:  time.Unix(1_700_000_000, 0),
 	}
 	standalone, err := json.Marshal(NewTranscriptMessage(2, NewTranscriptEvent(prompt)))
 	if err != nil {
@@ -151,7 +151,7 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 	streamID := transcriptTestAssistantStreamID(t)
 	prompt := TranscriptPrompt{
 		Kind: TranscriptPromptKindQuestion, Status: TranscriptPromptStatusPending,
-		PromptID: "prompt-1", SessionID: transcriptTestSessionID(t), StepID: stepID,
+		ToolCallID: "prompt-1", SessionID: transcriptTestSessionID(t), StepID: stepID,
 		Question: "Choose", CreatedAt: time.Unix(1_700_000_000, 0),
 	}
 	text := "queued"

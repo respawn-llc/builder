@@ -529,11 +529,18 @@ func newPersistedEffectFixture(
 	t.Helper()
 	approver := func(
 		ctx context.Context,
-		_ tools.FileAccessRequest,
+		_ tools.FileAccessApprovalRequest,
 	) (tools.FileAccessApproval, error) {
+		identity, err := tools.ExecutionIdentityFromContext(ctx)
+		if err != nil {
+			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, err
+		}
 		response, err := broker.Ask(ctx, tools.AskQuestionRequest{
-			Question: "Approve outside-workspace access?",
-			Approval: true,
+			Question:   "Approve outside-workspace access?",
+			Approval:   true,
+			RunID:      identity.RunID,
+			StepID:     identity.StepID,
+			ToolCallID: string(identity.ToolCallID),
 			ApprovalOptions: []tools.AskQuestionApprovalOption{{
 				Decision: tools.AskQuestionApprovalDecisionAllowOnce,
 				Label:    "Allow once",

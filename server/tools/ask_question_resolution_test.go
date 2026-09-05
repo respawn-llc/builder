@@ -14,7 +14,7 @@ func TestAskQuestionBrokerPreservesCanonicalQuestionResolution(t *testing.T) {
 
 	resolution, err := broker.Ask(
 		context.Background(),
-		AskQuestionRequest{ID: "question-1", Question: "Proceed?"},
+		AskQuestionRequest{ToolCallID: "question-1", Question: "Proceed?"},
 	)
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
@@ -31,7 +31,7 @@ func TestAskQuestionBrokerPreservesCanonicalQuestionResolution(t *testing.T) {
 func TestValidateAskQuestionResolutionUsesTypedOptionalText(t *testing.T) {
 	selected := 1
 	req := AskQuestionRequest{
-		ID:          "question-1",
+		ToolCallID:  "question-1",
 		Question:    "Proceed?",
 		Suggestions: []string{"yes"},
 	}

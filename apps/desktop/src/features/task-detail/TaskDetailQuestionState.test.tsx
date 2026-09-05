@@ -27,6 +27,8 @@ type FixtureQuestionAttention = QuestionAttentionItem &
     sessionID: string;
     suggestions: readonly string[];
   }>;
+type FixtureApprovalAttention = FixtureQuestionAttention &
+  Readonly<{ question: Extract<QuestionAttentionItem["question"], { kind: "approval" }> }>;
 
 let questionAnswerMutation: QuestionAnswerMutation;
 let listPendingAsks: (sessionID: string) => Promise<readonly PendingAsk[]>;
@@ -250,12 +252,51 @@ describe("questionPresentation", () => {
     });
   });
 
+  it("renders typed Approval targets verbatim before controls", () => {
+    const approval = approvalAttention(["allow_once", "deny"]);
+    const attention = {
+      ...approval,
+      question: {
+        ...approval.question,
+        accessTargets: [
+          { requestedPath: "/alias/a", resolvedPath: "/real/file" },
+          { requestedPath: "/alias/b", resolvedPath: "/real/file" },
+          { requestedPath: "/real/other", resolvedPath: "/real/other" },
+        ],
+      },
+    };
+    const presentation = questionPresentation(attention);
+    renderQuestionForm(
+      attention,
+      presentation,
+      anchorQuestionSelection(emptyQuestionSelection(), presentation.defaultSelection),
+      recordingQuestionAnswerMutation([]),
+    );
+
+    const intro = screen.getByText(appI18n.t("task.accessApprovalIntro", { count: 3 }));
+    const aliasA = screen.getByText("- /alias/a → /real/file");
+    const aliasB = screen.getByText("- /alias/b → /real/file");
+    const realOther = screen.getByText("- /real/other");
+    const finalQuestion = screen.getByText(appI18n.t("task.accessApprovalQuestion"));
+    const firstControl = screen.getAllByRole("radio")[0];
+    if (firstControl === undefined) {
+      throw new Error("Approval controls are required");
+    }
+    expect(intro.compareDocumentPosition(aliasA) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(aliasA.compareDocumentPosition(aliasB) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(aliasB.compareDocumentPosition(realOther) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(realOther.compareDocumentPosition(finalQuestion) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(finalQuestion.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
+      0,
+    );
+  });
+
   it("retains an ordinary anchored choice across refresh, failure, and retry", async () => {
     const initialAttention = ordinaryAttention(["one", "two", "three"], 2);
     const initialPresentation = questionPresentation(initialAttention);
     const selection = anchorQuestionSelection(emptyQuestionSelection(), initialPresentation.defaultSelection);
     const inputs: QuestionAnswerInput[] = [];
-    const answerQuestion = failingOnceQuestionAnswerMutation(inputs);
+    const answerQuestion = failingQuestionAnswerMutation(inputs);
     const user = userEvent.setup();
     const view = renderQuestionForm(initialAttention, initialPresentation, selection, answerQuestion);
 
@@ -302,12 +343,12 @@ describe("questionPresentation", () => {
     ]);
   });
 
-  it("retains an anchored approval decision across refresh, failure, and retry", async () => {
+  it("preserves an Approval draft through two failures until a deliberate third submission", async () => {
     const initialAttention = approvalAttention(["deny", "allow_session", "allow_once"]);
     const initialPresentation = questionPresentation(initialAttention);
     const selection = anchorQuestionSelection(emptyQuestionSelection(), initialPresentation.defaultSelection);
     const inputs: QuestionAnswerInput[] = [];
-    const answerQuestion = failingOnceQuestionAnswerMutation(inputs);
+    const answerQuestion = failingQuestionAnswerMutation(inputs, 2);
     const user = userEvent.setup();
     const view = renderQuestionForm(initialAttention, initialPresentation, selection, answerQuestion);
 
@@ -330,6 +371,7 @@ describe("questionPresentation", () => {
       expect(inputs).toHaveLength(1);
       expect(submit).toBeEnabled();
     });
+    await user.type(screen.getByRole("textbox"), " after first");
 
     const retriedAttention = approvalAttention(["deny", "allow_once", "allow_session"]);
     view.rerender(
@@ -339,19 +381,18 @@ describe("questionPresentation", () => {
     await user.click(submit);
     await waitFor(() => {
       expect(inputs).toHaveLength(2);
+      expect(submit).toBeEnabled();
+    });
+    await user.type(screen.getByRole("textbox"), " after second");
+    await user.click(submit);
+    await waitFor(() => {
+      expect(inputs).toHaveLength(3);
     });
 
-    expect(inputs).toEqual([
-      expect.objectContaining({
-        commentary: "commentary",
-        decision: "allow_once",
-        kind: "approval",
-      }),
-      expect.objectContaining({
-        commentary: "commentary",
-        decision: "allow_once",
-        kind: "approval",
-      }),
+    expect(inputs.map((input) => (input.kind === "approval" ? input.commentary : null))).toEqual([
+      "commentary",
+      "commentary after first",
+      "commentary after first after second",
     ]);
   });
 });
@@ -428,7 +469,7 @@ function ordinaryAttention(
     occurredAt: 0,
     projectID: "project-1",
     question: {
-      promptID: "ask-1",
+      toolCallID: "ask-1",
       sessionID: "session-1",
       stepID: "22222222-2222-4222-8222-222222222222",
       kind: "ordinary",
@@ -455,14 +496,15 @@ function ordinaryAttention(
 
 function approvalAttention(
   decisions: readonly ("allow_once" | "allow_session" | "deny")[],
-): FixtureQuestionAttention {
+): FixtureApprovalAttention {
   return {
     ...ordinaryAttention([], 0),
     question: {
-      promptID: "ask-1",
+      toolCallID: "ask-1",
       sessionID: "session-1",
       stepID: "22222222-2222-4222-8222-222222222222",
       approvalDecisions: decisions,
+      accessTargets: [],
       kind: "approval",
     },
   };
@@ -501,12 +543,15 @@ function recordingQuestionAnswerMutation(inputs: QuestionAnswerInput[]): Questio
   };
 }
 
-function failingOnceQuestionAnswerMutation(inputs: QuestionAnswerInput[]): QuestionAnswerMutation {
+function failingQuestionAnswerMutation(
+  inputs: QuestionAnswerInput[],
+  failureCount = 1,
+): QuestionAnswerMutation {
   return {
     isPending: false,
     async mutateAsync(input: QuestionAnswerInput): Promise<void> {
       inputs.push(input);
-      if (inputs.length === 1) {
+      if (inputs.length <= failureCount) {
         throw new Error("delivery failed");
       }
     },

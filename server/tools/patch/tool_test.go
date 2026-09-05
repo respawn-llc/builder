@@ -35,7 +35,7 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	tool := newPatchTestToolWithContext(
 		t,
 		filesystemContext,
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 			approvalCalls++
 			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),
@@ -739,7 +739,7 @@ func TestOutsideWorkspaceEditRejectionContainsSteeringMessage(t *testing.T) {
 	}
 
 	approveCalls := 0
-	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 		approveCalls++
 		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, nil
 	}))

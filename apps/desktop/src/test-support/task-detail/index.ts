@@ -23,7 +23,11 @@ import {
   type SidebarMode,
   type TaskDetailInitialFocus,
 } from "@/app-facade";
-import { TaskDetailSurface, type TaskDetailDeleteDismissal } from "@/features/task-detail";
+import {
+  TaskDetailSurface,
+  type TaskDetailDeleteDismissal,
+  type TaskDetailSessionChatEntry,
+} from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
 import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
 import type { NativeBridge } from "../native-bridge";
@@ -261,7 +265,7 @@ export const questionAttention = {
   question: {
     session_id: "session-1",
     step_id: "22222222-2222-4222-8222-222222222222",
-    prompt_id: "ask-1",
+    tool_call_id: "ask-1",
     kind: "ordinary",
     recommended_option_index: 1,
     suggestions: ["Trail mix", "Dark chocolate"],
@@ -293,7 +297,7 @@ export function parsedQuestionAttention(): QuestionAttentionItem &
     question: {
       sessionID: questionAttention.question.session_id,
       stepID: questionAttention.question.step_id,
-      promptID: questionAttention.question.prompt_id,
+      toolCallID: questionAttention.question.tool_call_id,
       kind: "ordinary",
       recommendedOptionIndex: questionAttention.question.recommended_option_index,
       suggestions: questionAttention.question.suggestions,
@@ -348,7 +352,7 @@ export const activityResponse = {
 export const pendingAskResponse = {
   Asks: [
     {
-      PromptID: "ask-1",
+      ToolCallID: "ask-1",
       SessionID: "session-1",
       StepID: "11111111-1111-4111-8111-111111111111",
       Question: "Choose path",
@@ -429,6 +433,7 @@ export type TaskDetailFixtureOptions = Readonly<{
   nativeBridge?: NativeBridge | undefined;
   navigator?: SidebarPageNavigator | undefined;
   onDeleteDismiss?: TaskDetailDeleteDismissal | undefined;
+  openSessionChat?: TaskDetailSessionChatEntry | undefined;
   onMutated?: (() => void) | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   path?: string | undefined;
@@ -500,6 +505,7 @@ export function mountTaskDetailSurface(
                   enabled: true,
                   initialFocus: options.initialFocus,
                   onDeleteDismiss: options.onDeleteDismiss ?? (async () => ({ kind: "accepted" })),
+                  openSessionChat: options.openSessionChat,
                   onMutated: options.onMutated,
                   openSidebar: options.openSidebar,
                   retainedState,
@@ -510,6 +516,7 @@ export function mountTaskDetailSurface(
                   enabled: true,
                   initialFocus: options.initialFocus,
                   navigator: options.navigator,
+                  openSessionChat: options.openSessionChat,
                   onMutated: options.onMutated,
                   openSidebar: options.openSidebar,
                   retainedState,

@@ -415,6 +415,8 @@ export const englishResources = {
       stopping: "Stopping",
     },
     task: {
+      accessApprovalIntro: "Agent wants to access a batch of files, but {{count}} are outside workspace dir:",
+      accessApprovalQuestion: "Allow this access?",
       sessionStarted: "Session started",
       title: "Task",
       identifier: "ID",
@@ -499,6 +501,7 @@ export const englishResources = {
       noCommentsTitle: "No comments yet",
       sessions: "Sessions",
       openInCli: "Open {{name}} in CLI",
+      openChat: "Open {{name}} in Chat",
       interruptChat: "Interrupt {{name}} Chat",
       openScript: "Open script",
       cliCommandCopied: "Copied command to clipboard",

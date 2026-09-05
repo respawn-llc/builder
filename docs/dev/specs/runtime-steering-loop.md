@@ -57,7 +57,7 @@
 - Worktree create and delete are direct Worktree operations outside Session mutation ordering.
 - A live Workflow assignment applies in accepted Session order.
 - Workflow Execution still decides whether its Current Node start wins.
-- Question and Approval answers go directly to the matching pending prompt and return after that prompt resolves.
+- Question answers and Approval decisions use their exact live owners and follow the shared contract in `core-runtime-tools.md`. They do not enter Pending Work or the post-turn Queue. Nonblank Allow commentary is a separate ordinary Steering Intent accepted before Kent releases the waiting tool and applied at that Agent Step's normal Step Boundary.
 - Instant Stop goes directly through Session Runtime Authority and returns after Stop is admitted.
 - Instant Stop does not wait for cancellation cleanup or retirement.
 - Live Workflow completion and exact tool output remain part of the matching Agent Step and return their exact result synchronously.

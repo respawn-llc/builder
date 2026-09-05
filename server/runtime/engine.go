@@ -143,6 +143,8 @@ type Engine struct {
 	lifecycleClosed         bool
 	closed                  atomic.Bool
 	runtimeFIFO             *runtimeOperationFIFO
+	approvalCommentaryMu    sync.Mutex
+	approvalCommentary      map[string][]runtimeDeferred[struct{}]
 	pendingWorkSteerOrdinal atomic.Uint64
 
 	store                       *session.Store
@@ -380,6 +382,7 @@ func (e *Engine) Close() error {
 		return nil
 	}
 	e.ensureLifecycle()
+	e.runtimeFIFO.beginClose()
 	interruptErr := e.Interrupt()
 	e.lifecycleMu.Lock()
 	if e.lifecycleClosed {
@@ -388,7 +391,6 @@ func (e *Engine) Close() error {
 	}
 	e.lifecycleClosed = true
 	e.closed.Store(true)
-	e.runtimeFIFO.beginClose()
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {

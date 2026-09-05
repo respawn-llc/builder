@@ -46,13 +46,13 @@ func FirstPendingPromptObservation(
 	prompts := make([]PendingPromptObservation, 0, len(asks)+len(approvals))
 	for index := range asks {
 		prompts = append(prompts, PendingPromptObservation{
-			ID: string(asks[index].PromptID), CreatedAt: asks[index].CreatedAt,
+			ID: string(asks[index].ToolCallID), CreatedAt: asks[index].CreatedAt,
 			Question: ObservationQuestion{Ask: &asks[index]},
 		})
 	}
 	for index := range approvals {
 		prompts = append(prompts, PendingPromptObservation{
-			ID: string(approvals[index].PromptID), CreatedAt: approvals[index].CreatedAt,
+			ID: string(approvals[index].ToolCallID), CreatedAt: approvals[index].CreatedAt,
 			Question: ObservationQuestion{Approval: &approvals[index]},
 		})
 	}
@@ -79,7 +79,7 @@ func (q ObservationQuestion) Validate() error {
 }
 
 func validateObservationAsk(ask clientui.PendingAsk) error {
-	if err := validateObservationPromptIdentity(ask.PromptID, ask.SessionID, ask.StepID); err != nil {
+	if err := validateObservationToolCallIdentity(ask.ToolCallID, ask.SessionID, ask.StepID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(ask.Question) == "" {
@@ -93,11 +93,14 @@ func validateObservationAsk(ask clientui.PendingAsk) error {
 }
 
 func validateObservationApproval(approval clientui.PendingApproval) error {
-	if err := validateObservationPromptIdentity(approval.PromptID, approval.SessionID, approval.StepID); err != nil {
+	if err := validateObservationToolCallIdentity(approval.ToolCallID, approval.SessionID, approval.StepID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(approval.Question) == "" {
+	if strings.TrimSpace(approval.Question) == "" && len(approval.AccessTargets) == 0 {
 		return errors.New("observation approval question is required")
+	}
+	if strings.TrimSpace(approval.Question) != "" && len(approval.AccessTargets) > 0 {
+		return errors.New("observation access approval cannot carry question copy")
 	}
 	if len(approval.Options) == 0 {
 		return errors.New("observation approval options are required")
@@ -110,6 +113,11 @@ func validateObservationApproval(approval clientui.PendingApproval) error {
 		case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
 		default:
 			return errors.New("observation approval option decision is invalid")
+		}
+	}
+	for _, target := range approval.AccessTargets {
+		if err := target.Validate(); err != nil {
+			return errors.New("observation approval access target is invalid")
 		}
 	}
 	return nil
@@ -192,8 +200,8 @@ func (r RuntimeLiveWatchResponse) Validate() error {
 	return nil
 }
 
-func validateObservationPromptIdentity(promptID clientui.PromptID, sessionID runtimeids.SessionID, stepID runtimeids.StepID) error {
-	if err := promptID.Validate(); err != nil {
+func validateObservationToolCallIdentity(toolCallID clientui.ToolCallID, sessionID runtimeids.SessionID, stepID runtimeids.StepID) error {
+	if err := toolCallID.Validate(); err != nil {
 		return err
 	}
 	if sessionID.IsZero() {

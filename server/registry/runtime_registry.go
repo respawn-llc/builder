@@ -713,7 +713,7 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	if entry == nil {
 		return fmt.Errorf(
 			"publish pending prompt %q for session %s generation %d: %w",
-			req.ID,
+			req.ToolCallID,
 			resource.SessionID(),
 			resource.Generation(),
 			serverapi.ErrStreamUnavailable,
@@ -736,7 +736,7 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	if !projected {
 		return fmt.Errorf(
 			"publish pending prompt %q for session %s generation %d: %w",
-			req.ID,
+			req.ToolCallID,
 			resource.SessionID(),
 			resource.Generation(),
 			serverapi.ErrStreamUnavailable,
@@ -786,7 +786,7 @@ func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, 
 		logAttentionNotificationOperationFailure(
 			"publish workflow prompt resolution event",
 			sessionID,
-			snapshot.Request.ID,
+			snapshot.Request.ToolCallID,
 			err,
 		)
 	}
