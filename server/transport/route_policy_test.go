@@ -14,6 +14,8 @@ import (
 	shelltool "core/server/tools/shell"
 	rpccontract "core/shared/apicontract"
 	"core/shared/protoapi"
+	chatpb "core/shared/protoapi/gen/kent/api/chat"
+	chatsettingspb "core/shared/protoapi/gen/kent/api/chat_settings"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
@@ -83,6 +85,184 @@ func TestRoutePolicyAllowsStatelessScopesWithoutGateway(t *testing.T) {
 	); err != nil {
 		t.Fatalf("authorize Project view scope: %v", err)
 	}
+}
+
+func TestChatTargetSemanticUnion(t *testing.T) {
+	sessionID := runtimeids.NewSessionID().String()
+	for _, test := range []struct {
+		name    string
+		target  *chatpb.ChatTarget
+		wantErr bool
+	}{
+		{
+			name: "existing Session",
+			target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+				Session: &chatpb.ExistingSessionTarget{SessionId: sessionID},
+			}},
+		},
+		{
+			name:   "New Chat",
+			target: routePolicyNewChatTarget("project-1", "workspace-1"),
+		},
+		{
+			name:    "missing target arm",
+			target:  &chatpb.ChatTarget{},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := protoapi.ChatTargetFromRequest(&chatpb.SteerRequest{
+				Target: test.target,
+				Activation: &chatpb.Activation{
+					Input: &chatpb.Activation_Text{Text: "continue"},
+				},
+			})
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ChatTargetFromRequest error = %v, want error %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestChatResultClassification(t *testing.T) {
+	sessionID := runtimeids.NewSessionID().String()
+	queueItemID := runtimeids.NewQueueItemID().String()
+	for _, test := range []struct {
+		name        string
+		result      *chatpb.SteerResult
+		wantOutcome protoapi.OperationOutcome
+		wantCode    string
+		wantErr     bool
+	}{
+		{
+			name:        "accepted",
+			result:      chatSteerSuccessResult(sessionID, queueItemID, true),
+			wantOutcome: protoapi.OperationSuccess,
+		},
+		{
+			name:        "not accepted",
+			result:      chatSteerSuccessResult(sessionID, queueItemID, false),
+			wantOutcome: protoapi.OperationSuccess,
+		},
+		{
+			name: "typed failure",
+			result: &chatpb.SteerResult{Outcome: &chatpb.SteerResult_Error{
+				Error: &chatpb.ChatOperationError{
+					Code: "session_not_found",
+					Detail: &chatpb.ChatOperationError_SessionNotFound{
+						SessionNotFound: &chatpb.SessionNotFoundDetails{SessionId: sessionID},
+					},
+				},
+			}},
+			wantOutcome: protoapi.OperationKnownFailure,
+			wantCode:    "session_not_found",
+		},
+		{
+			name: "malformed success",
+			result: &chatpb.SteerResult{Outcome: &chatpb.SteerResult_Success{
+				Success: &chatpb.InputMutationSuccess{
+					Outcome: &chatpb.InputMutationSuccess_Accepted{
+						Accepted: &chatpb.InputAccepted{
+							QueueItem: &chatpb.QueueItemIdentity{Id: queueItemID},
+						},
+					},
+				},
+			}},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			classified, err := protoapi.ClassifyResult(test.result)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ClassifyResult error = %v, want error %t", err, test.wantErr)
+			}
+			if test.wantErr {
+				return
+			}
+			if classified.Outcome != test.wantOutcome {
+				t.Fatalf("outcome = %v, want %v", classified.Outcome, test.wantOutcome)
+			}
+			if test.wantCode != "" &&
+				(classified.Failure == nil || classified.Failure.Code != test.wantCode) {
+				t.Fatalf("failure = %+v, want code %q", classified.Failure, test.wantCode)
+			}
+		})
+	}
+}
+
+func TestBinaryChatFailureMapsAgentPreparationCategories(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	request := &chatpb.SteerRequest{
+		Target: &chatpb.ChatTarget{Target: &chatpb.ChatTarget_Session{
+			Session: &chatpb.ExistingSessionTarget{SessionId: sessionID.String()},
+		}},
+	}
+	for _, test := range []struct {
+		category serverapi.ChatSettingsAgentPreparationCategory
+		want     chatsettingspb.AgentPreparationCategory
+	}{
+		{
+			category: serverapi.ChatSettingsAgentInvalidConfiguration,
+			want: chatsettingspb.
+				AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_INVALID_CONFIGURATION,
+		},
+		{
+			category: serverapi.ChatSettingsAgentProviderUnavailable,
+			want: chatsettingspb.
+				AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_PROVIDER_UNAVAILABLE,
+		},
+		{
+			category: serverapi.ChatSettingsAgentInternalPreparation,
+			want: chatsettingspb.
+				AgentPreparationCategory_AGENT_PREPARATION_CATEGORY_INTERNAL_PREPARATION,
+		},
+	} {
+		t.Run(string(test.category), func(t *testing.T) {
+			detail := binaryChatFailure(
+				nil,
+				nil,
+				request,
+				&serverapi.ChatSettingsAgentPreparationError{
+					Agent:    "reviewer",
+					Category: test.category,
+				},
+			)
+			preparation, ok := detail.(*chatsettingspb.AgentPreparationDetails)
+			if !ok ||
+				preparation.Agent != "reviewer" ||
+				preparation.Category != test.want {
+				t.Fatalf("Agent preparation details = %+v", preparation)
+			}
+		})
+	}
+}
+
+func chatSteerSuccessResult(
+	sessionID string,
+	queueItemID string,
+	accepted bool,
+) *chatpb.SteerResult {
+	success := &chatpb.InputMutationSuccess{
+		Session: &chatpb.ExistingSessionTarget{SessionId: sessionID},
+	}
+	if accepted {
+		success.Outcome = &chatpb.InputMutationSuccess_Accepted{
+			Accepted: &chatpb.InputAccepted{
+				QueueItem: &chatpb.QueueItemIdentity{Id: queueItemID},
+			},
+		}
+	} else {
+		success.Outcome = &chatpb.InputMutationSuccess_NotAccepted{
+			NotAccepted: &chatpb.InputNotAccepted{
+				Reason: &chatpb.InputNotAccepted_PendingWorkCapacity{
+					PendingWorkCapacity: &chatpb.PendingWorkCapacityDetails{},
+				},
+			},
+		}
+	}
+	return &chatpb.SteerResult{Outcome: &chatpb.SteerResult_Success{
+		Success: success,
+	}}
 }
 
 func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
@@ -396,21 +576,6 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	); err != nil {
 		t.Fatalf("project workspace with attached project: %v", err)
 	}
-	materializationMethod := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().
-		ByName("SessionLaunchService").Methods().ByName("MaterializeWorkspaceChat")
-	materializationOperation, err := protoapi.OperationFromDescriptor(materializationMethod)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := executor.authorizeScopeFacts(
-		ctx,
-		&connectionState{attachedProject: fixture.bindingA.ProjectID},
-		routeScopePolicy(materializationOperation.Options.ScopePolicy),
-		materializationOperation.Name,
-		routeScopeParams{},
-	); err != nil {
-		t.Fatalf("workspace Chat materialization with attached project: %v", err)
-	}
 	workspaceListMethod := worktreepb.File_kent_api_worktree_worktree_proto.Services().
 		ByName("ListService").Methods().ByName("ListWorkspace")
 	workspaceListOperation, err := protoapi.OperationFromDescriptor(workspaceListMethod)
@@ -458,15 +623,6 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 		routeScopeParams{},
 	); err == nil {
 		t.Fatal("project workspace without active project unexpectedly allowed")
-	}
-	if err := newRoutePolicyExecutor(unboundGateway).authorizeScopeFacts(
-		ctx,
-		&connectionState{},
-		routeScopePolicy(materializationOperation.Options.ScopePolicy),
-		materializationOperation.Name,
-		routeScopeParams{},
-	); err == nil {
-		t.Fatal("workspace Chat materialization without active project unexpectedly allowed")
 	}
 }
 
@@ -567,4 +723,20 @@ func routeForTest(t *testing.T, method string) rpccontract.Route {
 		t.Fatalf("route %q missing", method)
 	}
 	return route
+}
+
+func routePolicyNewChatTarget(projectID string, workspaceID string) *chatpb.ChatTarget {
+	questions, autoCompaction := true, true
+	return &chatpb.ChatTarget{
+		Target: &chatpb.ChatTarget_NewChat{NewChat: &chatpb.NewChatTarget{
+			ProjectId:   projectID,
+			WorkspaceId: workspaceID,
+			InitialSettings: &chatpb.InitialChatSettings{
+				AgentRole:             "default",
+				Supervisor:            chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_OFF,
+				QuestionsEnabled:      &questions,
+				AutoCompactionEnabled: &autoCompaction,
+			},
+		}},
+	}
 }

@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
-	"core/server/chatcontext"
 	"core/shared/apicontract"
 	"core/shared/protoapi"
 	"core/shared/protocol"
@@ -40,33 +38,6 @@ func runtimePendingWorkClient(deps GatewayDependencies) apicontract.RuntimePendi
 var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
 		return handlePrepared(req.ID, prepared, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
-			if params.Target.IsWorkspaceChat() {
-				authReady, err := newRoutePolicyExecutor(g).serverAuthReady(ctx, state)
-				if err != nil {
-					return serverapi.ChatContextResponse{}, err
-				}
-				if !authReady {
-					return serverapi.ChatContextResponse{}, serverapi.ErrServerAuthRequired
-				}
-				projectID, err := g.activeProjectID(ctx, state)
-				if err != nil {
-					return serverapi.ChatContextResponse{}, err
-				}
-				var owner chatcontext.WorkspaceOwner
-				if strings.TrimSpace(state.attachedWorkspaceID) == "" {
-					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
-				} else {
-					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, state.attachedWorkspaceID)
-				}
-				if err != nil {
-					return serverapi.ChatContextResponse{}, err
-				}
-				if owner == nil {
-					return serverapi.ChatContextResponse{}, errors.New("workspace Chat Context owner is required")
-				}
-				contextFacts, err := owner.ReadWorkspaceChatContext(ctx)
-				return serverapi.ChatContextResponse{Context: contextFacts}, err
-			}
 			sessionID, selected := params.Target.SessionID()
 			if !selected {
 				return serverapi.ChatContextResponse{}, errors.New("validated Chat Context target is required")
@@ -165,14 +136,14 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodChatSettingsMutate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request, prepared any) protocol.Response {
 		return handlePrepared(req.ID, prepared, func(params serverapi.ChatSettingsMutationRequest) (serverapi.ChatSettingsMutationResponse, error) {
-			if err := g.authorizeChatSettingsTarget(ctx, state, params.Target); err != nil {
+			if err := g.requireSessionInActiveProject(ctx, state, params.SessionID.String()); err != nil {
 				return serverapi.ChatSettingsMutationResponse{}, err
 			}
 			response, err := g.deps.ChatSettingsClient().MutateChatSettings(ctx, params)
 			if err != nil {
 				return serverapi.ChatSettingsMutationResponse{}, err
 			}
-			if err := response.ValidateForTarget(params.Target); err != nil {
+			if err := response.ValidateForSession(params.SessionID); err != nil {
 				return serverapi.ChatSettingsMutationResponse{}, err
 			}
 			return response, nil
@@ -260,7 +231,7 @@ func (g *Gateway) authorizeChatSettingsTarget(
 	target serverapi.ChatSettingsReadTarget,
 ) error {
 	switch target.TargetKind {
-	case serverapi.ChatSettingsReadTargetLazy:
+	case serverapi.ChatSettingsReadTargetNewChat:
 		return newRoutePolicyExecutor(g).authorizeScopeFacts(
 			ctx,
 			state,

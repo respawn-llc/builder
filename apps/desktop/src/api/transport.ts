@@ -70,6 +70,13 @@ export type AttachedProjectCall = Readonly<{
   request: AttachedRequest;
 }>;
 
+export type AttachedProjectDescriptorCall<Method extends DescMethod> = Readonly<{
+  projectID: string;
+  selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
+  method: Method;
+  createRequest(attachment: ProjectAttachment): MessageShape<Method["input"]>;
+}>;
+
 export type ChatSubscriptionInput = Readonly<{
   projectID: string;
   sessionID: string;
@@ -123,6 +130,10 @@ export type DescriptorRpcTransport = RpcTransport &
       request: MessageShape<Method["input"]>,
       options?: RpcCallOptions,
     ): Promise<MessageShape<Method["output"]>>;
+    callDescriptorAttachedProject<Method extends DescMethod>(
+      input: AttachedProjectDescriptorCall<Method>,
+      options?: RpcDedicatedCallOptions,
+    ): Promise<Readonly<{ result: MessageShape<Method["output"]>; attachment: ProjectAttachment }>>;
     subscribeDescriptor<
       Method extends DescMethod,
       EventDescriptor extends DescMessage,

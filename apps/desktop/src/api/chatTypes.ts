@@ -1,5 +1,12 @@
 import type { ApiSubscription } from "./apiService";
 import type { ChatTranscriptMessage, ChatTranscriptPayloadByKind } from "./chatTranscriptSchemas";
+import type {
+  CompactionRequestID,
+  PendingWork,
+  PendingWorkIdentity,
+  PendingWorkItemID,
+  PendingWorkRestoration,
+} from "./pendingWork";
 export type {
   ChatTranscriptKind,
   ChatTranscriptMessage,
@@ -13,7 +20,72 @@ export type ChatProjectTarget = Readonly<{ projectID: string; workspace: ChatWor
 export type ChatSessionTarget = ChatProjectTarget & Readonly<{ sessionID: string }>;
 export type ChatContextTarget = ChatProjectTarget & Readonly<{ sessionID?: string }>;
 export type ChatSettingsTarget =
-  (ChatProjectTarget & Readonly<{ kind: "lazy" }>) | (ChatSessionTarget & Readonly<{ kind: "session" }>);
+  (ChatProjectTarget & Readonly<{ kind: "new_chat" }>) | (ChatSessionTarget & Readonly<{ kind: "session" }>);
+export type ChatInitialSettings = Readonly<{
+  agentRole: string;
+  supervisor: "off" | "edits" | "all";
+  thinking: string | null;
+  fast: boolean | null;
+  questionsEnabled: boolean;
+  autoCompactionEnabled: boolean;
+}>;
+export type ChatMutationTarget =
+  | (ChatSessionTarget & Readonly<{ kind: "session" }>)
+  | (ChatProjectTarget & Readonly<{ kind: "new_chat"; initialSettings: ChatInitialSettings }>);
+export type ChatActivation =
+  | Readonly<{ kind: "text"; text: string }>
+  | Readonly<{
+      kind: "command";
+      catalogIdentity: string;
+      token: string;
+      separatorWhitespace: string;
+      arguments: string;
+    }>;
+export type ChatInputMutationResult = Readonly<{
+  sessionID: string;
+  outcome:
+    | Readonly<{
+        kind: "accepted";
+        queueItemID: PendingWorkItemID;
+        diagnostic: ChatAcceptedDiagnostic | null;
+      }>
+    | Readonly<{
+        kind: "not_accepted";
+        reason: ChatNotAcceptedReason;
+      }>;
+}>;
+export type ChatNotAcceptedReason =
+  | Readonly<{ kind: "canceled" }>
+  | Readonly<{ kind: "runtime_unavailable" }>
+  | Readonly<{ kind: "pending_work_capacity" }>
+  | Readonly<{ kind: "prompt_catalog_read"; command: string | null }>
+  | Readonly<{ kind: "prompt_command_not_found"; command: string }>
+  | Readonly<{ kind: "prompt_command_read"; command: string }>
+  | Readonly<{ kind: "too_soon" }>
+  | Readonly<{ kind: "disabled" }>
+  | Readonly<{ kind: "active" }>
+  | Readonly<{ kind: "internal_failure"; operation: string | null; cause: string | null }>;
+export type ChatAcceptedDiagnostic = Readonly<{
+  kind: "prompt_history_failure" | "internal_failure";
+  operation: string | null;
+  cause: string | null;
+}>;
+export type ChatCompactionInvocation = Readonly<{
+  token: "/compact";
+  separatorWhitespace: string;
+  rawGuidance: string;
+}>;
+export type ChatCompactionResult = Readonly<{
+  sessionID: string;
+  outcome:
+    | Readonly<{
+        kind: "accepted";
+        requestID: CompactionRequestID;
+        diagnostic: ChatAcceptedDiagnostic | null;
+      }>
+    | Readonly<{ kind: "not_accepted"; reason: ChatNotAcceptedReason }>;
+}>;
+export type ChatForkEditInput = Readonly<{ rollbackTargetID: string; initialInput: string }>;
 
 export type ChatMainView = Readonly<{
   version: Readonly<{ epoch: string; generation: number; sequence: number }>;
@@ -146,6 +218,13 @@ export type ChatTranscriptHandler = Readonly<{
 export type ChatRuntimeAttachment = Readonly<{ sessionID: string; generation: number }>;
 export type ChatRuntimeRelease = Readonly<{ released: boolean; active: boolean }>;
 export type ChatApi = Readonly<{
+  steer(target: ChatMutationTarget, activation: ChatActivation): Promise<ChatInputMutationResult>;
+  queue(target: ChatMutationTarget, activation: ChatActivation): Promise<ChatInputMutationResult>;
+  compact(target: ChatMutationTarget, invocation: ChatCompactionInvocation): Promise<ChatCompactionResult>;
+  stop(target: ChatSessionTarget): Promise<"stopped" | "idle">;
+  forkEdit(target: ChatSessionTarget, input: ChatForkEditInput): Promise<string>;
+  listPendingWork(target: ChatSessionTarget): Promise<PendingWork>;
+  removePendingWork(target: ChatSessionTarget, itemID: PendingWorkIdentity): Promise<PendingWorkRestoration>;
   getMainView(target: ChatSessionTarget): Promise<ChatMainView>;
   getContext(target: ChatContextTarget): Promise<ChatContext>;
   getSettings(target: ChatSettingsTarget): Promise<ChatSettings>;

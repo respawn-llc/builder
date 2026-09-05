@@ -39,10 +39,14 @@ func newQueuedUserMessageStore() *queuedUserMessageStore {
 	return &queuedUserMessageStore{}
 }
 
-func (s *queuedUserMessageStore) Queue(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (s *queuedUserMessageStore) Queue(input QueuedUserInput, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+	if err := input.Validate(); err != nil {
+		return QueuedUserMessage{}, err
+	}
 	return s.QueueItem(QueuedUserMessage{
-		ID:      uuid.NewString(),
-		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+		ID:                    uuid.NewString(),
+		Message:               llm.Message{Role: llm.RoleUser, Content: textutil.Value(input.ExecutionText)},
+		CanonicalPresentation: input.CanonicalPresentation,
 	}, association...)
 }
 
@@ -57,7 +61,8 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations 
 	}
 	if item.Message.Content == nil ||
 		strings.TrimSpace(*item.Message.Content) == "" ||
-		item.Message.Role == "" {
+		item.Message.Role == "" ||
+		strings.TrimSpace(item.CanonicalPresentation) == "" {
 		return QueuedUserMessage{}, errInvalidQueuedUserMessage
 	}
 	if _, err := runtimeids.ParseQueueItemID(item.ID); err != nil {
@@ -83,7 +88,14 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage, associations 
 }
 
 func (m QueuedUserMessage) DisplayText() (string, error) {
-	if m.Message.Content == nil {
+	if strings.TrimSpace(m.CanonicalPresentation) == "" {
+		return "", errInvalidQueuedUserMessage
+	}
+	return m.CanonicalPresentation, nil
+}
+
+func (m QueuedUserMessage) ExecutionText() (string, error) {
+	if m.Message.Content == nil || strings.TrimSpace(*m.Message.Content) == "" {
 		return "", errInvalidQueuedUserMessage
 	}
 	return *m.Message.Content, nil
@@ -123,6 +135,16 @@ func (s *queuedUserMessageStore) ClaimAll() *queuedUserMessageClaim {
 func (s *queuedUserMessageStore) ClaimSteers() *queuedUserMessageClaim {
 	return s.claim(func(pending queuedUserMessage) bool {
 		return pending.steerAdmission != nil
+	})
+}
+
+func (s *queuedUserMessageStore) ClaimSteersAndIDs(ids map[string]struct{}) *queuedUserMessageClaim {
+	return s.claim(func(pending queuedUserMessage) bool {
+		if pending.steerAdmission != nil {
+			return true
+		}
+		_, selected := ids[strings.TrimSpace(pending.message.ID)]
+		return selected
 	})
 }
 

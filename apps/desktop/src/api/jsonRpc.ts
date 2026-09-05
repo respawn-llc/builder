@@ -36,6 +36,7 @@ import type {
   RpcCallOptions,
   DescriptorRpcTransport,
   DescriptorSubscriptionInput,
+  AttachedProjectDescriptorCall,
   AttachedProjectCall,
   ChatSubscriptionInput,
   RpcDedicatedCallOptions,
@@ -135,6 +136,29 @@ class JsonRpcWebSocketTransport implements RpcTransport {
             socket,
             method,
             request.kind === "factory" ? request.create(validatedAttachment) : request.value,
+            requestOptions,
+          ),
+          attachment: validatedAttachment,
+        };
+      },
+      { projectID, workspace: selector },
+    );
+  }
+
+  async callDescriptorAttachedProject<Method extends DescMethod>(
+    input: AttachedProjectDescriptorCall<Method>,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<Readonly<{ result: MessageShape<Method["output"]>; attachment: ProjectAttachment }>> {
+    const { projectID, selector, method, createRequest } = input;
+    return this.#withDedicatedSocket(
+      options,
+      async (socket, requestOptions, attachment) => {
+        const validatedAttachment = requireProjectAttachment(attachment, { projectID, workspace: selector });
+        return {
+          result: await sendSocketDescriptorRequest(
+            socket,
+            method,
+            createRequest(validatedAttachment),
             requestOptions,
           ),
           attachment: validatedAttachment,

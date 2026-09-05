@@ -56,6 +56,7 @@ type GatewayDependencies interface {
 	GatewayOnboardingDependencies
 	GatewayProjectDependencies
 	GatewaySessionDependencies
+	GatewayChatDependencies
 	GatewayRuntimeDependencies
 	GatewayPromptDependencies
 	GatewayPromptCommandDependencies
@@ -103,11 +104,13 @@ type GatewaySessionDependencies interface {
 	SessionTranscriptClient() apicontract.SessionTranscriptService
 	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error)
 	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error)
-	WorkspaceChatContextOwnerForProjectWorkspace(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
-	WorkspaceChatContextOwnerForProjectWorkspaceID(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
 	SessionChatContextOwner() chatcontext.SessionOwner
 	RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error)
 	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error)
+}
+
+type GatewayChatDependencies interface {
+	ChatMutationClient() apicontract.ChatMutationService
 }
 
 type GatewayRuntimeDependencies interface {

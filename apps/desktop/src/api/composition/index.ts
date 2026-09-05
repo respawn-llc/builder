@@ -15,6 +15,7 @@ export type {
   SessionAttachment,
   AttachedRequest,
   AttachedProjectCall,
+  AttachedProjectDescriptorCall,
   ChatSubscriptionInput,
   RuntimeOwnerContext,
   RuntimeOwnerOptions,

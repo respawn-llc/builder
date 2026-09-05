@@ -2697,8 +2697,7 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms,
-    chat_draft_json
+    updated_at_unix_ms
 FROM workspaces
 WHERE id = ?1
 LIMIT 1
@@ -2714,26 +2713,9 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.GitMetadataJson,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-		&i.ChatDraftJson,
 	), getWorkspaceByID, 1)
 
 	return i, err
-}
-
-const getWorkspaceChatDraft = `-- name: GetWorkspaceChatDraft :one
-SELECT
-    chat_draft_json
-FROM workspaces
-WHERE id = ?1
-LIMIT 1
-`
-
-func (q *Queries) GetWorkspaceChatDraft(ctx context.Context, id string) (sql.NullString, error) {
-	row := q.db.QueryRowContext(ctx, getWorkspaceChatDraft, id)
-	var chat_draft_json sql.NullString
-	err := recordQueryError(ctx, row.Scan(&chat_draft_json), getWorkspaceChatDraft, 1)
-
-	return chat_draft_json, err
 }
 
 const getWorktreeByCanonicalRoot = `-- name: GetWorktreeByCanonicalRoot :one
@@ -8296,8 +8278,7 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms,
-    chat_draft_json
+    updated_at_unix_ms
 FROM workspaces
 WHERE canonical_root_path = ?1
 ORDER BY created_at_unix_ms ASC, rowid ASC
@@ -8320,7 +8301,6 @@ func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRo
 			&i.GitMetadataJson,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-			&i.ChatDraftJson,
 		), listWorkspacesByCanonicalRoot, 1); err != nil {
 			return nil, err
 		}
@@ -8669,26 +8649,6 @@ func (q *Queries) ReplaceUserInterruptionWithAssignmentFailure(ctx context.Conte
 	)
 	err = recordQueryError(ctx, err, replaceUserInterruptionWithAssignmentFailure, 5)
 
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const replaceWorkspaceChatDraft = `-- name: ReplaceWorkspaceChatDraft :execrows
-UPDATE workspaces
-SET chat_draft_json = ?1
-WHERE id = ?2
-`
-
-type ReplaceWorkspaceChatDraftParams struct {
-	ChatDraftJson sql.NullString
-	ID            string
-}
-
-func (q *Queries) ReplaceWorkspaceChatDraft(ctx context.Context, arg ReplaceWorkspaceChatDraftParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceWorkspaceChatDraft, arg.ChatDraftJson, arg.ID)
-	err = recordQueryError(ctx, err, replaceWorkspaceChatDraft, 2)
 	if err != nil {
 		return 0, err
 	}

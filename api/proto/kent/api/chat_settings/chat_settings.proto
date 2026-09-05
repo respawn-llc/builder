@@ -9,7 +9,7 @@ import "kent/api/shared/validation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/chat_settings;chatsettingspb";
 
-message LazyTarget {
+message NewChatTarget {
   string project_id = 1 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.(kent.api.shared.nonblank) = true,
@@ -33,7 +33,7 @@ message ReadRequest {
   oneof target {
     option (buf.validate.oneof).required = true;
 
-    LazyTarget lazy = 1;
+    NewChatTarget new_chat = 1;
     SessionTarget session = 2;
   }
 }
@@ -337,13 +337,8 @@ message MutationOperation {
 }
 
 message MutationRequest {
-  oneof target {
-    option (buf.validate.oneof).required = true;
-
-    LazyTarget lazy = 1;
-    SessionTarget session = 2;
-  }
-  MutationOperation operation = 3 [(buf.validate.field).required = true];
+  SessionTarget session = 1 [(buf.validate.field).required = true];
+  MutationOperation operation = 2 [(buf.validate.field).required = true];
 }
 
 enum MutationRejectionReason {

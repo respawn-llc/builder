@@ -668,7 +668,7 @@ func (c *Remote) MutateChatSettings(
 	if err := c.call(ctx, protocol.MethodChatSettingsMutate, req, &response); err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	if err := response.ValidateForTarget(req.Target); err != nil {
+	if err := response.ValidateForSession(req.SessionID); err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, invalidResponseError(
 			"Chat settings mutation",
 			err,

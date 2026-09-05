@@ -242,6 +242,10 @@ class BootstrapErrorTransport implements DescriptorRpcTransport {
     throw this.#error;
   }
 
+  async callDescriptorAttachedProject(): Promise<never> {
+    throw this.#error;
+  }
+
   readonly subscribeDescriptor: DescriptorRpcTransport["subscribeDescriptor"] = (input) => {
     input.handler.onError(this.#error);
     return {

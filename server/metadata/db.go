@@ -49,6 +49,25 @@ func (e *UnsupportedMetadataVersionError) Error() string {
 	)
 }
 
+type WorkspaceChatDraftCutoverMigrationError struct {
+	DatabasePath string
+	Cause        error
+}
+
+func (e *WorkspaceChatDraftCutoverMigrationError) Error() string {
+	if e == nil {
+		return "workspace Chat draft cutover migration failed"
+	}
+	return fmt.Sprintf("migrate metadata database %q through workspace Chat draft cutover: %v", e.DatabasePath, e.Cause)
+}
+
+func (e *WorkspaceChatDraftCutoverMigrationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type metadataDatabasePreflight struct {
 	Exists  bool
 	Version int64
@@ -96,7 +115,15 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
 	if err := runMigrations(db); err != nil {
+		version, versionErr := readMetadataVersion(db)
 		_ = db.Close()
+		if versionErr == nil &&
+			version == metadatamigrations.WorkspaceChatDraftCutoverVersion-1 {
+			return nil, &WorkspaceChatDraftCutoverMigrationError{
+				DatabasePath: trimmedDatabasePath,
+				Cause:        err,
+			}
+		}
 		return nil, err
 	}
 	db.SetMaxOpenConns(metadataSQLiteConnectionPoolSize)

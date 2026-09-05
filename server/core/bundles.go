@@ -8,6 +8,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
 	"core/server/chatcontext"
+	"core/server/chatmutation"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -33,6 +34,7 @@ import (
 type Bundles struct {
 	Auth        *AuthBundle
 	Capability  *CapabilityBundle
+	Chat        *ChatBundle
 	cleanup     []lifecycleResource
 	Persistence *PersistenceBundle
 	Processes   *ProcessBundle
@@ -54,6 +56,11 @@ type AuthBundle struct {
 
 type CapabilityBundle struct {
 	facts apicontract.CapabilityFactsService
+}
+
+type ChatBundle struct {
+	operations *chatmutation.OperationOwner
+	mutations  apicontract.ChatMutationService
 }
 
 type PersistenceBundle struct {
@@ -96,7 +103,6 @@ type SessionBundle struct {
 	sessionLaunchMap    map[string]apicontract.SessionLaunchService
 	sessionServices     map[string]*sessionlaunch.Service
 	runPromptMap        map[string]apicontract.RunPromptService
-	draftOwner          *sessionlaunch.WorkspaceChatDraftOwner
 	sessionLaunch       apicontract.SessionLaunchService
 	sessionViews        apicontract.SessionViewService
 	sessionContextOwner chatcontext.SessionOwner
@@ -130,6 +136,9 @@ func (b *Bundles) withDefaults() *Bundles {
 	}
 	if withDefaults.Capability == nil {
 		withDefaults.Capability = &CapabilityBundle{}
+	}
+	if withDefaults.Chat == nil {
+		withDefaults.Chat = &ChatBundle{}
 	}
 	if withDefaults.Persistence == nil {
 		withDefaults.Persistence = &PersistenceBundle{}
@@ -166,7 +175,6 @@ func emptySessionBundle() *SessionBundle {
 		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
 		sessionServices:  make(map[string]*sessionlaunch.Service),
 		runPromptMap:     make(map[string]apicontract.RunPromptService),
-		draftOwner:       nil,
 	}
 }
 
@@ -199,12 +207,14 @@ type bundleCompositionInput struct {
 	workflowRuntimeStarter  *workflowrunner.Starter
 	worktreeService         *worktree.Service
 	sleepManager            *sleepguard.Manager
+	chatOperationOwner      *chatmutation.OperationOwner
 }
 
 func composeBundles(in bundleCompositionInput) *Bundles {
 	return &Bundles{
 		Auth:       newAuthBundle(in.authSupport, in.authBootstrapService, in.authStatusService, in.serverStatusService, authservice.StartupAuthRequired(in.cfg.Settings)),
 		Capability: newCapabilityBundle(in.capabilityFactsService),
+		Chat:       &ChatBundle{operations: in.chatOperationOwner},
 		cleanup: []lifecycleResource{
 			{name: "persistence root lock", close: in.rootLease.Close},
 			{name: "metadata store", close: in.metadataStore.Close},
@@ -239,6 +249,12 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 					in.sleepManager.Close()
 				}
 				return nil
+			}},
+			{name: "Chat operations", close: func() error {
+				if in.chatOperationOwner == nil {
+					return nil
+				}
+				return in.chatOperationOwner.Close()
 			}},
 		},
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore),
@@ -321,7 +337,6 @@ func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleS
 		sessionLaunchMap:    make(map[string]apicontract.SessionLaunchService),
 		sessionServices:     make(map[string]*sessionlaunch.Service),
 		runPromptMap:        make(map[string]apicontract.RunPromptService),
-		draftOwner:          sessionlaunch.NewWorkspaceChatDraftOwner(metadataStore),
 		sessionLaunch:       unregisteredSessionLaunchClient{},
 		sessionViews:        sessionViewService,
 		sessionContextOwner: sessionViewService,

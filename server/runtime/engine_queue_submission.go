@@ -340,10 +340,14 @@ func (e *Engine) waitQueuedUserAutoDrainAllowed(ctx context.Context) error {
 }
 
 func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
-	if strings.TrimSpace(text) == "" {
-		return UserTurnResult{}, nil, errors.New("empty message")
+	return e.SubmitUserInputOrSteerWithAcceptance(ctx, plainQueuedUserInput(text), accept)
+}
+
+func (e *Engine) SubmitUserInputOrSteerWithAcceptance(ctx context.Context, input QueuedUserInput, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+	if err := input.Validate(); err != nil {
+		return UserTurnResult{}, nil, err
 	}
-	item, err := e.QueueUserMessageForAutoDrainWithAcceptance(ctx, text, accept)
+	item, err := e.QueueUserInputForAutoDrainWithAcceptance(ctx, input, accept)
 	if err != nil {
 		return UserTurnResult{}, nil, err
 	}
@@ -351,11 +355,19 @@ func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, tex
 }
 
 func (e *Engine) QueueUserMessageForAutoDrain(ctx context.Context, text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, true, nil)
+	return e.QueueUserInputForAutoDrain(ctx, plainQueuedUserInput(text))
 }
 
 func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, true, accept)
+	return e.QueueUserInputForAutoDrainWithAcceptance(ctx, plainQueuedUserInput(text), accept)
+}
+
+func (e *Engine) QueueUserInputForAutoDrain(ctx context.Context, input QueuedUserInput) (QueuedUserMessage, error) {
+	return e.queueUserInput(ctx, input, true, true, nil)
+}
+
+func (e *Engine) QueueUserInputForAutoDrainWithAcceptance(ctx context.Context, input QueuedUserInput, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueUserInput(ctx, input, true, true, accept)
 }
 
 func (e *Engine) HasQueuedUserWork() bool {
@@ -367,6 +379,37 @@ func (e *Engine) HasQueuedUserWork() bool {
 		return true
 	}
 	return false
+}
+
+func (e *Engine) markQueuedUserInjectionForAutoDrain(queueItemID string) {
+	queueItemID = strings.TrimSpace(queueItemID)
+	if queueItemID == "" {
+		return
+	}
+	e.queuedUserWorkMu.Lock()
+	if e.queuedUserWorkAutoDrainIDs == nil {
+		e.queuedUserWorkAutoDrainIDs = make(map[string]struct{})
+	}
+	e.queuedUserWorkAutoDrainIDs[queueItemID] = struct{}{}
+	e.queuedUserWorkMu.Unlock()
+}
+
+func (e *Engine) unmarkQueuedUserInjectionForAutoDrainSet(queueItemIDs map[string]struct{}) {
+	if len(queueItemIDs) == 0 {
+		return
+	}
+	e.queuedUserWorkMu.Lock()
+	for queueItemID := range queueItemIDs {
+		delete(e.queuedUserWorkAutoDrainIDs, strings.TrimSpace(queueItemID))
+	}
+	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
+		e.queuedUserWorkAutoDrainIDs = nil
+	}
+	e.queuedUserWorkMu.Unlock()
+}
+
+func (e *Engine) unmarkQueuedUserInjectionForAutoDrain(queueItemID string) {
+	e.unmarkQueuedUserInjectionForAutoDrainSet(map[string]struct{}{queueItemID: {}})
 }
 
 func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
@@ -383,10 +426,11 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if e.failQueuedUserWorkIfTerminal() {
 		return false
 	}
-	if !e.messageFlow.HasPendingUserSteers() {
+	e.queuedUserWorkMu.Lock()
+	if !e.messageFlow.HasPendingUserSteers() && len(e.queuedUserWorkAutoDrainIDs) == 0 {
+		e.queuedUserWorkMu.Unlock()
 		return false
 	}
-	e.queuedUserWorkMu.Lock()
 	if e.queuedUserWorkScheduled {
 		e.queuedUserWorkMu.Unlock()
 		return true
@@ -415,7 +459,7 @@ func (e *Engine) processQueuedUserWork(
 			return
 		}
 		e.ensureOrchestrationCollaborators()
-		if e.messageFlow.HasPendingUserSteers() {
+		if e.messageFlow.HasPendingUserSteers() || e.hasQueuedUserAutoDrainIDs() {
 			e.scheduleQueuedUserInjectionsIfIdle()
 		}
 	}()
@@ -426,7 +470,11 @@ func (e *Engine) processQueuedUserWork(
 		e.surfaceRunError(err)
 		return nil
 	}
-	_, receipt, _, err := e.submitQueuedUserMessages(ctx, steerUserInjections(), nil)
+	_, receipt, _, err := e.submitQueuedUserMessages(
+		ctx,
+		steerUserInjections(e.queuedUserAutoDrainIDSnapshot()),
+		nil,
+	)
 	reschedulePending = receipt.Committed
 	if err != nil {
 		if fatal, abort := resultGroupFatalFromError(err); abort {
@@ -477,6 +525,18 @@ func (e *Engine) clearQueuedUserWorkScheduled(
 	e.queuedUserWorkCompletion = runtimeDeferred[struct{}]{}
 	e.queuedUserWorkMu.Unlock()
 	completion.complete(struct{}{}, err)
+}
+
+func (e *Engine) hasQueuedUserAutoDrainIDs() bool {
+	e.queuedUserWorkMu.Lock()
+	defer e.queuedUserWorkMu.Unlock()
+	return len(e.queuedUserWorkAutoDrainIDs) > 0
+}
+
+func (e *Engine) queuedUserAutoDrainIDSnapshot() map[string]struct{} {
+	e.queuedUserWorkMu.Lock()
+	defer e.queuedUserWorkMu.Unlock()
+	return cloneMapIfNonEmpty(e.queuedUserWorkAutoDrainIDs)
 }
 
 func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {

@@ -170,7 +170,7 @@ func (a *Authority) buildAgentResource(
 		return nil, err
 	}
 	if plan == nil {
-		return nil, errors.New("agent runtime plan is required")
+		return nil, ErrAgentRuntimePlanRequired
 	}
 	if _, err := applyAgentSelection(store, plan.options.AgentSelection); err != nil {
 		return nil, err

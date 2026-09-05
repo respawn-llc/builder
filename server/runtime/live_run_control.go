@@ -296,7 +296,11 @@ func (e *Engine) queueMessageForActiveRunRaw(operationCtx, callerCtx context.Con
 	if err := callerCtx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Message: message}
+	item := QueuedUserMessage{
+		ID:                    runtimeids.NewQueueItemID().String(),
+		Message:               message,
+		CanonicalPresentation: *message.Content,
+	}
 	accepted, err := runCommandAcceptance(accept, func() (bool, error) {
 		if beforeQueue != nil {
 			if err := beforeQueue(); err != nil {

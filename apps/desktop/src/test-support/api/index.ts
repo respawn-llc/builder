@@ -31,6 +31,7 @@ import {
   type DescriptorRpcTransport,
   type DescriptorSubscriptionInput,
   type AttachedProjectCall,
+  type AttachedProjectDescriptorCall,
   type ChatSubscriptionInput,
   type JsonValue,
   type ProjectAttachment,
@@ -213,11 +214,19 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     params: JsonValue;
     options?: RpcDedicatedCallOptions;
   }>[] = [];
+  readonly attachedProjectDescriptorCalls: Readonly<{
+    projectID: string;
+    selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>;
+    descriptor: DescMethod;
+    request: Message;
+    options?: RpcDedicatedCallOptions;
+  }>[] = [];
   readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
   readonly descriptorSubscriptionStarts: Readonly<{
     descriptor: DescMethod;
     request: Message;
   }>[] = [];
+  runtimeOwnerRuns = 0;
   #routes = new Map<string, FakeJsonRoute>();
   #descriptorRoutes = new Map<string, FakeDescriptorRoute>();
   #descriptorSubscriptionRoutes = new Map<string, FakeDescriptorSubscriptionRoute>();
@@ -337,19 +346,7 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     options?: RpcDedicatedCallOptions,
   ): Promise<Readonly<{ result: unknown; attachment: ProjectAttachment }>> {
     const { projectID, selector, method, request } = input;
-    const attachment = {
-      projectID,
-      workspaceID: "workspaceID" in selector ? selector.workspaceID : "workspace-1",
-      workspaceRoot: "workspaceRoot" in selector ? selector.workspaceRoot : "/workspace",
-      workspaceSelection:
-        "workspaceID" in selector
-          ? { kind: "workspaceID" as const, workspaceID: selector.workspaceID }
-          : {
-              kind: "workspaceRoot" as const,
-              requestedRoot: selector.workspaceRoot,
-              canonicalRoot: selector.workspaceRoot,
-            },
-    };
+    const attachment = this.#projectAttachment(projectID, selector);
     const params = request.kind === "factory" ? request.create(attachment) : request.value;
     this.attachedProjectCalls.push(
       options === undefined
@@ -358,6 +355,24 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     );
     return {
       result: this.#dispatch(method, params),
+      attachment,
+    };
+  }
+
+  async callDescriptorAttachedProject<Method extends DescMethod>(
+    input: AttachedProjectDescriptorCall<Method>,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<Readonly<{ result: MessageShape<Method["output"]>; attachment: ProjectAttachment }>> {
+    const { projectID, selector, method, createRequest } = input;
+    const attachment = this.#projectAttachment(projectID, selector);
+    const request = createRequest(attachment);
+    this.attachedProjectDescriptorCalls.push(
+      options === undefined
+        ? { projectID, selector, descriptor: method, request }
+        : { projectID, selector, descriptor: method, request, options },
+    );
+    return {
+      result: await this.callDescriptor(method, request, options),
       attachment,
     };
   }
@@ -374,11 +389,31 @@ export class FakeRpcTransport implements DescriptorRpcTransport {
     return this.#dispatch(method, params);
   }
 
+  #projectAttachment(
+    projectID: string,
+    selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>,
+  ): ProjectAttachment {
+    return {
+      projectID,
+      workspaceID: "workspaceID" in selector ? selector.workspaceID : "workspace-1",
+      workspaceRoot: "workspaceRoot" in selector ? selector.workspaceRoot : "/workspace",
+      workspaceSelection:
+        "workspaceID" in selector
+          ? { kind: "workspaceID", workspaceID: selector.workspaceID }
+          : {
+              kind: "workspaceRoot",
+              requestedRoot: selector.workspaceRoot,
+              canonicalRoot: selector.workspaceRoot,
+            },
+    };
+  }
+
   async runRuntimeOwner<Result>(
     sessionID: string,
     options: RuntimeOwnerOptions,
     run: (context: RuntimeOwnerContext) => Promise<Result>,
   ): Promise<Result> {
+    this.runtimeOwnerRuns += 1;
     if (!options.createIfMissing && this.#runtimeOwner === null) {
       throw new Error("Runtime owner connection is unavailable.");
     }

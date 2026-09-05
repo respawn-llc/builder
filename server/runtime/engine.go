@@ -159,16 +159,17 @@ type Engine struct {
 	outputMutationMu sync.Mutex
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
-	queuedUserWorkMu          sync.Mutex
-	queuedUserWorkScheduled   bool
-	queuedUserWorkCompletion  runtimeDeferred[struct{}]
-	queuedUserWorkPauseCount  int
-	liveRun                   *liveRunCoordinator
-	activeStepGoalMutationsMu sync.Mutex
-	activeStepGoalMutations   map[string][]activeStepGoalMutation
-	pendingGoalLoopStart      bool
-	diagnostics               *diagnosticDedupeStore
-	toolCallStarts            *pendingToolCallStartStore
+	queuedUserWorkMu           sync.Mutex
+	queuedUserWorkScheduled    bool
+	queuedUserWorkCompletion   runtimeDeferred[struct{}]
+	queuedUserWorkPauseCount   int
+	queuedUserWorkAutoDrainIDs map[string]struct{}
+	liveRun                    *liveRunCoordinator
+	activeStepGoalMutationsMu  sync.Mutex
+	activeStepGoalMutations    map[string][]activeStepGoalMutation
+	pendingGoalLoopStart       bool
+	diagnostics                *diagnosticDedupeStore
+	toolCallStarts             *pendingToolCallStartStore
 
 	usageState           *usageTrackingState
 	goalLoop             *goalLoopState
@@ -517,22 +518,85 @@ func (e *Engine) launchLifecycleTaskWithCompletion(
 }
 
 type QueuedUserMessage struct {
-	ID      string
-	Message llm.Message
+	ID                    string
+	Message               llm.Message
+	CanonicalPresentation string
+}
+
+type QueuedUserInput struct {
+	ExecutionText         string
+	CanonicalPresentation string
+}
+
+func (i QueuedUserInput) Validate() error {
+	if strings.TrimSpace(i.ExecutionText) == "" {
+		return errors.New("queued user input requires execution text")
+	}
+	if strings.TrimSpace(i.CanonicalPresentation) == "" {
+		return errors.New("queued user input requires canonical presentation")
+	}
+	return nil
+}
+
+func plainQueuedUserInput(text string) QueuedUserInput {
+	return QueuedUserInput{ExecutionText: text, CanonicalPresentation: text}
 }
 
 func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, false, nil)
+	return e.queueUserInput(ctx, plainQueuedUserInput(text), false, false, nil)
 }
 
-func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) QueueUserInput(ctx context.Context, input QueuedUserInput) (QueuedUserMessage, error) {
+	return e.queuePostTurnUserInput(ctx, input, nil)
+}
+
+func (e *Engine) QueueUserInputWithAcceptance(
+	ctx context.Context,
+	input QueuedUserInput,
+	accept CommandAcceptance,
+) (QueuedUserMessage, error) {
+	return e.queuePostTurnUserInput(ctx, input, accept)
+}
+
+func (e *Engine) queuePostTurnUserInput(
+	ctx context.Context,
+	input QueuedUserInput,
+	accept CommandAcceptance,
+) (QueuedUserMessage, error) {
+	if e == nil || e.closed.Load() {
+		return QueuedUserMessage{}, ErrEngineClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return QueuedUserMessage{}, cause
+	}
+	return e.queueUserInputRaw(input, false, true, accept)
+}
+
+func (e *Engine) queueUserInput(
+	ctx context.Context,
+	input QueuedUserInput,
+	forceAutoDrain bool,
+	autoStart bool,
+	accept CommandAcceptance,
+) (QueuedUserMessage, error) {
 	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (QueuedUserMessage, error) {
-		return e.queueUserMessageRaw(text, forceAutoDrain, accept)
+		return e.queueUserInputRaw(input, forceAutoDrain, autoStart, accept)
 	})
 }
 
-func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueUserInputRaw(
+	input QueuedUserInput,
+	forceAutoDrain bool,
+	autoStart bool,
+	accept CommandAcceptance,
+) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
+	if err := input.Validate(); err != nil {
+		return QueuedUserMessage{}, err
+	}
 	if err := e.requirePendingWorkCapacity(); err != nil {
 		return QueuedUserMessage{}, err
 	}
@@ -540,9 +604,12 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		var item QueuedUserMessage
 		committed, err := runCommandAcceptance(accept, func() (bool, error) {
 			e.outputMutationMu.Lock()
-			queued, queueErr := e.messageFlow.QueueUserMessage(text)
+			queued, queueErr := e.messageFlow.QueueUserMessage(input)
 			if queueErr == nil {
 				item = queued
+				if autoStart {
+					e.markQueuedUserInjectionForAutoDrain(item.ID)
+				}
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			}
 			e.outputMutationMu.Unlock()
@@ -555,11 +622,15 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 		if err := commandAcceptanceResult(committed, err); err != nil {
 			return QueuedUserMessage{}, err
 		}
+		if autoStart {
+			e.scheduleQueuedUserInjectionsIfIdle()
+		}
 		return item, nil
 	}
 	liveItem := QueuedUserMessage{
-		ID:      runtimeids.NewQueueItemID().String(),
-		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+		ID:                    runtimeids.NewQueueItemID().String(),
+		Message:               llm.Message{Role: llm.RoleUser, Content: textutil.Value(input.ExecutionText)},
+		CanonicalPresentation: input.CanonicalPresentation,
 	}
 	for {
 		var item QueuedUserMessage
@@ -618,7 +689,7 @@ func (e *Engine) queueUserMessageRaw(text string, forceAutoDrain bool, accept Co
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
 		admission := e.nextPendingWorkSteerAdmission()
 		e.outputMutationMu.Lock()
-		queued, queueErr := e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+		queued, queueErr := e.messageFlow.QueueUserMessage(input, queuedUserMessageAssociation{
 			steerAdmission: admission,
 		})
 		if queueErr == nil {

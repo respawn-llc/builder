@@ -17,7 +17,8 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 	}
 	message := steer.Message()
 	item, err := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
-		Message: message,
+		Message:               message,
+		CanonicalPresentation: "report status",
 	})
 	if err != nil {
 		t.Fatalf("QueueItem: %v", err)
@@ -39,6 +40,7 @@ func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 				Role:    llm.RoleUser,
 				Content: textutil.Value(content),
 			},
+			CanonicalPresentation: content,
 		}); err == nil {
 			t.Fatalf("QueueItem accepted whitespace-only content %q", content)
 		}
@@ -51,7 +53,8 @@ func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 func TestQueuedUserMessageStoreRejectsDuplicatePendingIdentity(t *testing.T) {
 	store := &queuedUserMessageStore{}
 	item := QueuedUserMessage{
-		ID: runtimeids.NewQueueItemID().String(),
+		ID:                    runtimeids.NewQueueItemID().String(),
+		CanonicalPresentation: "first",
 		Message: llm.Message{
 			Role:    llm.RoleUser,
 			Content: textutil.Value("first"),
@@ -79,10 +82,10 @@ func TestQueuedUserMessageFlushGroupsKeepAgentSteersSeparate(t *testing.T) {
 	firstMessage := first.Message()
 	secondMessage := second.Message()
 	pending := []queuedUserMessage{
-		{message: QueuedUserMessage{ID: "h1", Message: human}},
-		{message: QueuedUserMessage{ID: "a1", Message: firstMessage}},
-		{message: QueuedUserMessage{ID: "a2", Message: secondMessage}},
-		{message: QueuedUserMessage{ID: "h2", Message: human}},
+		{message: QueuedUserMessage{ID: "h1", Message: human, CanonicalPresentation: "human"}},
+		{message: QueuedUserMessage{ID: "a1", Message: firstMessage, CanonicalPresentation: "first"}},
+		{message: QueuedUserMessage{ID: "a2", Message: secondMessage, CanonicalPresentation: "second"}},
+		{message: QueuedUserMessage{ID: "h2", Message: human, CanonicalPresentation: "human"}},
 	}
 	groups, err := queuedUserMessageFlushGroups(pending)
 	if err != nil {

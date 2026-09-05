@@ -23,13 +23,6 @@ export {
   writePersistedLabelFilterState,
   type LabelFilterPersistenceReadResult,
 } from "./labelFilterPersistence";
-export {
-  LABEL_COMPARISON_VERSION,
-  compareLabelNames,
-  foldLabelText,
-  labelNameContains,
-  labelNamesEqual,
-} from "./labelComparison";
 export { ProjectLabelsProvider } from "./ProjectLabelsProvider";
 export {
   useProjectLabelCatalog,

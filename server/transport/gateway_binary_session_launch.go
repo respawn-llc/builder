@@ -2,44 +2,24 @@ package transport
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"core/shared/apicontract"
 	"core/shared/protoapi"
-	authpb "core/shared/protoapi/gen/kent/api/auth"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
-	"core/shared/serverapi"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func registerSessionLaunchGatewayBinaryBindings(bindings map[string]gatewayBinaryBinding) error {
 	service := sessionlaunchpb.File_kent_api_session_launch_session_launch_proto.Services().ByName("SessionLaunchService")
-	if err := registerSessionLaunchUnary(bindings, service, "Plan",
+	return registerSessionLaunchUnary(bindings, service, "Plan",
 		func() *sessionlaunchpb.SessionPlanRequest { return &sessionlaunchpb.SessionPlanRequest{} },
 		apicontract.SessionLaunchService.PlanSession,
 		binarySessionPlanFailure,
-	); err != nil {
-		return err
-	}
-	if err := registerSessionLaunchUnary(bindings, service, "WorkspaceChatDraft",
-		func() *sessionlaunchpb.WorkspaceChatDraftRequest {
-			return &sessionlaunchpb.WorkspaceChatDraftRequest{}
-		},
-		apicontract.SessionLaunchService.WorkspaceChatDraft,
-		binaryWorkspaceChatDraftFailure,
-	); err != nil {
-		return err
-	}
-	return registerSessionLaunchUnary(bindings, service, "MaterializeWorkspaceChat",
-		func() *emptypb.Empty { return &emptypb.Empty{} },
-		apicontract.SessionLaunchService.MaterializeWorkspaceChat,
-		binaryMaterializeWorkspaceChatFailure,
 	)
 }
 
@@ -85,38 +65,6 @@ func binarySessionPlanFailure(
 		return binaryInternalFailure(err)
 	}
 	return failure
-}
-
-func binaryWorkspaceChatDraftFailure(
-	g *Gateway,
-	state *connectionState,
-	_ *sessionlaunchpb.WorkspaceChatDraftRequest,
-	err error,
-) proto.Message {
-	switch {
-	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &authpb.AuthRequiredDetails{}
-	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered):
-		return sessionLaunchWorkspaceNotRegisteredDetails(g, state)
-	default:
-		return binaryInternalFailure(err)
-	}
-}
-
-func binaryMaterializeWorkspaceChatFailure(
-	g *Gateway,
-	state *connectionState,
-	_ *emptypb.Empty,
-	err error,
-) proto.Message {
-	switch {
-	case errors.Is(err, serverapi.ErrServerAuthRequired):
-		return &authpb.AuthRequiredDetails{}
-	case errors.Is(err, serverapi.ErrWorkspaceNotRegistered):
-		return sessionLaunchWorkspaceNotRegisteredDetails(g, state)
-	default:
-		return binaryInternalFailure(err)
-	}
 }
 
 func sessionLaunchWorkspaceNotRegisteredDetails(

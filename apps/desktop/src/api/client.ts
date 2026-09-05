@@ -17,7 +17,6 @@ import * as taskDetail from "./clientTaskDetail";
 import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
 import * as worktree from "./clientWorktree";
-import * as pendingWork from "./clientPendingWork";
 import * as project from "./clientProject";
 import * as processes from "./clientProcesses";
 import {
@@ -120,7 +119,6 @@ import {
 import type { DescriptorRpcTransport } from "./transport";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
-import type { PendingWorkIdentity } from "./pendingWork";
 import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
 import * as workflowBoard from "./clientWorkflowBoard";
 import * as workflowLabels from "./clientWorkflowLabels";
@@ -566,12 +564,6 @@ export class ApiClient implements ApiService {
   async listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]> {
     return taskDetail.listPendingAsks(this.#transport, sessionID);
   }
-
-  submitManualCompaction = async (sessionID: string, guidance: string | null) =>
-    pendingWork.submitManualCompaction(this.#transport, sessionID, guidance);
-  listPendingWork = async (sessionID: string) => pendingWork.listPendingWork(this.#transport, sessionID);
-  removePendingWork = async (sessionID: string, itemID: PendingWorkIdentity) =>
-    pendingWork.removePendingWork(this.#transport, sessionID, itemID);
 
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription {
     return this.#transport.subscribe(
