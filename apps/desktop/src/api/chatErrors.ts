@@ -1,6 +1,7 @@
 import type { DescMethod, Message, MessageShape } from "@app/server-api-contract";
 import type { ChatOperationError as WireChatOperationError } from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
 import { AgentPreparationCategory } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
+import type { ReadError } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
 import type {
   ListPendingWorkError,
   LiveStopError,
@@ -37,6 +38,7 @@ export class ChatOperationError extends RpcError {
 
 type ChatWireError =
   | WireChatOperationError
+  | ReadError
   | ListPendingWorkError
   | LiveStopError
   | RemovePendingWorkError

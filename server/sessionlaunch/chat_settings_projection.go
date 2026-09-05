@@ -22,6 +22,41 @@ type ChatSettingsProjectionInput struct {
 	Locked         *session.LockedContract
 }
 
+func projectNewChatCatalog(catalog launch.PreparedChatAgentCatalog, mode config.CompactionMode) (serverapi.NewChatCatalog, error) {
+	entries := catalog.Entries()
+	choices := catalog.Choices()
+	result := serverapi.NewChatCatalog{Choices: make([]serverapi.NewChatAgentChoice, 0, len(entries))}
+	for _, entry := range entries {
+		settings, err := projectSelectedChatSettings(ChatSettingsProjectionInput{
+			Agent: entry.Choice.Role, Settings: entry.Settings.Baseline, CompactionMode: mode,
+		}, entry, choices)
+		if err != nil {
+			return serverapi.NewChatCatalog{}, err
+		}
+		baseline := serverapi.InitialChatSettings{
+			AgentRole: entry.Choice.Role, Supervisor: settings.Supervisor.Value,
+			QuestionsEnabled: settings.Questions.Enabled, AutoCompactionEnabled: settings.AutoCompaction.Stored,
+		}
+		if settings.Thinking != nil {
+			baseline.Thinking = &settings.Thinking.Value
+		}
+		if settings.Fast != nil {
+			baseline.Fast = &settings.Fast.Value
+		}
+		result.Choices = append(result.Choices, serverapi.NewChatAgentChoice{
+			Agent: entry.Choice, Baseline: baseline, Supervisor: settings.Supervisor,
+			Thinking: settings.Thinking, Fast: settings.Fast, Questions: settings.Questions, AutoCompaction: settings.AutoCompaction,
+		})
+		if entry.Choice.Role == config.DefaultSubagentRole {
+			result.InitialSettings = baseline
+		}
+	}
+	if err := result.InitialSettings.Validate(); err != nil {
+		return serverapi.NewChatCatalog{}, err
+	}
+	return result, nil
+}
+
 func ProjectChatSettings(input ChatSettingsProjectionInput) (serverapi.ChatSettings, error) {
 	cachingLocked := input.Locked != nil
 	defaultEntry, _ := input.Catalog.Lookup(config.DefaultSubagentRole)
@@ -35,6 +70,15 @@ func ProjectChatSettings(input ChatSettingsProjectionInput) (serverapi.ChatSetti
 			input.Settings = defaultEntry.Settings.Baseline
 		}
 	}
+	return projectSelectedChatSettings(input, selected, input.Catalog.Choices())
+}
+
+func projectSelectedChatSettings(
+	input ChatSettingsProjectionInput,
+	selected launch.PreparedChatAgentCatalogEntry,
+	choices []serverapi.ChatSettingsAgentChoice,
+) (serverapi.ChatSettings, error) {
+	cachingLocked := input.Locked != nil
 	effective := input.Settings
 	selectedRole := selected.Choice.Role
 	selectedModel := selected.Choice.Model
@@ -83,7 +127,7 @@ func ProjectChatSettings(input ChatSettingsProjectionInput) (serverapi.ChatSetti
 			Model:    selectedModel,
 			Thinking: effective.Thinking,
 		},
-		AgentChoices:     input.Catalog.Choices(),
+		AgentChoices:     choices,
 		AgentEditability: agentEditability,
 		Supervisor: serverapi.ChatSettingsSupervisor{
 			Value:       serverapi.ChatSettingsSupervisorValue(effective.Supervisor),

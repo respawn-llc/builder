@@ -1,5 +1,21 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type { DesktopProcess } from "./processes";
+export type {
+  ChatSettingsAgent,
+  ChatSettingsAgentChoice,
+  ChatSettingsAutoCompaction,
+  ChatSettingsControls,
+  ChatSettingsEditability,
+  ChatSettingsFast,
+  ChatSettingsMutation,
+  ChatSettingsMutationResponse,
+  ChatSettingsRead,
+  ChatSettingsRejection,
+  ChatSettingsSessionFacts,
+  ChatSettingsSupervisor,
+  ChatSettingsThinking,
+  NewChatSettingsCatalog,
+} from "./chatSettingsTypes";
 export { committedRowSchema as chatTranscriptCommittedRowSchema } from "./chatSchemas";
 export type {
   ChatApi,
@@ -10,7 +26,7 @@ export type {
   ChatContext,
   ChatContextTarget,
   ChatForkEditInput,
-  ChatInitialSettings,
+  InitialChatSettings,
   ChatInputMutationResult,
   ChatMainView,
   ChatMutationTarget,

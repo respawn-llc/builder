@@ -202,8 +202,52 @@ func (i ChatSettingsTaskIdentity) Validate() error {
 }
 
 type ChatSettingsReadResponse struct {
-	Settings ChatSettings              `json:"settings"`
-	Session  *ChatSettingsSessionFacts `json:"session,omitempty"`
+	NewChat *NewChatCatalog      `json:"new_chat,omitempty"`
+	Session *SessionChatSettings `json:"session,omitempty"`
+}
+
+type SessionChatSettings struct {
+	Settings ChatSettings             `json:"settings"`
+	Session  ChatSettingsSessionFacts `json:"session"`
+}
+
+type NewChatCatalog struct {
+	Choices         []NewChatAgentChoice `json:"choices"`
+	InitialSettings InitialChatSettings  `json:"initial_settings"`
+}
+
+type NewChatAgentChoice struct {
+	Agent          ChatSettingsAgentChoice    `json:"agent"`
+	Baseline       InitialChatSettings        `json:"baseline"`
+	Supervisor     ChatSettingsSupervisor     `json:"supervisor"`
+	Thinking       *ChatSettingsThinking      `json:"thinking,omitempty"`
+	Fast           *ChatSettingsFast          `json:"fast,omitempty"`
+	Questions      ChatSettingsQuestions      `json:"questions"`
+	AutoCompaction ChatSettingsAutoCompaction `json:"auto_compaction"`
+}
+
+type InitialChatSettings struct {
+	AgentRole             string                      `json:"agent_role"`
+	Supervisor            ChatSettingsSupervisorValue `json:"supervisor"`
+	Thinking              *string                     `json:"thinking,omitempty"`
+	Fast                  *bool                       `json:"fast,omitempty"`
+	QuestionsEnabled      bool                        `json:"questions_enabled"`
+	AutoCompactionEnabled bool                        `json:"auto_compaction_enabled"`
+}
+
+func (s InitialChatSettings) Validate() error {
+	if err := validateChatTargetID("agent_role", &s.AgentRole); err != nil {
+		return err
+	}
+	switch s.Supervisor {
+	case ChatSettingsSupervisorOff, ChatSettingsSupervisorAfterEdits, ChatSettingsSupervisorAlways:
+	default:
+		return fmt.Errorf("initial Chat Supervisor %q is invalid", s.Supervisor)
+	}
+	if s.Thinking != nil {
+		return validateChatTargetID("thinking", s.Thinking)
+	}
+	return nil
 }
 
 type ChatSettingsMutationOperationKind string
@@ -357,10 +401,10 @@ func (r ChatSettingsMutationResponse) ValidateForSession(sessionID runtimeids.Se
 	if err := r.Result.Validate(); err != nil {
 		return fmt.Errorf("result: %w", err)
 	}
-	if err := (ChatSettingsReadResponse{
-		Settings: r.Settings,
-		Session:  r.Session,
-	}).ValidateForTarget(SessionChatSettingsTarget(sessionID)); err != nil {
+	if r.Session == nil {
+		return errors.New("Session Chat settings mutation requires Session facts")
+	}
+	if err := r.Session.validateForSession(sessionID); err != nil {
 		return err
 	}
 	return r.Context.Validate()
@@ -371,27 +415,33 @@ func (r ChatSettingsReadResponse) ValidateForTarget(target ChatSettingsReadTarge
 	}
 	switch target.TargetKind {
 	case ChatSettingsReadTargetNewChat:
-		if r.Session != nil {
-			return errors.New("New Chat settings response cannot contain Session facts")
+		if r.Session != nil || r.NewChat == nil {
+			return errors.New("New Chat settings response requires only a New Chat catalog")
 		}
+		return r.NewChat.InitialSettings.Validate()
 	case ChatSettingsReadTargetSession:
-		if r.Session == nil || r.Session.SessionID != *target.Session {
+		if r.NewChat != nil || r.Session == nil {
 			return errors.New("Session Chat settings response must contain the target Session")
 		}
-		if r.Session.PreviousSessionID != nil && r.Session.PreviousSessionID.IsZero() {
-			return errors.New("previous Session ID is invalid")
-		}
-		if (r.Session.TaskID == nil) != (r.Session.TaskShortID == nil) {
-			return errors.New("Task ID and Task Short ID must both be present or absent")
-		}
-		if r.Session.TaskID != nil {
-			if err := (ChatSettingsTaskIdentity{
-				TaskID:      *r.Session.TaskID,
-				TaskShortID: *r.Session.TaskShortID,
-			}).Validate(); err != nil {
-				return err
-			}
-		}
+		return r.Session.Session.validateForSession(*target.Session)
+	}
+	return nil
+}
+
+func (facts ChatSettingsSessionFacts) validateForSession(sessionID runtimeids.SessionID) error {
+	if sessionID.IsZero() || facts.SessionID != sessionID {
+		return errors.New("Session Chat settings response must contain the target Session")
+	}
+	if facts.PreviousSessionID != nil && facts.PreviousSessionID.IsZero() {
+		return errors.New("previous Session ID is invalid")
+	}
+	if (facts.TaskID == nil) != (facts.TaskShortID == nil) {
+		return errors.New("Task ID and Task Short ID must both be present or absent")
+	}
+	if facts.TaskID != nil {
+		return (ChatSettingsTaskIdentity{
+			TaskID: *facts.TaskID, TaskShortID: *facts.TaskShortID,
+		}).Validate()
 	}
 	return nil
 }

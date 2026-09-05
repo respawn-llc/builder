@@ -14,6 +14,7 @@ import (
 	"core/shared/config"
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
+	chatsettingspb "core/shared/protoapi/gen/kent/api/chat_settings"
 	processpb "core/shared/protoapi/gen/kent/api/process"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	"core/shared/protocol"
@@ -644,17 +645,24 @@ func (c *Remote) ReadChatSettings(
 	if err := req.Validate(); err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	var response serverapi.ChatSettingsReadResponse
-	if err := c.call(ctx, protocol.MethodChatSettingsRead, req, &response); err != nil {
+	request, err := protoapi.ChatSettingsReadTargetToProto(req.Target)
+	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	if err := response.ValidateForTarget(req.Target); err != nil {
+	response, err := callGeneratedBinary(c, ctx,
+		bootstrapMethod(chatsettingspb.File_kent_api_chat_settings_chat_settings_proto, "ChatSettingsService", "Read"),
+		request, &chatsettingspb.ReadResult{}, protoapi.ChatSettingsErrorFromProto)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	decoded, err := protoapi.ChatSettingsReadFromProto(response, req.Target)
+	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, invalidResponseError(
 			"Chat settings",
 			err,
 		)
 	}
-	return response, nil
+	return decoded, nil
 }
 
 func (c *Remote) MutateChatSettings(
@@ -664,17 +672,24 @@ func (c *Remote) MutateChatSettings(
 	if err := req.Validate(); err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	var response serverapi.ChatSettingsMutationResponse
-	if err := c.call(ctx, protocol.MethodChatSettingsMutate, req, &response); err != nil {
+	request, err := protoapi.ChatSettingsMutationToProto(req)
+	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	if err := response.ValidateForSession(req.SessionID); err != nil {
+	response, err := callGeneratedBinary(c, ctx,
+		bootstrapMethod(chatsettingspb.File_kent_api_chat_settings_chat_settings_proto, "ChatSettingsService", "Mutate"),
+		request, &chatsettingspb.MutationResponse{}, protoapi.ChatSettingsErrorFromProto)
+	if err != nil {
+		return serverapi.ChatSettingsMutationResponse{}, err
+	}
+	decoded, err := protoapi.ChatSettingsMutationResponseFromProto(response, req.SessionID)
+	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, invalidResponseError(
 			"Chat settings mutation",
 			err,
 		)
 	}
-	return response, nil
+	return decoded, nil
 }
 
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {

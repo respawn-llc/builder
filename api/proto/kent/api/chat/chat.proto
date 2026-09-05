@@ -21,32 +21,6 @@ message ExistingSessionTarget {
   ];
 }
 
-message InitialChatSettings {
-  string agent_role = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
-    (buf.validate.field).string.(kent.api.shared.trimmed) = true
-  ];
-  kent.api.chat_settings.SupervisorValue supervisor = 2 [(buf.validate.field).enum = {
-    defined_only: true
-    not_in: [0]
-  }];
-  optional string thinking = 3 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
-    (buf.validate.field).string.(kent.api.shared.trimmed) = true
-  ];
-  optional bool fast = 4;
-  optional bool questions_enabled = 5;
-  optional bool auto_compaction_enabled = 6;
-
-  option (buf.validate.message).cel = {
-    id: "kent.chat.initial_settings_complete"
-    message: "initial Chat settings must include Questions and Auto-compaction selections"
-    expression: "has(this.questions_enabled) && has(this.auto_compaction_enabled)"
-  };
-}
-
 message NewChatTarget {
   string project_id = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -58,7 +32,7 @@ message NewChatTarget {
     (buf.validate.field).string.(kent.api.shared.nonblank) = true,
     (buf.validate.field).string.(kent.api.shared.trimmed) = true
   ];
-  InitialChatSettings initial_settings = 3 [(buf.validate.field).required = true];
+  kent.api.chat_settings.InitialChatSettings initial_settings = 3 [(buf.validate.field).required = true];
 }
 
 message ChatTarget {
@@ -148,13 +122,6 @@ message PendingWorkCapacityDetails {}
 
 message RuntimeUnavailableDetails {}
 
-message SessionNotFoundDetails {
-  string session_id = 1 [
-    (buf.validate.field).string.uuid = true,
-    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
-  ];
-}
-
 message AcceptedDiagnostic {
   oneof detail {
     option (buf.validate.oneof).required = true;
@@ -199,7 +166,7 @@ message ChatOperationError {
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
   ];
   oneof detail {
-    SessionNotFoundDetails session_not_found = 2 [
+    kent.api.chat_settings.SessionNotFoundDetails session_not_found = 2 [
       (kent.api.shared.kent_result_field) = {
         role: RESULT_FIELD_ROLE_ERROR_DETAIL
         error_code: "session_not_found"

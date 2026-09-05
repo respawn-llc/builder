@@ -1,15 +1,11 @@
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
-import { z } from "zod";
 import { create } from "@app/server-api-contract";
-import {
-  ChatService,
-  InitialChatSettingsSchema,
-  QueueRequestSchema,
-} from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
+import { ChatService, QueueRequestSchema } from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
 import {
   AgentPreparationCategory,
+  InitialChatSettingsSchema,
   SupervisorValue,
 } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
 import {
@@ -196,7 +192,7 @@ function transcriptHydrationPayload() {
 }
 
 describe("Desktop Chat read client", () => {
-  it("reads Main View, Context, and both Chat Settings targets", async () => {
+  it("reads Main View and Context and validates runtime activation identity", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "session.getMainView",
@@ -268,38 +264,6 @@ describe("Desktop Chat read client", () => {
           },
         },
       },
-      {
-        method: "chat.settings.read",
-        handler: (params) => ({
-          settings: {
-            selected_agent: { role: "default", model: "gpt-5", thinking: "medium" },
-            agent_choices: [],
-            agent_editability: "editable",
-            supervisor: { value: "off", baseline: "off", editability: "editable" },
-            thinking: {
-              kind: "enumerated",
-              value: "medium",
-              baseline_value: "medium",
-              values: ["low", "medium"],
-              editability: "editable",
-            },
-            fast: { value: false, editability: "editable" },
-            questions: { capable: true, enabled: true, editability: "editable" },
-            auto_compaction: {
-              policy: "optional",
-              stored: true,
-              effective: true,
-              editability: "editable",
-            },
-            agent_locked: false,
-            workflow_locked: false,
-            caching_locked: false,
-          },
-          ...(z.object({ target: z.object({ kind: z.string() }) }).parse(params).target.kind === "session"
-            ? { session: { session_id: sessionID, previous_session_id: null, task_id: null } }
-            : {}),
-        }),
-      },
     ]);
     const client = new ApiClient(transport);
 
@@ -312,44 +276,6 @@ describe("Desktop Chat read client", () => {
       contextWindowTokens: 100,
       remainingTokens: 96,
     });
-    await expect(client.chat.getSettings({ ...target, kind: "new_chat" })).resolves.toMatchObject({
-      selectedAgent: { role: "default" },
-      session: null,
-    });
-    await expect(client.chat.getSettings({ ...target, kind: "session" })).resolves.toMatchObject({
-      session: { sessionID },
-    });
-
-    const mismatched = new ApiClient(
-      new FakeRpcTransport([
-        {
-          method: "chat.settings.read",
-          result: {
-            settings: {
-              selected_agent: { role: "default", model: "gpt-5", thinking: "medium" },
-              agent_choices: [],
-              agent_editability: "editable",
-              supervisor: { value: "off", baseline: "off", editability: "editable" },
-              questions: { capable: true, enabled: true, editability: "editable" },
-              auto_compaction: {
-                policy: "optional",
-                stored: true,
-                effective: true,
-                editability: "editable",
-              },
-              agent_locked: false,
-              workflow_locked: false,
-              caching_locked: false,
-            },
-            session: { session_id: "223e4567-e89b-42d3-a456-426614174000" },
-          },
-        },
-      ]),
-    );
-    await expect(mismatched.chat.getSettings({ ...target, kind: "session" })).rejects.toBeInstanceOf(
-      ContractError,
-    );
-
     const activationTransport = new FakeRpcTransport([
       { descriptor: SessionLaunchService.method.plan, result: runtimePlanResult(sessionID) },
       {

@@ -150,7 +150,7 @@ func TestChatResultClassification(t *testing.T) {
 				Error: &chatpb.ChatOperationError{
 					Code: "session_not_found",
 					Detail: &chatpb.ChatOperationError_SessionNotFound{
-						SessionNotFound: &chatpb.SessionNotFoundDetails{SessionId: sessionID},
+						SessionNotFound: &chatsettingspb.SessionNotFoundDetails{SessionId: sessionID},
 					},
 				},
 			}},
@@ -731,7 +731,7 @@ func routePolicyNewChatTarget(projectID string, workspaceID string) *chatpb.Chat
 		Target: &chatpb.ChatTarget_NewChat{NewChat: &chatpb.NewChatTarget{
 			ProjectId:   projectID,
 			WorkspaceId: workspaceID,
-			InitialSettings: &chatpb.InitialChatSettings{
+			InitialSettings: &chatsettingspb.InitialChatSettings{
 				AgentRole:             "default",
 				Supervisor:            chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_OFF,
 				QuestionsEnabled:      &questions,

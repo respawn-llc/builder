@@ -198,20 +198,11 @@ func (s *Service) NewChatSettings(ctx context.Context) (serverapi.ChatSettingsRe
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	entry, ok := catalog.Lookup(config.DefaultSubagentRole)
-	if !ok {
-		return serverapi.ChatSettingsReadResponse{}, errors.New("default Chat Agent baseline is missing")
-	}
-	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog:        catalog,
-		Agent:          config.DefaultSubagentRole,
-		Settings:       entry.Settings.Baseline,
-		CompactionMode: planner.Config.Settings.CompactionMode,
-	})
+	projected, err := projectNewChatCatalog(catalog, planner.Config.Settings.CompactionMode)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	return serverapi.ChatSettingsReadResponse{Settings: settings}, nil
+	return serverapi.ChatSettingsReadResponse{NewChat: &projected}, nil
 }
 
 func (s *Service) SessionChatSettings(
@@ -246,8 +237,7 @@ func (s *Service) SessionChatSettings(
 		facts.TaskShortID = &taskIdentity.TaskShortID
 	}
 	return serverapi.ChatSettingsReadResponse{
-		Settings: settings,
-		Session:  facts,
+		Session: &serverapi.SessionChatSettings{Settings: settings, Session: *facts},
 	}, nil
 }
 

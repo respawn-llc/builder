@@ -1,4 +1,10 @@
 import type { ApiSubscription } from "./apiService";
+import type {
+  ChatSettingsRead,
+  ChatSettingsMutation,
+  ChatSettingsMutationResponse,
+} from "./chatSettingsTypes";
+export type { ChatSettings } from "./chatSettingsTypes";
 import type { ChatTranscriptMessage, ChatTranscriptPayloadByKind } from "./chatTranscriptSchemas";
 import type {
   CompactionRequestID,
@@ -21,7 +27,7 @@ export type ChatSessionTarget = ChatProjectTarget & Readonly<{ sessionID: string
 export type ChatContextTarget = ChatProjectTarget & Readonly<{ sessionID?: string }>;
 export type ChatSettingsTarget =
   (ChatProjectTarget & Readonly<{ kind: "new_chat" }>) | (ChatSessionTarget & Readonly<{ kind: "session" }>);
-export type ChatInitialSettings = Readonly<{
+export type InitialChatSettings = Readonly<{
   agentRole: string;
   supervisor: "off" | "edits" | "all";
   thinking: string | null;
@@ -31,7 +37,7 @@ export type ChatInitialSettings = Readonly<{
 }>;
 export type ChatMutationTarget =
   | (ChatSessionTarget & Readonly<{ kind: "session" }>)
-  | (ChatProjectTarget & Readonly<{ kind: "new_chat"; initialSettings: ChatInitialSettings }>);
+  | (ChatProjectTarget & Readonly<{ kind: "new_chat"; initialSettings: InitialChatSettings }>);
 export type ChatActivation =
   | Readonly<{ kind: "text"; text: string }>
   | Readonly<{
@@ -155,43 +161,6 @@ export type ChatContext = Readonly<{
   compactionRunning: boolean;
   manualCompactAvailable: boolean;
 }>;
-export type ChatSettings = Readonly<{
-  selectedAgent: Readonly<{ role: string; model: string; thinking: string }>;
-  agentChoices: readonly Readonly<{
-    role: string;
-    model: string;
-    thinking: string;
-    tools: readonly string[];
-    customSystemPrompt: boolean;
-    customCapabilities: boolean;
-    agentCallable: boolean;
-  }>[];
-  agentEditability: string;
-  supervisor: Readonly<{
-    value: "off" | "edits" | "all";
-    baseline: "off" | "edits" | "all";
-    editability: string;
-  }>;
-  thinking: Readonly<{
-    kind: "enumerated" | "custom";
-    value: string;
-    baselineValue: string;
-    values: readonly string[];
-    editability: string;
-  }> | null;
-  fast: Readonly<{ value: boolean; editability: string }> | null;
-  questions: Readonly<{ capable: boolean; enabled: boolean; editability: string }>;
-  autoCompaction: Readonly<{
-    policy: "optional" | "required" | "disabled";
-    stored: boolean;
-    effective: boolean;
-    editability: string;
-  }>;
-  agentLocked: boolean;
-  workflowLocked: boolean;
-  cachingLocked: boolean;
-  session: Readonly<{ sessionID: string; previousSessionID: string | null; taskID: string | null }> | null;
-}>;
 export type ChatTranscriptPage = Readonly<{
   sessionID: string;
   sessionName: string | null;
@@ -227,7 +196,11 @@ export type ChatApi = Readonly<{
   removePendingWork(target: ChatSessionTarget, itemID: PendingWorkIdentity): Promise<PendingWorkRestoration>;
   getMainView(target: ChatSessionTarget): Promise<ChatMainView>;
   getContext(target: ChatContextTarget): Promise<ChatContext>;
-  getSettings(target: ChatSettingsTarget): Promise<ChatSettings>;
+  getSettings(target: ChatSettingsTarget): Promise<ChatSettingsRead>;
+  mutateSettings(
+    target: ChatSessionTarget,
+    operation: ChatSettingsMutation,
+  ): Promise<ChatSettingsMutationResponse>;
   getTranscriptPage(
     target: ChatSessionTarget,
     cursor?: Readonly<{ direction: "older" | "newer"; value: number }>,

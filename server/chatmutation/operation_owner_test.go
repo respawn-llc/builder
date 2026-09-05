@@ -141,7 +141,7 @@ func (s lifecyclePersistedSessions) ResolvePersistedSession(
 type lifecycleCreation struct {
 	recorder         *lifecycleRecorder
 	sessionID        runtimeids.SessionID
-	expectedSettings *chatpb.InitialChatSettings
+	expectedSettings *chatsettingspb.InitialChatSettings
 	expectedDraft    string
 }
 
@@ -362,7 +362,7 @@ func validNewChatTarget() *chatpb.NewChatTarget {
 	return &chatpb.NewChatTarget{
 		ProjectId:   "project-1",
 		WorkspaceId: "workspace-1",
-		InitialSettings: &chatpb.InitialChatSettings{
+		InitialSettings: &chatsettingspb.InitialChatSettings{
 			AgentRole:             "default",
 			Supervisor:            chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_OFF,
 			QuestionsEnabled:      &questions,
