@@ -146,7 +146,7 @@ Context source constraints:
 - `node:<node-key>` requires an agent node that is guaranteed to run before the transition source and is not the edge target.
 - Manual task moves support `previous_target` and `previous_target_or_new` through concrete edges. `node:<node-key>` remains blocked.
 
-Use `--requires-approval` when a transition must stop for explicit review before the target node starts. Approval can happen asynchronously with a delay, thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point continuation requires approval.
+Use `--requires-approval` when a transition must stop for explicit review before the target node starts. Approval can happen asynchronously with a delay, thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the user will tell you at which point continuation requires approval.
 
 ## Completion modes
 The completion mode controls the technicality of how an agent node signals task completion.

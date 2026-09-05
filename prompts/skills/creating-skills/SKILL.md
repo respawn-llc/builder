@@ -68,8 +68,8 @@ Overall, treat writing skills like public developer documentation or guidance. A
   - Bad: "Per user instruction, corrected this skill to explain Decompose Components".
   - Bad: "Added section about committing as requested".
   - Bad: "Introduced Decompose on April 29th in commit `abcdef`".
-  - Bad: <User complains about wrong TDD approach>, you write "Encoding correct TDD patterns, not shallow assertions" (in an attempt to appease the user, but as a result encoding irrelevant emotional statement in docs)
-  - Bad: User mentions "skill should apply outside this codebase" -> you write "This works especially well outside the original codebase" (You encoded irrelevant info from the user prompt in public documentation)
+  - Bad: <user complains about wrong TDD approach>, you write "Encoding correct TDD patterns, not shallow assertions" (in an attempt to appease the user, but as a result encoding irrelevant emotional statement in docs)
+  - Bad: user mentions "skill should apply outside this codebase" -> you write "This works especially well outside the original codebase" (You encoded irrelevant info from the user prompt in public documentation)
 - Don't praise or explain what you're writing by contrasting it with an implied worse alternative.
   - Bad: "Guide to effective test writing, not shallow coverage pumping". Good: "Testing with Kotest"
 - State guidance directly. Avoid negative comparisons shaped like "`X` is not `Y`."

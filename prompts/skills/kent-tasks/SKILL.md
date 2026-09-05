@@ -14,7 +14,7 @@ A task is a durable user-facing unit of work moving through one workflow.
 - Task body and comments are formatted as markdown.
 
 ## Principles of task management
-- User will be asking you to create tasks, or you might decide to interact with tasks on your own. Both are fine, with the exception that you do **NOT** execute destructive (task delete, task edit with removal of information, task comment delete on others comments) and cost-incurring (task start, task move, task approve) ops without explicit user consent or request.
+- The user will be asking you to create tasks, or you might decide to interact with tasks on your own. Both are fine, with the exception that you do **NOT** execute destructive (task delete, task edit with removal of information, task comment delete on others comments) and cost-incurring (task start, task move, task approve) ops without explicit user consent or request.
 - You may start, interrupt, resume, approve, or move another Task, but never the Task assigned to your workflow Session. Do not attempt to evade this restriction.
 - Structure worktree-based tasks so each task is independently shippable. Tasks do not share unmerged worktree changes. Keep coupled work in one task, create dependent tasks that can merge sequentially, or select a shared git worktree policy when starting the task.
 - You can inspect the workflow with `kent workflow list` + `kent workflow inspect` for context on what will actually be done for any given task. Adapt the level of detail and how you write requirements in tasks to the workflow you're working with. More info in the `kent-workflows` docs.

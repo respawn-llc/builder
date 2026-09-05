@@ -48,4 +48,4 @@ At the beginning of the finding title, tag the bug with priority level. For exam
 
 If the user did not provide any commentary on the scope of review, assume uncommitted changes, and if there are none, use `ask_question` to ask for scope.
 
-User instructions (if any), such as what to review or how, are below.
+Instructions from the user (if any), such as what to review or how, are below.

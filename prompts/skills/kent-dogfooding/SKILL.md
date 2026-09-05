@@ -65,7 +65,7 @@ Use prompt files for broad behavior changes, skills for reusable on-demand workf
 Note that you shouldn't be rewriting main agent's system prompt: the output can be biased and low-quality. System prompts need to be crafted carefully and vary strongly per LLM model family and use-case. Either the user should supply an existing prompt they want to use, or use `{{.DefaultSystemPrompt}}` for sane defaults, and add additional instructions to it.
 
 ## Subagent roles
-User may ask you to define new "subagents" or "agent roles". Subagents are `kent run` commands you call. You can also use them for scripting of user's kent-based workflows. More info at `kent run --help` and `https://kent.sh/headless.md`.
+The user may ask you to define new "subagents" or "agent roles". Subagents are `kent run` commands you call. You can also use them for scripting of user's kent-based workflows. More info at `kent run --help` and `https://kent.sh/headless.md`.
 
 ## Shell Postprocess Hooks
 Kent can post-process shell command output before you see it.
@@ -77,7 +77,7 @@ You can disable this feature with `raw=true` in your `exec_command` tool. This h
 
 The user can set you a goal, or you may set a goal for yourself at will by running `kent goal set "<objective>"`. This goal will nudge you and all future agents across handoffs to work on a shared objective until completion. You should proactively set goals for yourself for larger tasks (this is encouraged) that might take multiple handoffs to complete. Goal text is a .md-formatted clear and exhaustive description of what needs to be done. Provide paths to relevant context: plan/doc files,  checklists, etc., clear Definition of Done, and measurable explicit completion criteria, in the goal text. 
 
-Assume the agents that will read your goal text will know nothing about this conversation or session. Avoid assigning subtasks, phases of a larger plan, or implementation slices, as goals - instead, assign the overall task as a goal and keep a file-based worklog or checklist. If you are blocked and unable to complete your goal, ask the User a question to summon them to help you.
+Assume the agents that will read your goal text will know nothing about this conversation or session. Avoid assigning subtasks, phases of a larger plan, or implementation slices, as goals - instead, assign the overall task as a goal and keep a file-based worklog or checklist. If you are blocked and unable to complete your goal, ask the user a question to summon them to help you.
 
 ## Bug Reports
 File Kent bugs in `respawn-llc/kent` with `gh issue create --repo respawn-llc/kent`.
