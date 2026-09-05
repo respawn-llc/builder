@@ -19,6 +19,10 @@ const target = {
   workspace: { workspaceID: "workspace-1" },
   sessionID,
 } as const;
+const connected = {
+  serverMutationAvailability: "available",
+  authoritativeRefreshGeneration: Symbol("initial"),
+} as const;
 const settings: ChatSettings = {
   selectedAgent: { role: "default", model: "model", thinking: "medium" },
   agentChoices: [
@@ -81,7 +85,7 @@ it("loads ordinary Session Settings through the same feature boundary", async ()
   const services = createTestServices([]);
   const read = deferred<ChatSettingsRead>();
   const getSettings = vi.spyOn(services.api.chat, "getSettings").mockReturnValue(read.promise);
-  const { result } = renderHook(() => useChatSettings({ target, onContextChange: vi.fn() }), {
+  const { result } = renderHook(() => useChatSettings({ ...connected, target, onContextChange: vi.fn() }), {
     wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
       <TestAppProviders services={services}>{children}</TestAppProviders>
     ),
@@ -109,7 +113,7 @@ it("applies overlapping successes in delivery order and reports each mutation Co
     .mockReturnValueOnce(first.promise)
     .mockReturnValueOnce(second.promise);
   const onContextChange = vi.fn<(value: ChatContext) => void>();
-  const { result } = renderHook(() => useChatSettings({ target, onContextChange }), {
+  const { result } = renderHook(() => useChatSettings({ ...connected, target, onContextChange }), {
     wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
       <TestAppProviders services={services}>{children}</TestAppProviders>
     ),
@@ -118,7 +122,8 @@ it("applies overlapping successes in delivery order and reports each mutation Co
     expect(result.current.kind).toBe("ready-session");
   });
   act(() => {
-    if (result.current.kind !== "ready-session") throw new Error("Expected Session.");
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
     void result.current.activate({ kind: "questions", enabled: false });
     void result.current.activate({ kind: "fast", enabled: true });
   });
@@ -157,7 +162,7 @@ it("applies a late typed rejection as complete authoritative state and reports i
     .mockReturnValueOnce(second.promise);
   const notice = vi.spyOn(ui, "showStatusToast").mockImplementation(() => undefined);
   const onContextChange = vi.fn<(value: ChatContext) => void>();
-  const { result } = renderHook(() => useChatSettings({ target, onContextChange }), {
+  const { result } = renderHook(() => useChatSettings({ ...connected, target, onContextChange }), {
     wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
       <TestAppProviders services={services}>{children}</TestAppProviders>
     ),
@@ -166,7 +171,8 @@ it("applies a late typed rejection as complete authoritative state and reports i
     expect(result.current.kind).toBe("ready-session");
   });
   act(() => {
-    if (result.current.kind !== "ready-session") throw new Error("Expected Session.");
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
     void result.current.activate({ kind: "thinking", value: "unsupported request" });
     void result.current.activate({ kind: "questions", enabled: false });
   });
@@ -204,7 +210,7 @@ it.each(["applied", "rejected"] as const)(
       .mockReturnValueOnce(third.promise);
     const notice = vi.spyOn(ui, "showStatusToast").mockImplementation(() => undefined);
     const onContextChange = vi.fn<(value: ChatContext) => void>();
-    const { result } = renderHook(() => useChatSettings({ target, onContextChange }), {
+    const { result } = renderHook(() => useChatSettings({ ...connected, target, onContextChange }), {
       wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
         <TestAppProviders services={services}>{children}</TestAppProviders>
       ),
@@ -213,7 +219,11 @@ it.each(["applied", "rejected"] as const)(
       expect(result.current.kind).toBe("ready-session");
     });
     act(() => {
-      if (result.current.kind !== "ready-session") throw new Error("Expected Session.");
+      if (
+        result.current.kind !== "ready-session" ||
+        result.current.serverMutationAvailability !== "available"
+      )
+        throw new Error("Expected available Session.");
       void result.current.activate({ kind: "thinking", value: "will fail" }).catch(() => undefined);
       void result.current.activate({ kind: "questions", enabled: false });
     });
@@ -229,7 +239,11 @@ it.each(["applied", "rejected"] as const)(
       await second.promise;
     });
     act(() => {
-      if (result.current.kind !== "ready-session") throw new Error("Expected Session.");
+      if (
+        result.current.kind !== "ready-session" ||
+        result.current.serverMutationAvailability !== "available"
+      )
+        throw new Error("Expected available Session.");
       void result.current.activate({ kind: "questions", enabled: false });
     });
     expect(result.current).toMatchObject({ settings: { questions: { enabled: false } } });
@@ -264,7 +278,7 @@ it("drops old Session completions after target replacement and installs the newl
   const { result, rerender } = renderHook<ChatSettingsFeature, ChatSettingsOptions>(
     (options) => useChatSettings(options),
     {
-      initialProps: { target, onContextChange },
+      initialProps: { ...connected, target, onContextChange },
       wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
         <TestAppProviders services={services}>{children}</TestAppProviders>
       ),
@@ -274,10 +288,11 @@ it("drops old Session completions after target replacement and installs the newl
     expect(result.current.kind).toBe("ready-session");
   });
   act(() => {
-    if (result.current.kind !== "ready-session") throw new Error("Expected Session.");
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
     void result.current.activate({ kind: "questions", enabled: false });
   });
-  rerender({ target: { ...target, sessionID: newSessionID }, onContextChange });
+  rerender({ ...connected, target: { ...target, sessionID: newSessionID }, onContextChange });
   expect(result.current).toEqual({ kind: "loading-session" });
   const rebased: Extract<ChatSettingsRead, { kind: "session" }> = {
     kind: "session",
@@ -362,7 +377,7 @@ it("replaces New Chat selection with ordinary Session loading before installing 
     result.current.activate({ kind: "thinking", value: "transient input" });
   });
   seen.length = 0;
-  rerender({ target, onContextChange: vi.fn() });
+  rerender({ ...connected, target, onContextChange: vi.fn() });
   expect(seen.every((kind) => kind === "loading-session")).toBe(true);
   expect(result.current).toEqual({ kind: "loading-session" });
   const rebased: ChatSettingsRead = {
@@ -392,7 +407,7 @@ it("exposes whole-Chat Session read failure without retained Settings or local R
   const services = createTestServices([]);
   const read = deferred<ChatSettingsRead>();
   vi.spyOn(services.api.chat, "getSettings").mockReturnValue(read.promise);
-  const { result } = renderHook(() => useChatSettings({ target, onContextChange: vi.fn() }), {
+  const { result } = renderHook(() => useChatSettings({ ...connected, target, onContextChange: vi.fn() }), {
     wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
       <TestAppProviders services={services}>{children}</TestAppProviders>
     ),
@@ -417,7 +432,7 @@ it("preserves exact custom Thinking input and returns distinct completions for t
     .mockReturnValueOnce(rejected.promise)
     .mockReturnValueOnce(failed.promise);
   const notice = vi.spyOn(ui, "showStatusToast").mockImplementation(() => undefined);
-  const { result } = renderHook(() => useChatSettings({ target, onContextChange: vi.fn() }), {
+  const { result } = renderHook(() => useChatSettings({ ...connected, target, onContextChange: vi.fn() }), {
     wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
       <TestAppProviders services={services}>{children}</TestAppProviders>
     ),
@@ -426,7 +441,8 @@ it("preserves exact custom Thinking input and returns distinct completions for t
     expect(result.current.kind).toBe("ready-session");
   });
   const activate = async (value: string) => {
-    if (result.current.kind !== "ready-session") throw new Error("Expected Session.");
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
     return result.current.activate({ kind: "thinking", value });
   };
   let completion: Promise<ChatSettingsMutationResponse>;
@@ -472,5 +488,285 @@ it("preserves exact custom Thinking input and returns distinct completions for t
   });
   expect(result.current).toMatchObject({ settings: canonical.settings });
   expect(notice).toHaveBeenCalledTimes(2);
+  notice.mockRestore();
+});
+
+it("exposes no Session activation while the host reports disconnected", async () => {
+  const services = createTestServices([]);
+  const getSettings = vi.spyOn(services.api.chat, "getSettings").mockResolvedValue(initialRead);
+  const mutate = vi.spyOn(services.api.chat, "mutateSettings");
+  const generation = Symbol("initial");
+  const { result, rerender } = renderHook<ChatSettingsFeature, ChatSettingsOptions>(
+    (options) => useChatSettings(options),
+    {
+      initialProps: {
+        target,
+        onContextChange: vi.fn(),
+        serverMutationAvailability: "available",
+        authoritativeRefreshGeneration: generation,
+      },
+      wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
+        <TestAppProviders services={services}>{children}</TestAppProviders>
+      ),
+    },
+  );
+  await waitFor(() => {
+    expect(result.current.kind).toBe("ready-session");
+  });
+  rerender({
+    target,
+    onContextChange: vi.fn(),
+    serverMutationAvailability: "disconnected",
+    authoritativeRefreshGeneration: generation,
+  });
+  expect(result.current).toEqual({
+    kind: "ready-session",
+    settings,
+    session: initialRead.session,
+    serverMutationAvailability: "disconnected",
+  });
+  expect(getSettings).toHaveBeenCalledOnce();
+  expect(mutate).not.toHaveBeenCalled();
+  rerender({
+    target,
+    onContextChange: vi.fn(),
+    serverMutationAvailability: "available",
+    authoritativeRefreshGeneration: generation,
+  });
+  expect(result.current).toMatchObject({ kind: "ready-session", serverMutationAvailability: "available" });
+  expect(getSettings).toHaveBeenCalledOnce();
+});
+
+it("starts one refresh per changed host generation and re-enables mutations before refresh delivery", async () => {
+  const services = createTestServices([]);
+  const refresh = deferred<ChatSettingsRead>();
+  const getSettings = vi
+    .spyOn(services.api.chat, "getSettings")
+    .mockResolvedValueOnce(initialRead)
+    .mockReturnValue(refresh.promise);
+  const mutate = vi.spyOn(services.api.chat, "mutateSettings").mockResolvedValue(response());
+  const initialGeneration = Symbol("initial");
+  const nextGeneration = Symbol("refresh");
+  const { result, rerender } = renderHook<ChatSettingsFeature, ChatSettingsOptions>(
+    (options) => useChatSettings(options),
+    {
+      initialProps: {
+        target,
+        onContextChange: vi.fn(),
+        serverMutationAvailability: "disconnected",
+        authoritativeRefreshGeneration: initialGeneration,
+      },
+      wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
+        <TestAppProviders services={services}>{children}</TestAppProviders>
+      ),
+    },
+  );
+  await waitFor(() => {
+    expect(result.current.kind).toBe("ready-session");
+  });
+  const available: ChatSettingsOptions = {
+    target,
+    onContextChange: vi.fn(),
+    serverMutationAvailability: "available",
+    authoritativeRefreshGeneration: nextGeneration,
+  };
+  rerender(available);
+  expect(getSettings).toHaveBeenCalledTimes(2);
+  expect(result.current).toMatchObject({
+    kind: "ready-session",
+    settings,
+    serverMutationAvailability: "available",
+  });
+  rerender({ ...available, onContextChange: vi.fn() });
+  expect(getSettings).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
+    await result.current.activate({ kind: "questions", enabled: false });
+  });
+  expect(mutate).toHaveBeenCalledOnce();
+  await act(async () => {
+    refresh.resolve(initialRead);
+    await refresh.promise;
+  });
+  expect(getSettings).toHaveBeenCalledTimes(2);
+});
+
+it("preserves whichever authoritative projection is current when a refresh fails", async () => {
+  const services = createTestServices([]);
+  const refresh = deferred<ChatSettingsRead>();
+  const mutation = deferred<ChatSettingsMutationResponse>();
+  const getSettings = vi
+    .spyOn(services.api.chat, "getSettings")
+    .mockResolvedValueOnce(initialRead)
+    .mockReturnValue(refresh.promise);
+  vi.spyOn(services.api.chat, "mutateSettings").mockReturnValue(mutation.promise);
+  const notice = vi.spyOn(ui, "showStatusToast").mockImplementation(() => undefined);
+  const { result, rerender } = renderHook<ChatSettingsFeature, ChatSettingsOptions>(
+    (options) => useChatSettings(options),
+    {
+      initialProps: { ...connected, target, onContextChange: vi.fn() },
+      wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
+        <TestAppProviders services={services}>{children}</TestAppProviders>
+      ),
+    },
+  );
+  await waitFor(() => {
+    expect(result.current.kind).toBe("ready-session");
+  });
+  rerender({
+    ...connected,
+    target,
+    onContextChange: vi.fn(),
+    authoritativeRefreshGeneration: Symbol("next"),
+  });
+  act(() => {
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
+    void result.current.activate({ kind: "questions", enabled: false });
+  });
+  const delivered = response({ ...settings, questions: { ...settings.questions, enabled: false } });
+  await act(async () => {
+    mutation.resolve(delivered);
+    await mutation.promise;
+  });
+  await act(async () => {
+    refresh.reject(new Error("read failed"));
+    await refresh.promise.catch(() => undefined);
+  });
+  expect(result.current).toMatchObject({ kind: "ready-session", settings: delivered.settings });
+  expect(notice).toHaveBeenCalledOnce();
+  expect(notice.mock.lastCall?.[0].onAction).toBeUndefined();
+  expect(getSettings).toHaveBeenCalledTimes(2);
+  notice.mockRestore();
+});
+
+it.each(["refresh-first", "mutation-first"] as const)(
+  "applies refresh and mutation results in %s delivery order",
+  async (order) => {
+    const services = createTestServices([]);
+    const refresh = deferred<ChatSettingsRead>();
+    const mutation = deferred<ChatSettingsMutationResponse>();
+    vi.spyOn(services.api.chat, "getSettings")
+      .mockResolvedValueOnce(initialRead)
+      .mockReturnValue(refresh.promise);
+    vi.spyOn(services.api.chat, "mutateSettings").mockReturnValue(mutation.promise);
+    const onContextChange = vi.fn<(value: ChatContext) => void>();
+    const { result, rerender } = renderHook<ChatSettingsFeature, ChatSettingsOptions>(
+      (options) => useChatSettings(options),
+      {
+        initialProps: { ...connected, target, onContextChange },
+        wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
+          <TestAppProviders services={services}>{children}</TestAppProviders>
+        ),
+      },
+    );
+    await waitFor(() => {
+      expect(result.current.kind).toBe("ready-session");
+    });
+    rerender({ ...connected, target, onContextChange, authoritativeRefreshGeneration: Symbol("next") });
+    act(() => {
+      if (
+        result.current.kind !== "ready-session" ||
+        result.current.serverMutationAvailability !== "available"
+      )
+        throw new Error("Expected available Session.");
+      void result.current.activate({ kind: "questions", enabled: false });
+    });
+    const refreshValue: ChatSettingsRead = {
+      ...initialRead,
+      settings: { ...settings, supervisor: { ...settings.supervisor, value: "all" } },
+    };
+    const mutationValue = response({ ...settings, questions: { ...settings.questions, enabled: false } });
+    const deliverRefresh = async () => {
+      refresh.resolve(refreshValue);
+      await refresh.promise;
+    };
+    const deliverMutation = async () => {
+      mutation.resolve(mutationValue);
+      await mutation.promise;
+    };
+    if (order === "refresh-first") {
+      await act(deliverRefresh);
+      expect(result.current).toMatchObject({ settings: refreshValue.settings });
+      await act(deliverMutation);
+      expect(result.current).toMatchObject({ settings: mutationValue.settings });
+    } else {
+      await act(deliverMutation);
+      expect(result.current).toMatchObject({ settings: mutationValue.settings });
+      await act(deliverRefresh);
+      expect(result.current).toMatchObject({ settings: refreshValue.settings });
+    }
+    expect(onContextChange).toHaveBeenCalledExactlyOnceWith(mutationValue.context);
+  },
+);
+
+it("discards old reads and mutations through A to B to A target replacement", async () => {
+  const services = createTestServices([]);
+  const oldRefresh = deferred<ChatSettingsRead>();
+  const oldMutation = deferred<ChatSettingsMutationResponse>();
+  const abandonedRead = deferred<ChatSettingsRead>();
+  const latestRead = deferred<ChatSettingsRead>();
+  const getSettings = vi
+    .spyOn(services.api.chat, "getSettings")
+    .mockResolvedValueOnce(initialRead)
+    .mockReturnValueOnce(oldRefresh.promise)
+    .mockReturnValueOnce(abandonedRead.promise)
+    .mockReturnValueOnce(latestRead.promise);
+  vi.spyOn(services.api.chat, "mutateSettings").mockReturnValueOnce(oldMutation.promise);
+  const onContextChange = vi.fn<(value: ChatContext) => void>();
+  const notice = vi.spyOn(ui, "showStatusToast").mockImplementation(() => undefined);
+  const { result, rerender } = renderHook<ChatSettingsFeature, ChatSettingsOptions>(
+    (options) => useChatSettings(options),
+    {
+      initialProps: { ...connected, target, onContextChange },
+      wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
+        <TestAppProviders services={services}>{children}</TestAppProviders>
+      ),
+    },
+  );
+  await waitFor(() => {
+    expect(result.current.kind).toBe("ready-session");
+  });
+  const generation = Symbol("refresh");
+  rerender({ ...connected, target, onContextChange, authoritativeRefreshGeneration: generation });
+  act(() => {
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
+    void result.current.activate({ kind: "questions", enabled: false });
+  });
+  rerender({
+    ...connected,
+    target: { ...target, sessionID: "223e4567-e89b-42d3-a456-426614174000" },
+    onContextChange,
+  });
+  rerender({ ...connected, target, onContextChange, authoritativeRefreshGeneration: generation });
+  expect(result.current).toEqual({ kind: "loading-session" });
+  const latest: ChatSettingsRead = {
+    ...initialRead,
+    settings: { ...settings, supervisor: { ...settings.supervisor, value: "all" } },
+  };
+  await act(async () => {
+    latestRead.resolve(latest);
+    await latestRead.promise;
+  });
+  await act(async () => {
+    oldRefresh.resolve(initialRead);
+    oldMutation.resolve(response());
+    abandonedRead.reject(new Error("abandoned target read failed"));
+    await Promise.all([
+      oldRefresh.promise,
+      oldMutation.promise,
+      abandonedRead.promise.catch(() => undefined),
+    ]);
+  });
+  expect(result.current).toMatchObject({
+    kind: "ready-session",
+    settings: latest.settings,
+    session: initialRead.session,
+  });
+  expect(getSettings).toHaveBeenCalledTimes(4);
+  expect(onContextChange).not.toHaveBeenCalled();
+  expect(notice).not.toHaveBeenCalled();
   notice.mockRestore();
 });

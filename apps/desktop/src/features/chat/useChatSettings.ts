@@ -24,6 +24,8 @@ export type ChatSettingsOptions =
     }>
   | Readonly<{
       target: Extract<ChatSettingsTarget, { kind: "session" }>;
+      serverMutationAvailability: "available" | "disconnected";
+      authoritativeRefreshGeneration: unknown;
       onContextChange(context: ChatContext): void;
     }>;
 
@@ -50,7 +52,13 @@ export type ChatSettingsFeature =
   | Exclude<SettingsState, ReadyNewChat | ReadySession>
   | (ReadyNewChat & Readonly<{ activate(operation: ChatSettingsMutation): void }>)
   | (Omit<ReadySession, "lastDelivered"> &
-      Readonly<{ activate(operation: ChatSettingsMutation): Promise<ChatSettingsMutationResponse> }>);
+      (
+        | Readonly<{
+            serverMutationAvailability: "available";
+            activate(operation: ChatSettingsMutation): Promise<ChatSettingsMutationResponse>;
+          }>
+        | Readonly<{ serverMutationAvailability: "disconnected" }>
+      ));
 
 type SettingsAction =
   | Readonly<{ kind: "loading" }>
@@ -101,38 +109,9 @@ export function useChatSettings(options: ChatSettingsOptions): ChatSettingsFeatu
     [requestedTarget],
   );
   const observation = useRef<ChatSettingsTarget | null>(null);
-  useEffect(() => {
-    observation.current = requestedTarget;
-    dispatch({ kind: "loading" });
-    void api.chat.getSettings(requestedTarget).then(
-      (response) => {
-        if (observation.current !== requestedTarget) return;
-        if (response.kind !== targetKind) {
-          dispatch({
-            kind: "failed",
-            targetKind,
-            error: new ContractError("Chat Settings returned a different target kind."),
-          });
-          return;
-        }
-        dispatch({ kind: "loaded", response });
-      },
-      (error: unknown) => {
-        if (observation.current === requestedTarget) dispatch({ kind: "failed", targetKind, error });
-      },
-    );
-    return () => {
-      observation.current = null;
-    };
-  }, [api, requestedTarget, targetKind, dispatch]);
-
-  const reportSelection = useEffectEvent((selection: InitialChatSettings) => {
-    if ("onInitialSettingsChange" in options) options.onInitialSettingsChange(selection);
-  });
-  useEffect(() => {
-    if (state.kind === "ready-new-chat") reportSelection(state.initialSettings);
-  }, [state]);
-
+  const generation =
+    "authoritativeRefreshGeneration" in options ? options.authoritativeRefreshGeneration : null;
+  const observedRefresh = useRef<Readonly<{ target: ChatSettingsTarget; generation: unknown }> | null>(null);
   function reportOperationFailure(body: string) {
     showStatusToast({
       id: "chat-settings-operation",
@@ -141,11 +120,60 @@ export function useChatSettings(options: ChatSettingsOptions): ChatSettingsFeatu
       body,
     });
   }
+  const readSettings = useEffectEvent((kind: "initial" | "refresh") => {
+    function failed(error: unknown) {
+      if (observation.current !== requestedTarget) return;
+      if (kind === "refresh") reportOperationFailure(errorMessage(error));
+      else dispatch({ kind: "failed", targetKind, error });
+    }
+    void api.chat.getSettings(requestedTarget).then((response) => {
+      if (observation.current !== requestedTarget) return;
+      if (response.kind !== targetKind) {
+        failed(new ContractError("Chat Settings returned a different target kind."));
+        return;
+      }
+      dispatch({ kind: "loaded", response });
+    }, failed);
+  });
+  useEffect(() => {
+    observation.current = requestedTarget;
+    dispatch({ kind: "loading" });
+    readSettings("initial");
+    return () => {
+      observation.current = null;
+    };
+  }, [api, requestedTarget, targetKind, dispatch]);
+
+  useEffect(() => {
+    const previous = observedRefresh.current;
+    observedRefresh.current = { target: requestedTarget, generation };
+    if (previous?.target !== requestedTarget || Object.is(previous.generation, generation)) return;
+    if (requestedTarget.kind !== "session" || state.kind !== "ready-session") return;
+    readSettings("refresh");
+  }, [api, requestedTarget, generation, state.kind, dispatch]);
+
+  const reportSelection = useEffectEvent((selection: InitialChatSettings) => {
+    if ("onInitialSettingsChange" in options) options.onInitialSettingsChange(selection);
+  });
+  useEffect(() => {
+    if (state.kind === "ready-new-chat") reportSelection(state.initialSettings);
+  }, [state]);
 
   if (state.kind === "ready-session") {
     if (target.kind !== "session" || !("onContextChange" in options)) return loadingState(target.kind);
-    const ready: Extract<ChatSettingsFeature, { kind: "ready-session" }> = {
+    if (options.serverMutationAvailability === "disconnected")
+      return {
+        kind: state.kind,
+        settings: state.settings,
+        session: state.session,
+        serverMutationAvailability: "disconnected",
+      };
+    const ready: Extract<
+      ChatSettingsFeature,
+      { kind: "ready-session"; serverMutationAvailability: "available" }
+    > = {
       kind: state.kind,
+      serverMutationAvailability: "available",
       settings: state.settings,
       session: state.session,
       async activate(operation) {
