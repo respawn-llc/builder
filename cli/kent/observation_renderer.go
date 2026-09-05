@@ -34,16 +34,12 @@ func writeObservedQuestion(w io.Writer, question serverapi.ObservationQuestion, 
 	}
 }
 
-func observationQuestionHint(sessionID string, question serverapi.ObservationQuestion) string {
-	args := []string{config.Command, "question", "answer", "--session", sessionID}
-	return commandString(append(args, observationQuestionAnswerArgs(question)...))
-}
-
-func observationQuestionAnswerArgs(question serverapi.ObservationQuestion) []string {
+func observationQuestionHint(targetArgs []string, question serverapi.ObservationQuestion) string {
+	args := append([]string{config.Command, "question", "answer"}, targetArgs...)
 	if question.Approval != nil || question.Ask != nil && len(question.Ask.Suggestions) > 0 {
-		return []string{"--option", "<number>"}
+		return commandString(append(args, "--option", "<number>")) + ` [--commentary "optional freeform answer or additions"]`
 	}
-	return []string{"--commentary", "<answer>"}
+	return commandString(append(args, "--commentary", "<answer>"))
 }
 
 func writeRunWatchResponse(w io.Writer, stderr io.Writer, response serverapi.RuntimeLiveWatchResponse, continueHint string) int {
@@ -56,7 +52,7 @@ func writeRunWatchResponse(w io.Writer, stderr io.Writer, response serverapi.Run
 			fmt.Fprintf(stderr, "invalid live watch response: %s outcome has no question payload\n", response.Outcome.Kind)
 			return 1
 		}
-		writeObservedQuestion(w, *response.Outcome.Question, observationQuestionHint(response.SessionID, *response.Outcome.Question))
+		writeObservedQuestion(w, *response.Outcome.Question, observationQuestionHint([]string{"--session", response.SessionID}, *response.Outcome.Question))
 	case serverapi.RuntimeLiveWatchFinalAnswer:
 		if response.Outcome.FinalAnswer != nil {
 			result := ""

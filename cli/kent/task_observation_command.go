@@ -139,16 +139,15 @@ func writeTaskObservation(stdout io.Writer, stderr io.Writer, response serverapi
 				fmt.Fprintf(stderr, "invalid task observation response: %s outcome has no question payload\n", outcome.Kind)
 				return 1
 			}
-			hintArgs := []string{config.Command, "question", "answer", "--task", response.TaskShortID}
+			hintArgs := []string{"--task", response.TaskShortID}
 			if questionCount > 1 && outcome.SessionID != nil {
-				hintArgs = []string{config.Command, "question", "answer", "--session", *outcome.SessionID}
+				hintArgs = []string{"--session", *outcome.SessionID}
 			}
-			hintArgs = append(hintArgs, observationQuestionAnswerArgs(*outcome.Question)...)
 			if strings.TrimSpace(projectRef) != "" && projectRef != "." && questionCount == 1 {
 				hintArgs = append(hintArgs, "--project", projectRef)
 			}
 			writeTaskOutcomeDiscriminator(stdout, outcome)
-			writeObservedQuestion(stdout, *outcome.Question, commandString(hintArgs))
+			writeObservedQuestion(stdout, *outcome.Question, observationQuestionHint(hintArgs, *outcome.Question))
 		case serverapi.WorkflowTaskObservationExecutionError, serverapi.WorkflowTaskObservationInterrupted:
 			if outcome.Failure == nil {
 				fmt.Fprintf(stderr, "invalid task observation response: %s outcome has no failure payload\n", outcome.Kind)

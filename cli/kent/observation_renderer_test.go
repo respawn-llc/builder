@@ -26,7 +26,7 @@ func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 	}
 }
 
-func TestRunWatchApprovalHintUsesOptionOnly(t *testing.T) {
+func TestRunWatchApprovalHintTargetsSession(t *testing.T) {
 	sessionID := "session-dynamic"
 	var output bytes.Buffer
 	code := writeRunWatchResponse(&output, io.Discard, serverapi.RuntimeLiveWatchResponse{

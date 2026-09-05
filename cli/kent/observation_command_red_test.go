@@ -90,7 +90,8 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 		!strings.Contains(text, commandString([]string{
 			config.Command, "question", "answer",
 			"--task", response.TaskShortID,
-			"--option", "<number>",
+		})) ||
+		!strings.Contains(text, commandString([]string{
 			"--project", projectRef,
 		})) ||
 		strings.Contains(text, "--session "+sessionID) {

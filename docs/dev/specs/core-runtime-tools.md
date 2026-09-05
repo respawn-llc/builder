@@ -130,6 +130,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - The oversized-output guard does not alter a call when `max_output_tokens` is omitted, the requested cap is at or below the threshold, or the estimated final result is at or below the threshold.
 - A successful foreground command with output returns only that plaintext. Any completed foreground command without output returns `Exit code N, no output.`. An unsuccessful foreground command with output returns `Exit code N, output:` followed by the output.
 - Background completion and polling always include the exit code. Completion with no output says `Exit code N, no output.`. Lifecycle facts remain separate from output summaries.
+- Completed background polling with output must list wall time, the output-file path when available, and `Exit code N, output:` in that order, followed by the command output.
 - Concise background output may hide an inline preview, but completion must expose the exit code and output-file location when output exists and must not claim there was no output. Recoverable warnings remain visible and count as output, but do not imply command-log content.
 - An invalid background-completion state fails fast with diagnostics in debug mode. Production preserves the terminal process facts, records the diagnostic, and reports an explicit Kent error instead of inventing successful or empty output.
 - Transient model-step failures retry after `1s`, `2s`, `4s`, `8s`, and `16s`. Ongoing mode shows concise model/API errors; detail and logs retain full details.

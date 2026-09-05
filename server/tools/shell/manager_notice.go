@@ -560,12 +560,11 @@ func renderExecPresentation(presentation execPresentation) string {
 		if output == "" {
 			return fmt.Sprintf("Exit code %d, no output.", presentation.exitCode)
 		}
-		sections := []string{fmt.Sprintf("Exit code %d, output:", presentation.exitCode)}
-		sections = append(sections, fmt.Sprintf("Wall time: %.4f seconds", presentation.wallTime.Seconds()))
+		sections := []string{fmt.Sprintf("Wall time: %.4f seconds", presentation.wallTime.Seconds())}
 		if presentation.outputPath != "" {
-			sections = append(sections, fmt.Sprintf("Log file: %s", presentation.outputPath))
+			sections = append(sections, fmt.Sprintf("Output file: %s", presentation.outputPath))
 		}
-		sections = append(sections, output)
+		sections = append(sections, fmt.Sprintf("Exit code %d, output:", presentation.exitCode), output)
 		return strings.Join(sections, "\n")
 	default:
 		panic(fmt.Sprintf("unknown exec presentation kind %d", presentation.kind))

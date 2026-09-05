@@ -278,9 +278,10 @@ To respond, run: kent run steer <source-session-id> "message"
 - Run watch is Session-scoped. It does not target Script Nodes or follow a Session's Task into Script work.
 - Run watch renders a Question through the same live-prompt presentation as `kent question --session`.
 - Run watch then prints a blank line and a directly targeted answer template.
-- A suggested Question uses `Answer with: kent question answer --session <session-id> --option <number>`.
+- A suggested Question uses `Answer with: kent question answer --session <session-id> --option <number> [--commentary "optional freeform answer or additions"]`.
 - A freeform Question uses `Answer with: kent question answer --session <session-id> --commentary "<answer>"`.
 - An access request always uses the numbered-option answer template. Its labels come from the authoritative live prompt.
+- Task watch must use the same answer templates with its Task or Session target and any required Project selector.
 - Run watch renders a Final answer and continuation hint through the same presentation as Run wait.
 - Human Run wait and watch use the no-final-result presentation and exit code 1.
 - Run watch prints authoritative reason and diagnostic text for Execution error and Interrupted outcomes.
