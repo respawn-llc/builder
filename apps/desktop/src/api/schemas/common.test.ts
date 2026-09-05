@@ -14,7 +14,7 @@ const baseAttentionItem = {
   question: {
     session_id: "session-1",
     step_id: "22222222-2222-4222-8222-222222222222",
-    prompt_id: "ask-1",
+    tool_call_id: "ask-1",
     kind: "ordinary",
     suggestions: [],
     recommended_option_index: null,
@@ -89,7 +89,7 @@ describe("attentionItemSchema", () => {
     ) {
       throw new Error("attention variants did not decode to their discriminants");
     }
-    expect(question.question.promptID).toBe("ask-1");
+    expect(question.question.toolCallID).toBe("ask-1");
     expect(question.sessionName).toBe("Session one");
     expect(approval.approvalSnapshot).not.toBeNull();
     expect(interrupted.currentNode.nodeID).toBe("node-1");
@@ -106,7 +106,8 @@ describe("attentionItemSchema", () => {
       { ...baseAttentionItem, task_title: "" },
       { ...baseAttentionItem, workflow_id: "" },
       { ...baseAttentionItem, current_node: { ...baseAttentionItem.current_node, node_id: "" } },
-      { ...baseAttentionItem, question: { ...baseAttentionItem.question, prompt_id: "" } },
+      { ...baseAttentionItem, question: { ...baseAttentionItem.question, tool_call_id: "" } },
+      { ...baseAttentionItem, question: { ...baseAttentionItem.question, tool_call_id: " ask-1 " } },
       { ...baseAttentionItem, question: { ...baseAttentionItem.question, session_id: "" } },
       { ...baseAttentionItem, question: { ...baseAttentionItem.question, step_id: "" } },
       { ...baseAttentionItem, session_name: "" },
@@ -170,15 +171,20 @@ describe("attentionItemSchema", () => {
     }
   });
 
-  it("parses runtime approval question prompt metadata", () => {
+  it("decodes an Approval Tool Call ID and ordered access targets", () => {
     const item = attentionItemSchema.parse({
       ...baseAttentionItem,
       question: {
-        prompt_id: baseAttentionItem.question.prompt_id,
+        tool_call_id: baseAttentionItem.question.tool_call_id,
         session_id: baseAttentionItem.question.session_id,
         step_id: baseAttentionItem.question.step_id,
         kind: "approval",
         approval_decisions: ["allow_once", "allow_session", "deny"],
+        access_targets: [
+          { requested_path: " /alias/a ", resolved_path: " /real/file " },
+          { requested_path: "/alias/b", resolved_path: "/real/file" },
+          { requested_path: "/real/other", resolved_path: "/real/other" },
+        ],
       },
     });
     if (item.kind !== "question") {
@@ -186,12 +192,34 @@ describe("attentionItemSchema", () => {
     }
 
     expect(item.question).toEqual({
-      promptID: "ask-1",
+      toolCallID: "ask-1",
       sessionID: "session-1",
       stepID: "22222222-2222-4222-8222-222222222222",
       kind: "approval",
       approvalDecisions: ["allow_once", "allow_session", "deny"],
+      accessTargets: [
+        { requestedPath: " /alias/a ", resolvedPath: " /real/file " },
+        { requestedPath: "/alias/b", resolvedPath: "/real/file" },
+        { requestedPath: "/real/other", resolvedPath: "/real/other" },
+      ],
     });
+  });
+
+  it("projects an omitted Approval access-target list as empty", () => {
+    const item = attentionItemSchema.parse({
+      ...baseAttentionItem,
+      question: {
+        tool_call_id: "ask-1",
+        session_id: "session-1",
+        step_id: "22222222-2222-4222-8222-222222222222",
+        kind: "approval",
+        approval_decisions: ["deny"],
+      },
+    });
+    if (item.kind !== "question" || item.question.kind !== "approval") {
+      throw new Error("runtime approval prompt did not decode as an Approval");
+    }
+    expect(item.question.accessTargets).toEqual([]);
   });
 
   it("accepts omitted client-owned fallback messages", () => {

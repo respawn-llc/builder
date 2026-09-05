@@ -348,7 +348,7 @@ function useTaskPromptAnswers({
             failure.taskID,
             failure.promptKey.sessionID,
             failure.promptKey.stepID,
-            failure.promptKey.promptID,
+            failure.promptKey.toolCallID,
           ].join(":"),
           title: t("states.error"),
           tone: "danger",

@@ -28,6 +28,7 @@ import (
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/imagefileio"
 	"core/shared/jsoncontract"
@@ -584,6 +585,7 @@ func TestOutsideWorkspaceToolsInheritTypedApprovalBarrierFromCallContext(t *test
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			barrierCalls := 0
+			toolCallID := "call-" + test.name
 			ctx := tools.WithEffectBarrier(
 				context.Background(),
 				func(reason tools.EffectBarrierReason) error {
@@ -594,13 +596,19 @@ func TestOutsideWorkspaceToolsInheritTypedApprovalBarrierFromCallContext(t *test
 					return barrierErr
 				},
 			)
+			ctx = tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{
+				RunID:      "11111111-1111-4111-8111-111111111111",
+				StepID:     "22222222-2222-4222-8222-222222222222",
+				ToolCallID: clientui.ToolCallID(toolCallID),
+			})
+			ctx = tools.WithApprovalLifecycle(ctx, tools.NewApprovalLifecycle())
 			handler, ok := registry.Get(test.toolID)
 			if !ok {
 				t.Fatalf("missing %s handler", test.toolID)
 			}
 
 			result, err := handler.Call(ctx, tools.Call{
-				ID:    "call-" + test.name,
+				ID:    toolCallID,
 				Name:  test.toolID,
 				Input: test.input,
 			})
@@ -1032,8 +1040,15 @@ func callRuntimeWireTool(t *testing.T, registry *tools.Registry, id toolspec.ID,
 	if err != nil {
 		t.Fatalf("marshal %s input: %v", id, err)
 	}
-	result, err := handler.Call(context.Background(), tools.Call{
-		ID:    "runtimewire-" + string(id),
+	toolCallID := "runtimewire-" + string(id)
+	ctx := tools.WithExecutionIdentity(context.Background(), tools.ExecutionIdentity{
+		RunID:      "11111111-1111-4111-8111-111111111111",
+		StepID:     "22222222-2222-4222-8222-222222222222",
+		ToolCallID: clientui.ToolCallID(toolCallID),
+	})
+	ctx = tools.WithApprovalLifecycle(ctx, tools.NewApprovalLifecycle())
+	result, err := handler.Call(ctx, tools.Call{
+		ID:    toolCallID,
 		Name:  id,
 		Input: encoded,
 	})

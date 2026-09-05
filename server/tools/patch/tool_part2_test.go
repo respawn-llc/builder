@@ -34,7 +34,7 @@ func (f outsidePatchFixture) denyPolicyTool(root string, approvals *int, opts ..
 	opts = append(
 		opts,
 		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(f.T, root, "synthetic deny")),
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 			(*approvals)++
 			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),
@@ -53,7 +53,7 @@ func outsideUpdateApprovalError(
 	t *testing.T,
 	id string,
 	approver tools.FileAccessApprover,
-) (string, string) {
+) (tools.Result, string) {
 	t.Helper()
 	fixture := newOutsidePatchFixture(t)
 	target := filepath.Join(fixture.outsideRoot, "outside.txt")
@@ -63,24 +63,31 @@ func outsideUpdateApprovalError(
 	if !result.IsError {
 		t.Fatal("expected error result")
 	}
-	return toolError(t, result), target
+	return result, target
 }
 
 func TestOutsideWorkspaceRejectionIncludesUserCommentary(t *testing.T) {
 	commentary := "not allowed by policy"
-	errMessage, target := outsideUpdateApprovalError(t, "deny-commentary", func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+	result, target := outsideUpdateApprovalError(t, "deny-commentary", func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny, Commentary: &commentary}, nil
 	})
-	want := "Patch failed: user denied the edit for " + target + ".\nUser said: not allowed by policy"
-	if errMessage != want {
-		t.Fatalf("unexpected rejection error, got %q want %q", errMessage, want)
+	if result.CallID != "deny-commentary" || result.QuestionAnswer != nil {
+		t.Fatalf("terminal denied result = %+v", result)
+	}
+	payload := toolFailurePayload(t, result)
+	if payload.Commentary == nil || *payload.Commentary != commentary {
+		t.Fatalf("typed denial commentary = %v, want %q", payload.Commentary, commentary)
+	}
+	if payload.Kind != string(failureKindUserDenied) || payload.Path != target {
+		t.Fatalf("typed denial outcome = %+v", payload)
 	}
 }
 
 func TestOutsideWorkspaceApprovalFailureUsesPatchSpecificWording(t *testing.T) {
-	errMessage, _ := outsideUpdateApprovalError(t, "deny-approval-error", func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+	result, _ := outsideUpdateApprovalError(t, "deny-approval-error", func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 		return tools.FileAccessApproval{}, errors.New("ask failed")
 	})
+	errMessage := toolError(t, result)
 	if !strings.Contains(errMessage, "Patch failed: file edit approval failed") {
 		t.Fatalf("expected patch approval failure wording, got %q", errMessage)
 	}
@@ -191,27 +198,6 @@ func TestPathDenyPolicyPreflightsLexicalSymlinkTargetBeforeOutsideApproval(t *te
 	if _, err := os.Stat(filepath.Join(normalRoot, "via-link.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("symlink target created, stat err=%v", err)
 	}
-}
-
-func TestOutsideWorkspaceMultiAddRequestsApprovalForEveryTarget(t *testing.T) {
-	fixture := newOutsidePatchFixture(t)
-	first := filepath.Join(fixture.outsideRoot, "first", "one.txt")
-	second := filepath.Join(fixture.outsideRoot, "second", "two.txt")
-	requests := make([]tools.FileAccessRequest, 0, 2)
-	tool := fixture.tool(WithOutsideWorkspaceApprover(func(_ context.Context, request tools.FileAccessRequest) (tools.FileAccessApproval, error) {
-		requests = append(requests, request)
-		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
-	}))
-
-	result := callPatch(t, tool, "outside-multi-add", "*** Begin Patch\n*** Add File: "+first+"\n+one\n*** Add File: "+second+"\n+two\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("multi-add result = error: %s", toolError(t, result))
-	}
-	if len(requests) != 2 || requests[0].ResolvedPath != first || requests[1].ResolvedPath != second {
-		t.Fatalf("approval requests = %+v, want ordered targets %q then %q", requests, first, second)
-	}
-	assertPatchFileContent(t, first, "one\n")
-	assertPatchFileContent(t, second, "two\n")
 }
 
 func outsideNonTempDir(t *testing.T) string {

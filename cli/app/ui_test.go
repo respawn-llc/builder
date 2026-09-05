@@ -308,7 +308,7 @@ func TestAskQuestionRecommendedOptionIsSelectedAndSubmitted(t *testing.T) {
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
 	entry := requireQuestionAnswerEntry(t, request)
 	if request.SessionID != event.prompt.SessionID || request.StepID != event.prompt.StepID ||
-		entry.PromptID != event.prompt.PromptID || entry.QuestionAnswer.SelectedOptionNumber == nil ||
+		entry.ToolCallID != event.prompt.ToolCallID || entry.QuestionAnswer.SelectedOptionNumber == nil ||
 		*entry.QuestionAnswer.SelectedOptionNumber != recommended {
 		t.Fatalf("selected option = %+v, want %d", entry.QuestionAnswer.SelectedOptionNumber, recommended)
 	}
@@ -329,11 +329,11 @@ func TestQueuedAskQuestionReceivesItsRecommendationWhenPromoted(t *testing.T) {
 	recommended := 2
 	queued.prompt.RecommendedOptionIndex = &recommended
 	updated = updateUIModel(t, updated, askEventMsg{event: queued})
-	if updated.ask.current == nil || updated.ask.current.prompt.PromptID != "ask-a" || updated.ask.cursor != 0 {
+	if updated.ask.current == nil || updated.ask.current.prompt.ToolCallID != "ask-a" || updated.ask.cursor != 0 {
 		t.Fatalf("queued question changed active selection: current=%+v cursor=%d", updated.ask.current, updated.ask.cursor)
 	}
 
-	updated = updateUIModel(t, updated, askEventMsg{event: askEvent{resolvedPromptID: "ask-a"}})
+	updated = updateUIModel(t, updated, askEventMsg{event: askEvent{resolvedToolCallID: "ask-a"}})
 	selectedRecommended := false
 	for _, line := range updated.askController().renderPriorityPromptLines() {
 		if line.Kind == askPromptLineKindOption && line.Selected && line.Recommended {
@@ -662,6 +662,35 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	}
 	if testActiveAsk(updated) != nil {
 		t.Fatal("successful batch did not immediately remove the Approval")
+	}
+}
+
+func TestOutsideWorkspaceApprovalRendersDistinctSuppliedPathsBeforeOptions(t *testing.T) {
+	event := testApprovalAskEvent("approval-paths", "", clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny)
+	event.prompt.AccessTargets = []clientui.FileAccessTarget{
+		{RequestedPath: "/alias/a", ResolvedPath: "/real/file"},
+		{RequestedPath: "/alias/b", ResolvedPath: "/real/file"},
+		{RequestedPath: "/real/other", ResolvedPath: "/real/other"},
+	}
+	m := sizedTestUIModel(newProjectedStaticUIModel(), 100, 24)
+	next, projection := m.Update(askEventMsg{event: event})
+	viewModel := updateUIModel(t, next.(*uiModel), projection())
+	identity, ok := viewModel.currentQuestionRenderIdentity()
+	if !ok {
+		t.Fatal("outside-workspace Approval has no render identity")
+	}
+	want := clientui.FormatFileAccessApprovalMarkdown(event.prompt.AccessTargets)
+	if identity.questionSource != want {
+		t.Fatalf("Approval Markdown = %q, want %q", identity.questionSource, want)
+	}
+	view := stripANSIAndTrimRight(viewModel.View())
+	previous := -1
+	for _, text := range []string{"/alias/a → /real/file", "/alias/b → /real/file", "/real/other"} {
+		index := strings.Index(view, text)
+		if index <= previous {
+			t.Fatalf("Approval disclosure is missing or out of order at %q:\n%s", text, view)
+		}
+		previous = index
 	}
 }
 

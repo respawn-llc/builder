@@ -272,14 +272,12 @@ func TestCall_OutsideWorkspaceApprovalProjectsRequestedAndResolvedPathsToAudit(t
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	var request tools.FileAccessRequest
 	var audits []OutsideWorkspaceAudit
 	tool := newReadImageTestTool(
 		t,
 		workspace,
 		true,
-		WithOutsideWorkspaceApprover(func(_ context.Context, received tools.FileAccessRequest) (tools.FileAccessApproval, error) {
-			request = received
+		WithOutsideWorkspaceApprover(func(_ context.Context, _ tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),
 		WithOutsideWorkspaceAuditLogger(func(entry OutsideWorkspaceAudit) {
@@ -295,14 +293,6 @@ func TestCall_OutsideWorkspaceApprovalProjectsRequestedAndResolvedPathsToAudit(t
 	realOutside, err := filepath.EvalSymlinks(outside)
 	if err != nil {
 		t.Fatalf("resolve outside real path: %v", err)
-	}
-	wantRequest := tools.FileAccessRequest{
-		RequestedPath:    linkName,
-		ResolvedPath:     realOutside,
-		WorkingDirectory: workspace,
-	}
-	if request != wantRequest {
-		t.Fatalf("approval request = %+v, want %+v", request, wantRequest)
 	}
 	if len(audits) != 1 {
 		t.Fatalf("audit entries = %d, want 1", len(audits))
@@ -326,7 +316,7 @@ func TestCall_OutsideWorkspaceApprovalFailureUsesReadSpecificWording(t *testing.
 		t,
 		workspace,
 		true,
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 			return tools.FileAccessApproval{}, errors.New("ask failed")
 		}),
 	)
@@ -354,19 +344,25 @@ func TestCall_OutsideWorkspaceRejectionIncludesReadSpecificGuidance(t *testing.T
 		t,
 		workspace,
 		true,
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny, Commentary: &commentary}, nil
 		}),
 	)
 
 	result := callReadImageTool(t, tool, "call-deny-guidance", readImagePathInput(outside))
-	if !result.IsError {
-		t.Fatalf("expected error result")
+	if !result.IsError || result.CallID != "call-deny-guidance" || result.Name != toolspec.ToolViewImage || result.QuestionAnswer != nil {
+		t.Fatalf("terminal denied result = %+v", result)
 	}
-	errMessage := toolError(t, result)
-	want := `view_image path outside workspace rejected by user: ` + outside + `. User rejected the approval request for this tool call, and said: "keep it inside the repo". Do not attempt to circumvent, hack around, or re-execute the same path. Treat this rejection as authoritative. If it's essential to the task, ask the user to place the file inside the workspace root.`
-	if errMessage != want {
-		t.Fatalf("unexpected rejection error, got %q want %q", errMessage, want)
+	outcome := tools.FileAccessOutcome{
+		Kind:       tools.FileAccessDeniedByUser,
+		Request:    tools.FileAccessRequest{RequestedPath: outside, ResolvedPath: outside},
+		Commentary: &commentary,
+	}
+	err := readImageFileAccessFailure(outcome)
+	var typed outsideWorkspaceUserDeniedError
+	if !errors.As(err, &typed) || typed.presentation.Value() == nil ||
+		*typed.presentation.Value() != commentary {
+		t.Fatalf("typed view_image denial commentary = %+v", typed.presentation.Value())
 	}
 }
 

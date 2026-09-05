@@ -18,7 +18,7 @@ type SessionActiveTranscriptProvider interface {
 }
 
 type PendingPromptSnapshot struct {
-	PromptID               clientui.PromptID
+	ToolCallID             clientui.ToolCallID
 	SessionID              runtimeids.SessionID
 	StepID                 runtimeids.StepID
 	CreatedAt              time.Time
@@ -27,6 +27,7 @@ type PendingPromptSnapshot struct {
 	RecommendedOptionIndex *int
 	Approval               bool
 	ApprovalDecisions      []clientui.ApprovalDecision
+	AccessTargets          []clientui.FileAccessTarget
 }
 
 type PendingQuestionTranscriptEntry struct {
@@ -103,7 +104,7 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 		return pendingQuestion{}, false, fmt.Errorf("load pending prompts for session %q: %w", sessionID, err)
 	}
 	for _, snapshot := range snapshots {
-		if string(snapshot.PromptID) != askID {
+		if string(snapshot.ToolCallID) != askID {
 			continue
 		}
 		return pendingQuestionFromPrompt(snapshot)
@@ -112,14 +113,14 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 }
 
 func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion, bool, error) {
-	if err := snapshot.PromptID.Validate(); err != nil {
+	if err := snapshot.ToolCallID.Validate(); err != nil {
 		return pendingQuestion{}, true, fmt.Errorf("pending prompt identity: %w", err)
 	}
 	if snapshot.SessionID.IsZero() {
-		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no session identity", snapshot.PromptID)
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no session identity", snapshot.ToolCallID)
 	}
 	if snapshot.StepID.IsZero() {
-		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no step identity", snapshot.PromptID)
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no step identity", snapshot.ToolCallID)
 	}
 	if snapshot.Approval {
 		decisions := append([]clientui.ApprovalDecision(nil), snapshot.ApprovalDecisions...)
@@ -127,27 +128,28 @@ func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion,
 			switch decision {
 			case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
 			default:
-				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", snapshot.PromptID, decision)
+				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", snapshot.ToolCallID, decision)
 			}
 		}
 		if len(decisions) == 0 {
-			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", snapshot.PromptID)
+			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", snapshot.ToolCallID)
 		}
 		return pendingQuestion{
 			message: strings.TrimSpace(snapshot.Question),
 			prompt: &serverapi.WorkflowAttentionQuestionPrompt{
 				SessionID:         snapshot.SessionID,
 				StepID:            snapshot.StepID,
-				PromptID:          snapshot.PromptID,
+				ToolCallID:        snapshot.ToolCallID,
 				Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
 				ApprovalDecisions: decisions,
+				AccessTargets:     append([]clientui.FileAccessTarget(nil), snapshot.AccessTargets...),
 			},
 		}, true, nil
 	}
 	suggestions := normalizedPendingQuestionSuggestions(snapshot.Suggestions)
 	recommended, err := validatePendingQuestionRecommendation(snapshot.RecommendedOptionIndex, len(suggestions))
 	if err != nil {
-		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", snapshot.PromptID, err)
+		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", snapshot.ToolCallID, err)
 	}
 	return pendingQuestion{
 		message:                strings.TrimSpace(snapshot.Question),
@@ -156,7 +158,7 @@ func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion,
 		prompt: &serverapi.WorkflowAttentionQuestionPrompt{
 			SessionID:              snapshot.SessionID,
 			StepID:                 snapshot.StepID,
-			PromptID:               snapshot.PromptID,
+			ToolCallID:             snapshot.ToolCallID,
 			Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            suggestions,
 			RecommendedOptionIndex: textutil.Pointer(recommended),

@@ -28,15 +28,15 @@ export const promptSchema = z
   .object({
     Kind: z.enum(["question", "approval"]),
     State: z.enum(["pending", "resolved"]),
-    PromptID: identifier,
+    ToolCallID: identifier,
     SessionID: identifier,
     StepID: identifier,
-    Question: text,
+    Question: z.string(),
     CreatedAt: timestamp,
     Suggestions: nullableArray(text),
     RecommendedOptionIndex: optionalNullable(z.number().int()),
     ApprovalOptions: nullableArray(z.enum(["allow_once", "allow_session", "deny"])),
-    Tool: z.object({ ToolCallID: identifier, ToolName: identifier }).strict().nullable(),
+    AccessTargets: nullableArray(z.object({ RequestedPath: text, ResolvedPath: text }).strict()),
   })
   .strict();
 

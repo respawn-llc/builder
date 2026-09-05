@@ -140,6 +140,7 @@ message ApprovalQuestion {
       }
     }
   }];
+  repeated kent.api.prompt.FileAccessTarget access_targets = 2 [(buf.validate.field).repeated.items.required = true];
 }
 
 message AttentionQuestionPrompt {
@@ -148,11 +149,11 @@ message AttentionQuestionPrompt {
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  string prompt_id = 3 [
+  string tool_call_id = 3 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
-      id: "kent.workflow_task.attention_question_prompt_id_trimmed"
-      message: "prompt_id must not have surrounding whitespace"
+      id: "kent.workflow_task.attention_question_tool_call_id_trimmed"
+      message: "tool_call_id must not have surrounding whitespace"
       expression: "this == this.trim()"
     }
   ];

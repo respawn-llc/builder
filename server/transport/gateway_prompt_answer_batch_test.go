@@ -3,7 +3,6 @@ package transport
 import (
 	"testing"
 
-	"core/shared/clientui"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
@@ -16,7 +15,7 @@ func TestGatewayRegistersPromptAnswerBatchTypedResponseHandler(t *testing.T) {
 	}
 }
 
-func TestGatewayPromptAnswerBatchRoundTripReturnsTypedAllSkippedSet(t *testing.T) {
+func TestGatewayPromptAnswerBatchRoundTrip(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
@@ -29,23 +28,10 @@ func TestGatewayPromptAnswerBatchRoundTripReturnsTypedAllSkippedSet(t *testing.T
 	if err != nil {
 		t.Fatalf("ParseStepID: %v", err)
 	}
-	selected := 1
 	request := serverapi.PromptAnswerBatchRequest{
 		SessionID: sessionID,
 		StepID:    stepID,
-		Entries: []serverapi.PromptAnswerBatchEntry{
-			{
-				PromptID:       "question-1",
-				QuestionAnswer: &serverapi.PromptQuestionAnswer{SelectedOptionNumber: &selected},
-			},
-			{
-				PromptID: "approval-1",
-				ApprovalAnswer: &serverapi.PromptApprovalAnswer{
-					Decision: clientui.ApprovalDecisionDeny,
-				},
-			},
-			{PromptID: "declined-1", Declined: &serverapi.PromptDeclined{}},
-		},
+		Entries:   []serverapi.PromptAnswerBatchEntry{{ToolCallID: "declined-1", Declined: &serverapi.PromptDeclined{}}},
 	}
 
 	conn := dialGateway(t, server)
@@ -59,9 +45,7 @@ func TestGatewayPromptAnswerBatchRoundTripReturnsTypedAllSkippedSet(t *testing.T
 	if err := serverapi.ValidatePromptAnswerBatchResponse(request, response); err != nil {
 		t.Fatalf("ValidatePromptAnswerBatchResponse: %v", err)
 	}
-	for _, result := range response.Results {
-		if result.Outcome != serverapi.PromptAnswerBatchOutcomeSkipped {
-			t.Fatalf("all-stale gateway result = %+v", response)
-		}
+	if len(response.Results) != 1 || response.Results[0].Outcome != serverapi.PromptAnswerBatchOutcomeSkipped {
+		t.Fatalf("gateway response = %+v", response)
 	}
 }

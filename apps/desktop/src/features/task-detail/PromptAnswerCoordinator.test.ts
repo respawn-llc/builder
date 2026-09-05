@@ -140,9 +140,9 @@ async function submit(
   return coordinator.submit({ attention, selection: draft(answer), send });
 }
 const baseQuestion = parsedQuestionAttention();
-const question = (stepID: string, promptID: string, sessionID = "session-1"): QuestionAttentionItem => ({
+const question = (stepID: string, toolCallID: string, sessionID = "session-1"): QuestionAttentionItem => ({
   ...baseQuestion,
-  question: { ...baseQuestion.question, promptID, sessionID, stepID },
+  question: { ...baseQuestion.question, toolCallID, sessionID, stepID },
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;

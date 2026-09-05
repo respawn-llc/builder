@@ -7,7 +7,7 @@ import type {
   AttentionNotificationTarget,
   AttentionNotificationTaskDetailFocus,
 } from "../attentionNotifications";
-import { workflowIDSchema } from "./common";
+import { fileAccessTargetSchema, workflowIDSchema } from "./common";
 
 const id = z.string().min(1);
 const ids = z.array(id);
@@ -96,7 +96,16 @@ const notificationPayloadSchema = z
     occurred_at: id,
     revision: z.number().int().positive(),
     question: questionStateSchema.nullish(),
-    approval: z.object({ message: id }).strict().nullish(),
+    approval: z
+      .object({
+        message: z
+          .string()
+          .refine((value) => value.trim().length > 0)
+          .optional(),
+        access_targets: z.array(fileAccessTargetSchema).optional().default([]),
+      })
+      .strict()
+      .nullish(),
     workflow_approval: z.object({ approval_id: id, message: z.string().optional() }).strict().nullish(),
     interrupted_current_node: z
       .object({
@@ -120,7 +129,13 @@ const notificationSchema: z.ZodType<AttentionNotification> = notificationPayload
     occurredAt: value.occurred_at,
     revision: value.revision,
     question: value.question ?? null,
-    approval: value.approval ?? null,
+    approval:
+      value.approval == null
+        ? null
+        : {
+            message: value.approval.message,
+            accessTargets: value.approval.access_targets,
+          },
     workflowApproval:
       value.workflow_approval == null
         ? null
@@ -218,6 +233,8 @@ function validateQuestionNotification(value: NotificationPayload, context: z.Ref
 function validateApprovalNotification(value: NotificationPayload, context: z.RefinementCtx): void {
   if (value.approval == null) {
     context.addIssue({ code: "custom", message: "approval state required" });
+  } else if ((value.approval.message !== undefined) === value.approval.access_targets.length > 0) {
+    context.addIssue({ code: "custom", message: "approval presentation must be singular" });
   }
   if (value.question != null || value.workflow_approval != null || value.interrupted_current_node != null) {
     context.addIssue({ code: "custom", message: "approval notification has unrelated payload" });

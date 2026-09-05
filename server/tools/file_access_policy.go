@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/config"
 )
 
@@ -24,6 +25,13 @@ type FileAccessRequest struct {
 	WorkingDirectory string
 }
 
+type FileAccessTarget = clientui.FileAccessTarget
+
+type FileAccessApprovalRequest struct {
+	WorkingDirectory string
+	Targets          []FileAccessTarget
+}
+
 type FileAccessApprovalKind uint8
 
 const (
@@ -38,7 +46,7 @@ type FileAccessApproval struct {
 	Commentary *string
 }
 
-type FileAccessApprover func(context.Context, FileAccessRequest) (FileAccessApproval, error)
+type FileAccessApprover func(context.Context, FileAccessApprovalRequest) (FileAccessApproval, error)
 
 type FileAccessOutcomeKind uint8
 
@@ -200,23 +208,22 @@ func NewFileAccessPolicy(config FileAccessPolicyConfig) (*FileAccessPolicy, erro
 }
 
 type FileAccessCall struct {
-	policy   *FileAccessPolicy
-	approved map[string]fileAccessCallApproval
+	policy      *FileAccessPolicy
+	prepared    bool
+	disclosures map[string]preparedFileAccessTarget
+	authorized  map[string]struct{}
 }
 
-type fileAccessCallApproval struct {
-	identity *string
-}
-
-func (a fileAccessCallApproval) matches(path string) bool {
-	current := canonicalFileAccessIdentity(path)
-	return a.identity != nil && current != nil && *a.identity == *current
+type preparedFileAccessTarget struct {
+	target   FileAccessTarget
+	identity string
 }
 
 func (p *FileAccessPolicy) BeginCall() *FileAccessCall {
 	return &FileAccessCall{
-		policy:   p,
-		approved: make(map[string]fileAccessCallApproval),
+		policy:      p,
+		disclosures: make(map[string]preparedFileAccessTarget),
+		authorized:  make(map[string]struct{}),
 	}
 }
 
@@ -274,6 +281,138 @@ func (c *FileAccessCall) Authorize(ctx context.Context, requestedPath string, re
 			Cause:   errors.New("file access call is required"),
 		}
 	}
+	if !c.prepared {
+		return c.Prepare(ctx, []FileAccessTarget{{
+			RequestedPath: requestedPath,
+			ResolvedPath:  resolvedPath,
+		}})
+	}
+	return c.authorizePrepared(requestedPath, resolvedPath)
+}
+
+// Prepare freezes the complete path set for one tool call and presents at most
+// one Approval for all outside-workspace targets.
+func (c *FileAccessCall) Prepare(ctx context.Context, targets []FileAccessTarget) FileAccessOutcome {
+	if c == nil || c.policy == nil {
+		return FileAccessOutcome{Kind: FileAccessPolicyFailed, Cause: errors.New("file access call is required")}
+	}
+	if c.prepared {
+		return FileAccessOutcome{Kind: FileAccessPolicyFailed, Cause: errors.New("file access call is already prepared")}
+	}
+	if len(targets) == 0 {
+		return FileAccessOutcome{Kind: FileAccessPolicyFailed, Cause: errors.New("file access preparation requires at least one target")}
+	}
+
+	p := c.policy
+	ordered := make([]FileAccessTarget, 0, len(targets))
+	outside := make([]FileAccessTarget, 0, len(targets))
+	disclosures := make(map[string]preparedFileAccessTarget, len(targets))
+	authorized := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		req := p.request(target.RequestedPath, target.ResolvedPath)
+		if strings.TrimSpace(target.RequestedPath) == "" || strings.TrimSpace(target.ResolvedPath) == "" {
+			return FileAccessOutcome{
+				Kind:    FileAccessPolicyFailed,
+				Request: req,
+				Cause:   errors.New("file access target requires requested and resolved paths"),
+			}
+		}
+		identity, err := config.CanonicalPathIdentity(target.ResolvedPath)
+		if err != nil {
+			return FileAccessOutcome{
+				Kind:    FileAccessPolicyFailed,
+				Request: req,
+				Cause:   fmt.Errorf("resolve canonical identity for %q: %w", target.RequestedPath, err),
+			}
+		}
+		if existing, ok := disclosures[target.RequestedPath]; ok {
+			if existing.identity != identity {
+				return FileAccessOutcome{
+					Kind:    FileAccessPolicyFailed,
+					Request: req,
+					Cause:   fmt.Errorf("file access target %q resolved inconsistently during preparation", target.RequestedPath),
+				}
+			}
+			continue
+		}
+		if p.mode == FileAccessMutation {
+			outcome := p.CheckMutationTarget(target.RequestedPath, target.ResolvedPath)
+			if outcome.Kind != FileAccessTargetAccepted {
+				return outcome
+			}
+		}
+		prepared := preparedFileAccessTarget{
+			target: FileAccessTarget{
+				RequestedPath: target.RequestedPath,
+				ResolvedPath:  target.ResolvedPath,
+			},
+			identity: identity,
+		}
+		disclosures[target.RequestedPath] = prepared
+		ordered = append(ordered, prepared.target)
+
+		reason, err := p.authorizationReason(target.ResolvedPath)
+		if err != nil {
+			return FileAccessOutcome{Kind: FileAccessPolicyFailed, Request: p.request(target.RequestedPath, target.ResolvedPath), Cause: err}
+		}
+		if reason == nil {
+			outside = append(outside, prepared.target)
+			continue
+		}
+		authorized[identity] = struct{}{}
+	}
+	c.disclosures = disclosures
+	c.authorized = authorized
+	c.prepared = true
+
+	first := ordered[0]
+	if len(outside) == 0 {
+		return c.authorizePrepared(first.RequestedPath, first.ResolvedPath)
+	}
+	req := p.approvalRequest(outside)
+	if p.approver == nil {
+		return FileAccessOutcome{
+			Kind:    FileAccessDeniedOutsideWorkspace,
+			Request: p.request(outside[0].RequestedPath, outside[0].ResolvedPath),
+		}
+	}
+	approval, err := p.approver(ctx, req)
+	if err != nil {
+		return FileAccessOutcome{
+			Kind:    FileAccessApprovalFailed,
+			Request: p.request(outside[0].RequestedPath, outside[0].ResolvedPath),
+			Cause:   err,
+		}
+	}
+	outcomeRequest := p.request(outside[0].RequestedPath, outside[0].ResolvedPath)
+	switch approval.Kind {
+	case FileAccessApprovalAllowOnce, FileAccessApprovalAllowSession, FileAccessApprovalSessionCached:
+		for _, target := range outside {
+			c.authorized[disclosures[target.RequestedPath].identity] = struct{}{}
+		}
+		reason := FileAccessReasonAllowOnce
+		if approval.Kind == FileAccessApprovalAllowSession {
+			reason = FileAccessReasonAllowSession
+		} else if approval.Kind == FileAccessApprovalSessionCached {
+			reason = FileAccessReasonSessionAllow
+		}
+		return FileAccessOutcome{Kind: FileAccessAllowed, Request: outcomeRequest, Reason: reason}
+	case FileAccessApprovalDeny:
+		return FileAccessOutcome{
+			Kind:       FileAccessDeniedByUser,
+			Request:    outcomeRequest,
+			Commentary: cloneOptionalString(approval.Commentary),
+		}
+	default:
+		return FileAccessOutcome{
+			Kind:    FileAccessPolicyFailed,
+			Request: outcomeRequest,
+			Cause:   fmt.Errorf("unsupported file access approval kind %d", approval.Kind),
+		}
+	}
+}
+
+func (c *FileAccessCall) authorizePrepared(requestedPath string, resolvedPath string) FileAccessOutcome {
 	p := c.policy
 	req := p.request(requestedPath, resolvedPath)
 	if p.mode == FileAccessMutation {
@@ -282,95 +421,65 @@ func (c *FileAccessCall) Authorize(ctx context.Context, requestedPath string, re
 			return outcome
 		}
 	}
-	insideWorkspace, containmentErr := p.isWithinTrustedRoot(resolvedPath)
-	if containmentErr != nil {
+	prepared, ok := c.disclosures[requestedPath]
+	if !ok {
 		return FileAccessOutcome{
 			Kind:    FileAccessPolicyFailed,
 			Request: req,
-			Cause:   fmt.Errorf("workspace boundary check for %q: %w", requestedPath, containmentErr),
+			Cause:   fmt.Errorf("file access target %q was not disclosed before access", requestedPath),
 		}
+	}
+	identity, err := config.CanonicalPathIdentity(resolvedPath)
+	if err != nil {
+		return FileAccessOutcome{
+			Kind:    FileAccessPolicyFailed,
+			Request: req,
+			Cause:   fmt.Errorf("resolve canonical identity for %q: %w", requestedPath, err),
+		}
+	}
+	if identity != prepared.identity {
+		return FileAccessOutcome{
+			Kind:    FileAccessPolicyFailed,
+			Request: req,
+			Cause:   fmt.Errorf("file access target %q changed after approval", requestedPath),
+		}
+	}
+	reason, err := p.authorizationReason(resolvedPath)
+	if err != nil {
+		return FileAccessOutcome{Kind: FileAccessPolicyFailed, Request: req, Cause: err}
+	}
+	if reason != nil {
+		return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: *reason}
+	}
+	if _, ok := c.authorized[identity]; !ok {
+		return FileAccessOutcome{
+			Kind:    FileAccessPolicyFailed,
+			Request: req,
+			Cause:   fmt.Errorf("file access target %q is outside the prepared authorization set", requestedPath),
+		}
+	}
+	return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonCallAllow}
+}
+
+func (p *FileAccessPolicy) authorizationReason(resolvedPath string) (*FileAccessReason, error) {
+	insideWorkspace, err := p.isWithinTrustedRoot(resolvedPath)
+	if err != nil {
+		return nil, fmt.Errorf("workspace boundary check: %w", err)
 	}
 	if insideWorkspace {
-		return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonTrustedRoot}
+		return fileAccessReason(FileAccessReasonTrustedRoot), nil
 	}
 	if IsPathInTemporaryDir(resolvedPath) {
-		return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonTemporaryAllow}
+		return fileAccessReason(FileAccessReasonTemporaryAllow), nil
 	}
 	if p.allowOutsideWorkspace {
-		return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonConfiguredAllow}
+		return fileAccessReason(FileAccessReasonConfiguredAllow), nil
 	}
-	if approval, ok := c.approved[resolvedPath]; ok {
-		if approval.matches(resolvedPath) {
-			return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonCallAllow}
-		}
-		delete(c.approved, resolvedPath)
-	}
-	if p.approver == nil {
-		return FileAccessOutcome{Kind: FileAccessDeniedOutsideWorkspace, Request: req}
-	}
-	approvalIdentity := canonicalFileAccessIdentity(resolvedPath)
-	approval, approveErr := p.approver(ctx, req)
-	if approveErr != nil {
-		return FileAccessOutcome{Kind: FileAccessApprovalFailed, Request: req, Cause: approveErr}
-	}
-	switch approval.Kind {
-	case FileAccessApprovalAllowOnce:
-		c.rememberApproval(resolvedPath, approvalIdentity)
-		return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonAllowOnce}
-	case FileAccessApprovalAllowSession:
-		c.rememberApproval(resolvedPath, approvalIdentity)
-		return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonAllowSession}
-	case FileAccessApprovalSessionCached:
-		c.rememberApproval(resolvedPath, approvalIdentity)
-		return FileAccessOutcome{Kind: FileAccessAllowed, Request: req, Reason: FileAccessReasonSessionAllow}
-	case FileAccessApprovalDeny:
-		return FileAccessOutcome{
-			Kind:       FileAccessDeniedByUser,
-			Request:    req,
-			Commentary: cloneOptionalString(approval.Commentary),
-		}
-	default:
-		return FileAccessOutcome{
-			Kind:    FileAccessPolicyFailed,
-			Request: req,
-			Cause:   fmt.Errorf("unsupported file access approval kind %d", approval.Kind),
-		}
-	}
+	return nil, nil
 }
 
-func (c *FileAccessCall) ReuseApproval(fromResolvedPath string, toResolvedPath string) bool {
-	if c == nil || strings.TrimSpace(fromResolvedPath) == "" || strings.TrimSpace(toResolvedPath) == "" {
-		return false
-	}
-	approval, ok := c.approved[fromResolvedPath]
-	if !ok || approval.identity == nil {
-		return false
-	}
-	if info, err := os.Lstat(fromResolvedPath); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			return false
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return false
-	}
-	targetIdentity, err := config.CanonicalPathIdentity(toResolvedPath)
-	if err != nil || targetIdentity != *approval.identity {
-		return false
-	}
-	c.approved[toResolvedPath] = approval
-	return true
-}
-
-func (c *FileAccessCall) rememberApproval(resolvedPath string, identity *string) {
-	c.approved[resolvedPath] = fileAccessCallApproval{identity: identity}
-}
-
-func canonicalFileAccessIdentity(path string) *string {
-	identity, err := config.CanonicalPathIdentity(path)
-	if err != nil {
-		return nil
-	}
-	return &identity
+func fileAccessReason(reason FileAccessReason) *FileAccessReason {
+	return &reason
 }
 
 func (p *FileAccessPolicy) request(requestedPath string, resolvedPath string) FileAccessRequest {
@@ -382,6 +491,17 @@ func (p *FileAccessPolicy) request(requestedPath string, resolvedPath string) Fi
 		RequestedPath:    requestedPath,
 		ResolvedPath:     resolvedPath,
 		WorkingDirectory: workingDirectory,
+	}
+}
+
+func (p *FileAccessPolicy) approvalRequest(targets []FileAccessTarget) FileAccessApprovalRequest {
+	workingDirectory := ""
+	if p != nil {
+		workingDirectory = p.context.Access.WorkingDirectory.LexicalPath
+	}
+	return FileAccessApprovalRequest{
+		WorkingDirectory: workingDirectory,
+		Targets:          append([]FileAccessTarget(nil), targets...),
 	}
 }
 

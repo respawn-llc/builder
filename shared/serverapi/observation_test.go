@@ -11,7 +11,7 @@ func TestWorkflowTaskObservationResponseValidatesTypedOutcomes(t *testing.T) {
 	sessionID := observationSessionID(t, "9b9447ad-04e7-4c70-b4b0-f0eb1a53b47d")
 	rawSessionID := sessionID.String()
 	question := ObservationQuestion{Ask: &clientui.PendingAsk{
-		PromptID: "ask-1", SessionID: sessionID, StepID: observationStepID(t),
+		ToolCallID: "ask-1", SessionID: sessionID, StepID: observationStepID(t),
 		Question: "Continue?",
 	}}
 	response := WorkflowTaskObservationResponse{
@@ -42,7 +42,7 @@ func TestWorkflowTaskObservationResponseRejectsInvalidOutcomePayloads(t *testing
 			Outcomes: []WorkflowTaskObservationOutcome{{
 				Kind: WorkflowTaskObservationQuestion,
 				Question: &ObservationQuestion{Ask: &clientui.PendingAsk{
-					PromptID: "ask-1", SessionID: observationSessionID(t, "session-1"),
+					ToolCallID: "ask-1", SessionID: observationSessionID(t, "session-1"),
 				}},
 			}},
 		},
@@ -51,7 +51,7 @@ func TestWorkflowTaskObservationResponseRejectsInvalidOutcomePayloads(t *testing
 			Outcomes: []WorkflowTaskObservationOutcome{{
 				Kind: WorkflowTaskObservationQuestion,
 				Question: &ObservationQuestion{Approval: &clientui.PendingApproval{
-					PromptID: "approval-1", SessionID: observationSessionID(t, "session-1"),
+					ToolCallID: "approval-1", SessionID: observationSessionID(t, "session-1"),
 					StepID: observationStepID(t), Question: "Allow?",
 				}},
 			}},
@@ -74,11 +74,11 @@ func TestWorkflowTaskObservationResponseRejectsInvalidOutcomePayloads(t *testing
 func TestRuntimeLiveWatchResponseRejectsQuestionSessionMismatch(t *testing.T) {
 	for _, question := range []ObservationQuestion{
 		{Ask: &clientui.PendingAsk{
-			PromptID: "ask-1", SessionID: observationSessionID(t, "session-b"),
+			ToolCallID: "ask-1", SessionID: observationSessionID(t, "session-b"),
 			StepID: observationStepID(t), Question: "Continue?",
 		}},
 		{Approval: &clientui.PendingApproval{
-			PromptID: "approval-1", SessionID: observationSessionID(t, "session-b"),
+			ToolCallID: "approval-1", SessionID: observationSessionID(t, "session-b"),
 			StepID: observationStepID(t), Question: "Allow?",
 			Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
 		}},

@@ -1,10 +1,12 @@
 import type { ApprovalDecision } from "./models";
 
 export type PromptIdentity = Readonly<{
-  promptID: string;
+  toolCallID: string;
   sessionID: string;
   stepID: string;
 }>;
+
+export type FileAccessTarget = Readonly<{ requestedPath: string; resolvedPath: string }>;
 
 export type OrdinaryQuestionPrompt = PromptIdentity &
   Readonly<{
@@ -17,6 +19,7 @@ export type ApprovalQuestionPrompt = PromptIdentity &
   Readonly<{
     kind: "approval";
     approvalDecisions: readonly ApprovalDecision[];
+    accessTargets: readonly FileAccessTarget[];
   }>;
 
 export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionPrompt;

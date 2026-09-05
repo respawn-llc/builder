@@ -8,9 +8,9 @@ import (
 )
 
 type validatedQuestionBatchDescriptor struct {
-	promptID         string
+	toolCallID       string
 	candidateOrdinal int
-	promptIDs        []string
+	toolCallIDs      []string
 }
 
 func validateQuestionBatchMetadata(request tools.AskQuestionRequest) (*validatedQuestionBatchDescriptor, error) {
@@ -19,7 +19,7 @@ func validateQuestionBatchMetadata(request tools.AskQuestionRequest) (*validated
 		return nil, nil
 	}
 	invalid := func(detail string) (*validatedQuestionBatchDescriptor, error) {
-		return nil, PromptBatchInvariantError{PromptID: request.ID, Detail: detail}
+		return nil, PromptBatchInvariantError{ToolCallID: request.ToolCallID, Detail: detail}
 	}
 	if batch.Origin != tools.AskQuestionOriginModelTool {
 		return invalid(fmt.Sprintf("origin is %q", batch.Origin))
@@ -39,57 +39,57 @@ func validateQuestionBatchMetadata(request tools.AskQuestionRequest) (*validated
 	if !normalizedQuestionBatchID(batch.StepID) || batch.StepID != request.StepID {
 		return invalid(fmt.Sprintf("step id %q does not match request step id %q", batch.StepID, request.StepID))
 	}
-	if !normalizedQuestionBatchID(request.ID) {
-		return invalid(fmt.Sprintf("request prompt id %q is blank or not normalized", request.ID))
+	if !normalizedQuestionBatchID(request.ToolCallID) {
+		return invalid(fmt.Sprintf("request tool call id %q is blank or not normalized", request.ToolCallID))
 	}
-	if !normalizedQuestionBatchID(batch.PromptID) || batch.PromptID != request.ID {
-		return invalid(fmt.Sprintf("metadata prompt id %q does not match request id", batch.PromptID))
+	if !normalizedQuestionBatchID(batch.ToolCallID) || batch.ToolCallID != request.ToolCallID {
+		return invalid(fmt.Sprintf("metadata tool call id %q does not match request tool call id", batch.ToolCallID))
 	}
-	if batch.PreparedPromptCount != len(batch.BatchPromptIDs) {
+	if batch.PreparedPromptCount != len(batch.BatchToolCallIDs) {
 		return invalid(fmt.Sprintf(
-			"prepared prompt count %d does not match prompt id count %d",
+			"prepared prompt count %d does not match tool call id count %d",
 			batch.PreparedPromptCount,
-			len(batch.BatchPromptIDs),
+			len(batch.BatchToolCallIDs),
 		))
 	}
-	if batch.CandidateOrdinal < 0 || batch.CandidateOrdinal >= len(batch.BatchPromptIDs) {
+	if batch.CandidateOrdinal < 0 || batch.CandidateOrdinal >= len(batch.BatchToolCallIDs) {
 		return invalid(fmt.Sprintf(
-			"candidate ordinal %d is outside %d prompt ids",
+			"candidate ordinal %d is outside %d tool call ids",
 			batch.CandidateOrdinal,
-			len(batch.BatchPromptIDs),
+			len(batch.BatchToolCallIDs),
 		))
 	}
-	promptIDs := make([]string, len(batch.BatchPromptIDs))
-	seen := make(map[string]struct{}, len(batch.BatchPromptIDs))
-	for index, promptID := range batch.BatchPromptIDs {
-		if !normalizedQuestionBatchID(promptID) {
-			return invalid(fmt.Sprintf("prompt id at index %d is blank or not normalized", index))
+	toolCallIDs := make([]string, len(batch.BatchToolCallIDs))
+	seen := make(map[string]struct{}, len(batch.BatchToolCallIDs))
+	for index, toolCallID := range batch.BatchToolCallIDs {
+		if !normalizedQuestionBatchID(toolCallID) {
+			return invalid(fmt.Sprintf("tool call id at index %d is blank or not normalized", index))
 		}
-		if _, exists := seen[promptID]; exists {
-			return invalid(fmt.Sprintf("prompt id %q is duplicated", promptID))
+		if _, exists := seen[toolCallID]; exists {
+			return invalid(fmt.Sprintf("tool call id %q is duplicated", toolCallID))
 		}
-		seen[promptID] = struct{}{}
-		promptIDs[index] = promptID
+		seen[toolCallID] = struct{}{}
+		toolCallIDs[index] = toolCallID
 	}
-	if promptIDs[batch.CandidateOrdinal] != request.ID {
+	if toolCallIDs[batch.CandidateOrdinal] != request.ToolCallID {
 		return invalid(fmt.Sprintf(
-			"prompt id at candidate ordinal %d is %q",
+			"tool call id at candidate ordinal %d is %q",
 			batch.CandidateOrdinal,
-			promptIDs[batch.CandidateOrdinal],
+			toolCallIDs[batch.CandidateOrdinal],
 		))
 	}
 	return &validatedQuestionBatchDescriptor{
-		promptID:         request.ID,
+		toolCallID:       request.ToolCallID,
 		candidateOrdinal: batch.CandidateOrdinal,
-		promptIDs:        promptIDs,
+		toolCallIDs:      toolCallIDs,
 	}, nil
 }
 
-func (d *validatedQuestionBatchDescriptor) successorPromptIDs() []string {
-	if d == nil || d.candidateOrdinal+1 >= len(d.promptIDs) {
+func (d *validatedQuestionBatchDescriptor) successorToolCallIDs() []string {
+	if d == nil || d.candidateOrdinal+1 >= len(d.toolCallIDs) {
 		return nil
 	}
-	return append([]string(nil), d.promptIDs[d.candidateOrdinal+1:]...)
+	return append([]string(nil), d.toolCallIDs[d.candidateOrdinal+1:]...)
 }
 
 func normalizedQuestionBatchID(value string) bool {

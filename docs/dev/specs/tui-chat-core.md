@@ -43,12 +43,11 @@
 - When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server acceptance order, followed by the composer draft.
 - When the live TUI observes a definitely-unapplied technical restoration, it restores the canonical presentation through the same composer merge behavior. Every observing TUI restores the same broadcast independently, and Kent does not replay it after reconnect.
 - Pending Queue and Steer messages are not persisted for restoration. Process exit before the TUI observes the interrupt loses them.
-- The following creation-failure behavior applies to every queued message or Steer, including Allow commentary.
+- The following creation-failure behavior applies to every queued message or Steer.
 - If Kent cannot create the queued message or Steer, the failed message returns to the composer and requires an explicit user action to send again. The failed message does not remain pending or retry automatically.
 - A terminal Runtime activation, authentication, metadata, target, filesystem, tool, validation, open, or publication failure uses this creation-failure behavior. Cancellation or disconnection ends a pending activation wait without creating a Queue Item.
 - The restored text is the exact message Kent attempted to submit. If the composer already contains a newer draft, Kent keeps that draft first, inserts one blank line, appends the failed message, and places the cursor at the end.
 - The failure appears as a transient status-line error using the ordinary submission failure detail. It does not change the activity indicator. The TUI does not create a transcript feedback row for this failure.
-- If the failed message is Allow commentary, Kent delivers the Approval answer independently while the transient notice is active. Successful Allow commentary creation still precedes the Approval answer.
 
 ## Interrupts And Exit
 

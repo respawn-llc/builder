@@ -44,7 +44,7 @@ func TestAskProjectionSubsequentPromptStartsWithCleanViewportAndEditorState(t *t
 	next, _ = firstReady.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	firstReady = next.(*uiModel)
 
-	next, _ = firstReady.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
+	next, _ = firstReady.Update(askEventMsg{event: askEvent{resolvedToolCallID: "ask-1"}})
 	resolved := next.(*uiModel)
 	next, secondCommand := resolved.Update(askEventMsg{event: testQuestionAskEvent(
 		"ask-2",

@@ -96,7 +96,7 @@ func projectPendingPromptForTest(registry *RuntimeRegistry, sessionID string, re
 
 func resolvePendingPromptForTest(registry *RuntimeRegistry, sessionID string, requestID string) {
 	for _, prompt := range registry.ListPendingPrompts(sessionID) {
-		if prompt.Request.ID == requestID {
+		if prompt.Request.ToolCallID == requestID {
 			resolvePendingPromptResourceForTest(registry, prompt.Resource, prompt.ScopeID, requestID)
 			return
 		}
@@ -194,9 +194,9 @@ func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testin
 	registerResource(t, registry, ref, engine)
 	scopeID := runtimeids.NewExecutionScopeID()
 	projectPendingPromptResourceForTest(registry, ref, scopeID, askquestion.AskQuestionRequest{
-		ID:       "ask-1",
-		StepID:   registryTestStepID,
-		Question: "Continue?",
+		ToolCallID: "ask-1",
+		StepID:     registryTestStepID,
+		Question:   "Continue?",
 	}, time.Now().UTC())
 
 	hydrationResolverStarted := make(chan struct{})
@@ -880,7 +880,7 @@ func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) 
 	}
 	predecessorScope := runtimeids.NewExecutionScopeID()
 	successorScope := runtimeids.NewExecutionScopeID()
-	request := askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"}
+	request := askquestion.AskQuestionRequest{ToolCallID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"}
 
 	engine := &runtime.Engine{}
 	registerResource(t, registry, predecessor, engine)
@@ -892,7 +892,7 @@ func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) 
 	t.Cleanup(func() { _ = registry.ResourceDraining(context.Background(), registryTestResource(successor)) })
 	projectPendingPromptResourceForTest(registry, successor, successorScope, request, time.Now().UTC())
 	projectPendingPromptResourceForTest(registry, predecessor, predecessorScope, request, time.Now().UTC())
-	resolvePendingPromptResourceForTest(registry, predecessor, predecessorScope, request.ID)
+	resolvePendingPromptResourceForTest(registry, predecessor, predecessorScope, request.ToolCallID)
 
 	items := registry.ListPendingPrompts(sessionID.String())
 	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
@@ -921,14 +921,14 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 
 	scopeID := runtimeids.NewExecutionScopeID()
 	request := askquestion.AskQuestionRequest{
-		ID:       "ask-draining",
-		StepID:   registryTestStepID,
-		Question: "Proceed?",
+		ToolCallID: "ask-draining",
+		StepID:     registryTestStepID,
+		Question:   "Proceed?",
 	}
 	projectPendingPromptResourceForTest(registry, ref, scopeID, request, time.Now().UTC())
 	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePrompt)
 	pendingPrompt := transcriptPayload[clientui.TranscriptPrompt](t, pendingTranscript)
-	if pendingPrompt.Status != clientui.TranscriptPromptStatusPending || pendingPrompt.PromptID != "ask-draining" {
+	if pendingPrompt.Status != clientui.TranscriptPromptStatusPending || pendingPrompt.ToolCallID != "ask-draining" {
 		t.Fatalf("pending transcript prompt = %+v", pendingPrompt)
 	}
 	pendingAttention := nextRegistryAttentionEvent(t, attentionSub)
@@ -942,7 +942,7 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 
 	resolvedTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePrompt)
 	resolvedPrompt := transcriptPayload[clientui.TranscriptPrompt](t, resolvedTranscript)
-	if resolvedPrompt.Status != clientui.TranscriptPromptStatusResolved || resolvedPrompt.PromptID != "ask-draining" {
+	if resolvedPrompt.Status != clientui.TranscriptPromptStatusResolved || resolvedPrompt.ToolCallID != "ask-draining" {
 		t.Fatalf("resolved transcript prompt = %+v", resolvedPrompt)
 	}
 	resolvedCtx, cancelResolved := context.WithTimeout(context.Background(), time.Second)
@@ -951,16 +951,26 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 	if err != nil {
 		t.Fatalf("next resolved attention event: %v", err)
 	}
-	promptID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "ask-draining")
+	toolCallNotificationID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "ask-draining")
 	if resolvedAttention.Type != clientui.AttentionNotificationEventResolved ||
-		!attentionNotificationEventIDMatches(resolvedAttention, promptID) {
+		!attentionNotificationEventIDMatches(resolvedAttention, toolCallNotificationID) {
 		t.Fatalf("resolved attention event = %+v", resolvedAttention)
 	}
 	if prompts := registry.ListPendingPrompts(engine.SessionID()); len(prompts) != 0 {
 		t.Fatalf("pending prompts after draining = %+v, want none", prompts)
 	}
 
-	resolvePendingPromptResourceForTest(registry, ref, scopeID, request.ID)
+	resolvePendingPromptResourceForTest(registry, ref, scopeID, request.ToolCallID)
+}
+
+func TestPromptProjectionPreservesOrderedAccessTargets(t *testing.T) {
+	targets := []clientui.FileAccessTarget{{RequestedPath: "alias/first", ResolvedPath: "/outside/target"}, {RequestedPath: "alias/second", ResolvedPath: "/outside/target"}}
+	for _, eventType := range []pendingPromptEventType{pendingPromptEventPending, pendingPromptEventResolved} {
+		got := transcriptPendingPromptFromSnapshot("session-1", PendingPromptSnapshot{Request: askquestion.AskQuestionRequest{ToolCallID: "approval-1", StepID: registryTestStepID, Approval: true, AccessTargets: targets}}, eventType)
+		if !slices.Equal(got.AccessTargets, targets) {
+			t.Fatalf("%v prompt access targets = %+v, want %+v", eventType, got.AccessTargets, targets)
+		}
+	}
 }
 
 func TestRuntimeRegistryAggregatesSleepObserverAcrossAuthorityResources(t *testing.T) {
@@ -1051,9 +1061,9 @@ func TestActiveRuntimeActivitySnapshotsExcludeRegisteredIdlePopulation(t *testin
 	runningEngine, runningDone := startRegistryBlockingRuntime(t, registry)
 	questionEngine, questionDone := startRegistryBlockingRuntime(t, registry)
 	projectPendingPromptForTest(registry, questionEngine.SessionID(), askquestion.AskQuestionRequest{
-		ID:       "question-active-snapshot",
-		StepID:   registryTestStepID,
-		Question: "Continue?",
+		ToolCallID: "question-active-snapshot",
+		StepID:     registryTestStepID,
+		Question:   "Continue?",
 	})
 
 	snapshots, err := registry.ActiveRuntimeActivitySnapshots(context.Background())

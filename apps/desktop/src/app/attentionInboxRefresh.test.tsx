@@ -177,7 +177,7 @@ const questionAttentionItem = {
   question: {
     session_id: "session-1",
     step_id: "22222222-2222-4222-8222-222222222222",
-    prompt_id: "ask-1",
+    tool_call_id: "ask-1",
     kind: "ordinary",
     suggestions: [],
     recommended_option_index: null,

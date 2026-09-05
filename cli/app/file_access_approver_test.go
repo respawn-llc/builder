@@ -9,6 +9,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/runtimewire"
 	askquestion "core/server/tools"
+	"core/shared/clientui"
 	"core/shared/textutil"
 )
 
@@ -26,6 +27,25 @@ func testOutsideWorkspaceApprovalResolution(
 		Decision:   decision,
 		Commentary: commentary,
 	}
+}
+
+func testFileAccessApprovalRequest() askquestion.FileAccessApprovalRequest {
+	return askquestion.FileAccessApprovalRequest{
+		WorkingDirectory: "/tmp/w",
+		Targets: []askquestion.FileAccessTarget{{
+			RequestedPath: "../x.txt",
+			ResolvedPath:  "/tmp/x.txt",
+		}},
+	}
+}
+
+func testFileAccessApprovalContext(toolCallID string) context.Context {
+	ctx := askquestion.WithExecutionIdentity(context.Background(), askquestion.ExecutionIdentity{
+		RunID:      "11111111-1111-4111-8111-111111111111",
+		StepID:     "22222222-2222-4222-8222-222222222222",
+		ToolCallID: clientui.ToolCallID(toolCallID),
+	})
+	return askquestion.WithApprovalLifecycle(ctx, askquestion.NewApprovalLifecycle())
 }
 
 func TestOutsideWorkspaceApprovalFromResolution(t *testing.T) {
@@ -100,10 +120,10 @@ func TestOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 		return testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, nil), nil
 	})
 
-	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
+	approver := runtimewire.NewOutsideWorkspaceApprover(broker)
+	req := testFileAccessApprovalRequest()
 
-	first, err := approver.Approve(context.Background(), req)
+	first, err := approver.Approve(testFileAccessApprovalContext("cache-session"), req)
 	if err != nil {
 		t.Fatalf("approve first call: %v", err)
 	}
@@ -128,8 +148,11 @@ func TestOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 		return nil, errors.New("ask failed")
 	})
 
-	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	_, err := approver.Approve(context.Background(), askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"})
+	approver := runtimewire.NewOutsideWorkspaceApprover(broker)
+	_, err := approver.Approve(
+		testFileAccessApprovalContext("propagate-error"),
+		testFileAccessApprovalRequest(),
+	)
 	if err == nil {
 		t.Fatal("expected ask error")
 	}
@@ -137,8 +160,8 @@ func TestOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 
 func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
-	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
+	approver := runtimewire.NewOutsideWorkspaceApprover(broker)
+	req := testFileAccessApprovalRequest()
 	type out struct {
 		approval askquestion.FileAccessApproval
 		err      error
@@ -146,7 +169,7 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 	done := make(chan out, 1)
 
 	go func() {
-		approval, err := approver.Approve(context.Background(), req)
+		approval, err := approver.Approve(testFileAccessApprovalContext("queued-deny"), req)
 		done <- out{approval: approval, err: err}
 	}()
 
@@ -172,10 +195,10 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 	default:
 	}
 
-	if err := broker.Submit(pending[0].ID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, textutil.Value("no"))); err != nil {
+	if err := broker.Submit(pending[0].ToolCallID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, textutil.Value("no"))); err != nil {
 		t.Fatalf("submit denial: %v", err)
 	}
-	if err := broker.Submit(pending[0].ID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, nil)); err == nil {
+	if err := broker.Submit(pending[0].ToolCallID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, nil)); err == nil {
 		t.Fatal("expected duplicate approval resolution to fail")
 	}
 
@@ -201,8 +224,8 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 
 func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
-	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
+	approver := runtimewire.NewOutsideWorkspaceApprover(broker)
+	req := testFileAccessApprovalRequest()
 	type out struct {
 		approval askquestion.FileAccessApproval
 		err      error
@@ -210,12 +233,12 @@ func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *
 	done := make(chan out, 1)
 
 	go func() {
-		approval, err := approver.Approve(context.Background(), req)
+		approval, err := approver.Approve(testFileAccessApprovalContext("queued-session"), req)
 		done <- out{approval: approval, err: err}
 	}()
 
 	pending := waitForPendingApprovals(t, broker, 1)
-	if err := broker.Submit(pending[0].ID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, nil)); err != nil {
+	if err := broker.Submit(pending[0].ToolCallID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, nil)); err != nil {
 		t.Fatalf("submit allow-session approval: %v", err)
 	}
 

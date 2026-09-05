@@ -568,6 +568,7 @@ function ack(socket: MockWebSocket, sentIndex: number): void {
                 workspaceId: "workspace-1",
                 workspaceRoot: "/workspace",
                 sessionId: "session-1",
+                reattachCapability: "reattach-capability-1",
               },
             },
           },
