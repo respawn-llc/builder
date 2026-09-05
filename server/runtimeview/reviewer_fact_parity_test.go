@@ -109,7 +109,7 @@ func TestQuestionAnswerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing
 	}
 	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{entry}}
 	facts := runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot)
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{CommittedRows: facts})
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{CommittedRows: facts})
 	page, err := TranscriptPageFromSegment(
 		sessionID,
 		"name",
@@ -131,26 +131,26 @@ func TestQuestionAnswerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing
 		},
 		CommittedProvenance: provenance,
 	})
-	if len(facts) != 1 || len(hydration.CommittedRows) != 1 || len(page.Entries) != 1 || len(liveMessages) != 1 {
+	if len(facts) != 1 || len(hydration.TailSegment.Entries) != 1 || len(page.Entries) != 1 || len(liveMessages) != 1 {
 		t.Fatalf(
 			"projected Question rows: facts=%d hydration=%d page=%d live=%d, want one each",
 			len(facts),
-			len(hydration.CommittedRows),
+			len(hydration.TailSegment.Entries),
 			len(page.Entries),
 			len(liveMessages),
 		)
 	}
 	liveRow := transcriptPayload[clientui.TranscriptCommittedRow](t, liveMessages[0])
-	if !reflect.DeepEqual(hydration.CommittedRows[0], page.Entries[0]) ||
-		!reflect.DeepEqual(hydration.CommittedRows[0], liveRow) {
+	if !reflect.DeepEqual(hydration.TailSegment.Entries[0], page.Entries[0]) ||
+		!reflect.DeepEqual(hydration.TailSegment.Entries[0], liveRow) {
 		t.Fatalf(
 			"Question rows differ: hydration=%+v page=%+v live=%+v",
-			hydration.CommittedRows[0],
+			hydration.TailSegment.Entries[0],
 			page.Entries[0],
 			liveRow,
 		)
 	}
-	got := hydration.CommittedRows[0]
+	got := hydration.TailSegment.Entries[0]
 	if got.Tool == nil || got.Tool.QuestionAnswer == nil ||
 		got.Tool.QuestionAnswer.SelectedOptionNumber == nil ||
 		*got.Tool.QuestionAnswer.SelectedOptionNumber != selected ||
