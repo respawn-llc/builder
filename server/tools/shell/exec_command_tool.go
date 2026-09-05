@@ -19,7 +19,7 @@ import (
 )
 
 type execCommandInput struct {
-	Cmd             string `json:"cmd" jsonschema_description:"Shell command to execute."`
+	Cmd             string `json:"cmd" jsonschema_description:"Shell command to execute. Treat shell command text as executable code. Single-quote fully literal prose; single quotes suppress variable expansion too. Put intentional variable expansions in separate double-quoted segments. Double quotes still execute backtick substitutions and $(). For prose containing apostrophes or complex/multiline text, prefer a file/stdin option when the command supports it. JSON escaping is not shell escaping."`
 	Command         string `json:"command,omitempty" jsonschema:"-"`
 	Workdir         string `json:"workdir,omitempty" jsonschema_description:"Optional working directory to run the command in; defaults to the workspace root."`
 	Shell           string `json:"shell,omitempty" jsonschema_description:"Shell binary to launch. Defaults to the user's default shell."`

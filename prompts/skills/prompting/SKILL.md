@@ -49,9 +49,9 @@ description: Write prompts and assign work to Kent agents. Use when drafting age
 Use the available agent roles and their descriptions to select a role. Exact flags are available through `kent run --help`.
 
 ```bash
-kent run "<assignment>"
-kent run --agent <role> "<assignment>"
-kent run --fast "<assignment>"
+kent run '<assignment>'
+kent run --agent <role> '<assignment>'
+kent run --fast '<assignment>'
 ```
 
 Omitting `--agent` selects the default agent. `--fast` selects the built-in fast role. Fast agents are suitable for menial tasks such as exploration and context gathering, not code review, plan review, or self-checks.
@@ -62,13 +62,13 @@ Omitting `--agent` selects the default agent. `--fast` selects the built-in fast
 Steer an active run to give it additional context or adjust its assignment:
 
 ```bash
-kent run steer <session-id> "<message>"
+kent run steer <session-id> '<message>'
 ```
 
 Continue an idle Session for follow-ups, re-reviews, or further discussion:
 
 ```bash
-kent run --session <session-id> "<follow-up>"
+kent run --session <session-id> '<follow-up>'
 ```
 
 `--continue` is an alias of `--session`. Reuse the existing Session for follow-up work; start a new Session for a separate task. Do not directly resume Workflow Task Sessions with `kent run --session`; Workflow Tasks have their own resume operation.
@@ -99,7 +99,7 @@ Inspect or answer another interactive or Workflow Session's pending Question:
 ```bash
 kent question --session <session-id>
 kent question answer --session <session-id> --option <number>
-kent question answer --session <session-id> --commentary "<answer>"
+kent question answer --session <session-id> --commentary '<answer>'
 ```
 
 List answered Questions from a known Session:
