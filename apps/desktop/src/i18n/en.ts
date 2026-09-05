@@ -3,6 +3,7 @@ import { workflowEditorEnglish } from "./workflowEditorEn";
 export const englishResources = {
   translation: {
     chatSettings: {
+      thinking: "Thinking",
       operationFailed: "Could not change Chat settings",
       rejections: {
         agent_locked: "The Agent is locked for this Session.",
