@@ -26,7 +26,7 @@ const completed: ChatTranscriptPayloadByKind["compaction_status"] = {
 };
 
 describe("transcript live membership and compaction", () => {
-  it("retains live rows while browsing and shares compatible page overlap without deleting omitted live rows", () => {
+  it("retains hidden live rows while browsing and reveals them at the global tail", () => {
     const window = new TranscriptWindow();
     window.dispatch({ kind: "opening-success", permit: window.openingPermit, page: page([row(30)], 300) });
     const live = row(40);
@@ -42,7 +42,8 @@ describe("transcript live membership and compaction", () => {
       request: visit(window, "older"),
       page: page([row(10)], null, 200),
     });
-    expect(sequences(window)).toEqual([10, 20, 40]);
+    expect(sequences(window)).toEqual([10, 20]);
+    const historical = window.snapshot.items;
     window.dispatch({
       kind: "live-fact",
       fact: {
@@ -50,7 +51,7 @@ describe("transcript live membership and compaction", () => {
         payload: { StepID: "step", StreamID: "browse-stream", Phase: "commentary", Delta: "Draft" },
       },
     });
-    expect(window.snapshot.items.at(-1)).toMatchObject({ kind: "assistant", state: "live" });
+    expect(window.snapshot.items).toEqual(historical);
     const promoted = {
       ...row(50),
       Kind: "assistant",
@@ -65,14 +66,14 @@ describe("transcript live membership and compaction", () => {
       },
     } as const;
     window.dispatch({ kind: "committed-row", row: promoted });
-    expect(sequences(window)).toEqual([10, 20, 40, 50]);
-    expect(window.snapshot.items.at(-1)).toMatchObject({ kind: "assistant", state: "committed" });
+    expect(window.snapshot.items).toEqual(historical);
     window.dispatch({
       kind: "page-success",
       request: visit(window, "newer"),
       page: page([row(30), row(40)], 300),
     });
     expect(sequences(window)).toEqual([20, 30, 40, 50]);
+    expect(window.snapshot.items.at(-1)).toMatchObject({ kind: "assistant", state: "committed" });
     const overlap = window.snapshot.items.find(
       (item) => "row" in item && item.row.Locator.event_sequence === 40,
     );
@@ -201,7 +202,7 @@ describe("transcript live membership and compaction", () => {
       page: page([row(60)], 300),
     });
     expect(result).toEqual({ kind: "accepted", effects: [] });
-    expect(sequences(window)).toEqual([20, 40, 60]);
+    expect(sequences(window)).toEqual([20, 60]);
     const settled = window.snapshot;
     expect(
       window.dispatch({
@@ -209,9 +210,9 @@ describe("transcript live membership and compaction", () => {
         status: completed,
       }).effects,
     ).toEqual([{ kind: "scratch-rehydration" }]);
-    expect(sequences(window)).toEqual([20, 60]);
-    expect(window.snapshot.older).toBe(settled.older);
-    expect(window.snapshot.newer).toBe(settled.newer);
+    expect(window.snapshot.items).toEqual(settled.items);
+    expect(window.snapshot.older).toEqual(settled.older);
+    expect(window.snapshot.newer).toEqual(settled.newer);
     const replacement = hydration([row(70)], 1);
     window.dispatch({
       kind: "reattachment-hydration",
@@ -222,8 +223,8 @@ describe("transcript live membership and compaction", () => {
     });
     // The local completion is already reflected: equal-count reattachment reconciles, not replaces.
     expect(sequences(window)).toEqual([20, 60, 70]);
-    expect(window.snapshot.older).toBe(settled.older);
-    expect(window.snapshot.newer).toBe(settled.newer);
+    expect(window.snapshot.older).toEqual(settled.older);
+    expect(window.snapshot.newer).toEqual(settled.newer);
     window.dispatch({
       kind: "reattachment-hydration",
       hydration: {

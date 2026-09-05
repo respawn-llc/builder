@@ -38,8 +38,17 @@ type State = Readonly<{
   snapshot: TranscriptWindowSnapshot;
 }>;
 
+function showsLive(state: State): boolean {
+  const tail = state.segments.at(-1);
+  return (
+    tail !== undefined &&
+    !tail.hasMoreBelow &&
+    (state.lifecycle?.kind !== "stage" || state.lifecycle.presentation === "continuous-live")
+  );
+}
+
 function project(state: State, admitted: readonly CommittedRow[] = []): State {
-  const presentation = present(state, state.snapshot.items, admitted);
+  const presentation = present({ ...state, showLive: showsLive(state) }, state.snapshot.items, admitted);
   return {
     ...state,
     provisional: presentation.provisional,
@@ -63,10 +72,18 @@ function admitRows(state: State, rows: readonly CommittedRow[]): State {
 
 function install(
   state: State,
-  segments: ResidentSegments,
-  operation: "replace" | "insert",
-  admitted: readonly CommittedRow[],
+  installation: Readonly<{
+    segments: ResidentSegments;
+    operation: "replace" | "insert";
+    admitted: readonly CommittedRow[];
+    stagingPresentation: "preserve-live" | "page-only";
+  }>,
 ): State {
+  const { segments, operation, admitted, stagingPresentation } = installation;
+  const lifecycle =
+    stagingPresentation === "page-only" && state.lifecycle?.kind === "stage"
+      ? { ...state.lifecycle, presentation: "page-only" as const }
+      : state.lifecycle;
   function boundary(direction: TranscriptDirection, cursor: number | null): TranscriptBoundary {
     const previous = state.snapshot[direction];
     return operation === "insert" && previous.kind === "error" && previous.cursor === cursor
@@ -77,6 +94,7 @@ function install(
     {
       ...state,
       segments,
+      lifecycle,
       pending: null,
       snapshot: {
         items: state.snapshot.items,
@@ -178,12 +196,12 @@ export class TranscriptWindow {
 
   private replace(segment: Segment): TranscriptWindowResult {
     validateTail(segment);
-    this.state = install(
-      this.state,
-      [shareSegment(segment, this.state.segments, this.state.pool)],
-      "replace",
-      segment.entries,
-    );
+    this.state = install(this.state, {
+      segments: [shareSegment(segment, this.state.segments, this.state.pool)],
+      operation: "replace",
+      admitted: segment.entries,
+      stagingPresentation: "page-only",
+    });
     return { kind: "accepted", effects: [] };
   }
 
@@ -207,12 +225,12 @@ export class TranscriptWindow {
     const page = shareSegment(input.page, segments, this.state.pool);
     const neighbor = input.request.direction === "older" ? segments[0] : segments.at(-1);
     if (neighbor === undefined) throw new ContractError("Transcript edge request has no resident neighbor.");
-    this.state = install(
-      this.state,
-      input.request.direction === "older" ? [page, neighbor] : [neighbor, page],
-      "insert",
-      input.page.entries,
-    );
+    this.state = install(this.state, {
+      segments: input.request.direction === "older" ? [page, neighbor] : [neighbor, page],
+      operation: "insert",
+      admitted: input.page.entries,
+      stagingPresentation: input.page.hasMoreBelow ? "preserve-live" : "page-only",
+    });
     return { kind: "accepted", effects: [] };
   }
 
@@ -295,9 +313,12 @@ export class TranscriptWindow {
         provisional,
         activity: hydration.RuntimeReadModelUpdate.Activity,
       },
-      [shared],
-      "replace",
-      segment.entries,
+      {
+        segments: [shared],
+        operation: "replace",
+        admitted: segment.entries,
+        stagingPresentation: "preserve-live",
+      },
     );
     return { kind: "accepted", effects: [] };
   }
@@ -348,12 +369,10 @@ export class TranscriptWindow {
 
   private completeCompaction(checkpoint: number): TranscriptWindowResult {
     const pending = this.state.pending;
+    const liveWasVisible = showsLive(this.state);
     let snapshot = this.snapshot;
-    if (this.state.provisional.length > 0) {
-      snapshot = { ...snapshot, items: snapshot.items.filter((item) => "row" in item) };
-    }
     if (pending !== null) snapshot = { ...snapshot, [pending.request.direction]: pending.previous };
-    this.state = project({
+    const completed = {
       ...this.state,
       checkpoint,
       lifecycle: null,
@@ -361,7 +380,8 @@ export class TranscriptWindow {
       provisional: [],
       pending: null,
       snapshot,
-    });
+    };
+    this.state = liveWasVisible ? project(completed) : completed;
     return { kind: "accepted", effects: [{ kind: "scratch-rehydration" }] };
   }
 }

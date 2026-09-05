@@ -142,15 +142,17 @@ export function present(
     segments,
     pool,
     provisional,
+    showLive,
   }: Readonly<{
     segments: ResidentSegments;
     pool: readonly CommittedRow[];
     provisional: readonly TranscriptProvisionalItem[];
+    showLive: boolean;
   }>,
   previous: readonly TranscriptRenderItem[],
   admitted: readonly CommittedRow[] = [],
 ): Readonly<{ items: readonly TranscriptRenderItem[]; provisional: readonly TranscriptProvisionalItem[] }> {
-  const rows = mergeRows(residentRows(segments), pool);
+  const rows = showLive ? mergeRows(residentRows(segments), pool) : residentRows(segments);
   const priorKeys = new Map(
     previous.flatMap((item) => ("row" in item ? [[locatorKey(item.row), item.key]] : [])),
   );
@@ -167,7 +169,7 @@ export function present(
   const items: TranscriptRenderItem[] = rows
     .map((row) => committedItem(row, priorKeys.get(locatorKey(row)) ?? promotions.get(locatorKey(row))))
     .filter((item) => item.row.Visibility !== "hidden");
-  items.push(...remaining);
+  if (showLive) items.push(...remaining);
   if (new Set(items.map((item) => item.key)).size !== items.length) {
     throw new ContractError("Transcript rows compete for one live presentation identity.");
   }

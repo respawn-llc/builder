@@ -13,6 +13,7 @@ type Stage = Readonly<{
   kind: "stage";
   attempt: CompactionAttempt;
   rows: readonly CommittedRow[];
+  presentation: "continuous-live" | "page-only";
 }>;
 export type CompactionLifecycle =
   | Stage
@@ -85,7 +86,12 @@ export function sameCompaction(left: CompactionFacts, right: CompactionFacts): b
 
 export function beginStage(checkpoint: number | null, step: ActiveStep): Stage {
   if (checkpoint === null) throw new ContractError("Compaction requires an admitted hydration baseline.");
-  return { kind: "stage", attempt: { checkpoint, step, facts: null }, rows: [] };
+  return {
+    kind: "stage",
+    attempt: { checkpoint, step, facts: null },
+    rows: [],
+    presentation: "continuous-live",
+  };
 }
 
 /** Reattachment never carries an old feed's attempt identity into the new hydration facts. */
