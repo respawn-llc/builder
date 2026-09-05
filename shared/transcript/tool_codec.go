@@ -330,31 +330,6 @@ func normalizeLegacyRenderedFile(rendered patchformat.RenderedFile) (patchformat
 		return patchformat.FileChange{}, errors.New("legacy rendered file has invalid path or counts")
 	}
 
-	deletionMarkerCount := 0
-	nonMarkerRemovedCount := 0
-	for _, diff := range rendered.Diff {
-		switch {
-		case diff == "-<deleted file>":
-			deletionMarkerCount++
-		case len(diff) > 0 && diff[0] == '-':
-			nonMarkerRemovedCount++
-		}
-	}
-	literalDeletionMarkerCount := rendered.Removed - nonMarkerRemovedCount
-	if literalDeletionMarkerCount < 0 || literalDeletionMarkerCount > deletionMarkerCount {
-		return patchformat.FileChange{}, errors.New("legacy rendered file counts are inconsistent")
-	}
-	syntheticDeletionMarkerCount := deletionMarkerCount - literalDeletionMarkerCount
-	if syntheticDeletionMarkerCount != len(rendered.WholeFileDeletions) {
-		return patchformat.FileChange{}, errors.New("legacy deletion marker count does not match operations")
-	}
-	if literalDeletionMarkerCount > 0 && len(rendered.WholeFileDeletions) > 0 {
-		return patchformat.FileChange{}, errors.New(
-			"legacy deletion marker is ambiguous with a literal removed line",
-		)
-	}
-	deletionMarkersAreLiteral := literalDeletionMarkerCount > 0
-
 	operations := make([]patchformat.FileOperation, 0, len(rendered.WholeFileDeletions)+1)
 	groups := make([]patchformat.ChangeGroup, 0, 4)
 	current := patchformat.ChangeGroup{}
@@ -380,7 +355,7 @@ func normalizeLegacyRenderedFile(rendered patchformat.RenderedFile) (patchformat
 		groups = nil
 	}
 	for _, diff := range rendered.Diff {
-		if diff == "-<deleted file>" && !deletionMarkersAreLiteral {
+		if diff == "-<deleted file>" {
 			flushUpdate()
 			if deletionIndex >= len(rendered.WholeFileDeletions) {
 				return patchformat.FileChange{}, errors.New("legacy deletion marker has no operation")
