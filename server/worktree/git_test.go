@@ -86,16 +86,58 @@ func TestGitInspectorListParsesPorcelainTopology(t *testing.T) {
 		t.Fatalf("entries=%d want 3", len(entries))
 	}
 	mainEntry := entries[0]
-	if !mainEntry.IsMain || mainEntry.Branch == nil || mainEntry.Branch.Name() != "main" || mainEntry.Root != canonicalTestPath(t, workspaceRoot) {
+	if !mainEntry.IsMainWorktree || mainEntry.Branch == nil || mainEntry.Branch.Name() != "main" || mainEntry.Root != canonicalTestPath(t, workspaceRoot) {
 		t.Fatalf("unexpected main entry: %+v", mainEntry)
 	}
 	linkedEntry := entries[1]
-	if linkedEntry.IsMain || linkedEntry.Branch == nil || linkedEntry.Branch.Ref() != "refs/heads/feature/worktree" || linkedEntry.Branch.Name() != "feature/worktree" || linkedEntry.LockedReason != "bootstrap running" {
+	if linkedEntry.IsMainWorktree || linkedEntry.Branch == nil || linkedEntry.Branch.Ref() != "refs/heads/feature/worktree" || linkedEntry.Branch.Name() != "feature/worktree" || linkedEntry.LockedReason != "bootstrap running" {
 		t.Fatalf("unexpected linked entry: %+v", linkedEntry)
 	}
 	prunableEntry := entries[2]
 	if !prunableEntry.Detached || prunableEntry.Branch != nil || prunableEntry.PrunableReason == "" || prunableEntry.Root != canonicalTestPath(t, prunableRoot) {
 		t.Fatalf("unexpected prunable entry: %+v", prunableEntry)
+	}
+}
+
+func TestParseGitWorktreeListPorcelainIdentifiesGitMainOnlyFromRecordZero(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantRoots  []string
+		wantIsMain []bool
+	}{
+		{
+			name: "non-bare record zero",
+			body: "worktree /repo/main\nHEAD aaa111\nbranch refs/heads/main\n\n" +
+				"worktree /repo/linked\nHEAD bbb222\nbranch refs/heads/feature\n",
+			wantRoots:  []string{"/repo/main", "/repo/linked"},
+			wantIsMain: []bool{true, false},
+		},
+		{
+			name: "bare record zero has no Git main worktree",
+			body: "worktree /repo/bare.git\nHEAD aaa111\nbare\n\n" +
+				"worktree /repo/linked\nHEAD bbb222\nbranch refs/heads/feature\n",
+			wantRoots:  []string{"/repo/bare.git", "/repo/linked"},
+			wantIsMain: []bool{false, false},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries, err := parseGitWorktreeListPorcelain(test.body)
+			if err != nil {
+				t.Fatalf("parseGitWorktreeListPorcelain: %v", err)
+			}
+			if len(entries) != len(test.wantRoots) {
+				t.Fatalf("entries = %+v, want %d entries", entries, len(test.wantRoots))
+			}
+			for index, entry := range entries {
+				if entry.Root != canonicalTestPath(t, test.wantRoots[index]) ||
+					entry.IsMainWorktree != test.wantIsMain[index] {
+					t.Fatalf("entry %d = %+v, want root %q and is_main_worktree=%t",
+						index, entry, test.wantRoots[index], test.wantIsMain[index])
+				}
+			}
+		})
 	}
 }
 
@@ -192,7 +234,7 @@ func markGitRepository(t *testing.T, workspaceRoot string) {
 
 func TestParseGitWorktreeListPorcelainRejectsUnsupportedKeys(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	_, err := parseGitWorktreeListPorcelain("worktree "+workspaceRoot+"\nHEAD aaa111\nunsupported nope\n", workspaceRoot)
+	_, err := parseGitWorktreeListPorcelain("worktree " + workspaceRoot + "\nHEAD aaa111\nunsupported nope\n")
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -205,7 +247,7 @@ func TestParseGitWorktreeListPorcelainRejectsNamedDetachedHead(t *testing.T) {
 		"detached_then_branch": "worktree " + workspaceRoot + "\nHEAD aaa111\ndetached\nbranch refs/heads/main\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := parseGitWorktreeListPorcelain(body, workspaceRoot); err == nil {
+			if _, err := parseGitWorktreeListPorcelain(body); err == nil {
 				t.Fatal("parseGitWorktreeListPorcelain accepted named detached head")
 			}
 		})

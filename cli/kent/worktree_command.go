@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -253,14 +254,62 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	selector := strings.TrimSpace(fs.Args()[0])
+	targetWorkspace, err := resolveWorktreeTransitionWorkspace(context.Background(), selector)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	origin, err := sessionRetargetRuntimeOrigin(sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var transitionOrigin *worktreepb.TransitionRuntimeStepOrigin
+	if origin != nil {
+		transitionOrigin = &worktreepb.TransitionRuntimeStepOrigin{
+			RunId:  origin.RunID,
+			StepId: origin.StepID,
+		}
+	}
 	operationID := worktreecontract.NewOperationID()
 	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "enter", func(ctx context.Context, remote apicontract.WorktreeService) (*worktreepb.ScheduledAcknowledgement, error) {
 		return remote.EnterWorktree(ctx, &worktreepb.EnterRequest{
-			OperationId: operationID.String(),
-			SessionId:   sessionID,
-			Selector:    strings.TrimSpace(fs.Args()[0]),
+			OperationId:     operationID.String(),
+			SessionId:       sessionID,
+			Selector:        selector,
+			TargetWorkspace: targetWorkspace,
+			Origin:          transitionOrigin,
 		})
 	})
+}
+
+func resolveWorktreeTransitionWorkspace(ctx context.Context, selector string) (*worktreepb.TransitionWorkspace, error) {
+	configRoot, err := nearestCommandConfigRoot()
+	if err != nil {
+		return nil, err
+	}
+	cfg, remote, err := openBindingCommandRemote(ctx, configRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = remote.Close() }()
+	binding, err := resolveWorkspaceBinding(ctx, remote, worktreeTransitionResolutionPath(selector, cfg.WorkspaceRoot))
+	if err != nil {
+		return nil, err
+	}
+	return &worktreepb.TransitionWorkspace{
+		WorkspaceId:   strings.TrimSpace(binding.WorkspaceID),
+		WorkspaceRoot: strings.TrimSpace(binding.CanonicalRoot),
+	}, nil
+}
+
+func worktreeTransitionResolutionPath(selector string, workspaceRoot string) string {
+	selector = strings.TrimSpace(selector)
+	if filepath.IsAbs(selector) {
+		return filepath.Clean(selector)
+	}
+	return strings.TrimSpace(workspaceRoot)
 }
 
 func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -398,6 +447,8 @@ func writeWorktreeProtoJSON(stdout io.Writer, stderr io.Writer, message proto.Me
 
 func worktreeTopologyVariantJSON(topology *worktreepb.TopologyEntry) (string, error) {
 	switch topology.GetTopology().(type) {
+	case *worktreepb.TopologyEntry_MainWorkspace:
+		return "main_workspace", nil
 	case *worktreepb.TopologyEntry_Registered:
 		return "registered", nil
 	case *worktreepb.TopologyEntry_External:

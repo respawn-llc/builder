@@ -265,6 +265,10 @@ func TestPersistedTranscriptScanProjectsCacheWarningWithConfiguredVisibility(t *
 				got.Visibility != test.want || got.Text != transcript.CacheWarningText(warning) {
 				t.Fatalf("cache-warning projection = %+v, want configured persisted warning", got)
 			}
+			if got := snapshot.Entries[0].CacheWarning; got == nil ||
+				got.Scope != warning.Scope || got.Reason != warning.Reason {
+				t.Fatalf("cache-warning typed facts = %+v, want persisted warning facts", got)
+			}
 		})
 	}
 }

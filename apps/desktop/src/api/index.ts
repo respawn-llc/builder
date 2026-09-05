@@ -1,4 +1,27 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+export type { DesktopProcess } from "./processes";
+export type {
+  ChatApi,
+  ChatContext,
+  ChatContextTarget,
+  ChatMainView,
+  ChatProjectTarget,
+  ChatRuntimeAttachment,
+  ChatRuntimeRelease,
+  ChatSessionTarget,
+  ChatSettings,
+  ChatSettingsTarget,
+  ChatTranscriptCompletion,
+  ChatTranscriptCommittedRow,
+  ChatTranscriptHandler,
+  ChatTranscriptKind,
+  ChatTranscriptMessage,
+  ChatTranscriptMessageByKind,
+  ChatTranscriptPage,
+  ChatTranscriptPayload,
+  ChatTranscriptPayloadByKind,
+  ChatWorkspaceSelector,
+} from "./chat";
 export type {
   BoardNodeCardsInput,
   PromptAnswerBatchInput,
@@ -70,8 +93,36 @@ export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
+export {
+  parseCompactionRequestID,
+  parsePendingWorkItemID,
+  parseWorktreeOperationID,
+  pendingWorkItemSchema,
+  pendingWorkChangedEventSchema,
+  pendingWorkRestorationSchema,
+  pendingWorkSchema,
+  pendingWorkTechnicalRestorationEventSchema,
+  sessionSettingFeedbackSchema,
+} from "./pendingWork";
+export type {
+  CompactionRequestID,
+  PendingWork,
+  PendingWorkIdentity,
+  PendingWorkItem,
+  PendingWorkItemID,
+  PendingWorkRestoration,
+  PendingWorkChangedEvent,
+  PendingWorkTechnicalRestorationEvent,
+  SessionSettingFeedback,
+} from "./pendingWork";
 export type * from "./schemas/worktree";
 export { rpcErrorCodes } from "./rpcErrorCodes";
+export { decodePendingWorkError, PendingWorkError } from "./clientPendingWork";
+export type {
+  ManualCompactionErrorReason,
+  PendingWorkErrorDetail,
+  PendingWorkFailure,
+} from "./clientPendingWork";
 export { WorktreeError } from "./clientWorktree";
 export type { WorktreeErrorDetail } from "./clientWorktree";
 export { workflowIDSchema } from "./schemas/workflowID";

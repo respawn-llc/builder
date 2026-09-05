@@ -15,6 +15,7 @@ import (
 
 type submitDoneMsg struct {
 	token         uint64
+	sessionID     runtimeids.SessionID
 	message       string
 	submittedText string
 	resultKind    *clientui.UserTurnResultKind
@@ -103,6 +104,7 @@ type chatSettingsDoneMsg struct {
 
 type injectedQueueCreateDoneMsg struct {
 	token     uint64
+	sessionID runtimeids.SessionID
 	localID   string
 	item      clientui.QueuedUserMessage
 	completed bool
@@ -111,6 +113,7 @@ type injectedQueueCreateDoneMsg struct {
 
 type injectedQueueDiscardDoneMsg struct {
 	token     uint64
+	sessionID runtimeids.SessionID
 	localID   string
 	serverID  string
 	discarded bool
@@ -118,6 +121,7 @@ type injectedQueueDiscardDoneMsg struct {
 
 type compactDoneMsg struct {
 	requestID     runtimeids.CompactionRequestID
+	sessionID     runtimeids.SessionID
 	submittedText string
 	invoked       bool
 	err           error
@@ -246,6 +250,10 @@ func (e askEvent) isResolution() bool {
 
 type askEventMsg struct {
 	event askEvent
+}
+
+type missingPromptRehydrationMsg struct {
+	scope missingPromptRecoveryScope
 }
 
 type uiStatusNoticeKind uint8

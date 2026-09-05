@@ -17,7 +17,7 @@ const workflowGitFactsSchema = z
     bare: z.boolean(),
     locked_reason: nullableNonBlank,
     prunable_reason: nullableNonBlank,
-    is_main: z.boolean(),
+    is_main_worktree: z.boolean(),
     path_available: z.boolean(),
   })
   .strict();

@@ -138,6 +138,36 @@ func TestTranscriptCompactionStatusPreservesInitiatingRequestIdentity(t *testing
 	}
 }
 
+func TestTranscriptPendingWorkTechnicalRestorationProjection(t *testing.T) {
+	itemID := runtimeids.NewQueueItemID()
+	restoration := runtimeinput.PendingWorkTechnicalRestoration{
+		ItemID:         itemID,
+		Kind:           runtimeinput.PendingWorkItemKindWorktreeTransition,
+		CanonicalInput: "/wt leave",
+	}
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                   runtime.EventPendingWorkRestored,
+		PendingWorkRestoration: &restoration,
+	})
+	if len(messages) != 1 {
+		t.Fatalf("technical restoration messages = %+v, want one", messages)
+	}
+	projected := transcriptPayload[clientui.TranscriptPendingWorkRestored](t, messages[0])
+	if projected.Restoration != restoration {
+		t.Fatalf("projected technical restoration = %+v, want %+v", projected.Restoration, restoration)
+	}
+}
+
+func TestTranscriptPendingWorkChangedProjectionCarriesNoCollection(t *testing.T) {
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{Kind: runtime.EventPendingWorkChanged})
+	if len(messages) != 1 {
+		t.Fatalf("Pending Work Changed messages = %+v, want one", messages)
+	}
+	if _, ok := messages[0].Payload().(clientui.TranscriptPendingWorkChanged); !ok {
+		t.Fatalf("Pending Work Changed payload = %T", messages[0].Payload())
+	}
+}
+
 func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {
@@ -248,7 +278,6 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 }
 
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
-	queueItemID := runtimeids.NewQueueItemID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
 			StepID: transcriptProjectionStepID, Text: "Planning",
@@ -261,12 +290,7 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 			}()},
 			Text: "inspect",
 		}},
-		InFlightTools: []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
-		PendingWork: runtimeinput.PendingWork{Items: []runtimeinput.PendingWorkItem{{
-			ID: queueItemID, Lane: runtimeinput.PendingWorkLaneQueue,
-			Kind: runtimeinput.PendingWorkItemKindMessage, State: runtimeinput.PendingWorkItemStatePending,
-			Message: &runtimeinput.PendingWorkMessage{Text: "queued"},
-		}}},
+		InFlightTools:    []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
 		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
 		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
 		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
@@ -278,9 +302,6 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	}
 	if len(hydration.InFlightTools) != 1 || hydration.InFlightTools[0].ToolCallID != "call-1" {
 		t.Fatalf("tools = %+v", hydration.InFlightTools)
-	}
-	if len(hydration.PendingWork.Items) != 1 || hydration.PendingWork.Items[0].ID != queueItemID {
-		t.Fatalf("Pending Work = %+v", hydration.PendingWork)
 	}
 	if hydration.ActiveCompaction == nil || hydration.ActiveCompaction.Count != 3 {
 		t.Fatalf("compaction = %+v", hydration.ActiveCompaction)

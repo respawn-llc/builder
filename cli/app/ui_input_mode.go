@@ -25,18 +25,17 @@ type uiInteractionState struct {
 }
 
 type uiAskState struct {
-	current                  *askEvent
-	currentToken             uint64
-	queue                    []askEvent
-	cursor                   int
-	freeform                 bool
-	freeformMode             askFreeformMode
-	activeDelivery           *activePromptAnswerDelivery
-	pendingCtrlCContinuation *transcriptPromptKey
-	editor                   tuiinput.Editor
-	activeProjection         *activeQuestionProjection
-	inFlightProjection       *questionRenderRequest
-	latestDesiredProjection  *desiredQuestionProjection
+	current                 *askEvent
+	currentToken            uint64
+	queue                   []askEvent
+	cursor                  int
+	freeform                bool
+	freeformMode            askFreeformMode
+	activeDelivery          *activePromptAnswerDelivery
+	editor                  tuiinput.Editor
+	activeProjection        *activeQuestionProjection
+	inFlightProjection      *questionRenderRequest
+	latestDesiredProjection *desiredQuestionProjection
 }
 
 type uiProcessListState struct {

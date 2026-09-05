@@ -68,6 +68,45 @@ func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesWorktreePendingWorkCapacity(t *testing.T) {
+	tests := []struct {
+		name   string
+		decode func() error
+	}{
+		{
+			name: "enter",
+			decode: func() error {
+				return worktreeError(&worktreepb.EnterError{
+					Code: "pending_work_capacity",
+					Detail: &worktreepb.EnterError_PendingWorkCapacity{
+						PendingWorkCapacity: &worktreepb.PendingWorkCapacityDetails{},
+					},
+				})
+			},
+		},
+		{
+			name: "leave",
+			decode: func() error {
+				return worktreeError(&worktreepb.LeaveError{
+					Code: "pending_work_capacity",
+					Detail: &worktreepb.LeaveError_PendingWorkCapacity{
+						PendingWorkCapacity: &worktreepb.PendingWorkCapacityDetails{},
+					},
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.decode()
+			var typed *serverapi.PendingWorkCapacityError
+			if !errors.Is(err, serverapi.ErrPendingWorkCapacity) || !errors.As(err, &typed) {
+				t.Fatalf("decoded error = %T %v, want Pending Work capacity", err, err)
+			}
+		})
+	}
+}
+
 func TestProtocolErrorMapsWorkspaceNotRegisteredSentinel(t *testing.T) {
 	workspaceID := "workspace"
 	_, err := decodeGeneratedResult(
@@ -1648,29 +1687,31 @@ func TestProtocolErrorDecodesPendingWorkCapacityDirectly(t *testing.T) {
 }
 
 func TestRemotePendingWorkContractsPreserveTypedResults(t *testing.T) {
-	guidance, exact := "keep details", " /compact   keep details "
+	guidance := "keep details"
+	exact := "/compact keep details"
+	requestID := runtimeids.NewCompactionRequestID()
 	wire := mustJSON(t, serverapi.RuntimeCompactContextRequest{
-		SessionID: "session-1",
-		RequestID: runtimeids.NewCompactionRequestID(),
-		Admission: serverapi.ManualCompactionAdmission{Guidance: &guidance, RestorationInput: exact},
-	})
+		SessionID: "session-1", RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{Guidance: &guidance}})
 	var compactRequest serverapi.RuntimeCompactContextRequest
 	if err := json.Unmarshal(wire, &compactRequest); err != nil {
 		t.Fatal(err)
 	}
-	if compactRequest.Admission.Guidance == nil ||
+	if compactRequest.RequestID != requestID ||
+		compactRequest.Admission.Guidance == nil ||
 		*compactRequest.Admission.Guidance != guidance {
 		t.Fatalf("compact request = %+v", compactRequest)
 	}
 	id := runtimeids.NewQueueItemID()
 	list := serverapi.RuntimeListPendingWorkResponse{PendingWork: serverapi.PendingWork{Items: []serverapi.PendingWorkItem{{
 		ID: id, Lane: serverapi.PendingWorkLaneSteer, Kind: serverapi.PendingWorkItemKindManualCompaction,
-		State: serverapi.PendingWorkItemStatePending, ManualCompaction: &serverapi.PendingWorkManualCompaction{
-			Guidance: &guidance, RestorationInput: exact},
+		CanonicalInput: exact,
+		State:          serverapi.PendingWorkItemStatePending, ManualCompaction: &serverapi.PendingWorkManualCompaction{
+			Guidance: &guidance},
 	}}}}
 	removed := serverapi.RuntimeRemovePendingWorkResponse{Restoration: serverapi.PendingWorkRestoration{
-		Kind:             serverapi.PendingWorkItemKindManualCompaction,
-		ManualCompaction: &serverapi.PendingWorkManualCompactionRestoration{Input: exact},
+		Kind:           serverapi.PendingWorkItemKindManualCompaction,
+		CanonicalInput: exact,
 	}}
 	invalid := list
 	invalid.PendingWork.Items = []serverapi.PendingWorkItem{list.PendingWork.Items[0]}
@@ -1702,14 +1743,16 @@ func TestRemotePendingWorkContractsPreserveTypedResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	compaction := gotList.PendingWork.Items[0].ManualCompaction
-	if compaction == nil || compaction.Guidance == nil || *compaction.Guidance != guidance || compaction.RestorationInput != exact {
+	if compaction == nil || compaction.Guidance == nil || *compaction.Guidance != guidance ||
+		gotList.PendingWork.Items[0].CanonicalInput != exact {
 		t.Fatalf("listed compaction = %+v", compaction)
 	}
 	gotRemoval, err := remote.RemovePendingWork(context.Background(), serverapi.RuntimeRemovePendingWorkRequest{SessionID: "session-1", ItemID: id})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotRemoval.Restoration.ManualCompaction == nil || gotRemoval.Restoration.ManualCompaction.Input != exact {
+	if gotRemoval.Restoration.Kind != serverapi.PendingWorkItemKindManualCompaction ||
+		gotRemoval.Restoration.CanonicalInput != exact {
 		t.Fatalf("removal = %+v", gotRemoval.Restoration)
 	}
 	if _, err := remote.ListPendingWork(context.Background(), serverapi.RuntimeListPendingWorkRequest{SessionID: "session-1"}); err == nil {

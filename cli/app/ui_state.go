@@ -11,7 +11,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -45,7 +44,14 @@ type uiRuntimeFeatureState struct {
 	runtimeContextUsage        clientui.RuntimeContextUsage
 	runtimeContextUsageSession string
 	runtimeActivityProjection  clientui.RuntimeActivity
+	missingPromptRecovery      *missingPromptRecoveryScope
 	logger                     uiLogger
+}
+
+type missingPromptRecoveryScope struct {
+	sessionID string
+	runID     runtimeids.RunID
+	stepID    runtimeids.StepID
 }
 
 type uiInputFeatureState struct {
@@ -71,7 +77,6 @@ type uiInputFeatureState struct {
 	// injected user work.
 	queued                      []queuedInputItem
 	pendingCompactionRequestIDs map[runtimeids.CompactionRequestID]struct{}
-	pendingWork                 runtimeinput.PendingWork
 	submitToken                 uint64
 	activeSubmit                activeSubmitState
 
@@ -198,6 +203,7 @@ type uiStatusFeatureState struct {
 
 type uiTranscriptFeatureState struct {
 	runtimeConnection            clientui.RuntimeConnectionLifecycle
+	pendingWorkRefresh           pendingWorkRefreshOwner
 	runtimeMainViewToken         uint64
 	runtimeMainViewBusy          bool
 	runtimeMainViewActiveRequest runtimeMainViewRefreshRequest

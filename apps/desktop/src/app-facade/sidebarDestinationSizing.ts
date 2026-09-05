@@ -28,7 +28,11 @@ export function sidebarWidthProfile(destination: SidebarDestination): SidebarWid
   if (destination.kind === "projectEdit") {
     return { kind: "projectEdit" };
   }
-  if (destination.kind === "workflowCreate" || destination.kind === "linkWorkflow") {
+  if (
+    destination.kind === "workflowCreate" ||
+    destination.kind === "linkWorkflow" ||
+    destination.kind === "processes"
+  ) {
     return { kind: "workflowList" };
   }
   if (destination.kind === "custom") {

@@ -10,7 +10,7 @@ func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.
 	if closeSurface != nil {
 		closeCmd = closeSurface()
 	}
-	if m.runtimeLifecycle.Run.IsRunning() {
+	if m.runtimeLifecycle.Run.IsRunning() || m.ask.hasCurrent() {
 		if m.hasPendingInterrupt() &&
 			m.interruptRunID == m.currentRunID &&
 			m.interruptStepID == m.currentStepID {

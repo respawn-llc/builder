@@ -75,9 +75,6 @@ func (h TranscriptHydration) Validate() error {
 	if err := validateHydrationTools(h.InFlightTools); err != nil {
 		return err
 	}
-	if err := h.PendingWork.Validate(); err != nil {
-		return fmt.Errorf("validate transcript hydration Pending Work: %w", err)
-	}
 	if err := validateHydrationPrompts(h.PendingPrompts); err != nil {
 		return err
 	}

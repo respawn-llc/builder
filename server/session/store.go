@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const eventsFile = "events.jsonl"
-
 var ErrSessionNotFound = sessioncontract.ErrSessionNotFound
 
 var ErrGoalAgentOverwriteBlocked = errors.New("agent goal set cannot overwrite an active or paused goal")
@@ -453,6 +451,7 @@ type ArtifactRelocationTarget struct {
 	WorkspaceContainer string
 	UpdatedAt          time.Time
 	RebindReminder     *SessionRebindReminder
+	WorktreeReminder   *WorktreeReminderState
 }
 
 func (s *Store) RunArtifactRelocation(target ArtifactRelocationTarget, relocate func() error) error {
@@ -499,7 +498,7 @@ func (s *Store) RunArtifactRelocation(target ArtifactRelocationTarget, relocate 
 	}
 	s.meta.WorkspaceRoot = target.WorkspaceRoot
 	s.meta.WorkspaceContainer = target.WorkspaceContainer
-	s.meta.WorktreeReminder = nil
+	s.meta.WorktreeReminder = CloneWorktreeReminderState(target.WorktreeReminder)
 	if target.RebindReminder != nil {
 		s.meta.RebindReminder = CloneSessionRebindReminder(target.RebindReminder)
 	}
@@ -712,12 +711,37 @@ func (s *Store) EnsureDurable() error {
 	return s.mutateAndPersist(func() error { return nil })
 }
 
+type NameMutationResult struct {
+	CommitReceipt
+	Changed bool
+}
+
 func (s *Store) SetName(name string) error {
-	return s.mutateAndPersist(func() error {
-		s.meta.Name = strings.TrimSpace(name)
-		s.meta.UpdatedAt = time.Now().UTC()
-		return nil
-	})
+	_, err := s.MutateName(name)
+	return err
+}
+
+func (s *Store) MutateName(name string) (NameMutationResult, error) {
+	normalized := strings.TrimSpace(name)
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	s.mu.Lock()
+	if s.meta.Name == normalized {
+		s.mu.Unlock()
+		return NameMutationResult{}, nil
+	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		s.mu.Unlock()
+		return NameMutationResult{}, err
+	}
+	checkpoint := s.metadataMutationCheckpointLocked()
+	s.meta.Name = normalized
+	s.meta.UpdatedAt = time.Now().UTC()
+	receipt, err := s.persistMetadataMutationWithCommitReceiptLocked(checkpoint)
+	return NameMutationResult{
+		CommitReceipt: receipt,
+		Changed:       receipt.Committed,
+	}, err
 }
 
 func (s *Store) SetListingMetadata(name string, firstPromptPreview string) error {

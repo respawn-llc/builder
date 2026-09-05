@@ -1342,6 +1342,7 @@ func (a *Authority) interruptCurrentAgentExecution(
 		return false, err
 	}
 	execution.prompts.mu.Lock()
+	promptPending := len(execution.prompts.pending) != 0
 	closure := execution.prompts.closeLocked(context.Canceled)
 	execution.prompts.mu.Unlock()
 	publicationErr := execution.prompts.publishClosure(closure)
@@ -1366,6 +1367,10 @@ func (a *Authority) interruptCurrentAgentExecution(
 	}
 	engine := resource.engine
 	interrupted, interruptErr := interrupt(engine)
+	if interruptErr == nil && !interrupted && promptPending {
+		interruptErr = engine.PersistInterruption()
+		interrupted = interruptErr == nil
+	}
 	if interruptErr == nil && interrupted {
 		execution.cancel()
 	}

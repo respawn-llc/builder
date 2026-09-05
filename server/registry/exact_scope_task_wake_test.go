@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -235,6 +236,22 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 	}
 	if projected := events.snapshot(); len(projected) != 2 {
 		t.Fatalf("non-workflow wake events = %+v, want workflow event only", projected)
+	}
+	nonWorkflowResource, ok := nonWorkflowHandle.Scope().Resource()
+	if !ok {
+		t.Fatal("non-workflow execution has no session resource")
+	}
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(nonWorkflowResource)); err != nil {
+		t.Fatalf("drain non-workflow prompt feed: %v", err)
+	}
+	unpublishedRequest := nonWorkflowRequest
+	unpublishedRequest.ToolCallID = "ask-unpublished"
+	if err := registry.PromptPendingScope(
+		nonWorkflowHandle.Scope(),
+		unpublishedRequest,
+		time.Now().UTC(),
+	); !errors.Is(err, serverapi.ErrStreamUnavailable) {
+		t.Fatalf("prompt publication after feed drain = %v, want stream unavailable", err)
 	}
 	nonWorkflowStopCtx, cancelNonWorkflowStop := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelNonWorkflowStop()

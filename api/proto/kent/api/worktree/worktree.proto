@@ -14,9 +14,10 @@ option go_package = "core/shared/protoapi/gen/kent/api/worktree;worktreepb";
 
 enum TopologyVariant {
   WORKTREE_TOPOLOGY_VARIANT_UNSPECIFIED = 0;
-  WORKTREE_TOPOLOGY_VARIANT_REGISTERED = 1;
-  WORKTREE_TOPOLOGY_VARIANT_EXTERNAL = 2;
-  WORKTREE_TOPOLOGY_VARIANT_MISSING = 3;
+  WORKTREE_TOPOLOGY_VARIANT_MAIN_WORKSPACE = 1;
+  WORKTREE_TOPOLOGY_VARIANT_REGISTERED = 2;
+  WORKTREE_TOPOLOGY_VARIANT_EXTERNAL = 3;
+  WORKTREE_TOPOLOGY_VARIANT_MISSING = 4;
 }
 
 enum SwitchOperationKind {
@@ -107,7 +108,7 @@ message GitFacts {
   bool bare = 6;
   optional string locked_reason = 7 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   optional string prunable_reason = 8 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
-  bool is_main = 9;
+  bool is_main_worktree = 9;
   bool path_available = 10;
 }
 
@@ -131,6 +132,10 @@ message RegisteredFacts {
   };
 }
 
+message MainWorkspaceFacts {
+  GitFacts git = 1 [(buf.validate.field).required = true];
+}
+
 message ExternalFacts {
   GitFacts git = 1 [(buf.validate.field).required = true];
 }
@@ -142,9 +147,10 @@ message MissingFacts {
 message TopologyEntry {
   oneof topology {
     option (buf.validate.oneof).required = true;
-    RegisteredFacts registered = 1;
-    ExternalFacts external = 2;
-    MissingFacts missing = 3;
+    MainWorkspaceFacts main_workspace = 1;
+    RegisteredFacts registered = 2;
+    ExternalFacts external = 3;
+    MissingFacts missing = 4;
   }
 }
 
@@ -186,23 +192,23 @@ message ListEntry {
     expression:
       "!has(this.projection.switch) || "
       "(!this.projection.is_current && "
-      "((has(this.topology.registered) && this.topology.registered.git.path_available && "
-      "((this.topology.registered.git.is_main && this.projection.switch.kind == 2) || "
-      "(!this.topology.registered.git.is_main && this.projection.switch.kind == 1 && "
-      "this.projection.switch.selector == this.projection.selector))) || "
+      "((has(this.topology.main_workspace) && this.topology.main_workspace.git.path_available && "
+      "this.projection.switch.kind == 2 && !has(this.projection.switch.selector)) || "
+      "(has(this.topology.registered) && this.topology.registered.git.path_available && "
+      "this.projection.switch.kind == 1 && "
+      "this.projection.switch.selector == this.projection.selector) || "
       "(has(this.topology.external) && this.topology.external.git.path_available && "
-      "((this.topology.external.git.is_main && this.projection.switch.kind == 2) || "
-      "(!this.topology.external.git.is_main && this.projection.switch.kind == 1 && "
-      "this.projection.switch.selector == this.projection.selector)))))"
-  };
+      "this.projection.switch.kind == 1 && "
+      "this.projection.switch.selector == this.projection.selector)))"
+    };
   option (buf.validate.message).cel = {
     id: "kent.worktree.list_entry_delete_preview"
     message: "worktree delete preview projection must match topology"
     expression:
       "!has(this.projection.delete_preview) || "
-      "(has(this.topology.registered) && !this.topology.registered.git.is_main && "
+      "(has(this.topology.registered) && !this.topology.registered.git.is_main_worktree && "
       "this.projection.delete_preview.selector == this.topology.registered.kent.worktree_id) || "
-      "(has(this.topology.external) && !this.topology.external.git.is_main && "
+      "(has(this.topology.external) && !this.topology.external.git.is_main_worktree && "
       "this.projection.delete_preview.selector == this.topology.external.git.canonical_root) || "
       "(has(this.topology.missing) && "
       "this.projection.delete_preview.selector == this.topology.missing.kent.worktree_id)"
@@ -390,6 +396,8 @@ message CreateFailureDetails {
 
 message BlockedDetails {}
 
+message PendingWorkCapacityDetails {}
+
 message StatusRequest {
   string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
@@ -444,11 +452,12 @@ message ListSuccess {
       "this.worktrees.all(w, "
       "has(w.projection.switch) == "
       "(!w.projection.is_current && "
-      "((has(w.topology.registered) && w.topology.registered.git.path_available) || "
+      "((has(w.topology.main_workspace) && w.topology.main_workspace.git.path_available) || "
+      "(has(w.topology.registered) && w.topology.registered.git.path_available) || "
       "(has(w.topology.external) && w.topology.external.git.path_available))) && "
       "has(w.projection.delete_preview) == "
-      "((has(w.topology.registered) && !w.topology.registered.git.is_main) || "
-      "(has(w.topology.external) && !w.topology.external.git.is_main) || "
+      "((has(w.topology.registered) && !w.topology.registered.git.is_main_worktree) || "
+      "(has(w.topology.external) && !w.topology.external.git.is_main_worktree) || "
       "has(w.topology.missing)))"
   };
 }
@@ -547,11 +556,12 @@ message SelectorResolveSuccess {
     expression:
       "has(this.worktree.projection.switch) == "
       "(!this.worktree.projection.is_current && "
-      "((has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
+      "((has(this.worktree.topology.main_workspace) && this.worktree.topology.main_workspace.git.path_available) || "
+      "(has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
       "(has(this.worktree.topology.external) && this.worktree.topology.external.git.path_available))) && "
       "has(this.worktree.projection.delete_preview) == "
-      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main) || "
-      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main) || "
+      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main_worktree) || "
+      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main_worktree) || "
       "has(this.worktree.topology.missing))"
   };
 }
@@ -603,9 +613,9 @@ message DeletePreviewSuccess {
     id: "kent.worktree.delete_preview_authority"
     message: "delete preview selector and cleanliness must match its topology"
     expression:
-      "(has(this.worktree.registered) && !this.worktree.registered.git.is_main && "
+      "(has(this.worktree.registered) && !this.worktree.registered.git.is_main_worktree && "
       "this.deletion_selector == this.worktree.registered.kent.worktree_id) || "
-      "(has(this.worktree.external) && !this.worktree.external.git.is_main && "
+      "(has(this.worktree.external) && !this.worktree.external.git.is_main_worktree && "
       "this.deletion_selector == this.worktree.external.git.canonical_root) || "
       "(has(this.worktree.missing) && this.deletion_selector == this.worktree.missing.kent.worktree_id && "
       "this.cleanliness.kind == 1)"
@@ -751,11 +761,12 @@ message CreateSuccess {
     expression:
       "has(this.worktree.projection.switch) == "
       "(!this.worktree.projection.is_current && "
-      "((has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
+      "((has(this.worktree.topology.main_workspace) && this.worktree.topology.main_workspace.git.path_available) || "
+      "(has(this.worktree.topology.registered) && this.worktree.topology.registered.git.path_available) || "
       "(has(this.worktree.topology.external) && this.worktree.topology.external.git.path_available))) && "
       "has(this.worktree.projection.delete_preview) == "
-      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main) || "
-      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main) || "
+      "((has(this.worktree.topology.registered) && !this.worktree.topology.registered.git.is_main_worktree) || "
+      "(has(this.worktree.topology.external) && !this.worktree.topology.external.git.is_main_worktree) || "
       "has(this.worktree.topology.missing))"
   };
 }
@@ -804,6 +815,24 @@ message EnterRequest {
   ];
   string session_id = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
   string selector = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  TransitionWorkspace target_workspace = 4 [(buf.validate.field).required = true];
+  optional TransitionRuntimeStepOrigin origin = 5;
+}
+
+message TransitionWorkspace {
+  string workspace_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string workspace_root = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+}
+
+message TransitionRuntimeStepOrigin {
+  string run_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message LeaveRequest {
@@ -836,6 +865,10 @@ message EnterError {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "server_not_ready"
     }];
+    PendingWorkCapacityDetails pending_work_capacity = 8 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "pending_work_capacity"
+    }];
   }
 }
 
@@ -864,6 +897,10 @@ message LeaveError {
     kent.api.server.ServerNotReadyDetails server_not_ready = 6 [(kent.api.shared.kent_result_field) = {
       role: RESULT_FIELD_ROLE_ERROR_DETAIL
       error_code: "server_not_ready"
+    }];
+    PendingWorkCapacityDetails pending_work_capacity = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "pending_work_capacity"
     }];
   }
 }

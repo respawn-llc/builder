@@ -3,6 +3,10 @@ package clientui
 import (
 	"encoding/json"
 	"testing"
+
+	"buf.build/go/protovalidate"
+	transcriptpb "core/shared/protoapi/gen/kent/api/transcript"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 )
 
 func TestTranscriptWorktreeAndOperationalOutcomesStayTyped(t *testing.T) {
@@ -13,6 +17,14 @@ func TestTranscriptWorktreeAndOperationalOutcomesStayTyped(t *testing.T) {
 	}
 	if err := worktree.Validate(); err != nil {
 		t.Fatalf("validate worktree transition outcome: %v", err)
+	}
+	generated := &transcriptpb.WorktreeTransitionOutcome{OperationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Transition: transcriptpb.WorktreeTransitionKind_WORKTREE_TRANSITION_KIND_ENTER, State: transcriptpb.WorktreeTransitionState_WORKTREE_TRANSITION_STATE_FAILED, FailureDetail: &transcriptpb.WorktreeTransitionOutcome_SelectorError{SelectorError: &worktreepb.SelectorErrorDetails{Kind: worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_NOT_FOUND, Input: "missing"}}}
+	if err := protovalidate.Validate(generated); err != nil {
+		t.Fatalf("generated selector failure rejected: %v", err)
+	}
+	generated.State = transcriptpb.WorktreeTransitionState_WORKTREE_TRANSITION_STATE_COMPLETED
+	if err := protovalidate.Validate(generated); err == nil {
+		t.Fatal("completed generated outcome accepted selector failure")
 	}
 
 	diagnostic := TranscriptOperationalDiagnostic{

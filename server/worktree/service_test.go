@@ -58,13 +58,16 @@ func createWorktreeRequestForTest(
 }
 
 type serviceTestPublisher struct {
-	mu       sync.Mutex
-	outcomes []clientui.WorktreeTransitionOutcome
-	ready    chan struct{}
+	mu          sync.Mutex
+	identityErr error
+	outcomes    []clientui.WorktreeTransitionOutcome
+	ready       chan struct{}
 }
 
 func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
-	return nil
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.identityErr
 }
 
 func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
@@ -684,7 +687,7 @@ func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testin
 		t.Fatalf("list worktrees after detached create rollback: %v", listErr)
 	}
 	for _, worktree := range worktrees {
-		if !worktree.IsMain {
+		if !worktree.IsMainWorktree {
 			t.Fatalf("detached worktree remained registered after failed create: %+v", worktree)
 		}
 	}

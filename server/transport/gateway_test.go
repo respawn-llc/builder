@@ -422,7 +422,7 @@ func (d *gatewayRuntimeClientOverride) SessionRuntimeClient() apicontract.Sessio
 	return d.runtimeClient
 }
 
-func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
+func TestGatewayConnectionCloseDetachesOwnedRuntime(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	counter := &countingSessionRuntimeClient{
 		SessionRuntimeService: appCore.SessionRuntimeClient(),
@@ -479,8 +479,8 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 		if request.Attachment != successor.Attachment {
 			t.Fatalf("disconnect release attachment = %+v, want successor %+v", request.Attachment, successor.Attachment)
 		}
-		if request.OwnerID != activationRequest.OwnerID || !request.DropOwner || request.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle {
-			t.Fatalf("disconnect release request = %+v, want exact close-if-idle owner drop", request)
+		if request.OwnerID != activationRequest.OwnerID || !request.DropOwner || request.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
+			t.Fatalf("disconnect release request = %+v, want exact detach-only owner drop", request)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for disconnect runtime release")
@@ -583,6 +583,65 @@ func TestGatewayCloseIfIdleReleasePropagatesPolicy(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for explicit close-if-idle release")
+	}
+}
+
+func TestGatewayDisconnectKeepsRuntimeAvailableUntilExplicitCloseIfIdle(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	store := createGatewayAuthoritativeSession(t, appCore)
+
+	first := dialGateway(t, server)
+	handshakeGateway(t, first)
+	var firstActivation serverapi.SessionRuntimeActivateResponse
+	callGateway(
+		t,
+		first,
+		"activate-first",
+		protocol.MethodSessionRuntimeActivate,
+		gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID),
+		&firstActivation,
+	)
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first gateway connection: %v", err)
+	}
+
+	second := dialGateway(t, server)
+	defer second.Close()
+	handshakeGateway(t, second)
+	var secondActivation serverapi.SessionRuntimeActivateResponse
+	callGateway(
+		t,
+		second,
+		"activate-second",
+		protocol.MethodSessionRuntimeActivate,
+		gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID),
+		&secondActivation,
+	)
+	if secondActivation.Attachment.Generation != firstActivation.Attachment.Generation {
+		t.Fatalf(
+			"disconnect replaced the runtime: first generation %d, second generation %d",
+			firstActivation.Attachment.Generation,
+			secondActivation.Attachment.Generation,
+		)
+	}
+
+	var release serverapi.SessionRuntimeReleaseResponse
+	callGateway(
+		t,
+		second,
+		"release-close-if-idle",
+		protocol.MethodSessionRuntimeRelease,
+		serverapi.SessionRuntimeReleaseRequest{
+			Attachment:  secondActivation.Attachment,
+			DropOwner:   true,
+			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+		},
+		&release,
+	)
+	if !release.Released || release.Active {
+		t.Fatalf("explicit close-if-idle release = %+v, want released inactive runtime", release)
 	}
 }
 
@@ -872,7 +931,7 @@ func TestGatewayRejectsMethodsBeforeHandshake(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	sendGatewayRequest(t, conn, "1", protocol.MethodProcessList, serverapi.ProcessListRequest{})
+	sendGatewayRequest(t, conn, "1", protocol.MethodProcessList, map[string]any{"project_id": "project-1"})
 	var response protocol.Response
 	if err := websocket.JSON.Receive(conn, &response); err == nil {
 		t.Fatalf("pre-handshake application traffic unexpectedly received %+v", response)

@@ -59,7 +59,8 @@ func (s remoteConnectionSetup) run(ctx context.Context, conn rpcwire.Conn) (remo
 		}
 	}
 	if s.additionalAttachmentIntent != nil {
-		if _, err := attachRemoteBinaryRPC(ctx, conn, s.additionalAttachmentIntent); err != nil {
+		attachment, err = attachRemoteBinaryRPC(ctx, conn, s.additionalAttachmentIntent)
+		if err != nil {
 			return remoteConnectionState{}, err
 		}
 	}
@@ -144,7 +145,10 @@ func attachRemoteBinaryRPC(
 			conn,
 			"attach-session",
 			method,
-			&connectionpb.AttachSessionRequest{SessionId: request.sessionID},
+			&connectionpb.AttachSessionRequest{
+				SessionId:          request.sessionID,
+				ReattachCapability: request.reattachCapability,
+			},
 			result,
 		); err != nil {
 			return nil, err
@@ -283,10 +287,11 @@ func attachmentResponseFromGenerated(success *connectionpb.AttachmentSuccess) (r
 	}
 	if session := success.GetSession(); session != nil {
 		return remoteAttachment{session: &remoteSessionAttachment{
-			projectID:     session.ProjectId,
-			workspaceID:   session.WorkspaceId,
-			workspaceRoot: session.WorkspaceRoot,
-			sessionID:     session.SessionId,
+			projectID:          session.ProjectId,
+			workspaceID:        session.WorkspaceId,
+			workspaceRoot:      session.WorkspaceRoot,
+			sessionID:          session.SessionId,
+			reattachCapability: session.ReattachCapability,
 		}}, nil
 	}
 	return remoteAttachment{}, fmt.Errorf("attachment success has no attachment")

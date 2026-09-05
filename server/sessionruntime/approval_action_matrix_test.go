@@ -434,7 +434,7 @@ func TestApprovalActionCommentaryFIFOAtStepBoundary(t *testing.T) {
 	transitionStarted, releaseTransition := make(chan struct{}), make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- h.engine.RunWorktreeTransition(context.Background(), func() error {
+		transitionDone <- h.engine.RunExecutionTargetTransition(context.Background(), nil, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil

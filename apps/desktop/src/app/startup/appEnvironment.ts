@@ -7,6 +7,7 @@ import {
   ConnectionStore,
   createJsonRpcTransport,
   protocolVersion,
+  type ChatSubscriptionInput,
   type DescriptorRpcTransport,
   type JsonValue,
   type RpcEventHandler,
@@ -258,8 +259,25 @@ class BootstrapErrorTransport implements DescriptorRpcTransport {
     throw this.#error;
   }
 
+  async callAttachedProject(): Promise<never> {
+    throw this.#error;
+  }
+
+  async runRuntimeOwner(): Promise<never> {
+    throw this.#error;
+  }
+
   subscribe(_method: string, _params: JsonValue, handler: RpcEventHandler): RpcSubscription {
     handler.onError(this.#error);
+    return {
+      close() {
+        return;
+      },
+    };
+  }
+
+  subscribeChatSession(input: ChatSubscriptionInput): RpcSubscription {
+    input.handler.onError(this.#error);
     return {
       close() {
         return;

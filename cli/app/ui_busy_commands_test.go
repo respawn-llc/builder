@@ -22,7 +22,7 @@ func TestDefaultRegistryBusyContract(t *testing.T) {
 		"fast": commands.ActiveRunPolicyAllowed, "supervisor": commands.ActiveRunPolicyAllowed,
 		"autocompaction": commands.ActiveRunPolicyAllowed, "questions": commands.ActiveRunPolicyAllowed,
 		"status": commands.ActiveRunPolicyAllowed, "goal": commands.ActiveRunPolicyAllowed,
-		"ps": commands.ActiveRunPolicyAllowed, "worktree": commands.ActiveRunPolicyRequiresIdle,
+		"ps": commands.ActiveRunPolicyAllowed, "worktree": commands.ActiveRunPolicyAllowed,
 		"copy": commands.ActiveRunPolicyAllowed, "back": commands.ActiveRunPolicyAllowed,
 		"review": commands.ActiveRunPolicyAllowed, "init": commands.ActiveRunPolicyAllowed,
 	}
@@ -58,17 +58,22 @@ func TestBusyEnterOpensReadOverlays(t *testing.T) {
 	}
 }
 
-func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
-	for _, input := range []string{"/worktree list", "/wt switch feature"} {
+func TestBusyEnterDispatchesWorktreeTransitions(t *testing.T) {
+	for _, input := range []string{"/wt switch feature", "/wt leave"} {
 		t.Run(input, func(t *testing.T) {
+			client := &worktreeCommandTestClient{}
 			model := busyCommandTestModel()
+			model.worktreeClient = client
 			testSetMainInput(model, input)
 			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
-			if cmd == nil || testMainInput(updated) != "" {
-				t.Fatalf("blocked command result = cmd %v, input %q", cmd, testMainInput(updated))
+			if cmd == nil || testMainInput(updated) != "" || !updated.worktrees.switchPending {
+				t.Fatalf("transition result = cmd %v input %q pending %t", cmd, testMainInput(updated), updated.worktrees.switchPending)
 			}
-			requireBusyCommandQueuesEmpty(t, updated)
+			_ = cmd()
+			if got := len(client.enterRequests) + len(client.leaveRequests); got != 1 {
+				t.Fatalf("transition requests = enter %d leave %d, want one", len(client.enterRequests), len(client.leaveRequests))
+			}
 		})
 	}
 }
@@ -98,34 +103,43 @@ func TestBusyEnterOpensBareWorktreePickerAliases(t *testing.T) {
 	}
 }
 
-func TestPromptCommandRemainsTypedRuntimeSubmission(t *testing.T) {
+func TestBusyEnterRoutesDirectWorktreeCommands(t *testing.T) {
+	for _, input := range []string{"/wt status", "/wt create", "/wt delete feature"} {
+		t.Run(input, func(t *testing.T) {
+			client := &worktreeCommandTestClient{listResp: testMainWorktreeListResponse()}
+			model := busyCommandTestModel()
+			model.worktreeClient = client
+			testSetMainInput(model, input)
+			_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			for range collectCmdMessages(t, cmd) {
+			}
+			if len(client.listRequests) != 1 {
+				t.Fatalf("worktree list requests = %d, want direct owner call", len(client.listRequests))
+			}
+		})
+	}
+}
+
+func TestBusyCatalogPromptCommandRemainsTypedRuntimeSubmission(t *testing.T) {
 	client := &runtimeControlFakeClient{}
-	model := newProjectedTestUIModel(
-		client,
+	model := newProjectedTestUIModel(client,
 		WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
-		WithUIPromptCommandCatalogEntries([]commands.PromptCommandCatalogEntry{{
-			Name:    "prompt:inspect",
-			Preview: "Inspect the requested scope",
-		}}),
+		WithUIPromptCommandCatalogEntries([]commands.PromptCommandCatalogEntry{{Name: "prompt:inspect", Preview: "Inspect"}}),
 	)
 	model.commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(model.promptCatalogEntries)
-	submitted := "/prompt:inspect cli/app"
-	testSetMainInput(model, submitted)
-
+	model.setRuntimeActivityBusyForTest(true)
+	model.activity = uiActivityRunning
+	testSetMainInput(model, "/prompt:inspect cli/app")
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
 	for _, msg := range collectCmdMessages(t, cmd) {
 		model = updateUIModel(t, model, msg)
 	}
-
-	if client.submitCalls != 1 {
-		t.Fatalf("typed prompt steering calls = %d, want 1", client.submitCalls)
-	}
-	if client.submitInput.Kind != runtimeinput.KindPromptCommand ||
+	if client.submitCalls != 1 || model.exitAction != UIActionNone ||
+		client.submitInput.Kind != runtimeinput.KindPromptCommand ||
 		client.submitInput.PromptCommand == nil ||
-		client.submitInput.PromptCommand.Name != "prompt:inspect" ||
-		client.submitInput.PromptCommand.Arguments != "cli/app" {
-		t.Fatalf("typed prompt steering input = %+v", client.submitInput)
+		client.submitInput.PromptCommand.Name != "prompt:inspect" {
+		t.Fatalf("busy prompt result = calls %d action %q input %+v", client.submitCalls, model.exitAction, client.submitInput)
 	}
 }
 
@@ -234,22 +248,20 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 		t.Fatal("expected compaction command")
 	}
 	requestID := runtimeids.NewCompactionRequestID()
-	guidance := "tighten  summary"
-	_ = model.inputController().compactCmd(requestID, "  /compact   tighten  summary  ", &guidance)()
+	_ = model.inputController().compactCmd(
+		requestID,
+		"  /compact   tighten  summary  ",
+		optionalCompactionGuidance("tighten  summary"),
+	)()
 	if got := client.compactRequest.RequestID; got != requestID {
 		t.Fatalf("compaction request ID = %v, want %v", got, requestID)
 	}
-	if got := client.compactRequest.Admission.RestorationInput; got != "  /compact   tighten  summary  " {
-		t.Fatalf("compaction restoration input = %q", got)
-	}
-	if client.compactRequest.Admission.Guidance == nil || *client.compactRequest.Admission.Guidance != "tighten  summary" {
-		t.Fatalf("compaction guidance = %v", client.compactRequest.Admission.Guidance)
+	if client.compactRequest.Admission.Guidance == nil ||
+		*client.compactRequest.Admission.Guidance != "tighten summary" {
+		t.Fatalf("compaction admission = %+v", client.compactRequest.Admission)
 	}
 	buttonClient := &runtimeControlFakeClient{}
 	_ = newProjectedTestUIModel(buttonClient).inputController().compactCmd(runtimeids.NewCompactionRequestID(), "", nil)()
-	if got := buttonClient.compactRequest.Admission.RestorationInput; got != "/compact" {
-		t.Fatalf("button compaction restoration input = %q", got)
-	}
 	if buttonClient.compactRequest.Admission.Guidance != nil {
 		t.Fatalf("button compaction guidance = %v, want absent", buttonClient.compactRequest.Admission.Guidance)
 	}

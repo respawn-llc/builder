@@ -1177,6 +1177,31 @@ func TestExclusiveStepLifecycleDefersSecondBoundaryReservationToOuterStep(t *tes
 	}
 }
 
+func TestExclusiveStepOperationalReservationsReceiveAdmissionOrder(t *testing.T) {
+	engine := &Engine{}
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	first := &exclusiveStepReservation{
+		Kind:        exclusiveStepReservationManualCompaction,
+		queueable:   true,
+		pendingWork: &pendingOperationalWork{},
+	}
+	second := &exclusiveStepReservation{
+		Kind:        exclusiveStepReservationWorktreeTransition,
+		queueable:   true,
+		pendingWork: &pendingOperationalWork{},
+	}
+	if err := lifecycle.AcquireReservation(first); err != nil {
+		t.Fatalf("AcquireReservation first: %v", err)
+	}
+	if err := lifecycle.AcquireReservation(second); err != nil {
+		t.Fatalf("AcquireReservation second: %v", err)
+	}
+	pending := lifecycle.pendingOperationalWork()
+	if len(pending) != 2 || pending[0].order == 0 || pending[1].order != pending[0].order+1 {
+		t.Fatalf("operational admission order = %+v, want two consecutive nonzero values", pending)
+	}
+}
+
 func TestExclusiveStepRuntimeAbortClosesAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

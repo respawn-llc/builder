@@ -7,6 +7,8 @@ import {
   type Readiness,
 } from "@app/server-api-contract/gen/kent/api/server/server_pb";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+import type { ChatApi } from "./chat";
+import { createChatApi } from "./chat";
 import { listSessionPage as listSessionCatalogPage } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
@@ -15,7 +17,9 @@ import * as taskDetail from "./clientTaskDetail";
 import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
 import * as worktree from "./clientWorktree";
+import * as pendingWork from "./clientPendingWork";
 import * as project from "./clientProject";
+import * as processes from "./clientProcesses";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
@@ -116,6 +120,7 @@ import {
 import type { DescriptorRpcTransport } from "./transport";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
+import type { PendingWorkIdentity } from "./pendingWork";
 import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
 import * as workflowBoard from "./clientWorkflowBoard";
 import * as workflowLabels from "./clientWorkflowLabels";
@@ -129,7 +134,13 @@ export class ApiClient implements ApiService {
   constructor(transport: DescriptorRpcTransport) {
     this.#transport = transport;
     this.connection = transport.connection;
+    this.chat = createChatApi(transport);
   }
+
+  readonly chat: ChatApi;
+
+  listProcesses = async (projectID: string) => processes.listProcesses(this.#transport, projectID);
+  killProcess = async (processID: string) => processes.killProcess(this.#transport, processID);
 
   async getReadiness(): Promise<ServerReadiness> {
     const method = ServerService.method.getReadiness;
@@ -555,6 +566,12 @@ export class ApiClient implements ApiService {
   async listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]> {
     return taskDetail.listPendingAsks(this.#transport, sessionID);
   }
+
+  submitManualCompaction = async (sessionID: string, guidance: string | null) =>
+    pendingWork.submitManualCompaction(this.#transport, sessionID, guidance);
+  listPendingWork = async (sessionID: string) => pendingWork.listPendingWork(this.#transport, sessionID);
+  removePendingWork = async (sessionID: string, itemID: PendingWorkIdentity) =>
+    pendingWork.removePendingWork(this.#transport, sessionID, itemID);
 
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription {
     return this.#transport.subscribe(

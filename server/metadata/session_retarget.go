@@ -18,9 +18,11 @@ import (
 )
 
 type SessionWorkspaceRetargetRequest struct {
-	SessionID     string
-	WorkspaceRoot string
-	ProjectID     *string
+	SessionID        string
+	WorkspaceRoot    string
+	ProjectID        *string
+	TargetWorktreeID *string
+	WorktreeReminder *session.WorktreeReminderState
 }
 
 type SessionWorkspaceRetargetPlan struct {
@@ -34,6 +36,9 @@ type SessionWorkspaceRetargetPlan struct {
 	SourceSessionDir      string
 	TargetSessionDir      string
 	RebindReminder        *session.SessionRebindReminder
+	TargetWorktreeID      *string
+	TargetExecutionRoot   string
+	WorktreeReminder      *session.WorktreeReminderState
 }
 
 func (p SessionWorkspaceRetargetPlan) CrossProject() bool {
@@ -96,6 +101,27 @@ func (s *Store) PlanSessionWorkspaceRetarget(ctx context.Context, req SessionWor
 	); err != nil {
 		return SessionWorkspaceRetargetPlan{}, err
 	}
+	targetExecutionRoot := targetRoot
+	var targetWorktreeID *string
+	if req.TargetWorktreeID != nil {
+		worktreeID := strings.TrimSpace(*req.TargetWorktreeID)
+		if worktreeID == "" {
+			return SessionWorkspaceRetargetPlan{}, errors.New("target worktree id is required when provided")
+		}
+		worktree, err := s.GetWorktreeRecordByID(ctx, worktreeID)
+		if err != nil {
+			return SessionWorkspaceRetargetPlan{}, err
+		}
+		binding, err := s.LookupWorkspaceBindingByID(ctx, worktree.WorkspaceID)
+		if err != nil {
+			return SessionWorkspaceRetargetPlan{}, err
+		}
+		if binding.ProjectID != targetProject.ID || binding.CanonicalRoot != targetRoot {
+			return SessionWorkspaceRetargetPlan{}, errors.New("target worktree does not belong to the target project workspace")
+		}
+		targetWorktreeID = &worktreeID
+		targetExecutionRoot = worktree.CanonicalRoot
+	}
 	if err := validateSessionWorkspaceRetargetWorkflowOwnership(
 		ctx,
 		s.queries,
@@ -129,6 +155,9 @@ func (s *Store) PlanSessionWorkspaceRetarget(ctx context.Context, req SessionWor
 		TargetArtifactRelpath: targetArtifactRelpath,
 		SourceSessionDir:      sourceDir,
 		TargetSessionDir:      targetDir,
+		TargetWorktreeID:      targetWorktreeID,
+		TargetExecutionRoot:   targetExecutionRoot,
+		WorktreeReminder:      req.WorktreeReminder,
 	}, nil
 }
 
@@ -184,6 +213,19 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 	if err != nil {
 		return SessionWorkspaceRetargetResult{}, err
 	}
+	var targetWorktreeID sql.NullString
+	if plan.TargetWorktreeID != nil {
+		worktreeID := strings.TrimSpace(*plan.TargetWorktreeID)
+		worktree, err := q.GetWorktreeByID(ctx, worktreeID)
+		if err != nil {
+			return SessionWorkspaceRetargetResult{}, err
+		}
+		if worktree.WorkspaceID != binding.WorkspaceID ||
+			worktree.CanonicalRootPath != plan.TargetExecutionRoot {
+			return SessionWorkspaceRetargetResult{}, errors.New("target worktree changed while rebinding")
+		}
+		targetWorktreeID = sql.NullString{String: worktreeID, Valid: true}
+	}
 	var reminderJSON sql.NullString
 	if plan.RebindReminder != nil {
 		normalized, err := session.NormalizeSessionRebindReminder(*plan.RebindReminder)
@@ -196,14 +238,28 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		}
 		reminderJSON = sql.NullString{String: string(encoded), Valid: true}
 	}
+	var worktreeReminderJSON sql.NullString
+	if plan.WorktreeReminder != nil {
+		normalized, err := session.NormalizeWorktreeReminderState(*plan.WorktreeReminder)
+		if err != nil {
+			return SessionWorkspaceRetargetResult{}, fmt.Errorf("validate worktree reminder: %w", err)
+		}
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			return SessionWorkspaceRetargetResult{}, fmt.Errorf("marshal worktree reminder: %w", err)
+		}
+		worktreeReminderJSON = sql.NullString{String: string(encoded), Valid: true}
+	}
 	rows, err := q.RetargetSessionWorkspaceProject(ctx, sqlitegen.RetargetSessionWorkspaceProjectParams{
 		TargetProjectID:          plan.TargetProject.ID,
 		TargetWorkspaceID:        sql.NullString{String: binding.WorkspaceID, Valid: true},
+		TargetWorktreeID:         targetWorktreeID,
 		TargetArtifactRelpath:    plan.TargetArtifactRelpath,
 		UpdatedAtUnixMs:          updatedAt.UnixMilli(),
 		TargetWorkspaceRoot:      binding.CanonicalRoot,
 		TargetWorkspaceContainer: binding.WorkspaceName,
 		RebindReminderJson:       reminderJSON,
+		WorktreeReminderJson:     worktreeReminderJSON,
 		SessionID:                plan.SessionID,
 		SourceProjectID:          plan.SourceProject.ID,
 		SourceArtifactRelpath:    plan.SourceArtifactRelpath,

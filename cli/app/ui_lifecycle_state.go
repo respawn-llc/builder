@@ -43,6 +43,7 @@ func (m *uiModel) applyRuntimeActivityProjection(activity clientui.RuntimeActivi
 		return err
 	}
 	m.runtimeActivityProjection = activity
+	m.reconcileMissingPromptRecoveryScope()
 	if !activity.ActiveForControl() {
 		m.runtimeLifecycle.Run = clientui.IdleRunLifecycle()
 		m.activity = uiActivityIdle

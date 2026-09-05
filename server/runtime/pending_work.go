@@ -11,65 +11,27 @@ import (
 	"core/shared/serverapi"
 )
 
+type pendingWorkSteerAdmission uint64
+
 type orderedPendingWorkItem struct {
-	order uint64
+	order pendingWorkSteerAdmission
 	item  runtimeinput.PendingWorkItem
 }
 
-var errPendingManualCompactionRemoved = errors.New("pending manual compaction was removed")
+type pendingOperationalWork struct {
+	order  pendingWorkSteerAdmission
+	item   runtimeinput.PendingWorkItem
+	cancel context.CancelCauseFunc
+}
+
+var errPendingOperationalWorkRemoved = errors.New("pending operational work was removed")
 
 func (e *Engine) PendingWorkSnapshot() (runtimeinput.PendingWork, error) {
 	if e == nil {
 		return runtimeinput.PendingWork{}, nil
 	}
 	e.ensureOrchestrationCollaborators()
-
-	autoDrainIDs := e.queuedUserAutoDrainIDSnapshot()
-	messages := e.messageFlow.PendingUserMessageEntries()
-	steer := make([]orderedPendingWorkItem, 0, len(messages))
-	queue := make([]runtimeinput.PendingWorkItem, 0, len(messages))
-	for _, message := range messages {
-		lane := runtimeinput.PendingWorkLaneQueue
-		if _, autoDrain := autoDrainIDs[message.message.ID]; autoDrain {
-			lane = runtimeinput.PendingWorkLaneSteer
-		}
-		item, err := pendingWorkMessage(message.message, lane)
-		if err != nil {
-			return runtimeinput.PendingWork{}, err
-		}
-		if lane == runtimeinput.PendingWorkLaneSteer {
-			steer = append(steer, orderedPendingWorkItem{order: message.admission, item: item})
-		} else {
-			queue = append(queue, item)
-		}
-	}
-	if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
-		for _, compaction := range lifecycle.pendingManualCompactions() {
-			steer = append(steer, orderedPendingWorkItem{
-				order: compaction.order,
-				item: runtimeinput.PendingWorkItem{
-					ID:               compaction.itemID,
-					Lane:             runtimeinput.PendingWorkLaneSteer,
-					Kind:             runtimeinput.PendingWorkItemKindManualCompaction,
-					State:            runtimeinput.PendingWorkItemStatePending,
-					ManualCompaction: &compaction.admission,
-				},
-			})
-		}
-	}
-	sort.SliceStable(steer, func(i, j int) bool {
-		return steer[i].order < steer[j].order
-	})
-	items := make([]runtimeinput.PendingWorkItem, 0, len(steer)+len(queue))
-	for _, pending := range steer {
-		items = append(items, pending.item)
-	}
-	items = append(items, queue...)
-	collection := runtimeinput.PendingWork{Items: items}
-	if err := collection.Validate(); err != nil {
-		return runtimeinput.PendingWork{}, fmt.Errorf("project Pending Work: %w", err)
-	}
-	return collection, nil
+	return e.projectPendingWork()
 }
 
 func (e *Engine) requirePendingWorkCapacity() error {
@@ -83,132 +45,176 @@ func (e *Engine) requirePendingWorkCapacity() error {
 	return nil
 }
 
-func (e *Engine) publishPendingWorkSnapshot() {
-	snapshot, err := e.PendingWorkSnapshot()
-	if err != nil {
-		e.surfaceRunError(err)
-		return
-	}
-	e.publishPendingWork(snapshot)
+func (e *Engine) nextPendingWorkSteerAdmission() *pendingWorkSteerAdmission {
+	next := pendingWorkSteerAdmission(e.pendingWorkSteerOrdinal.Add(1))
+	return &next
 }
 
-func (e *Engine) publishPendingWork(snapshot runtimeinput.PendingWork) {
-	if err := e.emitRaw(Event{Kind: EventPendingWorkReplaced, PendingWork: &snapshot}); err != nil {
-		e.surfaceRunError(fmt.Errorf("publish Pending Work replacement: %w", err))
+func (e *Engine) projectPendingWork() (runtimeinput.PendingWork, error) {
+	messages := e.messageFlow.PendingUserMessageEntries()
+	queue := make([]runtimeinput.PendingWorkItem, 0, len(messages))
+	steer := make([]orderedPendingWorkItem, 0, len(messages))
+	for _, message := range messages {
+		item, err := pendingWorkMessage(message)
+		if err != nil {
+			return runtimeinput.PendingWork{}, err
+		}
+		if message.steerAdmission == nil {
+			queue = append(queue, item)
+		} else {
+			steer = append(steer, orderedPendingWorkItem{order: *message.steerAdmission, item: item})
+		}
 	}
+	if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
+		for _, operational := range lifecycle.pendingOperationalWork() {
+			steer = append(steer, orderedPendingWorkItem{
+				order: operational.order,
+				item:  operational.item,
+			})
+		}
+	}
+	sort.SliceStable(steer, func(i, j int) bool {
+		return steer[i].order < steer[j].order
+	})
+	items := make([]runtimeinput.PendingWorkItem, 0, len(queue)+len(steer))
+	items = append(items, queue...)
+	for _, pending := range steer {
+		items = append(items, pending.item)
+	}
+	collection := runtimeinput.PendingWork{Items: items}
+	if err := collection.Validate(); err != nil {
+		return runtimeinput.PendingWork{}, err
+	}
+	return collection, nil
+}
+
+func (e *Engine) publishPendingWorkChanged() {
+	if err := e.emitRaw(Event{Kind: EventPendingWorkChanged}); err != nil {
+		e.surfaceRunError(fmt.Errorf("publish Pending Work Changed: %w", err))
+	}
+}
+
+func (e *Engine) publishPendingWorkTechnicalRestoration(item runtimeinput.PendingWorkItem) error {
+	restoration, err := item.TechnicalRestoration()
+	if err != nil {
+		return err
+	}
+	return e.emitRaw(Event{
+		Kind:                   EventPendingWorkRestored,
+		PendingWorkRestoration: &restoration,
+	})
 }
 
 func (e *Engine) RemovePendingWork(ctx context.Context, id runtimeids.QueueItemID) (runtimeinput.PendingWorkRestoration, error) {
 	if id.IsZero() {
 		return runtimeinput.PendingWorkRestoration{}, &runtimeinput.PendingWorkRemovalError{ItemID: id}
 	}
-	return awaitEngineRuntimeOperation(ctx, e, func(context.Context) (runtimeinput.PendingWorkRestoration, error) {
-		return e.removePendingWork(id)
-	})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return runtimeinput.PendingWorkRestoration{}, err
+	}
+	return e.removePendingWork(id)
 }
 
 func (e *Engine) removePendingWork(id runtimeids.QueueItemID) (runtimeinput.PendingWorkRestoration, error) {
 	e.ensureOrchestrationCollaborators()
+	var restoration runtimeinput.PendingWorkRestoration
 	if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
-		if compaction, removed := lifecycle.removePendingManualCompaction(id); removed {
-			item := runtimeinput.PendingWorkItem{
-				ID:               compaction.itemID,
-				Lane:             runtimeinput.PendingWorkLaneSteer,
-				Kind:             runtimeinput.PendingWorkItemKindManualCompaction,
-				State:            runtimeinput.PendingWorkItemStatePending,
-				ManualCompaction: &compaction.admission,
-			}
-			restoration, err := item.Restoration()
+		if operational, removed := lifecycle.removePendingOperationalWork(id); removed {
+			var err error
+			restoration, err = operational.item.Restoration()
 			if err != nil {
 				return runtimeinput.PendingWorkRestoration{}, err
 			}
-			e.publishPendingWorkSnapshot()
+			e.publishPendingWorkChanged()
 			return restoration, nil
 		}
 	}
 
-	autoDrainIDs := e.queuedUserAutoDrainIDSnapshot()
 	message, removed := e.messageFlow.DiscardQueuedUserMessage(id.String())
 	if !removed {
 		return runtimeinput.PendingWorkRestoration{}, &runtimeinput.PendingWorkRemovalError{ItemID: id}
 	}
-	lane := runtimeinput.PendingWorkLaneQueue
-	if _, autoDrain := autoDrainIDs[id.String()]; autoDrain {
-		lane = runtimeinput.PendingWorkLaneSteer
-		e.unmarkQueuedUserInjectionForAutoDrain(id.String())
+	if message.steerAdmission != nil {
 		e.completeLiveRunQueueItems(map[string]struct{}{id.String(): {}})
 	}
-	item, err := pendingWorkMessage(message, lane)
+	item, err := pendingWorkMessage(message)
 	if err != nil {
 		return runtimeinput.PendingWorkRestoration{}, err
 	}
-	restoration, err := item.Restoration()
+	restoration, err = item.Restoration()
 	if err != nil {
 		return runtimeinput.PendingWorkRestoration{}, err
 	}
-	e.emitQueuedUserMessageStatus(message, QueuedUserMessageDiscarded, "", false)
-	e.publishPendingWorkSnapshot()
+	e.emitQueuedUserMessageStatus(message.message, QueuedUserMessageDiscarded, "", false)
+	e.publishPendingWorkChanged()
 	return restoration, nil
 }
 
-func (s *defaultExclusiveStepLifecycle) pendingManualCompactions() []pendingManualCompaction {
+func (s *defaultExclusiveStepLifecycle) pendingOperationalWork() []pendingOperationalWork {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	items := make([]pendingManualCompaction, 0)
+	items := make([]pendingOperationalWork, 0)
 	for _, waiter := range s.nextWaiters {
-		if waiter == nil || waiter.reservation == nil || waiter.reservation.pendingManualCompaction == nil {
+		if waiter == nil || waiter.reservation == nil || waiter.reservation.pendingWork == nil {
 			continue
 		}
-		items = append(items, *waiter.reservation.pendingManualCompaction)
+		items = append(items, *waiter.reservation.pendingWork)
 	}
 	return items
 }
 
-func (s *defaultExclusiveStepLifecycle) removePendingManualCompaction(id runtimeids.QueueItemID) (pendingManualCompaction, bool) {
+func (s *defaultExclusiveStepLifecycle) removePendingOperationalWork(id runtimeids.QueueItemID) (pendingOperationalWork, bool) {
 	if s == nil || id.IsZero() {
-		return pendingManualCompaction{}, false
+		return pendingOperationalWork{}, false
 	}
 	s.mu.Lock()
-	var removed *pendingManualCompaction
-	var cancel context.CancelCauseFunc
+	var removed *pendingOperationalWork
 	for index, waiter := range s.nextWaiters {
-		if waiter == nil || waiter.reservation == nil || waiter.reservation.pendingManualCompaction == nil ||
-			waiter.reservation.pendingManualCompaction.itemID != id {
+		if waiter == nil || waiter.reservation == nil || waiter.reservation.pendingWork == nil ||
+			waiter.reservation.pendingWork.item.ID != id {
 			continue
 		}
-		removed = waiter.reservation.pendingManualCompaction
-		cancel = waiter.reservation.cancelPendingCompaction
+		removed = waiter.reservation.pendingWork
+		waiter.reservation.pendingWork = nil
 		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
 		s.notifyNextWaiterLocked()
 		break
 	}
 	s.mu.Unlock()
 	if removed == nil {
-		return pendingManualCompaction{}, false
+		return pendingOperationalWork{}, false
 	}
-	if cancel != nil {
-		cancel(errPendingManualCompactionRemoved)
+	if removed.cancel != nil {
+		removed.cancel(errPendingOperationalWorkRemoved)
 	}
 	return *removed, true
 }
 
-func pendingWorkMessage(message QueuedUserMessage, lane runtimeinput.PendingWorkLane) (runtimeinput.PendingWorkItem, error) {
-	id, err := runtimeids.ParseQueueItemID(message.ID)
+func pendingWorkMessage(message queuedUserMessage) (runtimeinput.PendingWorkItem, error) {
+	id, err := runtimeids.ParseQueueItemID(message.message.ID)
 	if err != nil {
 		return runtimeinput.PendingWorkItem{}, err
 	}
-	text, err := message.DisplayText()
+	text, err := message.message.DisplayText()
 	if err != nil {
 		return runtimeinput.PendingWorkItem{}, err
+	}
+	lane := runtimeinput.PendingWorkLaneQueue
+	if message.steerAdmission != nil {
+		lane = runtimeinput.PendingWorkLaneSteer
 	}
 	return runtimeinput.PendingWorkItem{
-		ID:      id,
-		Lane:    lane,
-		Kind:    runtimeinput.PendingWorkItemKindMessage,
-		State:   runtimeinput.PendingWorkItemStatePending,
-		Message: &runtimeinput.PendingWorkMessage{Text: text},
+		ID:             id,
+		Lane:           lane,
+		Kind:           runtimeinput.PendingWorkItemKindMessage,
+		State:          runtimeinput.PendingWorkItemStatePending,
+		CanonicalInput: text,
+		Message:        &runtimeinput.PendingWorkMessage{Text: text},
 	}, nil
 }

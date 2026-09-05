@@ -36,8 +36,14 @@ export function sidebarTitle(
   if (destination.kind === "workflowEditor") {
     return t("workflowEditor.title");
   }
-  if (destination.kind === "projectEdit") {
-    return t("projectEdit.title");
-  }
+  return remainingSidebarTitle(destination, t);
+}
+
+function remainingSidebarTitle(
+  destination: Extract<SidebarDestination, { kind: "projectEdit" | "processes" | "custom" }>,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (destination.kind === "projectEdit") return t("projectEdit.title");
+  if (destination.kind === "processes") return t("processes.title");
   return destination.title;
 }

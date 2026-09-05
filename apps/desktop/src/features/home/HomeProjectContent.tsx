@@ -2,16 +2,20 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import type { SessionCatalogSummary } from "@/api";
+import type { SessionCatalogSummary, SessionCategory } from "@/api";
 import { errorMessage, isProjectMissingError } from "@/api";
 import {
   clearLastProjectRoute,
   formatRelativeTime,
   mainSessionCatalogInfiniteQueryOptions,
+  type ProjectContentTab,
   queryKeys,
   subagentSessionCatalogInfiniteQueryOptions,
+  useSessionChatCatalogReturn,
   useAppNavigation,
   useAppServices,
+  readLastProjectRoute,
+  writeLastProjectContentTab,
   type SidebarMode,
 } from "@/app-facade";
 import {
@@ -21,14 +25,11 @@ import {
   HomeListCard,
   InfiniteListBoundary,
   IslandTabs,
-  LoadingState,
   VirtualizedInfiniteList,
 } from "@/ui";
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectTasksSurface } from "./ProjectTasksSurface";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
-
-type ProjectContentTab = "tasks" | "sessions" | "subagents";
 
 export function HomeProjectContent({
   projectID,
@@ -39,10 +40,13 @@ export function HomeProjectContent({
   sessionsVisible: boolean;
   sidebarMode: SidebarMode;
 }>) {
-  const { t } = useTranslation();
   const { api } = useAppServices();
   const navigation = useAppNavigation();
+  const catalogReturn = useSessionChatCatalogReturn(projectID);
   const [taskListViewMemory] = useState(createProjectTasksViewMemory);
+  useEffect(() => {
+    catalogReturn?.consume();
+  }, [catalogReturn]);
   const projectQuery = useQuery({
     queryKey: queryKeys.projectEdit(projectID),
     queryFn: async () => api.getProjectEdit(projectID),
@@ -52,11 +56,9 @@ export function HomeProjectContent({
     clearLastProjectRoute(projectID);
     void navigation.selectHomeProject(null);
   }, [navigation, projectID, projectQuery.error]);
-  if (projectQuery.isPending) {
-    return <LoadingState appearanceDelayMs={0} reveal={false} title={t("states.loading")} />;
-  }
   return sessionsVisible ? (
     <ProjectContentTabs
+      catalogReturn={catalogReturn?.category ?? null}
       projectID={projectID}
       sidebarMode={sidebarMode}
       taskListViewMemory={taskListViewMemory}
@@ -67,17 +69,30 @@ export function HomeProjectContent({
 }
 
 function ProjectContentTabs({
+  catalogReturn,
   projectID,
   sidebarMode,
   taskListViewMemory,
 }: Readonly<{
+  catalogReturn: SessionCategory | null;
   projectID: string;
   sidebarMode: SidebarMode;
   taskListViewMemory: ReturnType<typeof createProjectTasksViewMemory>;
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
-  const [tab, setTab] = useState<ProjectContentTab>("tasks");
+  const [tab, setTab] = useState<ProjectContentTab>(() => {
+    if (catalogReturn === "main") return "sessions";
+    if (catalogReturn === "subagent") return "subagents";
+    const lastProjectRoute = readLastProjectRoute();
+    if (lastProjectRoute?.kind === "home_project" && lastProjectRoute.projectId === projectID) {
+      return lastProjectRoute.contentTab;
+    }
+    return "tasks";
+  });
+  useEffect(() => {
+    writeLastProjectContentTab(projectID, tab);
+  }, [projectID, tab]);
   const mainSessionsQuery = useInfiniteQuery({
     ...mainSessionCatalogInfiniteQueryOptions(api, projectID),
     enabled: tab === "sessions",
@@ -113,7 +128,11 @@ function ProjectContentTabs({
               viewMemory={taskListViewMemory}
             />
           ) : (
-            <SessionList query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery} />
+            <SessionList
+              category={tab === "sessions" ? "main" : "subagent"}
+              projectID={projectID}
+              query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery}
+            />
           )}
         </OverlappingCrossfade>
       </div>
@@ -122,8 +141,12 @@ function ProjectContentTabs({
 }
 
 function SessionList({
+  category,
+  projectID,
   query,
 }: Readonly<{
+  category: "main" | "subagent";
+  projectID: string;
   query: Readonly<{
     data:
       | Readonly<{
@@ -140,6 +163,7 @@ function SessionList({
   }>;
 }>) {
   const { t } = useTranslation();
+  const navigation = useAppNavigation();
   const sessions = query.data?.pages.flatMap((page) => page.sessions) ?? [];
   const initialBoundary = directionalBoundary({
     failed: query.isError,
@@ -179,7 +203,13 @@ function SessionList({
       renderItem={(session) => (
         <HomeListCard
           ariaLabel={session.name ?? session.firstPromptPreview ?? session.id}
-          onClick={unavailableSessionAction}
+          onClick={() => {
+            void navigation.openSessionChat({
+              catalogOrigin: { category },
+              projectID,
+              sessionID: session.id,
+            });
+          }}
         >
           <span className="truncate text-sm text-[var(--color-muted)]">
             {formatRelativeTime(session.updatedAt)}
@@ -192,8 +222,4 @@ function SessionList({
       )}
     />
   );
-}
-
-function unavailableSessionAction(): void {
-  return;
 }

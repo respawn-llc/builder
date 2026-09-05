@@ -123,7 +123,7 @@ func TestCommandDiscoveryOrdersMatchesAndHidesAliases(t *testing.T) {
 			}
 		}
 	}
-	if command, ok := registry.Command("/wt"); !ok || command.Name != "worktree" || command.ActiveRunPolicy != ActiveRunPolicyRequiresIdle {
+	if command, ok := registry.Command("/wt"); !ok || command.Name != "worktree" || command.ActiveRunPolicy != ActiveRunPolicyAllowed {
 		t.Fatalf("worktree alias lookup = %+v, ok=%v", command, ok)
 	}
 }

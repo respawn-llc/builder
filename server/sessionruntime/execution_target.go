@@ -13,16 +13,26 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 )
 
 type ActiveRuntimeMaintenance struct {
-	PreviousFilesystemContext tools.FilesystemContext
-	Replace                   func(tools.FilesystemContext) error
-	steerSessionRebindFailure func(session.SessionRebindReminder) (session.CommitReceipt, error)
-	retire                    bool
+	PreviousFilesystemContext           tools.FilesystemContext
+	Replace                             func(tools.FilesystemContext) error
+	steerSessionRebindFailureDiagnostic func(error) (session.CommitReceipt, error)
+	steerSessionRebindFailure           func(session.SessionRebindReminder) (session.CommitReceipt, error)
+	retire                              bool
+}
+
+func (m *ActiveRuntimeMaintenance) SteerSessionRebindFailureDiagnostic(cause error) (session.CommitReceipt, error) {
+	if m == nil || m.steerSessionRebindFailureDiagnostic == nil {
+		return session.CommitReceipt{}, errors.New("active runtime Session rebind failure diagnostic steering is unavailable")
+	}
+	return m.steerSessionRebindFailureDiagnostic(cause)
 }
 
 func (m *ActiveRuntimeMaintenance) SteerSessionRebindFailure(reminder session.SessionRebindReminder) (session.CommitReceipt, error) {
@@ -68,85 +78,106 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 	})
 }
 
+type WorktreeTransitionAuthority func(func(context.Context) error) error
+
+type WorktreeTransitionTargetSync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
+
+type WorktreeTransitionExecutor func(context.Context, WorktreeTransitionAuthority, WorktreeTransitionTargetSync, func(clientui.WorktreeTransitionOutcome) error) error
+
 func (a *Authority) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
-	transition clientui.WorktreeTransitionKind,
-	fn func(
-		context.Context,
-		func(func() error) error,
-		func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
-		func(clientui.WorktreeTransitionOutcome) error,
-	) error,
-) error {
+	operationID clientui.WorktreeTransitionID,
+	transition runtimeinput.PendingWorkWorktreeTransition,
+	fn WorktreeTransitionExecutor,
+) (*worktreepb.ScheduledAcknowledgement, error) {
 	if fn == nil {
-		return nil
+		return nil, errors.New("worktree transition executor is required")
 	}
-	switch transition {
-	case clientui.WorktreeTransitionEnter, clientui.WorktreeTransitionLeave:
-	default:
-		return errors.New("worktree transition kind is invalid")
+	if err := operationID.Validate(); err != nil {
+		return nil, err
+	}
+	if err := transition.Validate(); err != nil {
+		return nil, err
 	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+	var acknowledgement *worktreepb.ScheduledAcknowledgement
+	err = a.withMaintenanceResource(ctx, id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
 		if resource == nil {
-			return false, fn(
+			runErr := fn(
 				runCtx,
-				func(apply func() error) error { return apply() },
+				nil,
 				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 					if err := context.Cause(syncCtx); err != nil {
 						return err
 					}
 					_, normalizedReminder, err := normalizeTarget(target, reminder)
-					if err != nil || normalizedReminder == nil {
+					if err != nil {
 						return err
 					}
-					return store.SetWorktreeReminderState(normalizedReminder)
+					if err := store.SetWorktreeReminderState(normalizedReminder); err != nil {
+						return err
+					}
+					return nil
 				},
-				func(clientui.WorktreeTransitionOutcome) error { return nil },
+				nil,
 			)
+			if runErr != nil {
+				return false, runErr
+			}
+			acknowledgement = &worktreepb.ScheduledAcknowledgement{OperationId: operationID.String()}
+			return false, nil
 		}
-		retire := false
-		err := engine.RunWorktreeTransition(runCtx, func() error {
-			active := true
-			defer func() { active = false }()
-			return fn(
-				runCtx,
-				func(apply func() error) error { return apply() },
-				func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-					return engine.ApplyWorktreeTransitionTerminal(syncCtx, func(operationCtx context.Context) error {
-						if err := context.Cause(operationCtx); err != nil {
-							return err
-						}
-						if !active {
-							return errors.New("worktree transition target synchronizer is no longer active")
-						}
+		var scheduleErr error
+		acknowledgement, scheduleErr = engine.ScheduleWorktreeTransition(
+			runCtx,
+			operationID,
+			transition,
+			func(executionCtx context.Context) error {
+				return fn(
+					executionCtx,
+					func(apply func(context.Context) error) error {
+						return engine.ApplyWorktreeTransitionTerminal(executionCtx, apply)
+					},
+					func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 						normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
 						if err != nil {
 							return err
 						}
-						var syncErr error
-						retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+						retire, syncErr := syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+						if retire {
+							return &indeterminateWorktreeTargetSyncError{syncErr}
+						}
 						return syncErr
-					})
-				},
-				func(outcome clientui.WorktreeTransitionOutcome) error {
-					if !active {
-						return errors.New("worktree transition failure synchronizer is no longer active")
-					}
-					return engine.SteerWorktreeTransitionFailure(outcome)
-				},
-			)
-		})
-		if errors.Is(err, runtime.ErrReviewerActive) ||
-			errors.Is(err, runtime.ErrWorktreeDeleteBlockedByQueuedWork) {
-			err = errors.Join(worktreecontract.ErrWorktreeBlocked, err)
+					},
+					func(outcome clientui.WorktreeTransitionOutcome) error {
+						return engine.SteerWorktreeTransitionFailure(outcome)
+					},
+				)
+			},
+		)
+		if errors.Is(scheduleErr, runtime.ErrReviewerActive) ||
+			errors.Is(scheduleErr, runtime.ErrWorktreeDeleteBlockedByQueuedWork) {
+			scheduleErr = errors.Join(worktreecontract.ErrWorktreeBlocked, scheduleErr)
 		}
-		return retire, err
+		return false, scheduleErr
 	})
+	return acknowledgement, err
+}
+
+type indeterminateWorktreeTransition interface {
+	WorktreeTransitionIndeterminate()
+}
+
+type indeterminateWorktreeTargetSyncError struct{ error }
+
+func (*indeterminateWorktreeTargetSyncError) WorktreeTransitionIndeterminate() {}
+func worktreeTransitionIsIndeterminate(err error) bool {
+	var indeterminate indeterminateWorktreeTransition
+	return errors.As(err, &indeterminate)
 }
 
 func (a *Authority) RunSessionMaintenance(
@@ -268,7 +299,8 @@ func runActiveRuntimeMaintenance(
 			currentContext = next.Clone()
 			return nil
 		},
-		steerSessionRebindFailure: engine.SteerSessionRebindFailure,
+		steerSessionRebindFailureDiagnostic: engine.SteerSessionRebindFailureDiagnostic,
+		steerSessionRebindFailure:           engine.SteerSessionRebindFailure,
 	}
 	callbackErr := fn(maintenance)
 	active = false

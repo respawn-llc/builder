@@ -102,7 +102,12 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		if evt.CacheWarning == nil {
 			return nil
 		}
-		entries = []ChatEntry{{Role: cacheWarningTranscriptRole, Text: transcript.CacheWarningText(*evt.CacheWarning), Visibility: evt.CacheWarningVisibility}}
+		entries = []ChatEntry{{
+			Role:         cacheWarningTranscriptRole,
+			Text:         transcript.CacheWarningText(*evt.CacheWarning),
+			Visibility:   evt.CacheWarningVisibility,
+			CacheWarning: copyCacheWarning(evt.CacheWarning),
+		}}
 	case EventLocalEntryAdded:
 		if evt.LocalEntry == nil {
 			return nil
@@ -173,6 +178,7 @@ func resolvedToolResultForMessage(msg llm.Message, completions map[string]tools.
 		result.Summary = completion.Summary
 		result.CondensedText = completion.CondensedText
 		result.Presentation = completion.Presentation
+		result.QuestionAnswer = cloneAskQuestionAnswer(completion.QuestionAnswer)
 	}
 	if result.Name == "" {
 		result.Name = toolspec.ID("tool")
@@ -200,5 +206,6 @@ func toolResultChatEntry(result tools.Result) ChatEntry {
 		ToolCallID:        strings.TrimSpace(result.CallID),
 		ToolResultSummary: summary,
 		ToolCall:          presentation,
+		QuestionAnswer:    cloneAskQuestionAnswer(result.QuestionAnswer),
 	}
 }

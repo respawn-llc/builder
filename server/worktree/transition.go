@@ -10,8 +10,11 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/runtimeinput"
+	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 
 	"github.com/google/uuid"
@@ -22,10 +25,11 @@ type worktreeTransitionRequest struct {
 	sessionID   string
 	kind        clientui.WorktreeTransitionKind
 	selector    string
+	workspace   sessionWorkspaceContext
 }
 
-type transitionTargetSync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
-type transitionAuthority func(func() error) error
+type transitionAuthority = sessionruntime.WorktreeTransitionAuthority
+type transitionTargetSync = sessionruntime.WorktreeTransitionTargetSync
 
 func (s *Service) EnterWorktree(ctx context.Context, req *worktreepb.EnterRequest) (*worktreepb.ScheduledAcknowledgement, error) {
 	operationID, err := clientui.ParseWorktreeTransitionID(req.OperationId)
@@ -36,15 +40,154 @@ func (s *Service) EnterWorktree(ctx context.Context, req *worktreepb.EnterReques
 		operationID: operationID,
 		sessionID:   strings.TrimSpace(req.SessionId),
 		kind:        clientui.WorktreeTransitionEnter,
-		selector:    strings.TrimSpace(req.Selector),
+		selector:    runtimeinput.NormalizePendingWorkArgument(req.Selector),
 	}
-	target, err := s.resolveScheduledEnterTarget(ctx, request.sessionID, request.selector)
+	request.workspace, err = s.transitionWorkspaceContext(ctx, request.sessionID, req.TargetWorkspace)
 	if err != nil {
 		return nil, err
 	}
-	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
-		return s.executeEnterWorktree(runCtx, request.sessionID, target, authority, sync)
+	currentTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, request.sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(currentTarget.WorkspaceID) != request.workspace.workspaceID {
+		return s.enterWorktreeAcrossWorkspace(ctx, request, req.Origin)
+	}
+	selector := request.selector
+	return s.runWorktreeTransition(ctx, request, runtimeinput.PendingWorkWorktreeTransition{
+		Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+		Selector:   &selector,
+	}, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
+		return s.executeEnterWorktree(runCtx, request.sessionID, request.selector, authority, sync)
 	})
+}
+
+func (s *Service) transitionWorkspaceContext(
+	ctx context.Context,
+	sessionID string,
+	target *worktreepb.TransitionWorkspace,
+) (sessionWorkspaceContext, error) {
+	if target == nil {
+		return sessionWorkspaceContext{}, errors.New("target workspace is required")
+	}
+	binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, strings.TrimSpace(target.WorkspaceId))
+	if err != nil {
+		return sessionWorkspaceContext{}, err
+	}
+	if binding.CanonicalRoot != strings.TrimSpace(target.WorkspaceRoot) {
+		return sessionWorkspaceContext{}, errors.New("target workspace identity does not match the registered workspace")
+	}
+	return sessionWorkspaceContext{
+		projectID:     binding.ProjectID,
+		workspaceID:   binding.WorkspaceID,
+		workspaceRoot: binding.CanonicalRoot,
+		sessionID:     strings.TrimSpace(sessionID),
+	}, nil
+}
+
+func (s *Service) enterWorktreeAcrossWorkspace(
+	ctx context.Context,
+	request worktreeTransitionRequest,
+	origin *worktreepb.TransitionRuntimeStepOrigin,
+) (*worktreepb.ScheduledAcknowledgement, error) {
+	if s.sessionRetargeter == nil {
+		return nil, errors.New("session workspace retargeter is required")
+	}
+	resolve := func(resolveCtx context.Context) (metadata.SessionWorkspaceRetargetRequest, error) {
+		return s.resolveCrossWorkspaceEnter(resolveCtx, request)
+	}
+	complete := func(runErr error) {
+		if runErr != nil {
+			runErr = worktreeTransitionFailure(runErr)
+		}
+		_ = s.publishWorktreeTransitionResult(request, runErr, nil)
+	}
+	if origin != nil {
+		runtimeOrigin := serverapi.RuntimeStepOrigin{
+			RunID:  strings.TrimSpace(origin.RunId),
+			StepID: strings.TrimSpace(origin.StepId),
+		}
+		if _, err := s.sessionRetargeter.ScheduleWorkspaceRetargetResolutionWithCompletion(
+			ctx,
+			request.sessionID,
+			runtimeOrigin,
+			worktreecontract.OperationID(request.operationID),
+			resolve,
+			complete,
+		); err != nil {
+			return nil, err
+		}
+		return &worktreepb.ScheduledAcknowledgement{OperationId: request.operationID.String()}, nil
+	}
+	retargetRequest, err := resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.sessionRetargeter.RetargetWorkspace(ctx, retargetRequest)
+	complete(err)
+	if err != nil {
+		return nil, err
+	}
+	return &worktreepb.ScheduledAcknowledgement{OperationId: request.operationID.String()}, nil
+}
+
+func (s *Service) resolveCrossWorkspaceEnter(
+	ctx context.Context,
+	request worktreeTransitionRequest,
+) (metadata.SessionWorkspaceRetargetRequest, error) {
+	lease, err := s.acquireWorkspaceMutationLease(ctx, request.workspace.workspaceID)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
+	}
+	defer lease.Release()
+	topology, err := s.projectTopology(ctx, request.workspace.workspaceID, request.workspace.workspaceRoot)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
+	}
+	match, err := resolveTopologySelector(topology, request.selector)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
+	}
+	entry := match.entry
+	if entry.GetMissing() != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, worktreecontract.NewSelectorError(
+			worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_UNAVAILABLE,
+			request.selector,
+			nil,
+		)
+	}
+	next, err := s.enterTransitionWorktree(ctx, request.workspace, entry)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
+	}
+	previousTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, request.sessionID)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
+	}
+	nextTarget := clientui.SessionExecutionTarget{
+		WorkspaceID:      request.workspace.workspaceID,
+		WorkspaceRoot:    request.workspace.workspaceRoot,
+		CwdRelpath:       ".",
+		EffectiveWorkdir: next.record.CanonicalRoot,
+	}
+	reminder, hasReminder, err := worktreeReminderStateForTransition(nil, previousTarget, next, nextTarget)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetRequest{}, err
+	}
+	var targetWorktreeID *string
+	if worktreeID := strings.TrimSpace(next.record.ID); worktreeID != "" {
+		targetWorktreeID = &worktreeID
+	}
+	retargetRequest := metadata.SessionWorkspaceRetargetRequest{
+		SessionID:        request.sessionID,
+		WorkspaceRoot:    request.workspace.workspaceRoot,
+		ProjectID:        &request.workspace.projectID,
+		TargetWorktreeID: targetWorktreeID,
+	}
+	if hasReminder {
+		retargetRequest.WorktreeReminder = &reminder
+	}
+	return retargetRequest, nil
 }
 
 func (s *Service) LeaveWorktree(ctx context.Context, req *worktreepb.LeaveRequest) (*worktreepb.ScheduledAcknowledgement, error) {
@@ -57,14 +200,17 @@ func (s *Service) LeaveWorktree(ctx context.Context, req *worktreepb.LeaveReques
 		sessionID:   strings.TrimSpace(req.SessionId),
 		kind:        clientui.WorktreeTransitionLeave,
 	}
-	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
+	return s.runWorktreeTransition(ctx, request, runtimeinput.PendingWorkWorktreeTransition{
+		Transition: runtimeinput.PendingWorkWorktreeTransitionLeave,
+	}, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
 		return s.executeLeaveWorktree(runCtx, request.sessionID, authority, sync)
 	})
 }
 
-func (s *Service) scheduleWorktreeTransition(
+func (s *Service) runWorktreeTransition(
 	ctx context.Context,
 	request worktreeTransitionRequest,
+	transition runtimeinput.PendingWorkWorktreeTransition,
 	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
 ) (*worktreepb.ScheduledAcknowledgement, error) {
 	if s == nil || s.authority == nil || s.publisher == nil {
@@ -73,170 +219,114 @@ func (s *Service) scheduleWorktreeTransition(
 	if execute == nil {
 		return nil, errors.New("worktree transition executor is required")
 	}
-	s.transitionMu.Lock()
-	if s.transitionsClosed {
-		s.transitionMu.Unlock()
-		return nil, context.Canceled
-	}
-	predecessor := s.transitionTails[request.sessionID]
-	completed := make(chan struct{})
-	s.transitionTails[request.sessionID] = completed
-	s.transitionWG.Add(1)
-	s.transitionMu.Unlock()
-
-	go s.runQueuedWorktreeTransition(predecessor, completed, request, execute)
-	return &worktreepb.ScheduledAcknowledgement{OperationId: request.operationID.String()}, nil
-}
-
-func (s *Service) runQueuedWorktreeTransition(
-	predecessor <-chan struct{},
-	completed chan struct{},
-	request worktreeTransitionRequest,
-	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
-) {
-	defer func() {
-		close(completed)
-		s.transitionMu.Lock()
-		if s.transitionTails[request.sessionID] == completed {
-			delete(s.transitionTails, request.sessionID)
-		}
-		s.transitionWG.Done()
-		s.transitionMu.Unlock()
-	}()
-	if predecessor != nil {
-		select {
-		case <-predecessor:
-		case <-s.transitionCtx.Done():
-			return
-		}
-	}
-	_ = s.runWorktreeTransition(s.transitionCtx, request, execute)
-}
-
-func (s *Service) runWorktreeTransition(
-	ctx context.Context,
-	request worktreeTransitionRequest,
-	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
-) error {
-	var terminalOutcome *clientui.WorktreeTransitionOutcome
-	err := s.authority.RunWorktreeTransition(
+	return s.authority.RunWorktreeTransition(
 		ctx,
 		request.sessionID,
-		request.kind,
+		request.operationID,
+		transition,
 		func(
 			ctx context.Context,
-			authority func(func() error) error,
-			sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
+			authority transitionAuthority,
+			sync transitionTargetSync,
 			syncFailure func(clientui.WorktreeTransitionOutcome) error,
 		) error {
-			executionErr := execute(ctx, transitionAuthority(authority), func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				return sync(syncCtx, target, reminder)
+			runErr := execute(ctx, authority, func(
+				syncCtx context.Context,
+				target clientui.SessionExecutionTarget,
+				reminder *session.WorktreeReminderState,
+			) error {
+				if err := sync(syncCtx, target, reminder); err != nil {
+					return err
+				}
+				if err := s.publisher.PublishSessionIdentity(request.sessionID); err != nil {
+					return worktreeApplied(fmt.Errorf("publish session identity: %w", err))
+				}
+				return nil
 			})
-			if executionErr == nil || s.transitionCtx.Err() != nil {
-				return executionErr
+			if isWorktreeIndeterminate(runErr) {
+				return runErr
 			}
-			outcome := worktreeTransitionOutcome(request, executionErr)
-			terminalOutcome = &outcome
-			if syncFailure == nil {
-				return errors.Join(executionErr, errors.New("worktree transition failure synchronizer is required"))
-			}
-			return errors.Join(executionErr, syncFailure(outcome))
+			return s.publishWorktreeTransitionResult(request, runErr, syncFailure)
 		},
 	)
-	if s.transitionCtx.Err() == nil {
-		outcome := worktreeTransitionOutcome(request, err)
-		if terminalOutcome != nil {
-			outcome = *terminalOutcome
-		}
-		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
-	}
-	return err
 }
 
-func worktreeTransitionOutcome(
+func (s *Service) publishWorktreeTransitionResult(
 	request worktreeTransitionRequest,
-	err error,
-) clientui.WorktreeTransitionOutcome {
+	runErr error,
+	syncFailure func(clientui.WorktreeTransitionOutcome) error,
+) error {
 	outcome := clientui.WorktreeTransitionOutcome{
 		OperationID: request.operationID,
 		Transition:  request.kind,
 		State:       clientui.WorktreeTransitionCompleted,
 	}
-	if err == nil {
-		return outcome
+	if runErr != nil && !isWorktreeApplied(runErr) {
+		outcome.State = clientui.WorktreeTransitionFailed
+		outcome.Failure = projectWorktreeTransitionFailure(runErr)
 	}
-	outcome.State = clientui.WorktreeTransitionFailed
-	outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
-	return outcome
+	if isWorktreeUnapplied(runErr) && syncFailure != nil {
+		if syncErr := syncFailure(outcome); syncErr != nil {
+			runErr = errors.Join(runErr, syncErr)
+		}
+	}
+	s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
+	return runErr
 }
 
-func (s *Service) resolveScheduledEnterTarget(
-	ctx context.Context,
-	sessionID string,
-	selector string,
-) (scheduledWorktreeTarget, error) {
+func projectWorktreeTransitionFailure(err error) *clientui.WorktreeTransitionFailure {
+	failure := &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
+	var selector *worktreecontract.SelectorError
+	if errors.As(err, &selector) && selector.Details != nil {
+		failure.SelectorError = selector.Details
+	}
+	return failure
+}
+
+func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, selector string, authority transitionAuthority, sync transitionTargetSync) error {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
 	if err != nil {
-		return scheduledWorktreeTarget{}, err
+		return worktreeTransitionFailure(err)
 	}
 	defer release()
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
-		return scheduledWorktreeTarget{}, err
+		return worktreeUnappliedTechnical(err)
 	}
 	match, err := resolveTopologySelector(topology, selector)
 	if err != nil {
-		return scheduledWorktreeTarget{}, err
+		return worktreeTransitionFailure(err)
 	}
-	if match.entry.GetMissing() != nil {
-		return scheduledWorktreeTarget{}, worktreecontract.NewSelectorError(
+	entry := match.entry
+	if entry.GetMissing() != nil {
+		return worktreeUnappliedUserCorrectable(worktreecontract.NewSelectorError(
 			worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_UNAVAILABLE,
 			selector,
 			nil,
-		)
+		))
 	}
-	return scheduledWorktreeTargetFromEntry(match.entry)
-}
-
-func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, target scheduledWorktreeTarget, authority transitionAuthority, sync transitionTargetSync) error {
-	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	defer release()
-	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
-	if err != nil {
-		return err
-	}
-	entry, err := target.resolve(topology)
-	if err != nil {
-		return err
-	}
-	apply := func() error {
+	apply := func(applyCtx context.Context) error {
 		if topologyIsCurrent(entry, workspaceCtx.target) {
 			return nil
 		}
-		previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
+		previous, err := s.currentTransitionWorktree(applyCtx, topology, workspaceCtx.target)
 		if err != nil {
-			return err
+			return worktreeTransitionFailure(err)
 		}
-		next, err := s.enterTransitionWorktree(ctx, workspaceCtx, entry)
+		next, err := s.enterTransitionWorktree(applyCtx, workspaceCtx, entry)
 		if err != nil {
-			return err
+			return worktreeTransitionFailure(err)
 		}
-		_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, next, authority, sync)
+		_, err = s.switchSessionTargetWithSync(applyCtx, workspaceCtx, previous, next, authority, sync)
 		return err
 	}
-	if authority != nil {
-		return authority(apply)
-	}
-	return apply()
+	return applyWorktreeTransition(ctx, authority, apply)
 }
 
 func (s *Service) executeLeaveWorktree(ctx context.Context, sessionID string, authority transitionAuthority, sync transitionTargetSync) error {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
 	if err != nil {
-		return err
+		return worktreeTransitionFailure(err)
 	}
 	defer release()
 	if workspaceCtx.target.Worktree == nil {
@@ -244,18 +334,39 @@ func (s *Service) executeLeaveWorktree(ctx context.Context, sessionID string, au
 	}
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
-		return err
+		return worktreeUnappliedTechnical(err)
 	}
 	previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
 	if err != nil {
-		return err
+		return worktreeTransitionFailure(err)
 	}
 	main, err := mainTransitionWorktree(topology, workspaceCtx.workspaceRoot)
 	if err != nil {
+		return worktreeTransitionFailure(err)
+	}
+	apply := func(applyCtx context.Context) error {
+		_, err := s.switchSessionTargetWithSync(applyCtx, workspaceCtx, previous, main, authority, sync)
 		return err
 	}
-	_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, main, authority, sync)
-	return err
+	return applyWorktreeTransition(ctx, authority, apply)
+}
+
+func applyWorktreeTransition(ctx context.Context, authority transitionAuthority, apply func(context.Context) error) error {
+	if authority == nil {
+		return apply(ctx)
+	}
+	return worktreeUnappliedTechnicalUnlessClassified(authority(apply))
+}
+
+func worktreeTransitionFailure(err error) error {
+	var selector *worktreecontract.SelectorError
+	if errors.As(err, &selector) ||
+		errors.Is(err, worktreecontract.ErrWorktreeNotFound) ||
+		errors.Is(err, worktreecontract.ErrWorktreeBlocked) ||
+		errors.Is(err, session.ErrSessionNotFound) {
+		return worktreeUnappliedUserCorrectable(err)
+	}
+	return worktreeUnappliedTechnical(err)
 }
 
 func (s *Service) enterTransitionWorktree(ctx context.Context, workspaceCtx sessionWorkspaceContext, entry *worktreepb.TopologyEntry) (syncedWorktree, error) {
@@ -271,17 +382,16 @@ func (s *Service) enterTransitionWorktree(ctx context.Context, workspaceCtx sess
 		}
 		return syncedWorktree{record: record, git: gitEntry}, nil
 	case entry.GetExternal() != nil:
-		gitEntry, err := gitWorktreeFromFacts(entry.GetExternal().GetGit())
+		return s.adoptExternalWorktree(ctx, workspaceCtx.workspaceID, entry.GetExternal().GetGit())
+	case entry.GetMainWorkspace() != nil:
+		gitEntry, err := gitWorktreeFromFacts(entry.GetMainWorkspace().GetGit())
 		if err != nil {
 			return syncedWorktree{}, err
 		}
-		if entry.GetExternal().GetGit().GetIsMain() {
-			return syncedWorktree{
-				record: metadata.WorktreeRecord{WorkspaceID: workspaceCtx.workspaceID, CanonicalRoot: workspaceCtx.workspaceRoot},
-				git:    gitEntry,
-			}, nil
-		}
-		return s.adoptExternalWorktree(ctx, workspaceCtx.workspaceID, entry.GetExternal().GetGit())
+		return syncedWorktree{
+			record: metadata.WorktreeRecord{WorkspaceID: workspaceCtx.workspaceID, CanonicalRoot: workspaceCtx.workspaceRoot},
+			git:    gitEntry,
+		}, nil
 	case entry.GetMissing() != nil:
 		return syncedWorktree{}, worktreecontract.NewSelectorError(
 			worktreepb.SelectorErrorKind_WORKTREE_SELECTOR_ERROR_KIND_UNAVAILABLE,
@@ -305,7 +415,6 @@ func (s *Service) adoptExternalWorktree(ctx context.Context, workspaceID string,
 		CanonicalRoot: strings.TrimSpace(facts.CanonicalRoot),
 		DisplayName:   filepath.Base(strings.TrimSpace(facts.CanonicalRoot)),
 		Availability:  string(PathAvailability(facts.CanonicalRoot)),
-		IsMain:        facts.IsMain,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -364,32 +473,15 @@ func (s *Service) currentTransitionWorktree(
 func mainTransitionWorktree(topology []*worktreepb.TopologyEntry, workspaceRoot string) (syncedWorktree, error) {
 	for _, entry := range topology {
 		switch {
-		case entry.GetRegistered() != nil:
-			if entry.GetRegistered().GetGit().GetIsMain() {
-				gitEntry, err := gitWorktreeFromFacts(entry.GetRegistered().GetGit())
-				if err != nil {
-					return syncedWorktree{}, err
-				}
-				return syncedWorktree{
-					record: metadata.WorktreeRecord{
-						ID:            entry.GetRegistered().GetKent().GetWorktreeId(),
-						WorkspaceID:   "",
-						CanonicalRoot: entry.GetRegistered().GetGit().GetCanonicalRoot(),
-					},
-					git: gitEntry,
-				}, nil
+		case entry.GetMainWorkspace() != nil:
+			gitEntry, err := gitWorktreeFromFacts(entry.GetMainWorkspace().GetGit())
+			if err != nil {
+				return syncedWorktree{}, err
 			}
-		case entry.GetExternal() != nil:
-			if entry.GetExternal().GetGit().GetIsMain() {
-				gitEntry, err := gitWorktreeFromFacts(entry.GetExternal().GetGit())
-				if err != nil {
-					return syncedWorktree{}, err
-				}
-				return syncedWorktree{
-					record: metadata.WorktreeRecord{CanonicalRoot: strings.TrimSpace(workspaceRoot)},
-					git:    gitEntry,
-				}, nil
-			}
+			return syncedWorktree{
+				record: metadata.WorktreeRecord{CanonicalRoot: strings.TrimSpace(workspaceRoot)},
+				git:    gitEntry,
+			}, nil
 		}
 	}
 	return syncedWorktree{}, fmt.Errorf("main worktree not found")
@@ -411,7 +503,7 @@ func gitWorktreeFromFacts(facts *worktreepb.GitFacts) (GitWorktree, error) {
 		Bare:           facts.Bare,
 		LockedReason:   optionalString(facts.LockedReason),
 		PrunableReason: optionalString(facts.PrunableReason),
-		IsMain:         facts.IsMain,
+		IsMainWorktree: facts.IsMainWorktree,
 	}
 	if err := entry.validateHead(); err != nil {
 		return GitWorktree{}, err

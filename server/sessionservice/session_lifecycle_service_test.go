@@ -12,7 +12,6 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	"core/server/runlog"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	sessionruntime "core/server/sessionruntime"
@@ -617,7 +616,6 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 		CanonicalRoot: worktreeRoot,
 		DisplayName:   "feature-a",
 		Availability:  "available",
-		IsMain:        false,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
@@ -683,7 +681,6 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		CanonicalRoot: worktreeRoot,
 		DisplayName:   "feature-a",
 		Availability:  "available",
-		IsMain:        false,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
@@ -747,7 +744,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	if err != nil {
 		t.Fatalf("OpenByID child: %v", err)
 	}
-	logBody, err := os.ReadFile(filepath.Join(childStore.Dir(), runlog.RunLogFileName))
+	logBody, err := os.ReadFile(session.RunLogPath(childStore.Dir()))
 	if err != nil {
 		t.Fatalf("ReadFile steps.log: %v", err)
 	}

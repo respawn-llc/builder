@@ -952,6 +952,48 @@ func TestApprovalAppliesStrictPreviousTargetOnceAfterSourceRetires(t *testing.T)
 	}
 }
 
+func TestApprovalStartsScriptTargetWithoutAgentAssignment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture is a POSIX shell script")
+	}
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedFinalAnswer(`{"transition":"next","commentary":"ready for approval"}`),
+	)
+	markerPath := filepath.Join(f.workspace, "approved-script.started")
+	scriptPath := filepath.Join(f.workspace, "approved-script.sh")
+	script := "#!/bin/sh\n: > " + workflowRunnerShellQuote(markerPath) + "\nprintf '%s' '{\"commentary\":\"approved script ran\"}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write approved Script: %v", err)
+	}
+	workflowID := createCurrentNodeLinearWorkflow(
+		t,
+		f.store,
+		"Approved Script target",
+		[]currentNodeWorkflowStep{
+			{kind: workflow.NodeKindAgent, role: "coder", prompt: "Prepare the script transition."},
+			{kind: workflow.NodeKindScript, scriptPath: scriptPath},
+		},
+		[]currentNodeLinearTransition{{
+			id:               "next",
+			mode:             workflow.ContextModeNewSession,
+			requiresApproval: true,
+		}},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForTaskQuiescence(t, task.ID)
+
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply Script target Approval: %v", err)
+	}
+	f.waitForPath(t, markerPath)
+	if requests := f.client.Requests(); len(requests) != 1 {
+		t.Fatalf("model requests = %d, want only the source Agent request", len(requests))
+	}
+}
+
 func TestManualMoveToRetainedTargetAssignsBeforeResumingLockedSession(t *testing.T) {
 	auditScriptPath := filepath.Join(t.TempDir(), "audit.sh")
 	if err := os.WriteFile(auditScriptPath, []byte("#!/bin/sh\nexit 23\n"), 0o755); err != nil {

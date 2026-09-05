@@ -480,15 +480,10 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 		return nil
 	}
 	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
-		identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+		identity, err := r.sessionIdentity(entry, id)
 		if err != nil {
 			return nil, err
 		}
-		target, err := r.resolveSessionExecutionTarget(context.Background(), id)
-		if err != nil {
-			return nil, err
-		}
-		identity.ExecutionTarget = target
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(identity)}, nil
 	})
 }
@@ -502,12 +497,70 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 		return nil
 	}
 	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
-		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		status, err := r.sessionStatus(entry)
 		if err != nil {
 			return nil, err
 		}
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
 	})
+}
+
+func (r *RuntimeRegistry) PublishSessionSettingFeedback(
+	sessionID string,
+	feedback clientui.TranscriptSessionSettingFeedback,
+) error {
+	if r == nil {
+		return nil
+	}
+	if err := feedback.Validate(); err != nil {
+		return err
+	}
+	id := strings.TrimSpace(sessionID)
+	entry := r.authorityEntryBySession(id)
+	if entry == nil {
+		return nil
+	}
+	return r.publishTranscriptAndMainView(entry, func() ([]clientui.TranscriptEvent, error) {
+		feedbackEvent := clientui.NewTranscriptEvent(feedback)
+		if feedback.Kind == clientui.SessionSettingSessionName {
+			identity, err := r.sessionIdentity(entry, id)
+			if err != nil {
+				return nil, err
+			}
+			return []clientui.TranscriptEvent{
+				clientui.NewTranscriptEvent(identity),
+				feedbackEvent,
+			}, nil
+		}
+		status, err := r.sessionStatus(entry)
+		if err != nil {
+			return nil, err
+		}
+		return []clientui.TranscriptEvent{
+			clientui.NewTranscriptEvent(status),
+			feedbackEvent,
+		}, nil
+	})
+}
+
+func (r *RuntimeRegistry) sessionIdentity(
+	entry *authorityRuntimeEntry,
+	sessionID string,
+) (clientui.TranscriptSessionIdentity, error) {
+	identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+	if err != nil {
+		return clientui.TranscriptSessionIdentity{}, err
+	}
+	target, err := r.resolveSessionExecutionTarget(context.Background(), sessionID)
+	if err != nil {
+		return clientui.TranscriptSessionIdentity{}, err
+	}
+	identity.ExecutionTarget = target
+	return identity, nil
+}
+
+func (r *RuntimeRegistry) sessionStatus(entry *authorityRuntimeEntry) (clientui.TranscriptSessionStatus, error) {
+	return runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 }
 
 func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
@@ -579,9 +632,13 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 		State:       outcome.State,
 	}
 	if outcome.Failure != nil {
-		transcriptOutcome.Failure = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode("worktree_transition_failed"),
-			Detail: outcome.Failure.Diagnostic,
+		if outcome.Failure.SelectorError != nil {
+			transcriptOutcome.SelectorError = outcome.Failure.SelectorError
+		} else {
+			transcriptOutcome.Failure = &clientui.TranscriptDiagnostic{
+				Code:   clientui.TranscriptDiagnosticCode("worktree_transition_failed"),
+				Detail: outcome.Failure.Diagnostic,
+			}
 		}
 		if outcome.Failure.DeletePrecondition != nil {
 			dirtyState := *outcome.Failure.DeletePrecondition
@@ -653,20 +710,41 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	}
 	id := resource.SessionID().String()
 	entry := r.authorityEntryByRef(resource)
+	if entry == nil {
+		return fmt.Errorf(
+			"publish pending prompt %q for session %s generation %d: %w",
+			req.ToolCallID,
+			resource.SessionID(),
+			resource.Generation(),
+			serverapi.ErrStreamUnavailable,
+		)
+	}
 	var snapshot PendingPromptSnapshot
+	var wakeErr error
+	entry.publicationMu.Lock()
 	projected := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
 		var admitted bool
 		snapshot, admitted = r.pendingPrompts.Begin(id, resource, scope.ID(), req, createdAt)
 		return admitted
 	})
-	if projected && entry != nil {
+	if projected {
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 		r.publishAttentionPending(id, snapshot)
-		wakeErr := r.publishTaskQuestionWaitingForScope(scope, snapshot)
-		r.publishCurrentRuntimeActivity(id)
-		if wakeErr != nil {
-			return wakeErr
-		}
+		wakeErr = r.publishTaskQuestionWaitingForScope(scope, snapshot)
+	}
+	entry.publicationMu.Unlock()
+	if !projected {
+		return fmt.Errorf(
+			"publish pending prompt %q for session %s generation %d: %w",
+			req.ToolCallID,
+			resource.SessionID(),
+			resource.Generation(),
+			serverapi.ErrStreamUnavailable,
+		)
+	}
+	r.publishCurrentRuntimeActivity(id)
+	if wakeErr != nil {
+		return wakeErr
 	}
 	return nil
 }

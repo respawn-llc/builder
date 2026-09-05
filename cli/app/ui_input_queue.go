@@ -187,10 +187,12 @@ func (m *uiModel) enqueueInjectedInput(text string) tea.Cmd {
 		submissionOrder: submissionOrder,
 	})
 	client := m.runtimeClient()
+	sessionID := m.pendingWorkRefresh.sessionID
 	return func() tea.Msg {
 		item, completed, err := submitRuntimeSteering(client, text)
 		return injectedQueueCreateDoneMsg{
 			token:     token,
+			sessionID: sessionID,
 			localID:   localID,
 			item:      item,
 			completed: completed,
@@ -568,9 +570,11 @@ func (m *uiModel) discardInjectedRuntimeQueueCommand(localID, serverID string, t
 	if client == nil || strings.TrimSpace(serverID) == "" {
 		return nil
 	}
+	sessionID := m.pendingWorkRefresh.sessionID
 	return func() tea.Msg {
 		return injectedQueueDiscardDoneMsg{
 			token:     token,
+			sessionID: sessionID,
 			localID:   localID,
 			serverID:  serverID,
 			discarded: client.DiscardQueuedUserMessage(serverID),
@@ -616,20 +620,16 @@ func (m *uiModel) hasEnqueuedInjectedRuntimeWork() bool {
 	return false
 }
 
-func (m *uiModel) applyPendingWorkReplacement(pending runtimeinput.PendingWork) tea.Cmd {
-	m.pendingWork = pending
-	return nil
-}
-
 func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreateDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
+	pendingWorkRefreshCmd := m.requestPendingWorkRefreshIfSuccessful(msg.sessionID, msg.err == nil)
 	index := m.injectedQueueIndexByAnyID(msg.localID)
 	if index < 0 {
-		return m, nil
+		return m, pendingWorkRefreshCmd
 	}
 	item := m.injectedQueue[index]
 	if item.CreateToken != msg.token {
-		return m, nil
+		return m, pendingWorkRefreshCmd
 	}
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
@@ -652,10 +652,10 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		m.removeInjectedQueueItemAt(index)
 		m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 		if item.State != injectedRuntimeQueuePendingCreate {
-			return m, nil
+			return m, pendingWorkRefreshCmd
 		}
 		m.rememberPromptHistoryLocally(item.Text)
-		return m, nil
+		return m, pendingWorkRefreshCmd
 	}
 	serverID := strings.TrimSpace(msg.item.ID)
 	if serverID == "" {
@@ -667,7 +667,7 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		m.rememberPromptHistoryLocally(item.Text)
 	}
 	if deferredCmd, consumed := m.applyUnownedQueuedTerminalState(serverID); consumed {
-		return m, deferredCmd
+		return m, tea.Batch(deferredCmd, pendingWorkRefreshCmd)
 	}
 	switch item.State {
 	case injectedRuntimeQueuePendingCreate:
@@ -678,31 +678,38 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		item.State = injectedRuntimeQueueDiscardPending
 		item.DiscardToken = token
 		m.injectedQueue[index] = item
-		return m, m.discardInjectedRuntimeQueueCommand(item.LocalID, serverID, token, m.runtimeClient())
+		return m, tea.Batch(
+			m.discardInjectedRuntimeQueueCommand(item.LocalID, serverID, token, m.runtimeClient()),
+			pendingWorkRefreshCmd,
+		)
 	default:
 		m.injectedQueue[index] = item
 	}
 	m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
-	return m, nil
+	return m, pendingWorkRefreshCmd
 }
 
 func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDiscardDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
+	pendingWorkRefreshCmd := m.requestPendingWorkRefreshIfSuccessful(msg.sessionID, msg.discarded)
 	id := strings.TrimSpace(msg.localID)
 	if id == "" {
 		id = strings.TrimSpace(msg.serverID)
 	}
 	index := m.injectedQueueIndexByAnyID(id)
 	if index < 0 {
-		return m, nil
+		return m, pendingWorkRefreshCmd
 	}
 	item := m.injectedQueue[index]
 	if item.DiscardToken != msg.token {
-		return m, nil
+		return m, pendingWorkRefreshCmd
 	}
 	if msg.discarded {
 		m.removeInjectedQueueItemAt(index)
-		return m, c.resumeQueuedInputsAfterIdleRuntime()
+		return m, tea.Batch(
+			c.resumeQueuedInputsAfterIdleRuntime(),
+			pendingWorkRefreshCmd,
+		)
 	}
 	item.State = injectedRuntimeQueueDiscardFailed
 	m.injectedQueue[index] = item

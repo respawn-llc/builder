@@ -3,9 +3,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { errorMessage } from "@/api";
 import { runNavigationTransition } from "./navigationTransitions";
+import type { SessionChatCatalogOrigin, SessionChatHistoryState } from "./sessionChatHistory";
 import { useAppServices } from "./useAppServices";
 
 type NavigationStackAction = "PUSH" | "REPLACE" | "FORWARD" | "BACK" | "GO";
+
+export const sessionChatRoutePath = "/projects/$projectId/sessions/$sessionId" as const;
+
+export type { SessionChatCatalogOrigin, SessionChatHistoryState } from "./sessionChatHistory";
+
+export type SessionChatTarget = Readonly<{
+  projectID: string;
+  sessionID: string;
+  catalogOrigin?: SessionChatCatalogOrigin;
+}>;
 
 export type AppNavigation = Readonly<{
   back(): Promise<void>;
@@ -19,6 +30,7 @@ export type AppNavigation = Readonly<{
   openTask(taskID: string): Promise<void>;
   replaceTask(taskID: string): Promise<void>;
   openProjectTask(projectID: string, workflowID: string, taskID: string): Promise<void>;
+  openSessionChat(target: SessionChatTarget): Promise<void>;
   closeProjectTask(projectID: string, workflowID?: string): Promise<void>;
 }>;
 
@@ -152,6 +164,24 @@ export function useAppNavigation(): AppNavigation {
             to: "/projects/$projectId",
             params: { projectId: projectID },
             search: { workflowId: workflowID, taskId: taskID },
+          });
+        });
+      },
+      async openSessionChat(target) {
+        const sessionChatState: SessionChatHistoryState = {
+          sessionChat: {
+            catalogOrigin: target.catalogOrigin ?? null,
+            projectID: target.projectID,
+          },
+        };
+        await runNavigation(async () => {
+          await navigate({
+            to: sessionChatRoutePath,
+            params: { projectId: target.projectID, sessionId: target.sessionID },
+            state: (previous) => ({
+              ...previous,
+              ...sessionChatState,
+            }),
           });
         });
       },

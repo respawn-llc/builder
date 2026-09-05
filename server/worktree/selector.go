@@ -215,6 +215,8 @@ func topologyVariant(entry *worktreepb.TopologyEntry) worktreepb.TopologyVariant
 	switch {
 	case entry == nil:
 		return worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_UNSPECIFIED
+	case entry.GetMainWorkspace() != nil:
+		return worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_MAIN_WORKSPACE
 	case entry.GetRegistered() != nil:
 		return worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_REGISTERED
 	case entry.GetExternal() != nil:
@@ -230,6 +232,8 @@ func topologyRoot(entry *worktreepb.TopologyEntry) string {
 	switch {
 	case entry == nil:
 		return ""
+	case entry.GetMainWorkspace() != nil:
+		return entry.GetMainWorkspace().GetGit().GetCanonicalRoot()
 	case entry.GetRegistered() != nil:
 		return entry.GetRegistered().GetGit().GetCanonicalRoot()
 	case entry.GetExternal() != nil:
@@ -244,6 +248,8 @@ func topologyRoot(entry *worktreepb.TopologyEntry) string {
 func topologyWorktreeID(entry *worktreepb.TopologyEntry) *string {
 	switch {
 	case entry == nil:
+		return nil
+	case entry.GetMainWorkspace() != nil, entry.GetExternal() != nil:
 		return nil
 	case entry.GetRegistered() != nil:
 		value := entry.GetRegistered().GetKent().GetWorktreeId()
@@ -260,6 +266,8 @@ func topologyBranch(entry *worktreepb.TopologyEntry) *string {
 	switch {
 	case entry == nil:
 		return nil
+	case entry.GetMainWorkspace() != nil:
+		return entry.GetMainWorkspace().GetGit().BranchName
 	case entry.GetRegistered() != nil:
 		return entry.GetRegistered().GetGit().BranchName
 	case entry.GetExternal() != nil:

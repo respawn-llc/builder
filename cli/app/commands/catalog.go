@@ -27,6 +27,7 @@ func NewDefaultRegistryWithPromptCatalog(entries []PromptCommandCatalogEntry) *R
 			command: Command{
 				Name:                       commandName,
 				Description:                strings.TrimSpace(entry.Preview),
+				ActiveRunPolicy:            ActiveRunPolicyAllowed,
 				PreservePromptHistoryDraft: true,
 			},
 			handler: func(args string) Result {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"buf.build/go/protovalidate"
+	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/runtimeids"
 	"core/shared/worktreecontract"
 )
@@ -13,6 +15,7 @@ type TranscriptWorktreeTransitionOutcome struct {
 	Transition         WorktreeTransitionKind
 	State              WorktreeTransitionState
 	Failure            *TranscriptDiagnostic
+	SelectorError      *worktreepb.SelectorErrorDetails
 	DeletePrecondition *WorktreeDirtyState
 }
 
@@ -45,18 +48,25 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 	}
 	switch o.State {
 	case WorktreeTransitionCompleted:
-		if o.Failure != nil || o.DeletePrecondition != nil {
+		if o.Failure != nil || o.SelectorError != nil || o.DeletePrecondition != nil {
 			return fmt.Errorf("completed worktree transition cannot carry failure")
 		}
 		return nil
 	case WorktreeTransitionFailed:
-		if o.Failure == nil {
-			return fmt.Errorf("failed worktree transition requires failure diagnostic")
+		if (o.Failure == nil) == (o.SelectorError == nil) {
+			return fmt.Errorf("failed worktree transition requires exactly one failure detail")
 		}
-		if err := o.Failure.Validate(); err != nil {
+		if o.Failure != nil {
+			if err := o.Failure.Validate(); err != nil {
+				return err
+			}
+		} else if err := protovalidate.Validate(o.SelectorError); err != nil {
 			return err
 		}
 		if o.DeletePrecondition != nil {
+			if o.SelectorError != nil {
+				return fmt.Errorf("selector failure cannot carry delete precondition")
+			}
 			precondition := o.DeletePrecondition
 			if err := worktreecontract.ValidateDeleteTransitionPrecondition(
 				worktreecontract.TransitionKind(o.Transition),

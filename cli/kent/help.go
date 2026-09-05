@@ -145,6 +145,21 @@ var (
 	rootUsage           = commandUsage{helpFile: "root.txt", includeEmbeddedFlags: true}
 	runUsage            = commandUsage{helpFile: "run.txt", includeEmbeddedFlags: true}
 	sessionIDUsage      = commandUsage{helpFile: "session_id.txt"}
+	sessionUsage        = commandUsage{helpFile: "session.txt"}
+	sessionArchiveUsage = leafCommandUsage(
+		config.Command+" session archive <session-id> --output <path> [--json]",
+		"Archive and remove a Session.",
+		"",
+		"The output path must be an absolute .tar.zst path on the Kent server and must not already exist.",
+	)
+	sessionDeleteUsage = commandUsage{
+		title: "Usage:",
+		lines: []string{
+			"  " + config.Command + " session delete <session-id> [--json]",
+			"",
+			"Permanently remove a Session without creating an archive.",
+		},
+	}
 	goalUsage           = commandUsage{helpFile: "goal.txt"}
 	goalShowUsage       = leafCommandUsage(config.Command+" goal show [--json] [--session <id>]", "Show a session's goal and status.")
 	goalSetUsage        = leafCommandUsage(config.Command+" goal set [--session <id>] <objective>", "Set the objective that guides a session.")
@@ -158,7 +173,7 @@ var (
 	questionListUsage   = leafCommandUsage(config.Command+" questions list [--session <id>] [--max-handoffs <count>] [--json]", "List answered Questions from one Session, newest first.", "", "Tasks can have hundreds of sessions, use `kent task sessions` to find the one you need, then use `--session`.", "JSON Question-history output can be slow.")
 	worktreeUsage       = leafCommandUsage(config.Command+" worktree <status|list|create|enter|leave|delete> ...", "Inspect workspace worktrees and manage a session's execution target.")
 	worktreeStatusUsage = leafCommandUsage(config.Command+" worktree status [--session <id>] [--json]", "Inspect the selected session's recorded worktree target.")
-	worktreeListUsage   = leafCommandUsage(config.Command+" worktree list [--session <id>] [--json]", "List registered, external, and missing worktrees.")
+	worktreeListUsage   = leafCommandUsage(config.Command+" worktree list [--session <id>] [--json]", "List the Main Workspace, registered, external, and missing worktrees.")
 	worktreeCreateUsage = leafCommandUsage(config.Command+" worktree create [--session <id>] [--base <ref>] [--json] <branch-or-ref> [path]", "Create and set up a worktree without entering it.")
 	worktreeEnterUsage  = leafCommandUsage(config.Command+" worktree enter [--session <id>] [--json] <selector>", "Schedule the session to enter a worktree.")
 	worktreeLeaveUsage  = leafCommandUsage(config.Command+" worktree leave [--session <id>] [--json]", "Schedule the session to return to the main workspace.")

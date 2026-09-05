@@ -38,9 +38,10 @@
 - Server acceptance, the separate post-turn Queue, Steering timing, Runtime-affecting slash commands, and process-loss behavior follow the [Runtime Steering And Model Loop](runtime-steering-loop.md) specification.
 - Each accepted human Steer remains a separate FIFO message. Each steer issued from another Session remains a separate message.
 - Pending messages survive only until delivery or process exit. The backend overload invariant is owned by the Runtime Steering specification.
-- Pending messages render as a visible pane between transcript and input until drained. The pane shows both queued post-turn messages and pending steering messages, each in FIFO order; queued messages render above steering messages.
-- There is no standalone per-item removal or reordering affordance. The only user-facing removal is the busy `Ctrl+C` interrupt, which drains pending human Send/Steer and post-turn Queue messages into the main input (see Interrupts And Exit). Typed controls and domain operations remain accepted.
-- When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server submission order, followed by the composer draft.
+- Pending Work renders as a visible pane between transcript and input until drained. The pane shows Queue messages first in Queue order and then Steer items in server acceptance order.
+- There is no standalone per-item removal or reordering affordance. The only TUI removal action is the busy `Ctrl+C` interrupt, which drains pending human Send/Steer and post-turn Queue messages into the main input (see Interrupts And Exit). Operational Pending Work remains accepted and is not removed.
+- When the live TUI observes the server's interruption event, it best-effort restores the listed Queue and Steer messages to the composer verbatim in server acceptance order, followed by the composer draft.
+- When the live TUI observes a definitely-unapplied technical restoration, it restores the canonical presentation through the same composer merge behavior. Every observing TUI restores the same broadcast independently, and Kent does not replay it after reconnect.
 - Pending Queue and Steer messages are not persisted for restoration. Process exit before the TUI observes the interrupt loses them.
 - The following creation-failure behavior applies to every queued message or Steer.
 - If Kent cannot create the queued message or Steer, the failed message returns to the composer and requires an explicit user action to send again. The failed message does not remain pending or retry automatically.
@@ -50,11 +51,11 @@
 
 ## Interrupts And Exit
 
-- The server-published Run lifecycle is the TUI liveness authority for `Ctrl+C`: while the Run lifecycle is Running, the TUI sends Interrupt; otherwise it exits. A second `Ctrl+C` while Interrupt is still pending for that same Run exits locally; a different Running Run or Step sends a new Interrupt.
-- The server accepts Interrupt only for an active Agent Turn. An accepted Interrupt stops the current Agent Step and active tool, keeps the Session available, adds the Detail Mode control message `User interrupted you`, returns to idle with input ready, and requires explicit user text to resume.
+- The server-published Run lifecycle and the current server-published pending Question or Approval are the TUI liveness authorities for `Ctrl+C`. While either identifies live work, the TUI sends Interrupt. A second `Ctrl+C` while Interrupt is still pending for that same execution exits locally; a different Running Run or Step sends a new Interrupt.
+- The server accepts Interrupt only for an active Agent execution, including one waiting for a Question or Approval. An accepted Interrupt stops its current Agent Step or prompt wait and active tool, keeps the Session available, adds the Detail Mode control message `User interrupted you`, returns to idle with input ready, and requires explicit user text to resume.
 - `Ctrl+C` does not cancel a submission before its Agent Turn starts.
 - When the live TUI observes the interruption event, it restores the stopped execution's pending human messages into the main input so the user can edit or resend them.
-- `Ctrl+C` while the server-published Run lifecycle is not Running exits the TUI. A submission already sent to the server may start or continue after the client detaches.
+- `Ctrl+C` exits the TUI only when the Run lifecycle is not Running and no current pending Question or Approval identifies live work. A submission already sent to the server may start or continue after the client detaches.
 - Graceful exit through `Ctrl+C` or `/exit` saves the current composer draft before releasing the Session attachment.
 - `/exit` detaches the client and does not interrupt the Active Session Runtime. Active work continues after this TUI releases its attachment.
 - Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.

@@ -159,8 +159,28 @@ func (m *uiModel) applyChatSettingsDone(msg chatSettingsDoneMsg) tea.Cmd {
 	}
 	return m.sendTransientStatusWithNoticeID(
 		chatSettingsSuccessNotice(msg.operation, settings),
-		uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "",
+		uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace,
+		chatSettingsMutationNoticeID(msg.operation),
 	)
+}
+
+func chatSettingsMutationNoticeID(kind serverapi.ChatSettingsMutationOperationKind) string {
+	switch kind {
+	case serverapi.ChatSettingsMutationSupervisor:
+		return sessionSettingNoticeID(clientui.SessionSettingSupervisor)
+	case serverapi.ChatSettingsMutationThinking:
+		return sessionSettingNoticeID(clientui.SessionSettingThinking)
+	case serverapi.ChatSettingsMutationFast:
+		return sessionSettingNoticeID(clientui.SessionSettingFastMode)
+	case serverapi.ChatSettingsMutationQuestions:
+		return sessionSettingNoticeID(clientui.SessionSettingQuestions)
+	case serverapi.ChatSettingsMutationAutoCompaction:
+		return sessionSettingNoticeID(clientui.SessionSettingAutoCompaction)
+	case serverapi.ChatSettingsMutationAgent:
+		return "session-setting:agent"
+	default:
+		panic("validated Chat settings mutation kind is exhaustive")
+	}
 }
 
 func chatSettingsSuccessNotice(kind serverapi.ChatSettingsMutationOperationKind, settings serverapi.ChatSettings) string {

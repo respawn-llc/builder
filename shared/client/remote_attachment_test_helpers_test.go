@@ -350,7 +350,11 @@ func remoteTestSessionAttachment(
 ) *connectionpb.AttachmentSuccess {
 	return &connectionpb.AttachmentSuccess{
 		Attachment: &connectionpb.AttachmentSuccess_Session{Session: &connectionpb.SessionAttachment{
-			ProjectId: projectID, WorkspaceId: workspaceID, WorkspaceRoot: workspaceRoot, SessionId: request.SessionId,
+			ProjectId:          projectID,
+			WorkspaceId:        workspaceID,
+			WorkspaceRoot:      workspaceRoot,
+			SessionId:          request.SessionId,
+			ReattachCapability: "test-session-reattach-capability",
 		}},
 	}
 }

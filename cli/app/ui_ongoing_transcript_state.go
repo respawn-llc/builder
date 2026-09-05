@@ -36,14 +36,20 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return m.applyTranscriptUserMessageFlushed(message.Payload().(clientui.TranscriptUserMessageFlushed))
 	case clientui.TranscriptMessageQueuedMessageState:
 		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
-	case clientui.TranscriptMessagePendingWorkReplaced:
-		return m.applyPendingWorkReplacement(message.Payload().(clientui.TranscriptPendingWorkReplaced).PendingWork)
+	case clientui.TranscriptMessagePendingWorkChanged:
+		return m.requestPendingWorkRefresh(m.pendingWorkRefresh.sessionID)
+	case clientui.TranscriptMessagePendingWorkRestored:
+		restoration := message.Payload().(clientui.TranscriptPendingWorkRestored).Restoration
+		m.inputController().restoreServerOrderedTextBeforeComposer(restoration.CanonicalInput)
+	case clientui.TranscriptMessageSessionSettingFeedback:
+		return m.applySessionSettingFeedback(message.Payload().(clientui.TranscriptSessionSettingFeedback))
 	case clientui.TranscriptMessageHumanInputInterrupted:
 		return m.applyTranscriptHumanInputInterrupted(message.Payload().(clientui.TranscriptHumanInputInterrupted))
 	case clientui.TranscriptMessageStepState:
 		m.applyTranscriptStepState(message.Payload().(clientui.TranscriptStepState))
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
-		return m.applyTranscriptRuntimeReadModelUpdate(admission)
+		cmd := m.applyTranscriptRuntimeReadModelUpdate(admission)
+		return sequenceCmds(cmd, m.missingPromptRehydrationCmd(admission.view.Session.SessionID))
 	case clientui.TranscriptMessageSessionStatus:
 		m.applyTranscriptSessionStatus(message.Payload().(clientui.TranscriptSessionStatus))
 	case clientui.TranscriptMessageSessionIdentity:
@@ -77,7 +83,9 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		if prompt.Status == clientui.TranscriptPromptStatusResolved {
 			return m.askController().resolvePrompt(string(prompt.ToolCallID))
 		}
-		return m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
+		cmd := m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
+		m.reconcileMissingPromptRecoveryScope()
+		return cmd
 	case clientui.TranscriptMessageWorktreeTransitionOutcome:
 		return m.reconcileTranscriptWorktreeTransitionOutcome(message.Payload().(clientui.TranscriptWorktreeTransitionOutcome))
 	case clientui.TranscriptMessageOperationalDiagnostic:
@@ -91,6 +99,7 @@ func (m *uiModel) applyTranscriptHydration(
 	admission runtimeTupleMergeResult,
 ) tea.Cmd {
 	var cmds []tea.Cmd
+	cmds = append(cmds, m.advancePendingWorkRefreshScope(hydration.SessionIdentity.SessionID))
 	cmds = append(cmds, m.applyTranscriptSessionIdentity(hydration.SessionIdentity))
 	m.applyTranscriptSessionStatus(hydration.SessionStatus)
 	cmds = append(cmds, m.applyTranscriptRuntimeReadModelUpdate(admission))
@@ -103,9 +112,8 @@ func (m *uiModel) applyTranscriptHydration(
 		m.applyTranscriptStepState(*hydration.ActiveStep)
 	}
 
-	m.pendingWork = hydration.PendingWork
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
-	cmds = append(cmds, m.releasePendingPromptCtrlCContinuation())
+	cmds = append(cmds, m.missingPromptRehydrationCmd(hydration.SessionIdentity.SessionID.String()))
 	currentSessionID := strings.TrimSpace(m.sessionID)
 	preserved := m.processList.entries[:0]
 	for _, entry := range m.processList.entries {
@@ -129,6 +137,55 @@ func (m *uiModel) applyTranscriptHydration(
 	return batchCmds(cmds...)
 }
 
+func (m *uiModel) missingPromptRehydrationCmd(sessionID string) tea.Cmd {
+	m.reconcileMissingPromptRecoveryScope()
+	scope, missing := m.missingPromptRecoveryScopeFor(sessionID)
+	if !missing {
+		return nil
+	}
+	if m.missingPromptRecovery != nil && *m.missingPromptRecovery == scope {
+		return nil
+	}
+	m.missingPromptRecovery = &scope
+	return func() tea.Msg { return missingPromptRehydrationMsg{scope: scope} }
+}
+
+func (m *uiModel) reconcileMissingPromptRecoveryScope() {
+	if m == nil || m.missingPromptRecovery == nil {
+		return
+	}
+	if !m.matchesMissingPromptRecoveryScope(*m.missingPromptRecovery) {
+		m.missingPromptRecovery = nil
+	}
+}
+
+func (m *uiModel) missingPromptRecoveryScopeFor(sessionID string) (missingPromptRecoveryScope, bool) {
+	if m == nil ||
+		sessionID == "" ||
+		m.runtimeActivityProjection.State != clientui.RuntimeActivityAwaitingPrompt ||
+		m.runtimeActivityProjection.ActiveStep == nil ||
+		m.ask.hasCurrent() {
+		return missingPromptRecoveryScope{}, false
+	}
+	activeStep := m.runtimeActivityProjection.ActiveStep
+	return missingPromptRecoveryScope{
+		sessionID: sessionID,
+		runID:     activeStep.RunID,
+		stepID:    activeStep.StepID,
+	}, true
+}
+
+func (m *uiModel) matchesMissingPromptRecoveryScope(scope missingPromptRecoveryScope) bool {
+	current, missing := m.missingPromptRecoveryScopeFor(scope.sessionID)
+	if !missing || current != scope {
+		return false
+	}
+	if sessionID := m.currentRuntimeSessionID(); sessionID != "" && sessionID != scope.sessionID {
+		return false
+	}
+	return true
+}
+
 func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMergeResult) tea.Cmd {
 	switch admission.decision {
 	case runtimeTupleRefresh:
@@ -148,15 +205,14 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 			"",
 		)
 	}
-	promptCtrlCCmd := m.releasePendingPromptCtrlCContinuation()
 	if view.Activity.ActiveForControl() {
-		return promptCtrlCCmd
+		return nil
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
 		cmd = m.acknowledgePendingInterrupt()
 	}
-	return tea.Batch(promptCtrlCCmd, cmd, m.releaseDeferredRuntimeSyncs())
+	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 }
 
 func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {
@@ -190,6 +246,7 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 		m.sessionExecutionTarget = &normalized
 	}
 	m.sessionID = nextSessionID
+	m.reconcileMissingPromptRecoveryScope()
 	m.sessionName = ""
 	if identity.SessionName != nil {
 		m.sessionName = strings.TrimSpace(*identity.SessionName)
@@ -209,7 +266,6 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	}
 	m.pendingCompactionRequestIDs = nil
 	m.askController().cancelActiveDelivery()
-	m.ask.pendingCtrlCContinuation = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()

@@ -13,6 +13,8 @@ import (
 	"core/shared/clientui"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
+	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/worktreecontract"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -125,16 +127,12 @@ type uiWorktreeOverlayState struct {
 	mutationToken                 uint64
 	switchToken                   uint64
 	switchPending                 bool
-	queuedSwitch                  uiWorktreeQueuedSwitch
+	queuedTransition              *runtimeinput.PendingWorkWorktreeTransition
 	selectedIdentity              worktreeui.SelectionIdentity
 	intent                        uiWorktreeOpenIntent
 	create                        uiWorktreeCreateDialogState
 	deleteConfirm                 uiWorktreeDeleteDialogState
 	inputCursor                   uiInputFieldCursor
-}
-
-type uiWorktreeQueuedSwitch struct {
-	TargetToken string
 }
 
 type worktreeListDoneMsg struct {
@@ -164,10 +162,11 @@ type worktreeSetupEventMsg struct {
 }
 
 type worktreeSwitchDoneMsg struct {
-	token  uint64
-	target string
-	ack    *worktreepb.ScheduledAcknowledgement
-	err    error
+	token      uint64
+	sessionID  runtimeids.SessionID
+	transition runtimeinput.PendingWorkWorktreeTransition
+	ack        *worktreepb.ScheduledAcknowledgement
+	err        error
 }
 
 type worktreeDeleteDoneMsg struct {
@@ -585,7 +584,11 @@ func (m *uiModel) worktreeSwitchCmd(target worktreeui.Item) tea.Cmd {
 		return nil
 	}
 	if m.worktrees.switchPending {
-		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{TargetToken: selector}
+		queued := runtimeinput.PendingWorkWorktreeTransition{
+			Transition: runtimeinput.PendingWorkWorktreeTransitionEnter,
+			Selector:   &selector,
+		}
+		m.worktrees.queuedTransition = &queued
 		return nil
 	}
 	m.invalidateWorktreeDeleteTargetResolution()
@@ -593,17 +596,17 @@ func (m *uiModel) worktreeSwitchCmd(target worktreeui.Item) tea.Cmd {
 	return m.worktreeSwitchCommandForTarget(selector)
 }
 
-func (m *uiModel) takeQueuedWorktreeSwitchCmd() tea.Cmd {
+func (m *uiModel) takeQueuedWorktreeTransitionCmd() tea.Cmd {
 	if m == nil {
 		return nil
 	}
-	queued := m.worktrees.queuedSwitch
-	m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{}
-	if strings.TrimSpace(queued.TargetToken) == "" {
+	queued := m.worktrees.queuedTransition
+	m.worktrees.queuedTransition = nil
+	if queued == nil {
 		return nil
 	}
 	m.worktrees.switchPending = false
-	return m.worktreeSwitchCommandForTarget(queued.TargetToken)
+	return m.worktreeTransitionCommand(*queued)
 }
 
 func (m *uiModel) worktreeDeleteCmd(target worktreeui.Item, deleteBranch bool) tea.Cmd {
@@ -633,9 +636,15 @@ func (m *uiModel) worktreeMutationService() worktreeui.Service {
 	if m == nil {
 		return worktreeui.Service{}
 	}
+	target := m.worktrees.target
+	if clientui.SessionExecutionTargetIsZero(target) {
+		target = m.currentExecutionTarget()
+	}
 	service := worktreeui.Service{
-		Client:    m.worktreeClient,
-		SessionID: m.sessionID,
+		Client:        m.worktreeClient,
+		SessionID:     m.sessionID,
+		WorkspaceID:   target.WorkspaceID,
+		WorkspaceRoot: target.WorkspaceRoot,
 		ResolveContext: func() (context.Context, context.CancelFunc) {
 			return context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 		},

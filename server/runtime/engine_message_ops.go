@@ -199,7 +199,7 @@ func (e *Engine) prepareStoredToolCompletion(
 		CondensedText:  r.CondensedText,
 		Presentation:   r.Presentation,
 		ProviderItems:  e.providerItemsForToolCompletion(r),
-		QuestionAnswer: r.QuestionAnswer,
+		QuestionAnswer: cloneAskQuestionAnswer(r.QuestionAnswer),
 	}
 	return payload, backgroundSessionID, hasBackgroundSession, nil
 }
@@ -723,13 +723,12 @@ func (e *Engine) emitInterruptedHumanInputs(items []QueuedUserMessage) {
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
 	pending := e.messageFlow.DrainPendingUserInjections()
-	messages := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		messages = append(messages, item)
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
-	}
+	messages := append([]QueuedUserMessage(nil), pending...)
 	if len(pending) != 0 {
-		e.publishPendingWorkSnapshot()
+		for _, item := range pending {
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+		}
+		e.publishPendingWorkChanged()
 	}
 	return messages
 }

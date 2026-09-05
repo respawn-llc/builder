@@ -297,8 +297,6 @@ func routeScopePolicy(scope sharedpb.ScopePolicy) apicontract.ScopePolicy {
 		return apicontract.ScopeRuntimeLiveSessionOptional
 	case sharedpb.ScopePolicy_SCOPE_POLICY_PROCESS_ACTIVE_PROJECT:
 		return apicontract.ScopeProcessActiveProject
-	case sharedpb.ScopePolicy_SCOPE_POLICY_PROCESS_LIST_ACTIVE_PROJECT:
-		return apicontract.ScopeProcessListActiveProject
 	case sharedpb.ScopePolicy_SCOPE_POLICY_NOTIFICATION:
 		return apicontract.ScopeNotification
 	default:

@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"core/server/metadata"
@@ -48,11 +47,18 @@ type processSource interface {
 	CurrentSnapshots() []shelltool.Snapshot
 }
 
+type sessionWorkspaceRetargeter interface {
+	RetargetWorkspace(context.Context, metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
+	ScheduleWorkspaceRetargetWithCompletion(context.Context, metadata.SessionWorkspaceRetargetRequest, serverapi.RuntimeStepOrigin, worktreecontract.OperationID, func(error)) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error)
+	ScheduleWorkspaceRetargetResolutionWithCompletion(context.Context, string, serverapi.RuntimeStepOrigin, worktreecontract.OperationID, func(context.Context) (metadata.SessionWorkspaceRetargetRequest, error), func(error)) (serverapi.SessionWorkspaceRetargetScheduledAcknowledgement, error)
+}
+
 type ServiceOptions struct {
 	BaseDir             string
 	SetupScript         string
 	SetupTimeoutSeconds int
 	ResolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
+	SessionRetargeter   sessionWorkspaceRetargeter
 }
 
 type Service struct {
@@ -67,13 +73,7 @@ type Service struct {
 	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
 	workspaceMutations  *mutationlane.MutationLaneRegistry[string]
-
-	transitionCtx     context.Context
-	cancelTransitions context.CancelFunc
-	transitionMu      sync.Mutex
-	transitionWG      sync.WaitGroup
-	transitionTails   map[string]chan struct{}
-	transitionsClosed bool
+	sessionRetargeter   sessionWorkspaceRetargeter
 }
 
 type syncedWorktree struct {
@@ -351,7 +351,6 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 	if gitInspector == nil {
 		gitInspector = NewGitInspector(nil)
 	}
-	transitionCtx, cancelTransitions := context.WithCancel(context.Background())
 	return &Service{
 		metadata:            metadataStore,
 		git:                 gitInspector,
@@ -364,9 +363,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
 		workspaceMutations:  mutationlane.NewMutationLaneRegistry[string](),
-		transitionCtx:       transitionCtx,
-		cancelTransitions:   cancelTransitions,
-		transitionTails:     make(map[string]chan struct{}),
+		sessionRetargeter:   opts.SessionRetargeter,
 	}
 }
 
@@ -426,16 +423,6 @@ func authorizeSessionMaintenance(ctx context.Context, release sessionruntime.Ses
 }
 
 func (s *Service) Close() error {
-	if s == nil {
-		return nil
-	}
-	s.transitionMu.Lock()
-	s.transitionsClosed = true
-	s.transitionMu.Unlock()
-	if s.cancelTransitions != nil {
-		s.cancelTransitions()
-	}
-	s.transitionWG.Wait()
 	return nil
 }
 
@@ -1510,18 +1497,9 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		}
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	if record.IsMain {
-		return DeleteTaskWorktreeResponse{}, fmt.Errorf("cannot delete main workspace worktree: %w", worktreecontract.ErrWorktreeBlocked)
-	}
 	if err := s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	activityLease, err := s.acquireDeleteTargetActivity(ctx, &record, &record.CanonicalRoot)
-	if err != nil {
-		return DeleteTaskWorktreeResponse{}, err
-	}
-	defer activityLease.Close()
-	ctx = activityLease.Context()
 	topology, err := s.projectTopology(ctx, record.WorkspaceID, workspaceRoot)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
@@ -1530,6 +1508,15 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if !found {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("managed worktree %q is absent from projected topology: %w", worktreeID, worktreecontract.ErrWorktreeNotFound)
 	}
+	if _, err := deletionSelector(entry); err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, &record, &record.CanonicalRoot)
+	if err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
+	defer activityLease.Close()
+	ctx = activityLease.Context()
 	var target syncedWorktree
 	targetFound := entry.GetRegistered() != nil
 	if targetFound {
@@ -1603,9 +1590,6 @@ func (s *Service) EnsureTaskWorktreeDeletable(ctx context.Context, taskID string
 			return nil
 		}
 		return err
-	}
-	if record.IsMain {
-		return fmt.Errorf("cannot delete main workspace worktree: %w", worktreecontract.ErrWorktreeBlocked)
 	}
 	return s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record)
 }
@@ -1994,7 +1978,6 @@ func (s *Service) registerCreatedWorktree(ctx context.Context, req createdWorktr
 		CanonicalRoot:         strings.TrimSpace(gitEntry.Root),
 		DisplayName:           filepath.Base(strings.TrimSpace(gitEntry.Root)),
 		Availability:          string(PathAvailability(gitEntry.Root)),
-		IsMain:                gitEntry.IsMain,
 		Managed:               req.Managed,
 		CreatedBranch:         req.CreatedBranch,
 		OriginSessionID:       strings.TrimSpace(req.OriginSessionID),

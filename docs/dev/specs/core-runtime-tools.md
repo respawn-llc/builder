@@ -4,7 +4,8 @@
 
 - Kent does not virtualize or sandbox command execution. Isolation requires running Kent on a remote machine or in Docker.
 - The server is the single authority for tool calls, session and other durable data, agent execution, and provider communication. CLI and GUI clients control and observe that authority; they do not own parallel local state or execution.
-- Client presence and connection lifecycle are transport-only and are never server-work authority. Connecting, disconnecting, canceling or closing a client request, reconnecting, changing subscriber count, navigating away, or closing a UI may stop that client's observation or delivery only; it never starts, stops, pauses, cancels, retries, replays, duplicates, authorizes, or otherwise changes server-owned work. Server event publication never depends on subscriber count.
+- Client presence and connection lifecycle are transport-only and are never server-work authority. Connecting, disconnecting, canceling or closing a client request, reconnecting, changing subscriber count, navigating away, or closing a UI may stop that client's observation or delivery only; it never starts, stops, pauses, cancels, retries, replays, duplicates, authorizes, or otherwise changes server-owned work. The detached Session archive lifetime defined by the [CLI Commands](cli-commands.md) specification is the sole exception. Server event publication never depends on subscriber count.
+- Explicit Runtime activation may retain the selected Session Runtime for the activating client connection. Disconnecting that connection detaches its retention without closing the Runtime or changing its work. An explicit Runtime Release is the separate operation that may drop the owner and close an idle Runtime.
 - A completed live execution has one server-authoritative terminal result: status, result kind, reason that no final answer exists, final assistant message, runtime error, timestamps, and whether work was performed. Work was performed when a completed step observed at least two tool-start events, including events emitted during recovery.
 - Terminal-result delivery is best-effort and never delays execution completion, waiting callers, queued work, interruption, or successor scheduling.
 - Each controlling TUI may run its configured read-only lifecycle command after it accepts a lifecycle event. Desktop, headless, subagent, and server-only use never run it. The server neither supplies nor overrides the command.
@@ -90,8 +91,9 @@ To respond, run: kent run steer <source-session-id> "message"
 - `[shell].postprocessing_mode` accepts only `none`, `builtin`, `user`, or `all`; omission selects the built-in default, while an empty or unknown value is an error. `[shell].postprocess_hook` is optional; absence is `null`, and a present empty or whitespace-only value is invalid.
 - Each command captures its effective post-processing settings when it starts. That captured policy applies consistently to foreground output, background output, later `write_stdin` polls, completion notices, and shutdown processing, even if settings, role, or workspace change. `raw=true` bypasses that policy in every one of those paths.
 - Except in `none` and `raw` modes, generic command-output sanitization runs before built-ins and the optional hook. Built-ins run before the hook; a built-in halt stops only later built-ins. In `user` and `all` modes, Kent runs the user-hook stage only when `[shell].postprocess_hook` is configured; an omitted hook silently skips that stage. A user hook receives JSON on stdin containing the original sanitized and current processed output, and returns JSON on stdout. If a configured hook executable is missing, times out, exits nonzero, or returns invalid JSON, Kent preserves the current model-facing output and reports a warning.
-- `/ps` can show and operate on background processes from other sessions in the same app instance.
-- Background process IDs are unique for one server lifetime. Their Session association controls notices and history, not access.
+- `/ps` shows background processes whose owning Session belongs to the selected Project and operates on processes selected from that list.
+- Process recent-output previews are UTF-8 text. A preview preserves valid UTF-8 and replaces each contiguous run of invalid bytes with one Unicode replacement character. This preview projection does not change raw shell output, retained logs, Inline Output, or raw byte offsets.
+- Background process IDs are unique for one server lifetime. Their Session association controls Project list membership, notices, and history. Process termination uses the process ID without revalidating Project membership.
 - Kent exposes at most 1,000 completed background processes per server lifetime. Completing another process removes the least recently directly accessed completed process and its retained log and completion output from `/ps` and process controls.
 - Kent performs terminal event creation, delivery/finalization, and only then retention eviction and artifact cleanup.
 - Direct process access refreshes completed-process recency. Listing `/ps` does not refresh recency.
@@ -144,7 +146,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Internal approvals belong to the tool call they approve and use that Tool Call ID throughout presentation and answer submission. Each tool call may present at most one internal Approval during its lifetime. Kent fails before presentation when an internal Approval has no owning Tool Call ID. Ordinary Questions use the Tool Call ID of their own `ask_question` call. Internal approvals carry ordered typed options whose labels are authoritative. Outside-workspace access ordinarily offers `Allow once`, `Allow for this session`, and `Deny`, but clients render the labels in the live request and never reconstruct them from decisions.
 - Before an outside-workspace tool call presents its Approval, Kent must discover every attempted path that requires approval. One Approval covers the complete path set. The disclosure preserves first-attempt order and includes each distinct path string supplied by the model once. Different aliases remain separate even when they resolve to one target. A repeated identical supplied path appears once. Each disclosed path includes its different real resolved path when applicable. `Allow once` authorizes the separately deduplicated canonical target set. Kent revalidates each disclosed path-to-target mapping before access. A changed target or a later undisclosed target fails the tool call visibly and never opens another Approval.
 - A Question or Approval is not presented when its preceding durability barrier fails. Kent surfaces the failure, ends the affected exact execution, and does not replay the blocked interaction.
-- A live Agent execution waiting for a Question or Approval remains interruptible.
+- A live Agent execution waiting for a Question or Approval remains interruptible even when no model or tool step is active.
 - Ordinary Runtime Interrupt, Runtime Live Stop, Workflow Task Interrupt, Workflow Manual Move, an Approval answer, and a declined Approval race at the exact live tool call owner. An Approval action is accepted only after the waiting tool accepts its decision or cancellation and any selected session-wide grant takes effect. If the Approval action is accepted first, those effects occur once before Interrupt or Manual Move may stop any continuing tool work. If Interrupt or Manual Move closes the tool call first, the Approval submission is Skipped without applying commentary.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
 - A Question answer goes directly to its exact pending Question owner and is not a Steering Intent. An Approval answer or decline goes directly to its exact live tool call owner and is not a Steering Intent. Single-prompt answers follow prompt order and are not retained across restart. A submitted answer payload is immutable; an editable draft after failed delivery affects only a later explicit submission. Supported post-answer actions validate their inputs.
@@ -181,7 +183,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Sessions can stop and resume. The persistence root is configurable and defaults to `~/.kent`; their durable location model is Project, Workspace, then Worktree.
 - Except for an active agent rebinding its own Session under the self-agent rule below, moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
 - An accepted cross-Project move retires an idle Active Session Runtime before moving the Session. Opening the Session in the destination Project creates a fresh learned-Workspace cache.
-- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, or when the Question-history command performs its explicitly requested backward history read.
+- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, when the Question-history command performs its explicitly requested backward history read, or when streaming a complete Session into an archive.
 - Transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
 - `server_host` and `server_port` explicitly select the daemon address; Kent binds exactly that address and fails startup if it is occupied. Local same-machine optimization is additive and cannot override either explicit setting.
 - Session activation and release identify the exact session resource generation. A stale release is a successful no-op and cannot close or detach a replacement generation.
@@ -231,7 +233,8 @@ To respond, run: kent run steer <source-session-id> "message"
 ## Fast Mode And Context Usage
 
 - Fast Mode is a persisted Session Chat setting when the active provider supports first-party Responses priority service.
-- Changing Fast Mode during an Agent Step affects the next provider or compaction request and never changes the request already running.
+- Changing Fast Mode during an Agent Step persists and publishes immediately, affects the next provider or compaction request, and never changes the request already running.
+- A Fast Mode change creates no transcript row.
 - A supported request uses the provider's priority service tier when Fast Mode is enabled.
 - Disabled Fast Mode omits the provider's priority service tier.
 - Enabling Fast Mode for an unsupported provider fails without changing the Session setting.
@@ -262,9 +265,11 @@ To respond, run: kent run steer <source-session-id> "message"
 - A user message submitted while eager compaction is running waits behind that compaction and is then processed against the compacted context.
 - Eager compaction is speculative. Its failure does not change the preceding successful turn, retains the uncompacted context, uses the ordinary diagnostic reporting, and is not retried automatically.
 - `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface.
-- A manual compact request follows the Session's accepted mutation order.
+- A manual compact request is a typed Pending Work item and follows the Session's accepted mutation order.
 - Compaction is an Agent Step selected after earlier accepted short mutations apply according to the Runtime Steering specification.
 - A manual compact request is never model-visible user text.
+- Manual-compaction policy and eligibility are revalidated when the pending request starts.
+- Manual compaction has canonical presentation `/compact` followed by normalized guidance when present.
 - Repeated manual compact requests remain distinct.
 - Clients do not coalesce manual compact requests.
 - Each manual compact request receives its own typed outcome.
@@ -355,8 +360,9 @@ To respond, run: kent run steer <source-session-id> "message"
 - A client does not consider a question or approval answered until the server accepts the answer and returns or publishes the resolved shared state.
 - A running Workflow Task is steerable from every attached client, including chat, queued input, Goal control, settings, compaction, worktree, and process controls. The model may not submit a structured final answer invalid for the current Node. Inability to reach active execution is a runtime-unavailable error.
 - Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
-- Entering or leaving a Worktree for an Active Session Runtime accepts one Session mutation carrying the domain Worktree Operation identity.
-- Acceptance starts the independent Worktree transition and returns the established acknowledgement without waiting for completion.
+- Entering or leaving a Worktree for an Active Session Runtime accepts one typed Pending Work item carrying the domain Worktree Operation identity.
+- Acceptance returns the established acknowledgement without waiting for the next Step Boundary or transition completion.
+- Entering or leaving a Worktree for a dormant Session remains a direct Worktree operation.
 - The Worktree owner later applies the target, Working Directory, tool environment, and reminder or failure.
 - Each explicit Worktree transition is an independent domain operation. Kent does not return an earlier result for a matching retry, reject a different transition merely because another is pending, replay an ambiguous operation, or resume process-local pending transitions after restart.
 - Worktree deletion follows the concrete multi-Session and process blockers in the Runtime Steering and Workflow specifications.

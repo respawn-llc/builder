@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/transcript"
 )
 
@@ -41,6 +42,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 		CreatedAt:  time.Unix(1_700_000_000, 0),
 	}
 	queueText := "queued input"
+	fastModeEnabled := true
 	tests := []struct {
 		name  string
 		event TranscriptEvent
@@ -99,6 +101,19 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			QueueItemID: transcriptTestQueueItemID(t),
 			Status:      QueuedUserMessageAccepted, Text: &queueText,
 		}), TranscriptMessageQueuedMessageState},
+		{"pending work changed", NewTranscriptEvent(TranscriptPendingWorkChanged{}), TranscriptMessagePendingWorkChanged},
+		{"pending work technical restoration", NewTranscriptEvent(TranscriptPendingWorkRestored{
+			Restoration: runtimeinput.PendingWorkTechnicalRestoration{
+				ItemID:         transcriptTestQueueItemID(t),
+				Kind:           runtimeinput.PendingWorkItemKindManualCompaction,
+				CanonicalInput: "/compact",
+			},
+		}), TranscriptMessagePendingWorkRestored},
+		{"session setting feedback", NewTranscriptEvent(TranscriptSessionSettingFeedback{
+			Kind:     SessionSettingFastMode,
+			Changed:  true,
+			FastMode: &fastModeEnabled,
+		}), TranscriptMessageSessionSettingFeedback},
 		{"interrupted human input", NewTranscriptEvent(TranscriptHumanInputInterrupted{
 			Items: []TranscriptInterruptedHumanInputItem{{
 				QueueItemID: transcriptTestQueueItemID(t),

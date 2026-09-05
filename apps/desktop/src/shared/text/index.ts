@@ -1,0 +1,1 @@
+export { firstPresent } from "./firstPresent";

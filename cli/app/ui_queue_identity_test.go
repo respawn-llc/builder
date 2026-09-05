@@ -162,7 +162,7 @@ func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *te
 			}}
 			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
 				ID: queueID.String(), Text: serverText})
-			model.applyPendingWorkReplacement(runtimeinput.PendingWork{})
+			model.pendingWorkRefresh.collection = runtimeinput.PendingWork{}
 			if len(model.injectedQueue) != 1 {
 				t.Fatal("membership replacement settled local queue lifecycle")
 			}

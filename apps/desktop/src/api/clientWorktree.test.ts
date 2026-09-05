@@ -31,6 +31,7 @@ import {
 } from "@app/server-api-contract/gen/kent/api/worktree/worktree_pb";
 
 import { ApiClient } from "./client";
+import { requireWorktreeSuccess, WorktreeError } from "./clientWorktree";
 import { newSetupOperationID } from "./index";
 
 const ids = ["123e4567-e89b-42d3-a456-426614174000", "223e4567-e89b-42d3-a456-426614174000"] as const;
@@ -50,7 +51,7 @@ const git = {
   branchName: "feature",
   detached: false,
   bare: false,
-  isMain: false,
+  isMainWorktree: false,
   pathAvailable: true,
 } as const;
 const detachedGit = {
@@ -68,6 +69,20 @@ const kent = {
 } as const;
 const topology = create(TopologyEntrySchema, {
   topology: { case: "registered", value: { git, kent } },
+});
+const mainWorkspaceTopology = create(TopologyEntrySchema, {
+  topology: {
+    case: "mainWorkspace",
+    value: {
+      git: {
+        ...git,
+        canonicalRoot: "/repo",
+        branchRef: "refs/heads/main",
+        branchName: "main",
+        isMainWorktree: false,
+      },
+    },
+  },
 });
 const detachedTopology = create(TopologyEntrySchema, {
   topology: { case: "registered", value: { git: detachedGit, kent } },
@@ -96,6 +111,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("Desktop Worktree client", () => {
   it("decodes exact Session reads and every topology/status fact", async () => {
     const topologies = [
+      mainWorkspaceTopology,
       topology,
       detachedTopology,
       create(TopologyEntrySchema, { topology: { case: "external", value: { git } } }),
@@ -136,10 +152,10 @@ describe("Desktop Worktree client", () => {
     const client = new ApiClient(transport);
 
     expect(topologies.every(isValidTopology)).toBe(true);
-    const detached = topologies[1];
+    const detached = topologies[2];
     if (detached.topology.case !== "registered") throw new Error("fixture was not registered");
     expect(detached.topology.value.git).not.toHaveProperty("branchName");
-    expect(topologies[3]).toMatchObject({
+    expect(topologies[4]).toMatchObject({
       topology: { value: { git: { pathAvailable: false } } },
     });
     await expect(client.getWorktreeStatus("session-1")).resolves.toMatchObject({
@@ -183,16 +199,15 @@ describe("Desktop Worktree client", () => {
       create(ListEntrySchema, {
         topology: {
           topology: {
-            case: "registered",
+            case: "mainWorkspace",
             value: {
               git: {
                 ...git,
                 canonicalRoot: "/repo",
                 branchRef: "refs/heads/main",
                 branchName: "main",
-                isMain: true,
+                isMainWorktree: false,
               },
-              kent: { ...kent, worktreeId: "main", canonicalRoot: "/repo" },
             },
           },
         },
@@ -343,6 +358,42 @@ describe("Desktop Worktree client", () => {
         ]),
       ).switchWorktree("session-1", operation),
     ).rejects.toThrow("different Worktree operation identity");
+
+    for (const [method, result] of [
+      [
+        TransitionService.method.enter,
+        create(EnterResultSchema, {
+          outcome: {
+            case: "error",
+            value: {
+              code: "pending_work_capacity",
+              detail: { case: "pendingWorkCapacity", value: {} },
+            },
+          },
+        }),
+      ],
+      [
+        TransitionService.method.leave,
+        create(LeaveResultSchema, {
+          outcome: {
+            case: "error",
+            value: {
+              code: "pending_work_capacity",
+              detail: { case: "pendingWorkCapacity", value: {} },
+            },
+          },
+        }),
+      ],
+    ] as const) {
+      try {
+        requireWorktreeSuccess(method, result);
+        throw new Error("expected Pending Work capacity rejection");
+      } catch (error) {
+        expect(error).toBeInstanceOf(WorktreeError);
+        if (!(error instanceof WorktreeError)) throw error;
+        expect(error.detail).toEqual({ kind: "capacity" });
+      }
+    }
   });
 });
 

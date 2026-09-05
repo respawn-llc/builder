@@ -1224,7 +1224,7 @@ func (s *Starter) withSessionStore(ctx context.Context, descriptor session.Sessi
 }
 
 func (s *Starter) cleanupSession(ctx context.Context, descriptor session.SessionDescriptor) error {
-	return errors.Join(s.withSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error { return store.RemoveDurable() }), s.metadata.DeleteSessionRecordByID(ctx, descriptor.SessionID().String()))
+	return errors.Join(s.withSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error { return store.RemoveDurable() }), s.metadata.DeleteFailedSessionCreationRecordByID(ctx, descriptor.SessionID().String()))
 }
 
 func (s *Starter) Close() error {

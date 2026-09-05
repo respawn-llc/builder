@@ -1866,6 +1866,85 @@ func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID s
 	return i, err
 }
 
+const getSessionDeletionState = `-- name: GetSessionDeletionState :one
+SELECT
+    CAST(EXISTS (
+        SELECT 1
+        FROM sessions session
+        WHERE session.id = ?1
+    ) AS INTEGER) AS session_exists,
+    CAST(
+        EXISTS (
+            SELECT 1
+            FROM task_current_nodes current_node
+            JOIN workflow_task_status_records status
+                ON status.task_id = current_node.task_id
+            WHERE current_node.session_id = ?1
+              AND status.is_done = 0
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM task_pending_approvals approval
+            WHERE approval.source_session_id = ?1
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM task_pending_approval_branches branch
+            WHERE (
+                json_extract(
+                    branch.context_source_resolution_json,
+                    '$.target_session.kind'
+                ) = 'reuse'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.target_session.session_id'
+                ) = ?1
+            )
+            OR (
+                json_extract(
+                    branch.context_source_resolution_json,
+                    '$.active_source.kind'
+                ) = 'exact'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.active_source.session_id'
+                ) = ?1
+            )
+            OR (
+                json_type(
+                    branch.context_source_resolution_json,
+                    '$.target_session'
+                ) IS NULL
+                AND json_type(
+                    branch.context_source_resolution_json,
+                    '$.active_source'
+                ) IS NULL
+                AND json_type(
+                    branch.context_source_resolution_json,
+                    '$.session_id'
+                ) = 'text'
+                AND json_extract(
+                    branch.context_source_resolution_json,
+                    '$.session_id'
+                ) = ?1
+            )
+        )
+    AS INTEGER) AS session_in_use
+`
+
+type GetSessionDeletionStateRow struct {
+	SessionExists int64
+	SessionInUse  int64
+}
+
+func (q *Queries) GetSessionDeletionState(ctx context.Context, sessionID string) (GetSessionDeletionStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionDeletionState, sessionID)
+	var i GetSessionDeletionStateRow
+	err := recordQueryError(ctx, row.Scan(&i.SessionExists, &i.SessionInUse), getSessionDeletionState, 1)
+
+	return i, err
+}
+
 const getSessionExecutionTargetByID = `-- name: GetSessionExecutionTargetByID :one
 SELECT
     s.id AS session_id,
@@ -2662,7 +2741,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -2671,7 +2749,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.canonical_root_path = ?1
 LIMIT 1
 `
@@ -2680,7 +2757,6 @@ type GetWorktreeByCanonicalRootRow struct {
 	ID                    string
 	WorkspaceID           string
 	CanonicalRootPath     string
-	IsMain                int64
 	Managed               int64
 	CreatedBranch         int64
 	OriginSessionID       string
@@ -2697,7 +2773,6 @@ func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootP
 		&i.ID,
 		&i.WorkspaceID,
 		&i.CanonicalRootPath,
-		&i.IsMain,
 		&i.Managed,
 		&i.CreatedBranch,
 		&i.OriginSessionID,
@@ -2715,7 +2790,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -2724,7 +2798,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.id = ?1
 LIMIT 1
 `
@@ -2733,7 +2806,6 @@ type GetWorktreeByIDRow struct {
 	ID                    string
 	WorkspaceID           string
 	CanonicalRootPath     string
-	IsMain                int64
 	Managed               int64
 	CreatedBranch         int64
 	OriginSessionID       string
@@ -2750,7 +2822,6 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 		&i.ID,
 		&i.WorkspaceID,
 		&i.CanonicalRootPath,
-		&i.IsMain,
 		&i.Managed,
 		&i.CreatedBranch,
 		&i.OriginSessionID,
@@ -8269,7 +8340,6 @@ SELECT
     wt.id,
     wt.workspace_id,
     wt.canonical_root_path,
-    CASE WHEN wt.canonical_root_path = w.canonical_root_path THEN 1 ELSE 0 END AS is_main,
     wt.managed,
     wt.created_branch,
     wt.origin_session_id,
@@ -8278,7 +8348,6 @@ SELECT
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.workspace_id = ?1
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC
 `
@@ -8287,7 +8356,6 @@ type ListWorktreesByWorkspaceIDRow struct {
 	ID                    string
 	WorkspaceID           string
 	CanonicalRootPath     string
-	IsMain                int64
 	Managed               int64
 	CreatedBranch         int64
 	OriginSessionID       string
@@ -8311,7 +8379,6 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 			&i.ID,
 			&i.WorkspaceID,
 			&i.CanonicalRootPath,
-			&i.IsMain,
 			&i.Managed,
 			&i.CreatedBranch,
 			&i.OriginSessionID,
@@ -8700,42 +8767,52 @@ UPDATE sessions
 SET
     project_id = ?1,
     workspace_id = ?2,
-    worktree_id = NULL,
+    worktree_id = ?3,
     cwd_relpath = '.',
-    artifact_relpath = ?3,
-    updated_at_unix_ms = ?4,
+    artifact_relpath = ?4,
+    updated_at_unix_ms = ?5,
     metadata_json = json_remove(
-        CASE WHEN CAST(?5 AS TEXT) IS NULL THEN
+        CASE WHEN CAST(?6 AS TEXT) IS NULL THEN
             json_set(
                 CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-                '$.workspace_root', CAST(?6 AS TEXT),
-                '$.workspace_container', CAST(?7 AS TEXT),
-                '$.worktree_reminder', json('null')
+                '$.workspace_root', CAST(?7 AS TEXT),
+                '$.workspace_container', CAST(?8 AS TEXT),
+                '$.worktree_reminder',
+                CASE WHEN CAST(?9 AS TEXT) IS NULL
+                    THEN json('null')
+                    ELSE json(CAST(?9 AS TEXT))
+                END
             )
         ELSE
             json_set(
                 CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-                '$.workspace_root', CAST(?6 AS TEXT),
-                '$.workspace_container', CAST(?7 AS TEXT),
-                '$.worktree_reminder', json('null'),
-                '$.rebind_reminder', json(CAST(?5 AS TEXT))
+                '$.workspace_root', CAST(?7 AS TEXT),
+                '$.workspace_container', CAST(?8 AS TEXT),
+                '$.worktree_reminder',
+                CASE WHEN CAST(?9 AS TEXT) IS NULL
+                    THEN json('null')
+                    ELSE json(CAST(?9 AS TEXT))
+                END,
+                '$.rebind_reminder', json(CAST(?6 AS TEXT))
             )
         END,
         '$.workflow_session'
     )
-WHERE id = ?8
-  AND project_id = ?9
-  AND artifact_relpath = ?10
+WHERE id = ?10
+  AND project_id = ?11
+  AND artifact_relpath = ?12
 `
 
 type RetargetSessionWorkspaceProjectParams struct {
 	TargetProjectID          string
 	TargetWorkspaceID        sql.NullString
+	TargetWorktreeID         sql.NullString
 	TargetArtifactRelpath    string
 	UpdatedAtUnixMs          int64
 	RebindReminderJson       sql.NullString
 	TargetWorkspaceRoot      string
 	TargetWorkspaceContainer string
+	WorktreeReminderJson     sql.NullString
 	SessionID                string
 	SourceProjectID          string
 	SourceArtifactRelpath    string
@@ -8745,16 +8822,18 @@ func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg Retar
 	result, err := q.db.ExecContext(ctx, retargetSessionWorkspaceProject,
 		arg.TargetProjectID,
 		arg.TargetWorkspaceID,
+		arg.TargetWorktreeID,
 		arg.TargetArtifactRelpath,
 		arg.UpdatedAtUnixMs,
 		arg.RebindReminderJson,
 		arg.TargetWorkspaceRoot,
 		arg.TargetWorkspaceContainer,
+		arg.WorktreeReminderJson,
 		arg.SessionID,
 		arg.SourceProjectID,
 		arg.SourceArtifactRelpath,
 	)
-	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 10)
+	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 12)
 
 	if err != nil {
 		return 0, err

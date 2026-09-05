@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
 
@@ -17,7 +20,7 @@ func (c *sessionRuntimeClient) ReadChatSettings() (serverapi.ChatSettings, error
 	if err != nil {
 		return serverapi.ChatSettings{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), uiChatSettingsTimeout)
 	defer cancel()
 	response, err := c.chatSettings.ReadChatSettings(ctx, serverapi.ChatSettingsReadRequest{
 		Target: serverapi.SessionChatSettingsTarget(sessionID),
@@ -33,7 +36,7 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 	if err != nil {
 		return serverapi.ChatSettingsMutationResponse{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), uiChatSettingsTimeout)
 	defer cancel()
 	response, err := c.chatSettings.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
 		Target:    serverapi.SessionChatSettingsTarget(sessionID),
@@ -230,13 +233,40 @@ func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool
 	if err != nil {
 		return false
 	}
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeRemovePendingWorkResponse, error) {
+	_, err = runtimeControlCall(c, true, func(ctx context.Context) (serverapi.RuntimeRemovePendingWorkResponse, error) {
 		return pendingWork.RemovePendingWork(ctx, serverapi.RuntimeRemovePendingWorkRequest{SessionID: c.sessionID, ItemID: itemID})
 	})
-	if err != nil {
-		return false
+	return err == nil
+}
+
+func (c *sessionRuntimeClient) ListPendingWork(sessionID runtimeids.SessionID) (runtimeinput.PendingWork, error) {
+	if c == nil {
+		return runtimeinput.PendingWork{}, errors.New("runtime client is required")
 	}
-	return resp.Restoration.Message != nil
+	if sessionID.IsZero() {
+		return runtimeinput.PendingWork{}, errors.New("Pending Work Session ID is required")
+	}
+	if sessionID.String() != c.sessionID {
+		return runtimeinput.PendingWork{}, fmt.Errorf(
+			"Pending Work Session ID %q does not match runtime client Session %q",
+			sessionID.String(),
+			c.sessionID,
+		)
+	}
+	pendingWork, ok := c.controls.(apicontract.RuntimePendingWorkService)
+	if !ok {
+		return runtimeinput.PendingWork{}, errors.New("runtime Pending Work service is unavailable")
+	}
+	resp, err := runtimeControlCall(c, false, func(ctx context.Context) (serverapi.RuntimeListPendingWorkResponse, error) {
+		return pendingWork.ListPendingWork(ctx, serverapi.RuntimeListPendingWorkRequest{SessionID: sessionID.String()})
+	})
+	if err != nil {
+		return runtimeinput.PendingWork{}, err
+	}
+	if err := resp.Validate(); err != nil {
+		return runtimeinput.PendingWork{}, fmt.Errorf("validate Pending Work list response: %w", err)
+	}
+	return resp.PendingWork, nil
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {
