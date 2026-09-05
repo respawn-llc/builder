@@ -103,10 +103,11 @@ func TestReviewerActivityPublishesInvocationAndTerminalStateToTUI(t *testing.T) 
 				runtimeClient.admitTranscriptMessageState,
 				model.applyAdmittedTranscriptMessageState,
 			)
-			applyReviewerActivityMessage(
+			applyReviewerActivityUntil(
 				t,
 				controller,
-				nextReviewerActivityMessage(t, subscription, clientui.ReviewerActivityInactive),
+				subscription,
+				clientui.ReviewerActivityInactive,
 			)
 
 			submitDone := make(chan error, 1)
@@ -122,10 +123,11 @@ func TestReviewerActivityPublishesInvocationAndTerminalStateToTUI(t *testing.T) 
 			case <-time.After(3 * time.Second):
 				t.Fatal("Reviewer did not start")
 			}
-			applyReviewerActivityMessage(
+			applyReviewerActivityUntil(
 				t,
 				controller,
-				nextReviewerActivityMessage(t, subscription, clientui.ReviewerActivityInvoking),
+				subscription,
+				clientui.ReviewerActivityInvoking,
 			)
 			if !model.isReviewerActive() {
 				t.Fatalf("TUI Reviewer projection = %+v, want active", model.runtimeActivityProjection)
@@ -152,10 +154,11 @@ func TestReviewerActivityPublishesInvocationAndTerminalStateToTUI(t *testing.T) 
 			} else {
 				close(reviewer.release)
 			}
-			applyReviewerActivityMessage(
+			applyReviewerActivityUntil(
 				t,
 				controller,
-				nextReviewerActivityMessage(t, subscription, clientui.ReviewerActivityInactive),
+				subscription,
+				clientui.ReviewerActivityInactive,
 			)
 			if model.isReviewerActive() {
 				t.Fatalf("TUI Reviewer projection = %+v, want inactive", model.runtimeActivityProjection)
@@ -247,11 +250,12 @@ func (*blockingReviewerActivityClient) ProviderCapabilities(context.Context) (ll
 	return llm.InferProviderCapabilities("openai")
 }
 
-func nextReviewerActivityMessage(
+func applyReviewerActivityUntil(
 	t *testing.T,
+	controller *ongoingTranscriptController,
 	subscription serverapi.TranscriptSubscription,
 	want clientui.ReviewerActivity,
-) clientui.TranscriptMessage {
+) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -260,26 +264,18 @@ func nextReviewerActivityMessage(
 		if err != nil {
 			t.Fatalf("read Reviewer activity: %v", err)
 		}
+		if _, _, err := controller.Accept(message); err != nil {
+			t.Fatalf("apply Reviewer activity message: %v", err)
+		}
 		switch message.Kind() {
 		case clientui.TranscriptMessageHydration:
 			if payload := message.Payload().(clientui.TranscriptHydration); payload.RuntimeReadModelUpdate.Activity.Reviewer == want {
-				return message
+				return
 			}
 		case clientui.TranscriptMessageRuntimeReadModelUpdate:
 			if payload := message.Payload().(clientui.RuntimeReadModelUpdate); payload.Activity.Reviewer == want {
-				return message
+				return
 			}
 		}
-	}
-}
-
-func applyReviewerActivityMessage(
-	t *testing.T,
-	controller *ongoingTranscriptController,
-	message clientui.TranscriptMessage,
-) {
-	t.Helper()
-	if _, _, err := controller.Accept(message); err != nil {
-		t.Fatalf("apply Reviewer activity message: %v", err)
 	}
 }

@@ -315,6 +315,15 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
 	}
 	s.finishTerminalPublication()
+	if options.EmitRunState {
+		// StepEnded precedes live-turn finalization. Publish its completed state
+		// after finalization has cleared turn-owned activity such as Supervisor.
+		if activityErr := s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRuntimeActivityChanged})); activityErr != nil {
+			activityErr = fmt.Errorf("publish finalized Runtime activity: %w", activityErr)
+			err = errors.Join(err, activityErr)
+			publicationErr = errors.Join(publicationErr, activityErr)
+		}
+	}
 	return err, publicationErr, publishLiveRunFinished
 }
 

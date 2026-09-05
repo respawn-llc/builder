@@ -39,6 +39,7 @@ func TestQuestionAnswerAndInterruptAcrossTranscriptReopen(t *testing.T) {
 		{name: "answer", answer: true},
 		{name: "interrupt_during_publication"},
 		{name: "delayed_supervisor_interrupt_during_reopen", delayedSupervisor: true},
+		{name: "delayed_supervisor_silent_completion_clears_review", answer: true, delayedSupervisor: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			exerciseQuestionResolution(t, test.answer, test.delayedSupervisor)
@@ -228,7 +229,11 @@ func exerciseQuestionResolution(t *testing.T, answer, delayedSupervisor bool) {
 		EnabledTools:     []toolspec.ID{toolspec.ToolAskQuestion},
 		QuestionsEnabled: textutil.Value(true), AutoCompactionEnabled: textutil.Value(false),
 		Client: &questionDeadlockClient{generate: func(_ context.Context, call int32) (llm.Response, error) {
-			return questionDeadlockResponse(call, questionCall), nil
+			response := questionDeadlockResponse(call, questionCall)
+			if delayedSupervisor && call > questionCall {
+				response.Assistant.Content = textutil.Value("")
+			}
+			return response, nil
 		}},
 		ReviewerClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			return &questionDeadlockClient{generate: func(ctx context.Context, _ int32) (llm.Response, error) {
@@ -411,5 +416,12 @@ func exerciseQuestionResolution(t *testing.T, answer, delayedSupervisor bool) {
 	}
 	if _, err := handle.Wait(t.Context()); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("execution: %v", err)
+	}
+	if delayedSupervisor {
+		view, available := registry.RuntimeMainViewSnapshot(id.String())
+		if !available || view.Activity.Reviewer != clientui.ReviewerActivityInactive ||
+			view.Activity.State != clientui.RuntimeActivityRegisteredIdle {
+			t.Fatalf("completed Supervisor turn left the client activity stuck: available=%t activity=%+v", available, view.Activity)
+		}
 	}
 }

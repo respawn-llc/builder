@@ -24,10 +24,7 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 		Usage: llm.Usage{WindowTokens: 200_000},
 	}}}
 	reviewerClient := &fakeClient{}
-	var (
-		assistantFinalPublications atomic.Int32
-		reviewerStarts             atomic.Int32
-	)
+	var assistantFinalPublications atomic.Int32
 	engine := mustNewTestEngine(
 		t,
 		store,
@@ -48,8 +45,6 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 						*event.Message.Phase == llm.MessagePhaseFinal {
 						assistantFinalPublications.Add(1)
 					}
-				case EventRuntimeActivityChanged:
-					reviewerStarts.Add(1)
 				}
 			},
 		},
@@ -67,9 +62,6 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 	}
 	if calls := len(reviewerClient.calls); calls != 0 {
 		t.Fatalf("reviewer provider dispatches = %d, want zero", calls)
-	}
-	if starts := reviewerStarts.Load(); starts != 0 {
-		t.Fatalf("reviewer starts = %d, want zero", starts)
 	}
 	if publications := assistantFinalPublications.Load(); publications != 0 {
 		t.Fatalf("assistant final publications = %d, want zero", publications)
