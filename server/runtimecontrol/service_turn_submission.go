@@ -68,21 +68,38 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
 	return runRuntimeCommand(ctx, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
-		return s.AdmitUserTurn(ctx, req)
+		response, accepted, _, err := s.admitUserTurn(ctx, req)
+		return response, accepted, err
 	})
 }
 
-func (s *Service) AdmitUserTurn(
+func (s *Service) AdmitChatUserTurn(
 	ctx context.Context,
 	req serverapi.RuntimeSubmitUserTurnRequest,
-) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
+	response, accepted, historyErr, commandErr := s.admitUserTurn(ctx, req)
+	if !accepted {
+		return serverapi.ChatInputAdmissionResult{}, commandErr
+	}
+	queueItemID, parseErr := runtimeids.ParseQueueItemID(response.QueueItemID)
+	return serverapi.ChatInputAdmissionResult{
+		QueueItemID:          queueItemID,
+		Accepted:             true,
+		PromptHistoryFailure: historyErr,
+	}, errors.Join(commandErr, parseErr)
+}
+
+func (s *Service) admitUserTurn(
+	ctx context.Context,
+	req serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.RuntimeSubmitUserTurnResponse, bool, error, error) {
 	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, nil, err
 	}
 	request := canonicalUserTurnRequest(req)
 	projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
 	if err != nil {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, nil, err
 	}
 	attempt := newRuntimeCommandAttempt(ctx)
 	defer attempt.Finish()
@@ -90,7 +107,12 @@ func (s *Service) AdmitUserTurn(
 	if commandErr == nil {
 		commandErr = response.Validate()
 	}
-	return response, attempt.Accepted(), commandErr
+	accepted := attempt.Accepted()
+	var historyErr error
+	if accepted {
+		historyErr = s.recordAcceptedUserTurnHistory(request, projection)
+	}
+	return response, accepted, historyErr, commandErr
 }
 
 func (s *Service) submitUserTurn(
@@ -228,9 +250,6 @@ func (s *Service) submitUserTurn(
 				}
 			}
 		}
-	}
-	if attempt.Accepted() {
-		_ = s.recordAcceptedUserTurnHistory(request, projection)
 	}
 	return response, err
 }

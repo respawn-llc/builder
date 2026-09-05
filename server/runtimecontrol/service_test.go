@@ -2444,14 +2444,14 @@ func TestServiceAdmitQueuedPromptCommandUsesExpandedExecutionAndCanonicalPresent
 	request := runtimeControlUserTurnRequest(store, "chat-queue-command", "unused")
 	request.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src")
 
-	queueItemID, accepted, err := service.AdmitQueuedUserInput(t.Context(), request)
+	result, err := service.AdmitChatQueuedUserInput(t.Context(), request)
 	if err != nil {
-		t.Fatalf("AdmitQueuedUserInput: %v", err)
+		t.Fatalf("AdmitChatQueuedUserInput: %v", err)
 	}
-	if !accepted || queueItemID.IsZero() {
-		t.Fatalf("AdmitQueuedUserInput = %s/%v, want accepted Queue Item", queueItemID, accepted)
+	if !result.Accepted || result.QueueItemID.IsZero() {
+		t.Fatalf("AdmitChatQueuedUserInput = %+v, want accepted Queue Item", result)
 	}
-	status := waitForRuntimeControlQueuedStatus(t, statuses, queueItemID.String(), runtime.QueuedUserMessageAccepted)
+	status := waitForRuntimeControlQueuedStatus(t, statuses, result.QueueItemID.String(), runtime.QueuedUserMessageAccepted)
 	if status.Text != "/review src" {
 		t.Fatalf("accepted Queue presentation = %q, want canonical command", status.Text)
 	}
@@ -2477,6 +2477,56 @@ func TestServiceAdmitQueuedPromptCommandUsesExpandedExecutionAndCanonicalPresent
 	}
 	close(client.release)
 	waitForRuntimeControlIdle(t, engine)
+}
+
+func TestServiceChatAdmissionsPreservePromptHistoryFailureAfterAcceptance(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Service, context.Context, serverapi.RuntimeSubmitUserTurnRequest) (serverapi.ChatInputAdmissionResult, error)
+	}{
+		{name: "Steer", run: (*Service).AdmitChatUserTurn},
+		{name: "Queue", run: (*Service).AdmitChatQueuedUserInput},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+			historyErr := errors.New("prompt history unavailable")
+			runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).SetRecordError(historyErr)
+
+			result, err := test.run(
+				service,
+				t.Context(),
+				runtimeControlUserTurnRequest(store, "chat-history-failure", "accepted despite history failure"),
+			)
+			if err != nil {
+				t.Fatalf("%s admission: %v", test.name, err)
+			}
+			if !result.Accepted || result.QueueItemID.IsZero() {
+				t.Fatalf("%s result = %+v, want accepted Queue Item", test.name, result)
+			}
+			if !errors.Is(result.PromptHistoryFailure, historyErr) {
+				t.Fatalf("prompt-history failure = %v, want %v", result.PromptHistoryFailure, historyErr)
+			}
+			waitForRuntimeControlAssistantFinal(t, engine, "done")
+		})
+	}
+	t.Run("ordinary Submit keeps its response contract", func(t *testing.T) {
+		store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+		runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).
+			SetRecordError(errors.New("prompt history unavailable"))
+
+		response, err := service.SubmitUserTurn(
+			t.Context(),
+			runtimeControlUserTurnRequest(store, "ordinary-submit-history", "ordinary Submit"),
+		)
+		if err != nil {
+			t.Fatalf("SubmitUserTurn: %v", err)
+		}
+		if response.QueueItemID == "" {
+			t.Fatalf("SubmitUserTurn response = %+v, want accepted Queue Item", response)
+		}
+		waitForRuntimeControlAssistantFinal(t, engine, "done")
+	})
 }
 
 func TestServiceSubmitUserTurnPromptResolutionFailureIsNotAcceptedAndRemainsRetryable(t *testing.T) {

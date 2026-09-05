@@ -506,7 +506,7 @@ func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectio
 func (g *Gateway) requireChatTargetAccess(ctx context.Context, state *connectionState, target *chatpb.ChatTarget) error {
 	switch selected := target.GetTarget().(type) {
 	case *chatpb.ChatTarget_Session:
-		if strings.TrimSpace(state.attachedProject) != "" || strings.TrimSpace(g.deps.ProjectID()) != "" {
+		if strings.TrimSpace(state.attachedProject) != "" {
 			return g.requireSessionInActiveProject(ctx, state, selected.Session.SessionId)
 		}
 		metadataStore := g.deps.MetadataStore()

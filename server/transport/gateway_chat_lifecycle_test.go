@@ -74,21 +74,20 @@ type gatewayChatLifecycleAdmission struct {
 	queueItemID runtimeids.QueueItemID
 }
 
-func (a gatewayChatLifecycleAdmission) AdmitUserTurn(
+func (a gatewayChatLifecycleAdmission) AdmitChatUserTurn(
 	context.Context,
 	serverapi.RuntimeSubmitUserTurnRequest,
-) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
-	return serverapi.RuntimeSubmitUserTurnResponse{
-		ResultKind:  "queued",
-		Steered:     true,
-		QueueItemID: a.queueItemID.String(),
-	}, true, nil
+) (serverapi.ChatInputAdmissionResult, error) {
+	return serverapi.ChatInputAdmissionResult{
+		QueueItemID: a.queueItemID,
+		Accepted:    true,
+	}, nil
 }
 
-func (gatewayChatLifecycleAdmission) AdmitQueuedUserInput(
+func (gatewayChatLifecycleAdmission) AdmitChatQueuedUserInput(
 	context.Context,
 	serverapi.RuntimeSubmitUserTurnRequest,
-) (runtimeids.QueueItemID, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
 	panic("unexpected Queue admission")
 }
 

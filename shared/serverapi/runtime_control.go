@@ -55,6 +55,12 @@ type RuntimeSubmitUserTurnResponse struct {
 	QueueItemID string                      `json:"queue_item_id,omitempty"`
 }
 
+type ChatInputAdmissionResult struct {
+	QueueItemID          runtimeids.QueueItemID
+	Accepted             bool
+	PromptHistoryFailure error
+}
+
 func (r RuntimeSubmitUserTurnResponse) Validate() error {
 	switch r.ResultKind {
 	case clientui.UserTurnResultKindQueued:

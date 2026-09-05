@@ -9,23 +9,23 @@ import (
 	"core/shared/serverapi"
 )
 
-func (s *Service) AdmitQueuedUserInput(
+func (s *Service) AdmitChatQueuedUserInput(
 	ctx context.Context,
 	req serverapi.RuntimeSubmitUserTurnRequest,
-) (runtimeids.QueueItemID, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
 	if err := req.Validate(); err != nil {
-		return runtimeids.QueueItemID{}, false, err
+		return serverapi.ChatInputAdmissionResult{}, err
 	}
 	projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
 	if err != nil {
-		return runtimeids.QueueItemID{}, false, err
+		return serverapi.ChatInputAdmissionResult{}, err
 	}
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return runtimeids.QueueItemID{}, false, err
+		return serverapi.ChatInputAdmissionResult{}, err
 	}
 	if s == nil || s.authority == nil {
-		return runtimeids.QueueItemID{}, false, errors.New("session runtime authority is required")
+		return serverapi.ChatInputAdmissionResult{}, errors.New("session runtime authority is required")
 	}
 	attempt := newRuntimeCommandAttempt(ctx)
 	defer attempt.Finish()
@@ -40,13 +40,16 @@ func (s *Service) AdmitQueuedUserInput(
 		return queueErr
 	})
 	if !attempt.Accepted() {
-		return runtimeids.QueueItemID{}, false, err
+		return serverapi.ChatInputAdmissionResult{}, err
 	}
 	queueItemID, parseErr := runtimeids.ParseQueueItemID(queued.ID)
 	if parseErr != nil {
-		return runtimeids.QueueItemID{}, true, errors.Join(err, parseErr)
+		return serverapi.ChatInputAdmissionResult{Accepted: true}, errors.Join(err, parseErr)
 	}
 	historyErr := s.recordAcceptedUserTurnHistory(canonicalUserTurnRequest(req), projection)
-	err = errors.Join(err, historyErr)
-	return queueItemID, true, err
+	return serverapi.ChatInputAdmissionResult{
+		QueueItemID:          queueItemID,
+		Accepted:             true,
+		PromptHistoryFailure: historyErr,
+	}, err
 }

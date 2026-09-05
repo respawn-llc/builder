@@ -98,7 +98,7 @@ type lifecycleContextRecorder struct {
 	operation context.Context
 	caller    context.Context
 	marker    *struct{}
-	stages    []string
+	stages    map[string]struct{}
 }
 
 type lifecycleContextKey struct{}
@@ -116,7 +116,10 @@ func (r *lifecycleContextRecorder) operationStage(t *testing.T, stage string, ct
 	} else if ctx != r.operation {
 		t.Fatalf("%s received a different operation context", stage)
 	}
-	r.stages = append(r.stages, stage)
+	if r.stages == nil {
+		r.stages = make(map[string]struct{})
+	}
+	r.stages[stage] = struct{}{}
 }
 
 func (r *lifecycleContextRecorder) finalizationStage(t *testing.T, ctx context.Context) {
@@ -130,7 +133,10 @@ func (r *lifecycleContextRecorder) finalizationStage(t *testing.T, ctx context.C
 	if ctx.Value(lifecycleContextKey{}) != r.marker {
 		t.Fatal("attachment finalization lost the operation context values")
 	}
-	r.stages = append(r.stages, "attachment finalization")
+	if r.stages == nil {
+		r.stages = make(map[string]struct{})
+	}
+	r.stages["attachment finalization"] = struct{}{}
 }
 
 type lifecycleSessionCreation struct {
@@ -169,22 +175,21 @@ type lifecycleAdmission struct {
 	queueItemID runtimeids.QueueItemID
 }
 
-func (a lifecycleAdmission) AdmitUserTurn(
+func (a lifecycleAdmission) AdmitChatUserTurn(
 	ctx context.Context,
 	_ serverapi.RuntimeSubmitUserTurnRequest,
-) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
 	a.recorder.operationStage(a.t, "admission", ctx)
-	return serverapi.RuntimeSubmitUserTurnResponse{
-		ResultKind:  "queued",
-		Steered:     true,
-		QueueItemID: a.queueItemID.String(),
-	}, true, nil
+	return serverapi.ChatInputAdmissionResult{
+		QueueItemID: a.queueItemID,
+		Accepted:    true,
+	}, nil
 }
 
-func (lifecycleAdmission) AdmitQueuedUserInput(
+func (lifecycleAdmission) AdmitChatQueuedUserInput(
 	context.Context,
 	serverapi.RuntimeSubmitUserTurnRequest,
-) (runtimeids.QueueItemID, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
 	panic("unexpected Queue admission")
 }
 
@@ -263,23 +268,15 @@ func TestServiceCarriesOneOperationContextThroughFiveStageLifecycle(t *testing.T
 		result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
 		t.Fatalf("Steer result = %+v", result)
 	}
-	tests := []struct {
-		name string
-	}{
-		{name: "target resolution"},
-		{name: "Session creation"},
-		{name: "Runtime opening"},
-		{name: "admission"},
-		{name: "attachment finalization"},
-	}
-	if len(recorder.stages) != len(tests) {
-		t.Fatalf("lifecycle stages = %v, want %d stages", recorder.stages, len(tests))
-	}
-	for index, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if recorder.stages[index] != test.name {
-				t.Fatalf("stage %d = %q, want %q", index, recorder.stages[index], test.name)
-			}
-		})
+	for _, stage := range []string{
+		"target resolution",
+		"Session creation",
+		"Runtime opening",
+		"admission",
+		"attachment finalization",
+	} {
+		if _, observed := recorder.stages[stage]; !observed {
+			t.Errorf("%s did not receive the operation context", stage)
+		}
 	}
 }

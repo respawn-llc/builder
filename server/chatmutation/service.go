@@ -26,14 +26,14 @@ type RuntimeOpeningService interface {
 }
 
 type RuntimeAdmissionService interface {
-	AdmitUserTurn(
+	AdmitChatUserTurn(
 		context.Context,
 		serverapi.RuntimeSubmitUserTurnRequest,
-	) (serverapi.RuntimeSubmitUserTurnResponse, bool, error)
-	AdmitQueuedUserInput(
+	) (serverapi.ChatInputAdmissionResult, error)
+	AdmitChatQueuedUserInput(
 		context.Context,
 		serverapi.RuntimeSubmitUserTurnRequest,
-	) (runtimeids.QueueItemID, bool, error)
+	) (serverapi.ChatInputAdmissionResult, error)
 	AdmitManualCompaction(
 		context.Context,
 		serverapi.RuntimeCompactContextRequest,
@@ -210,18 +210,18 @@ func (s *Service) mutateInput(
 			errors.Join(errors.New("user-turn admission service is required"), releaseErr),
 		), nil
 	}
-	queueItemID, accepted, admissionErr := s.admitInput(ctx, operation, serverapi.RuntimeSubmitUserTurnRequest{
+	admissionResult, admissionErr := s.admitInput(ctx, operation, serverapi.RuntimeSubmitUserTurnRequest{
 		SessionID: target.SessionID.String(),
 		Input:     input,
 	})
 	releasePolicy := sessionruntime.RuntimeReleaseCloseIfIdle
-	if accepted {
+	if admissionResult.Accepted {
 		releasePolicy = sessionruntime.RuntimeReleaseDetach
 	}
 	releaseErr := scope.FinalizeAttachment(func(finalizationCtx context.Context) error {
 		return attachment.Release(finalizationCtx, releasePolicy)
 	})
-	if !accepted {
+	if !admissionResult.Accepted {
 		if releaseErr != nil {
 			return inputNotAcceptedInternal(
 				target.SessionID,
@@ -231,7 +231,7 @@ func (s *Service) mutateInput(
 		}
 		return inputNotAccepted(target.SessionID, operation, errors.Join(admissionErr, releaseErr)), nil
 	}
-	if queueItemID.IsZero() {
+	if admissionResult.QueueItemID.IsZero() {
 		return nil, errors.Join(
 			fmt.Errorf("accepted Chat %s Queue Item identity is required", operation),
 			admissionErr,
@@ -239,13 +239,17 @@ func (s *Service) mutateInput(
 		)
 	}
 	acceptedResult := &chatpb.InputAccepted{
-		QueueItem: &chatpb.QueueItemIdentity{Id: queueItemID.String()},
+		QueueItem: &chatpb.QueueItemIdentity{Id: admissionResult.QueueItemID.String()},
 	}
 	switch {
 	case releaseErr != nil:
 		acceptedResult.Diagnostic = acceptedDiagnostic(
 			"release_chat_runtime",
 			errors.Join(admissionErr, releaseErr),
+		)
+	case admissionResult.PromptHistoryFailure != nil:
+		acceptedResult.Diagnostic = promptHistoryFailureDiagnostic(
+			errors.Join(admissionResult.PromptHistoryFailure, admissionErr),
 		)
 	case admissionErr != nil:
 		acceptedResult.Diagnostic = acceptedDiagnostic(string(operation), admissionErr)
@@ -328,19 +332,17 @@ func (s *Service) admitInput(
 	ctx context.Context,
 	operation inputMutationOperation,
 	request serverapi.RuntimeSubmitUserTurnRequest,
-) (runtimeids.QueueItemID, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
 	switch operation {
 	case inputMutationSteer:
-		response, accepted, err := s.admissions.AdmitUserTurn(ctx, request)
-		if !accepted {
-			return runtimeids.QueueItemID{}, false, err
-		}
-		queueItemID, parseErr := runtimeids.ParseQueueItemID(response.QueueItemID)
-		return queueItemID, true, errors.Join(err, parseErr)
+		return s.admissions.AdmitChatUserTurn(ctx, request)
 	case inputMutationQueue:
-		return s.admissions.AdmitQueuedUserInput(ctx, request)
+		return s.admissions.AdmitChatQueuedUserInput(ctx, request)
 	default:
-		return runtimeids.QueueItemID{}, false, fmt.Errorf("unsupported Chat input mutation %q", operation)
+		return serverapi.ChatInputAdmissionResult{}, fmt.Errorf(
+			"unsupported Chat input mutation %q",
+			operation,
+		)
 	}
 }
 
@@ -544,6 +546,14 @@ func acceptedDiagnostic(operation string, cause error) *chatpb.AcceptedDiagnosti
 	return &chatpb.AcceptedDiagnostic{
 		Detail: &chatpb.AcceptedDiagnostic_InternalFailure{
 			InternalFailure: internalFailure(operation, cause),
+		},
+	}
+}
+
+func promptHistoryFailureDiagnostic(cause error) *chatpb.AcceptedDiagnostic {
+	return &chatpb.AcceptedDiagnostic{
+		Detail: &chatpb.AcceptedDiagnostic_PromptHistoryFailure{
+			PromptHistoryFailure: internalFailure("record_prompt_history", cause),
 		},
 	}
 }

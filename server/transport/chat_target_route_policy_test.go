@@ -15,7 +15,6 @@ import (
 
 func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
 	fixture := newRoutePolicyFixture(t)
-	projectless := ""
 	for _, test := range []struct {
 		name      string
 		target    *chatpb.ChatTarget
@@ -24,14 +23,13 @@ func TestGatewayAuthorizesChatTargetModes(t *testing.T) {
 		wantCode  string
 	}{
 		{
-			name: "projectless existing Session",
+			name: "projectless existing Session outside startup Project",
 			target: &chatpb.ChatTarget{
 				Target: &chatpb.ChatTarget_Session{
-					Session: &chatpb.ExistingSessionTarget{SessionId: fixture.ownSessionID},
+					Session: &chatpb.ExistingSessionTarget{SessionId: fixture.foreignSessionID},
 				},
 			},
-			state:     &connectionState{},
-			projectID: &projectless,
+			state: &connectionState{},
 		},
 		{
 			name: "attached Project existing Session",

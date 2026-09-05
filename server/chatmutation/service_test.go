@@ -2,6 +2,7 @@ package chatmutation
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -67,12 +68,10 @@ func (a *steerRuntimeAttachment) Release(
 
 type steerAdmission struct {
 	request            serverapi.RuntimeSubmitUserTurnRequest
-	result             serverapi.RuntimeSubmitUserTurnResponse
-	accepted           bool
+	result             serverapi.ChatInputAdmissionResult
 	err                error
 	queueRequest       serverapi.RuntimeSubmitUserTurnRequest
-	queueItemID        runtimeids.QueueItemID
-	queueAccepted      bool
+	queueResult        serverapi.ChatInputAdmissionResult
 	queueErr           error
 	compactionRequest  serverapi.RuntimeCompactContextRequest
 	compactionAccepted bool
@@ -87,20 +86,20 @@ func (a *steerAdmission) AdmitManualCompaction(
 	return a.compactionAccepted, a.compactionErr
 }
 
-func (a *steerAdmission) AdmitUserTurn(
+func (a *steerAdmission) AdmitChatUserTurn(
 	_ context.Context,
 	request serverapi.RuntimeSubmitUserTurnRequest,
-) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
 	a.request = request
-	return a.result, a.accepted, a.err
+	return a.result, a.err
 }
 
-func (a *steerAdmission) AdmitQueuedUserInput(
+func (a *steerAdmission) AdmitChatQueuedUserInput(
 	_ context.Context,
 	request serverapi.RuntimeSubmitUserTurnRequest,
-) (runtimeids.QueueItemID, bool, error) {
+) (serverapi.ChatInputAdmissionResult, error) {
 	a.queueRequest = request
-	return a.queueItemID, a.queueAccepted, a.queueErr
+	return a.queueResult, a.queueErr
 }
 
 func newTestService(
@@ -124,11 +123,18 @@ func TestServiceInputMutationReleasePolicy(t *testing.T) {
 		name       string
 		accepted   bool
 		admission  error
+		historyErr error
 		wantPolicy sessionruntime.RuntimeReleasePolicy
 	}{
 		{
 			name:       "accepted work detaches",
 			accepted:   true,
+			wantPolicy: sessionruntime.RuntimeReleaseDetach,
+		},
+		{
+			name:       "accepted prompt-history failure stays typed",
+			accepted:   true,
+			historyErr: errors.New("prompt history unavailable"),
 			wantPolicy: sessionruntime.RuntimeReleaseDetach,
 		},
 		{
@@ -143,12 +149,11 @@ func TestServiceInputMutationReleasePolicy(t *testing.T) {
 			queueItemID := runtimeids.NewQueueItemID()
 			attachment := &steerRuntimeAttachment{sessionID: sessionID}
 			admission := &steerAdmission{
-				accepted: test.accepted,
-				err:      test.admission,
-				result: serverapi.RuntimeSubmitUserTurnResponse{
-					ResultKind:  "queued",
-					Steered:     true,
-					QueueItemID: queueItemID.String(),
+				err: test.admission,
+				result: serverapi.ChatInputAdmissionResult{
+					QueueItemID:          queueItemID,
+					Accepted:             test.accepted,
+					PromptHistoryFailure: test.historyErr,
 				},
 			}
 			service := newTestService(
@@ -180,6 +185,10 @@ func TestServiceInputMutationReleasePolicy(t *testing.T) {
 				if result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
 					t.Fatalf("Steer result = %+v, want accepted Queue Item", result)
 				}
+				if test.historyErr != nil &&
+					result.GetAccepted().GetDiagnostic().GetPromptHistoryFailure() == nil {
+					t.Fatalf("Steer result = %+v, want typed prompt-history diagnostic", result)
+				}
 			} else if result.GetNotAccepted().GetPendingWorkCapacity() == nil {
 				t.Fatalf("Steer result = %+v, want capacity rejection", result)
 			}
@@ -203,9 +212,14 @@ func TestServiceInputMutationReleasePolicy(t *testing.T) {
 func TestServiceQueuePreservesExactDraftAndCanonicalCommandIdentity(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	queueItemID := runtimeids.NewQueueItemID()
+	historyErr := errors.New("prompt history unavailable")
 	resolver := &steerTargetResolver{resolved: ResolvedTarget{SessionID: sessionID, Created: true}}
 	attachment := &steerRuntimeAttachment{sessionID: sessionID}
-	admission := &steerAdmission{queueAccepted: true, queueItemID: queueItemID}
+	admission := &steerAdmission{queueResult: serverapi.ChatInputAdmissionResult{
+		QueueItemID:          queueItemID,
+		Accepted:             true,
+		PromptHistoryFailure: historyErr,
+	}}
 	service := newTestService(
 		resolver,
 		&steerRuntimePlanner{attachment: attachment},
@@ -229,7 +243,8 @@ func TestServiceQueuePreservesExactDraftAndCanonicalCommandIdentity(t *testing.T
 		t.Fatalf("Queue: %v", err)
 	}
 	if result.GetSession().GetSessionId() != sessionID.String() ||
-		result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() {
+		result.GetAccepted().GetQueueItem().GetId() != queueItemID.String() ||
+		result.GetAccepted().GetDiagnostic().GetPromptHistoryFailure() == nil {
 		t.Fatalf("Queue result = %+v", result)
 	}
 	if resolver.request.InitialDraft == nil ||
