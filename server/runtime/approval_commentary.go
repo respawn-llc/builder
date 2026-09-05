@@ -55,7 +55,11 @@ func (e *Engine) validateExactApprovalCommentary(identity tools.ExecutionIdentit
 	if snapshot == nil || snapshot.RunID != identity.RunID || snapshot.StepID != identity.StepID {
 		return ErrActiveStepInactive
 	}
-	if _, exists := e.transcriptRuntimeState().ToolCallSnapshot(string(identity.ToolCallID)); !exists {
+	_, exists, err := e.transcriptRuntimeState().ToolCallSnapshot(string(identity.ToolCallID))
+	if err != nil {
+		return fmt.Errorf("snapshot Approval commentary Tool Call %q: %w", identity.ToolCallID, err)
+	}
+	if !exists {
 		return fmt.Errorf("Approval commentary Tool Call %q is not active", identity.ToolCallID)
 	}
 	return nil
