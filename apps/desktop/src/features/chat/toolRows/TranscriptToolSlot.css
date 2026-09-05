@@ -136,10 +136,20 @@
 
 .transcript-patch-source-line--removed::before {
   content: "-";
-  color: var(--color-error);
 }
 
 .transcript-patch-source-line--added::before {
   content: "+";
+}
+
+.transcript-patch-source-line--removed {
+  --syntax-highlighted-code-semantic-color: var(--color-error);
+
+  color: var(--color-error);
+}
+
+.transcript-patch-source-line--added {
+  --syntax-highlighted-code-semantic-color: var(--color-success);
+
   color: var(--color-success);
 }

@@ -11,7 +11,6 @@ type PatchPresentation = NonNullable<ToolMeta["PatchPresentation"]>;
 type ChatToolIdentityKind = "edit" | "patch" | "shell-command" | "shell-input" | "view-image" | "web-search";
 type ChatToolIdentity = Readonly<{
   kind: ChatToolIdentityKind;
-  ownsPatchPresentation: boolean;
 }>;
 export type PatchChangesPresentation = Extract<PatchPresentation, Readonly<{ Variant: "changes" }>>;
 export type PatchChangedFile = PatchChangesPresentation["Files"][number];
@@ -112,7 +111,7 @@ export type ToolPresentationStrings = Readonly<{
 }>;
 
 const chatToolIdentities = new Map<string, ChatToolIdentity>([
-  ...aliases("shell-command", false, [
+  ...aliases("shell-command", [
     "exec_command",
     "shell",
     "bash",
@@ -132,8 +131,8 @@ const chatToolIdentities = new Map<string, ChatToolIdentity>([
     "exec-command",
     "execCommand",
   ]),
-  ...aliases("shell-input", false, ["write_stdin", "write-stdin", "writeStdin"]),
-  ...aliases("view-image", false, [
+  ...aliases("shell-input", ["write_stdin", "write-stdin", "writeStdin"]),
+  ...aliases("view-image", [
     "view_image",
     "view-image",
     "viewImage",
@@ -157,10 +156,11 @@ const chatToolIdentities = new Map<string, ChatToolIdentity>([
     "inspect-pdf",
     "inspectPdf",
   ]),
-  ...aliases("patch", true, ["patch"]),
-  ...aliases("patch", false, ["apply_patch", "apply-patch", "applyPatch"]),
-  ...aliases("edit", true, ["edit", "replace", "write"]),
-  ...aliases("edit", false, [
+  ...aliases("patch", ["patch", "apply_patch", "apply-patch", "applyPatch"]),
+  ...aliases("edit", [
+    "edit",
+    "replace",
+    "write",
     "edit_file",
     "edit-file",
     "editFile",
@@ -174,7 +174,7 @@ const chatToolIdentities = new Map<string, ChatToolIdentity>([
     "replace-text",
     "replaceText",
   ]),
-  ...aliases("web-search", false, [
+  ...aliases("web-search", [
     "web_search",
     "web-search",
     "webSearch",
@@ -192,10 +192,9 @@ const chatToolIdentities = new Map<string, ChatToolIdentity>([
 
 function aliases(
   kind: ChatToolIdentityKind,
-  ownsPatchPresentation: boolean,
   names: readonly string[],
 ): readonly (readonly [string, ChatToolIdentity])[] {
-  return names.map((name) => [name, { kind, ownsPatchPresentation }] as const);
+  return names.map((name) => [name, { kind }] as const);
 }
 
 function resolveChatToolIdentity(name: string): ChatToolIdentity | undefined {
@@ -220,9 +219,6 @@ function resolveToolWithoutPatchPresentation(
   identity: ChatToolIdentity | undefined,
 ): ToolPresentation {
   if (identity?.kind === "patch" || identity?.kind === "edit") {
-    if (identity.ownsPatchPresentation) {
-      throw new Error("Patch/Edit row requires typed presentation");
-    }
     return resolveGeneric(context);
   }
   return resolveNonPatchTool(context, strings, identity?.kind);

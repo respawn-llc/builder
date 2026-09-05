@@ -239,6 +239,7 @@ export const assistantRowSchema = z
     committed_at_unix_ms: optionalNullable(committedAtSchema),
   })
   .strict();
+const patchPresentationOwnerNames = new Set(["patch", "edit", "replace", "write"]);
 export const toolMetaSchema = z
   .object({
     ToolName: z.string(),
@@ -270,7 +271,19 @@ export const toolMetaSchema = z
     MovedToBackground: z.boolean(),
     ShellExitCode: optionalNullable(z.number().int()),
   })
-  .strict();
+  .strict()
+  .superRefine((meta, context) => {
+    const ownsPatchPresentation = patchPresentationOwnerNames.has(meta.ToolName);
+    if (ownsPatchPresentation !== (meta.PatchPresentation != null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["PatchPresentation"],
+        message: ownsPatchPresentation
+          ? "Patch/Edit presentation is required"
+          : "non-Patch tool cannot carry Patch/Edit presentation",
+      });
+    }
+  });
 
 export function validateToolPresentationOwner(
   owner: Readonly<{
@@ -279,6 +292,14 @@ export function validateToolPresentationOwner(
   }>,
   context: z.RefinementCtx,
 ) {
+  if (patchPresentationOwnerNames.has(owner.ToolName) && owner.Presentation == null) {
+    context.addIssue({
+      code: "custom",
+      path: ["Presentation"],
+      message: "Patch/Edit presentation is required",
+    });
+    return;
+  }
   if (owner.Presentation != null && owner.Presentation.ToolName !== owner.ToolName) {
     context.addIssue({
       code: "custom",
