@@ -17,11 +17,11 @@ func (h TranscriptHydration) Validate() error {
 	if err := h.RuntimeReadModelUpdate.Validate(); err != nil {
 		return fmt.Errorf("validate transcript hydration runtime read-model update: %w", err)
 	}
-	if h.CommittedRows == nil {
-		return fmt.Errorf("transcript hydration committed rows are required")
+	if err := h.TailSegment.Validate(); err != nil {
+		return fmt.Errorf("validate transcript hydration tail segment: %w", err)
 	}
-	seenLocators := make(map[transcript.CommittedRowLocator]struct{}, len(h.CommittedRows))
-	for index, row := range h.CommittedRows {
+	seenLocators := make(map[transcript.CommittedRowLocator]struct{}, len(h.TailSegment.Entries))
+	for index, row := range h.TailSegment.Entries {
 		if err := row.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration committed row %d: %w", index, err)
 		}
@@ -93,6 +93,25 @@ func (h TranscriptHydration) Validate() error {
 		if err := h.GoalStatus.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration goal status: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s TranscriptTailSegment) Validate() error {
+	if s.Entries == nil {
+		return fmt.Errorf("entries are required")
+	}
+	if s.HasMoreAbove {
+		if s.OlderCursor == nil {
+			return fmt.Errorf("older cursor is required when older history exists")
+		}
+		if *s.OlderCursor <= 0 {
+			return fmt.Errorf("older cursor must be positive, got %d", *s.OlderCursor)
+		}
+		return nil
+	}
+	if s.OlderCursor != nil {
+		return fmt.Errorf("older cursor is present without older history")
 	}
 	return nil
 }

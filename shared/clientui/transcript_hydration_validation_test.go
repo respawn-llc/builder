@@ -16,7 +16,7 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
 			RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
-			CommittedRows:          []TranscriptCommittedRow{},
+			TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 			ActiveStep: &TranscriptStepState{
 				RunID:      runID,
 				StepID:     stepID,
@@ -156,13 +156,42 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 	}
 }
 
+func TestTranscriptHydrationRequiresClosedTailSegmentOlderBoundary(t *testing.T) {
+	olderCursor := int64(17)
+	valid := TranscriptHydration{
+		SessionIdentity:        transcriptTestSessionIdentity(t),
+		SessionStatus:          transcriptTestSessionStatus(),
+		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
+		TailSegment: TranscriptTailSegment{
+			HasMoreAbove: true,
+			OlderCursor:  &olderCursor,
+			Entries:      []TranscriptCommittedRow{},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid hydration tail rejected: %v", err)
+	}
+
+	missingCursor := valid
+	missingCursor.TailSegment.OlderCursor = nil
+	if err := missingCursor.Validate(); err == nil {
+		t.Fatal("hydration tail with older history but no cursor was accepted")
+	}
+
+	unexpectedCursor := valid
+	unexpectedCursor.TailSegment.HasMoreAbove = false
+	if err := unexpectedCursor.Validate(); err == nil {
+		t.Fatal("hydration tail with no older history but a cursor was accepted")
+	}
+}
+
 func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *testing.T) {
 	valid := func() TranscriptHydration {
 		return TranscriptHydration{
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
 			RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
-			CommittedRows:          []TranscriptCommittedRow{},
+			TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		}
 	}
 
@@ -187,7 +216,7 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 	tests := []TranscriptHydration{
 		func() TranscriptHydration {
 			hydration := valid()
-			hydration.CommittedRows = nil
+			hydration.TailSegment.Entries = nil
 			return hydration
 		}(),
 		func() TranscriptHydration {
@@ -225,7 +254,7 @@ func TestTranscriptHydrationRequiresPromptsOrderedByCreationThenID(t *testing.T)
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
 		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
-		CommittedRows:          []TranscriptCommittedRow{},
+		TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		PendingPrompts: []TranscriptPrompt{
 			prompt(PromptID("prompt-b"), createdAt),
 			prompt(PromptID("prompt-a"), createdAt),

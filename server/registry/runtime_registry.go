@@ -685,9 +685,13 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(ctx context.Context, id s
 	}
 	var sub *transcriptSubscription
 	err = entry.engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+		tailPage, pageErr := entry.engine.TranscriptNewestSegmentPage()
+		if pageErr != nil {
+			return fmt.Errorf("read transcript hydration tail segment: %w", pageErr)
+		}
 		var subscribeErr error
 		sub, subscribeErr = entry.sessionFeed.Subscribe(func() (clientui.TranscriptHydration, error) {
-			return r.composeTranscriptHydration(ctx, id, entry, snapshot)
+			return r.composeTranscriptHydration(ctx, id, entry, snapshot, tailPage)
 		})
 		return subscribeErr
 	})

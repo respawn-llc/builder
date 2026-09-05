@@ -37,7 +37,7 @@ func TranscriptPageFromRuntime(engine *runtime.Engine, req clientui.TranscriptPa
 }
 
 func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, page runtime.TranscriptSegmentPage) (clientui.TranscriptPage, error) {
-	entries, err := transcriptRowsFromFactsChecked(runtime.TranscriptCommittedRowFactsFromSnapshot(page.Snapshot))
+	segment, err := TranscriptTailSegmentFromSegment(page)
 	if err != nil {
 		return clientui.TranscriptPage{}, err
 	}
@@ -45,13 +45,41 @@ func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui
 		SessionID:               sessionID,
 		SessionName:             sessionName,
 		ConversationFreshness:   freshness,
-		OlderCursor:             transcriptCursor(page.HasMoreAbove, page.OlderCursor),
-		HasMoreAbove:            page.HasMoreAbove,
+		OlderCursor:             segment.OlderCursor,
+		HasMoreAbove:            segment.HasMoreAbove,
 		NewerCursor:             transcriptCursor(page.HasMoreBelow, page.NewerCursor),
 		HasMoreBelow:            page.HasMoreBelow,
 		LatestRollbackCandidate: textutil.Pointer(page.LatestRollbackCandidate),
-		Entries:                 entries,
+		Entries:                 segment.Entries,
 	}, nil
+}
+
+func TranscriptTailSegmentFromSegment(page runtime.TranscriptSegmentPage) (clientui.TranscriptTailSegment, error) {
+	return transcriptTailSegmentFromFactsChecked(
+		runtime.TranscriptCommittedRowFactsFromSnapshot(page.Snapshot),
+		transcriptCursor(page.HasMoreAbove, page.OlderCursor),
+		page.HasMoreAbove,
+	)
+}
+
+func transcriptTailSegmentFromFactsChecked(
+	facts []runtime.TranscriptCommittedRowFact,
+	olderCursor *int64,
+	hasMoreAbove bool,
+) (clientui.TranscriptTailSegment, error) {
+	entries, err := transcriptRowsFromFactsChecked(facts)
+	if err != nil {
+		return clientui.TranscriptTailSegment{}, err
+	}
+	segment := clientui.TranscriptTailSegment{
+		OlderCursor:  olderCursor,
+		HasMoreAbove: hasMoreAbove,
+		Entries:      entries,
+	}
+	if err := segment.Validate(); err != nil {
+		return clientui.TranscriptTailSegment{}, err
+	}
+	return segment, nil
 }
 
 func transcriptCursor(hasMore bool, cursor int64) *int64 {

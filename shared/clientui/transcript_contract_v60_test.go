@@ -11,7 +11,7 @@ func TestTranscriptContractHydratesAtOneThenCarriesAtomicRuntimeReadModelUpdateA
 		RuntimeReadModelUpdate: update,
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
-		CommittedRows:          []TranscriptCommittedRow{},
+		TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 	}))
 	if err := hydration.Validate(); err != nil {
 		t.Fatalf("validate hydration: %v", err)

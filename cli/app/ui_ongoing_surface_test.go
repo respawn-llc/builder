@@ -119,7 +119,7 @@ func TestNativeOngoingFirstWindowSizeSuppressesDelayedRendererClearAfterHydratio
 	_ = m.Init()
 	hydration := ongoingHydrationMessage(1)
 	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
-	hydrationPayload.CommittedRows = []clientui.TranscriptCommittedRow{
+	hydrationPayload.TailSegment.Entries = []clientui.TranscriptCommittedRow{
 		ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload().(clientui.TranscriptCommittedRow),
 	}
 	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
@@ -153,10 +153,10 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 
 	hydration := ongoingHydrationMessage(1)
 	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
-	hydrationPayload.CommittedRows = []clientui.TranscriptCommittedRow{
+	hydrationPayload.TailSegment.Entries = []clientui.TranscriptCommittedRow{
 		ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload().(clientui.TranscriptCommittedRow),
 	}
-	hydrationPayload.CommittedRows[0].User.Text = "hydrated row"
+	hydrationPayload.TailSegment.Entries[0].User.Text = "hydrated row"
 	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
 	_, cmd := m.Update(ongoingTranscriptEvent{
 		Kind:    ongoingTranscriptEventMessage,
@@ -181,7 +181,7 @@ func TestOngoingTranscriptHydrationRestoresAssistantCommentary(t *testing.T) {
 
 	hydration := ongoingHydrationMessage(1)
 	payload := hydration.Payload().(clientui.TranscriptHydration)
-	payload.CommittedRows = []clientui.TranscriptCommittedRow{{
+	payload.TailSegment.Entries = []clientui.TranscriptCommittedRow{{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowAssistant,

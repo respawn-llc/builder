@@ -71,7 +71,7 @@ func TestTranscriptHydrationRequiresUniqueLocatorsAndPreservesThemThroughJSON(t 
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
 		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
-		CommittedRows:          []TranscriptCommittedRow{row},
+		TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{row}},
 		GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 	}
 	if err := hydration.Validate(); err != nil {
@@ -90,12 +90,12 @@ func TestTranscriptHydrationRequiresUniqueLocatorsAndPreservesThemThroughJSON(t 
 		t.Fatalf("validate decoded hydration: %v", err)
 	}
 	got := decoded.Payload().(TranscriptHydration)
-	if got.CommittedRows[0].Locator != row.Locator {
-		t.Fatalf("hydration locator = %+v, want %+v", got.CommittedRows[0].Locator, row.Locator)
+	if got.TailSegment.Entries[0].Locator != row.Locator {
+		t.Fatalf("hydration locator = %+v, want %+v", got.TailSegment.Entries[0].Locator, row.Locator)
 	}
 
 	duplicate := hydration
-	duplicate.CommittedRows = []TranscriptCommittedRow{row, row}
+	duplicate.TailSegment.Entries = []TranscriptCommittedRow{row, row}
 	if err := duplicate.Validate(); err == nil {
 		t.Fatal("accepted duplicate committed row locator in hydration")
 	}
