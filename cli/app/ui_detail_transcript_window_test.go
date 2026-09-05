@@ -508,9 +508,9 @@ func TestDetailTranscriptPageDeepClonesPatchPresentation(t *testing.T) {
 				ToolCallID: "3f14b1c8-5fee-4c0e-a72e-f38bb6c3c389",
 				ToolName:   "apply_patch",
 				Presentation: &transcript.ToolCallMeta{
-					ToolName:       "apply_patch",
-					Presentation:   transcript.ToolPresentationDefault,
-					RenderBehavior: transcript.ToolCallRenderBehaviorDefault,
+					ToolName:          "apply_patch",
+					Presentation:      transcript.ToolPresentationDefault,
+					RenderBehavior:    transcript.ToolCallRenderBehaviorDefault,
 					PatchPresentation: sourcePatch,
 				},
 			}),
