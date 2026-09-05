@@ -6,7 +6,7 @@ import {
   type TranscriptProvisionalItem,
   type TranscriptRenderItem,
 } from "./renderSlots";
-import { residentRows } from "./segments";
+import { mergeRows, residentRows } from "./segments";
 import type { CommittedRow, Hydration, ResidentSegments, TranscriptLiveFact } from "./types";
 
 type Reasoning = Hydration["ActiveReasoningTraces"][number];
@@ -150,7 +150,7 @@ export function present(
   previous: readonly TranscriptRenderItem[],
   admitted: readonly CommittedRow[] = [],
 ): Readonly<{ items: readonly TranscriptRenderItem[]; provisional: readonly TranscriptProvisionalItem[] }> {
-  const rows = residentRows(segments);
+  const rows = mergeRows(residentRows(segments), pool);
   const priorKeys = new Map(
     previous.flatMap((item) => ("row" in item ? [[locatorKey(item.row), item.key]] : [])),
   );
@@ -167,8 +167,7 @@ export function present(
   const items: TranscriptRenderItem[] = rows
     .map((row) => committedItem(row, priorKeys.get(locatorKey(row)) ?? promotions.get(locatorKey(row))))
     .filter((item) => item.row.Visibility !== "hidden");
-  const tail = segments.at(-1);
-  if (tail !== undefined && !tail.hasMoreBelow) items.push(...remaining);
+  items.push(...remaining);
   if (new Set(items.map((item) => item.key)).size !== items.length) {
     throw new ContractError("Transcript rows compete for one live presentation identity.");
   }

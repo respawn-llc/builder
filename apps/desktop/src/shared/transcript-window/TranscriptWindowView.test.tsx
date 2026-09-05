@@ -151,13 +151,15 @@ describe("TranscriptWindowView promotion and measurements", () => {
     });
     const measurements: TranscriptViewportMeasurement[] = [];
     const correction = createVirtualizedPixelOffsetRequest("correction", 240);
+    const onInput = vi.fn();
     const view = render(
       <TranscriptWindowView
+        boundaryErrorMessage={(error) => error.message}
         estimateSize={() => 60}
         loadingLabel="Loading"
-        onLoadNewer={() => undefined}
-        onLoadOlder={() => undefined}
+        onInput={onInput}
         onMeasurement={(measurement) => measurements.push(measurement)}
+        retryLabel="Retry"
         slots={slots}
         snapshot={window.snapshot}
       />,
@@ -194,12 +196,13 @@ describe("TranscriptWindowView promotion and measurements", () => {
     }
     view.rerender(
       <TranscriptWindowView
+        boundaryErrorMessage={(error) => error.message}
         estimateSize={() => 60}
         loadingLabel="Loading"
-        onLoadNewer={() => undefined}
-        onLoadOlder={() => undefined}
+        onInput={onInput}
         onMeasurement={(measurement) => measurements.push(measurement)}
         pixelOffsetRequest={correction}
+        retryLabel="Retry"
         slots={slots}
         snapshot={window.snapshot}
       />,
@@ -222,5 +225,59 @@ describe("TranscriptWindowView promotion and measurements", () => {
         afterViewportOffsetPx: 45,
       },
     });
+  });
+
+  it("derives exact edge failure presentation from the reducer snapshot and emits its Retry transition", () => {
+    const window = new TranscriptWindow();
+    window.dispatch({
+      kind: "initial-hydration",
+      hydration: {
+        ...hydration([]),
+        TailSegment: { Entries: [], HasMoreAbove: true, OlderCursor: 987 },
+      },
+    });
+    const request = window.dispatch({
+      kind: "edge-visit",
+      direction: "older",
+      older: true,
+      newer: false,
+    }).effects[0];
+    if (request?.kind !== "page-request") throw new Error("Expected older page request.");
+    const onInput = vi.fn();
+    const boundaryErrorMessage = vi.fn(() => "Localized history failure");
+
+    const view = render(
+      <TranscriptWindowView
+        boundaryErrorMessage={boundaryErrorMessage}
+        estimateSize={() => 60}
+        loadingLabel="Loading"
+        onInput={onInput}
+        onMeasurement={() => undefined}
+        retryLabel="Retry"
+        slots={slots}
+        snapshot={window.snapshot}
+      />,
+    );
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    const error = new Error("History read failed");
+    window.dispatch({ kind: "page-failure", request: request.request, error });
+    view.rerender(
+      <TranscriptWindowView
+        boundaryErrorMessage={boundaryErrorMessage}
+        estimateSize={() => 60}
+        loadingLabel="Loading"
+        onInput={onInput}
+        onMeasurement={() => undefined}
+        retryLabel="Retry"
+        slots={slots}
+        snapshot={window.snapshot}
+      />,
+    );
+
+    expect(boundaryErrorMessage).toHaveBeenCalledWith(error);
+    fireEvent.click(within(screen.getByRole("alert")).getByRole("button"));
+    expect(onInput).toHaveBeenCalledOnce();
+    expect(onInput).toHaveBeenCalledWith({ kind: "retry", direction: "older" });
   });
 });

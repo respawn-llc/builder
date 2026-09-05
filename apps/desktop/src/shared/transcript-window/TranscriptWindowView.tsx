@@ -16,7 +16,9 @@ import {
 } from "@/ui";
 
 import type { TranscriptRenderItem, TranscriptRenderSlots } from "./renderSlots";
-import type { TranscriptWindowSnapshot } from "./types";
+import type { TranscriptDirection, TranscriptWindowInput, TranscriptWindowSnapshot } from "./types";
+
+type TranscriptWindowViewInput = Extract<TranscriptWindowInput, { kind: "edge-visit" | "retry" }>;
 
 export type TranscriptViewportMeasurement = Readonly<{
   absoluteScrollOffsetPx: number;
@@ -38,11 +40,10 @@ export type TranscriptWindowViewProps = Readonly<{
   slots: TranscriptRenderSlots<ReactElement | null>;
   estimateSize: () => number;
   loadingLabel: string;
-  onLoadOlder: () => void;
-  onLoadNewer: () => void;
+  retryLabel: string;
+  boundaryErrorMessage: (error: Error) => string;
+  onInput: (input: TranscriptWindowViewInput) => void;
   onMeasurement: (measurement: TranscriptViewportMeasurement) => void;
-  previousBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
-  nextBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
 }>;
 
@@ -61,18 +62,36 @@ export function TranscriptWindowView({
   slots,
   estimateSize,
   loadingLabel,
-  onLoadOlder,
-  onLoadNewer,
+  retryLabel,
+  boundaryErrorMessage,
+  onInput,
   onMeasurement,
-  previousBoundary,
-  nextBoundary,
   pixelOffsetRequest,
 }: TranscriptWindowViewProps) {
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
   const anchorRef = useRef<VisibleAnchor | null>(null);
   const emitMeasurement = useStableCallback(onMeasurement);
+  const emitInput = useStableCallback(onInput);
   const olderAvailable = snapshot.older.cursor !== null;
   const newerAvailable = snapshot.newer.cursor !== null;
+  const visit = useCallback(
+    (direction: TranscriptDirection) => {
+      emitInput({ kind: "edge-visit", direction, older: olderAvailable, newer: newerAvailable });
+    },
+    [emitInput, newerAvailable, olderAvailable],
+  );
+  const previousBoundary = transcriptBoundary(
+    snapshot.older,
+    "older",
+    { loadingLabel, retryLabel, errorMessage: boundaryErrorMessage },
+    emitInput,
+  );
+  const nextBoundary = transcriptBoundary(
+    snapshot.newer,
+    "newer",
+    { loadingLabel, retryLabel, errorMessage: boundaryErrorMessage },
+    emitInput,
+  );
   const measure = useCallback(() => {
     if (scrollElement === null) return;
     const rows = mountedRows(scrollElement);
@@ -144,16 +163,20 @@ export function TranscriptWindowView({
       getItemAnchorKey={presentationKey}
       getItemKey={presentationKey}
       getItemWrapperProps={rowWrapperProps}
-      hasNextPage={newerAvailable}
-      hasPreviousPage={olderAvailable}
+      hasNextPage={newerAvailable && snapshot.newer.kind !== "error"}
+      hasPreviousPage={olderAvailable && snapshot.older.kind !== "error"}
       isFetchingNextPage={snapshot.newer.kind === "loading"}
       isFetchingPreviousPage={snapshot.older.kind === "loading"}
       items={snapshot.items}
       layoutChangeScrollBehavior="natural"
       loadingLabel={loadingLabel}
       nextBoundary={nextBoundary}
-      onLoadMore={onLoadNewer}
-      onLoadPrevious={onLoadOlder}
+      onLoadMore={() => {
+        visit("newer");
+      }}
+      onLoadPrevious={() => {
+        visit("older");
+      }}
       onScrollElementChange={setScrollElement}
       pixelOffsetRequest={pixelOffsetRequest}
       previousBoundary={previousBoundary}
@@ -164,6 +187,33 @@ export function TranscriptWindowView({
       )}
     />
   );
+}
+
+function transcriptBoundary(
+  boundary: TranscriptWindowSnapshot[TranscriptDirection],
+  direction: TranscriptDirection,
+  copy: Readonly<{
+    loadingLabel: string;
+    retryLabel: string;
+    errorMessage: (error: Error) => string;
+  }>,
+  onInput: (input: TranscriptWindowViewInput) => void,
+): VirtualizedInfiniteListBoundaryState | undefined {
+  switch (boundary.kind) {
+    case "idle":
+      return undefined;
+    case "loading":
+      return { state: "loading", label: copy.loadingLabel };
+    case "error":
+      return {
+        state: "error",
+        message: copy.errorMessage(boundary.error),
+        retryLabel: copy.retryLabel,
+        onRetry: () => {
+          onInput({ kind: "retry", direction });
+        },
+      };
+  }
 }
 
 function presentationKey(item: TranscriptRenderItem): string {

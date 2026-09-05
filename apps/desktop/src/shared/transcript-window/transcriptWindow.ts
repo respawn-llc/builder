@@ -1,11 +1,11 @@
 import { ContractError } from "@/api";
 
-import { mergeRows, rowBatch, shareSegment, validateAdjacent, validateTail, withLivePool } from "./segments";
+import { mergeRows, rowBatch, shareSegment, validateAdjacent, validateTail } from "./segments";
 import type { TranscriptProvisionalItem } from "./renderSlots";
 import { committedCorrelation, hydratedLive, present, reduceLive } from "./live";
 import {
   beginStage,
-  bindAttempt,
+  bindStatus,
   classifyHydration,
   compactionStep,
   sameCompaction,
@@ -58,8 +58,7 @@ function admitRows(state: State, rows: readonly CommittedRow[]): State {
   }
   const shared = shareSegment(batch, state.segments, state.pool);
   const pool = mergeRows(state.pool, shared.entries);
-  const segments = withLivePool(state.segments, pool);
-  return project({ ...state, segments, pool }, rows);
+  return project({ ...state, pool }, rows);
 }
 
 function install(
@@ -68,7 +67,6 @@ function install(
   operation: "replace" | "insert",
   admitted: readonly CommittedRow[],
 ): State {
-  if (state.lifecycle?.kind !== "stage") segments = withLivePool(segments, state.pool);
   function boundary(direction: TranscriptDirection, cursor: number | null): TranscriptBoundary {
     const previous = state.snapshot[direction];
     return operation === "insert" && previous.kind === "error" && previous.cursor === cursor
@@ -330,7 +328,7 @@ export class TranscriptWindow {
       throw new ContractError("Compaction status has no active attempt.");
     }
     if (lifecycle.kind === "reflected") {
-      if (status.State === "started" && status.Count === lifecycle.facts.Count + 1) {
+      if (status.State === "started") {
         const step = this.state.activity === null ? null : compactionStep(this.state.activity);
         if (step === null) throw new ContractError("Compaction begin requires active Runtime Activity.");
         lifecycle = beginStage(this.state.checkpoint, step);
@@ -342,7 +340,7 @@ export class TranscriptWindow {
         return { kind: "accepted", effects: [] };
       }
     }
-    const attempt = bindAttempt(lifecycle.attempt, status);
+    const attempt = bindStatus(lifecycle.attempt, status);
     if (status.State === "completed") return this.completeCompaction(status.Count);
     this.state = { ...this.state, lifecycle: { ...lifecycle, attempt } };
     return { kind: "accepted", effects: [] };
@@ -355,7 +353,7 @@ export class TranscriptWindow {
       snapshot = { ...snapshot, items: snapshot.items.filter((item) => "row" in item) };
     }
     if (pending !== null) snapshot = { ...snapshot, [pending.request.direction]: pending.previous };
-    this.state = {
+    this.state = project({
       ...this.state,
       checkpoint,
       lifecycle: null,
@@ -363,7 +361,7 @@ export class TranscriptWindow {
       provisional: [],
       pending: null,
       snapshot,
-    };
+    });
     return { kind: "accepted", effects: [{ kind: "scratch-rehydration" }] };
   }
 }

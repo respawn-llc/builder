@@ -106,13 +106,6 @@ export function mergeRows(
   return rows;
 }
 
-export function withLivePool(segments: ResidentSegments, pool: readonly CommittedRow[]): ResidentSegments {
-  const tail = segments.at(-1);
-  if (tail === undefined || tail.hasMoreBelow) return segments;
-  const merged = { ...tail, entries: mergeRows(tail.entries, pool) };
-  return segments.length === 2 ? [segments[0], merged] : [merged];
-}
-
 export function rowBatch(entries: readonly CommittedRow[]): Segment {
   return { entries, olderCursor: null, hasMoreAbove: false, newerCursor: null, hasMoreBelow: false };
 }

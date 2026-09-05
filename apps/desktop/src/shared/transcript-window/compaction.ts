@@ -47,25 +47,40 @@ export function activityContinues(
   return previous !== null && sameStep(previous, step);
 }
 
-export function bindAttempt(attempt: CompactionAttempt, facts: CompactionStatus): CompactionAttempt {
+export function bindStatus(attempt: CompactionAttempt, facts: CompactionStatus): CompactionAttempt {
   const previous = attempt.facts;
+  const expectedCount = facts.State === "completed" ? attempt.checkpoint + 1 : 0;
   if (
     facts.StepID !== attempt.step.StepID ||
-    facts.Count !== attempt.checkpoint + 1 ||
-    (previous !== null && !sameCompaction(previous, facts))
+    facts.Count !== expectedCount ||
+    (previous !== null && !sameAttemptIdentity(previous, facts))
   ) {
     throw new ContractError("Compaction facts do not match the active attempt.");
   }
   return { ...attempt, facts };
 }
 
-export function sameCompaction(left: CompactionFacts, right: CompactionFacts): boolean {
+function bindActiveCompaction(attempt: CompactionAttempt, facts: CompactionStatus): CompactionAttempt {
+  if (
+    facts.State !== "started" ||
+    facts.StepID !== attempt.step.StepID ||
+    facts.Count !== attempt.checkpoint + 1
+  ) {
+    throw new ContractError("Active compaction facts do not match the active attempt.");
+  }
+  return { ...attempt, facts };
+}
+
+function sameAttemptIdentity(left: CompactionFacts, right: CompactionFacts): boolean {
   return (
     left.StepID === right.StepID &&
-    left.Count === right.Count &&
     left.Mode === right.Mode &&
     (left.RequestID ?? null) === (right.RequestID ?? null)
   );
+}
+
+export function sameCompaction(left: CompactionFacts, right: CompactionFacts): boolean {
+  return left.Count === right.Count && sameAttemptIdentity(left, right);
 }
 
 export function beginStage(checkpoint: number | null, step: ActiveStep): Stage {
@@ -83,5 +98,5 @@ export function classifyHydration(hydration: Hydration): CompactionLifecycle {
     return { kind: "reflected", facts };
   }
   const stage = beginStage(checkpoint, step);
-  return facts === null ? stage : { ...stage, attempt: bindAttempt(stage.attempt, facts) };
+  return facts === null ? stage : { ...stage, attempt: bindActiveCompaction(stage.attempt, facts) };
 }

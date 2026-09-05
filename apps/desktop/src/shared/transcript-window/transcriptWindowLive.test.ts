@@ -9,12 +9,20 @@ const compacting = {
   State: "running",
   ActiveStep: { RunID: "run", StepID: "step", ActiveKind: "compaction" },
 } as const;
-const attempt: ChatTranscriptPayloadByKind["compaction_status"] = {
+const activeCompaction: ChatTranscriptPayloadByKind["compaction_status"] = {
   StepID: "step",
   State: "started",
   Mode: "manual",
   Count: 1,
   RequestID: "request",
+};
+const started: ChatTranscriptPayloadByKind["compaction_status"] = {
+  ...activeCompaction,
+  Count: 0,
+};
+const completed: ChatTranscriptPayloadByKind["compaction_status"] = {
+  ...activeCompaction,
+  State: "completed",
 };
 
 describe("transcript live membership and compaction", () => {
@@ -34,8 +42,31 @@ describe("transcript live membership and compaction", () => {
       request: visit(window, "older"),
       page: page([row(10)], null, 200),
     });
-    expect(sequences(window)).toEqual([10, 20]);
-    window.dispatch({ kind: "committed-row", row: row(50) });
+    expect(sequences(window)).toEqual([10, 20, 40]);
+    window.dispatch({
+      kind: "live-fact",
+      fact: {
+        kind: "assistant_delta",
+        payload: { StepID: "step", StreamID: "browse-stream", Phase: "commentary", Delta: "Draft" },
+      },
+    });
+    expect(window.snapshot.items.at(-1)).toMatchObject({ kind: "assistant", state: "live" });
+    const promoted = {
+      ...row(50),
+      Kind: "assistant",
+      User: null,
+      Assistant: {
+        StepID: "step",
+        StreamID: "browse-stream",
+        Phase: "commentary",
+        Text: "Committed",
+        CondensedText: "",
+        committed_at_unix_ms: null,
+      },
+    } as const;
+    window.dispatch({ kind: "committed-row", row: promoted });
+    expect(sequences(window)).toEqual([10, 20, 40, 50]);
+    expect(window.snapshot.items.at(-1)).toMatchObject({ kind: "assistant", state: "committed" });
     window.dispatch({
       kind: "page-success",
       request: visit(window, "newer"),
@@ -50,7 +81,7 @@ describe("transcript live membership and compaction", () => {
 
   it("isolates staged rows until activity exits, then releases them through ordinary membership", () => {
     const window = new TranscriptWindow();
-    const initial = hydration([row(30)], 0, compacting, attempt);
+    const initial = hydration([row(30)], 0, compacting, activeCompaction);
     window.dispatch({
       kind: "initial-hydration",
       hydration: {
@@ -79,7 +110,7 @@ describe("transcript live membership and compaction", () => {
     expect(window.dispatch({ kind: "committed-row", row: committed }).kind).toBe("accepted");
     expect(sequences(window)).toEqual([30]);
     expect(window.snapshot.items.at(-1)).toMatchObject({ kind: "assistant", state: "live" });
-    window.dispatch({ kind: "compaction-status", status: { ...attempt, State: "failed" } });
+    window.dispatch({ kind: "compaction-status", status: { ...started, State: "failed" } });
     expect(sequences(window)).toEqual([30]);
     const released = window.dispatch({ kind: "runtime-activity", activity: idle });
     expect(released).toEqual({ kind: "accepted", effects: [] });
@@ -89,6 +120,22 @@ describe("transcript live membership and compaction", () => {
       state: "committed",
       value: committed.Assistant,
     });
+  });
+
+  it("discards the visible pre-compaction pool and staged rows immediately on successful completion", () => {
+    const window = new TranscriptWindow();
+    window.dispatch({ kind: "initial-hydration", hydration: hydration([row(30)]) });
+    window.dispatch({ kind: "committed-row", row: row(40) });
+    expect(sequences(window)).toEqual([30, 40]);
+    window.dispatch({ kind: "runtime-activity", activity: compacting });
+    expect(window.dispatch({ kind: "compaction-status", status: started }).kind).toBe("accepted");
+    window.dispatch({ kind: "committed-row", row: row(50) });
+    expect(sequences(window)).toEqual([30, 40]);
+
+    expect(window.dispatch({ kind: "compaction-status", status: completed }).effects).toEqual([
+      { kind: "scratch-rehydration" },
+    ]);
+    expect(sequences(window)).toEqual([30]);
   });
 
   it("discards a successful stage and old pool, restores an executing edge's failure, and requests Scratch once", () => {
@@ -111,9 +158,9 @@ describe("transcript live membership and compaction", () => {
     const retry = window.dispatch({ kind: "retry", direction: "older" }).effects[0];
     if (retry?.kind !== "page-request") throw new Error("Expected Retry.");
     window.dispatch({ kind: "runtime-activity", activity: compacting });
-    window.dispatch({ kind: "compaction-status", status: attempt });
+    window.dispatch({ kind: "compaction-status", status: started });
     window.dispatch({ kind: "committed-row", row: row(50) });
-    const complete = { kind: "compaction-status", status: { ...attempt, State: "completed" } } as const;
+    const complete = { kind: "compaction-status", status: completed } as const;
     expect(window.dispatch(complete)).toEqual({
       kind: "accepted",
       effects: [{ kind: "scratch-rehydration" }],
@@ -146,7 +193,7 @@ describe("transcript live membership and compaction", () => {
       page: page([row(10)], 100, 200),
     });
     window.dispatch({ kind: "runtime-activity", activity: compacting });
-    window.dispatch({ kind: "compaction-status", status: attempt });
+    window.dispatch({ kind: "compaction-status", status: started });
     window.dispatch({ kind: "committed-row", row: row(50) });
     const result = window.dispatch({
       kind: "page-success",
@@ -154,15 +201,17 @@ describe("transcript live membership and compaction", () => {
       page: page([row(60)], 300),
     });
     expect(result).toEqual({ kind: "accepted", effects: [] });
-    expect(sequences(window)).toEqual([20, 60]);
+    expect(sequences(window)).toEqual([20, 40, 60]);
     const settled = window.snapshot;
     expect(
       window.dispatch({
         kind: "compaction-status",
-        status: { ...attempt, State: "completed" },
+        status: completed,
       }).effects,
     ).toEqual([{ kind: "scratch-rehydration" }]);
-    expect(window.snapshot).toBe(settled);
+    expect(sequences(window)).toEqual([20, 60]);
+    expect(window.snapshot.older).toBe(settled.older);
+    expect(window.snapshot.newer).toBe(settled.newer);
     const replacement = hydration([row(70)], 1);
     window.dispatch({
       kind: "reattachment-hydration",
@@ -192,7 +241,7 @@ describe("transcript live membership and compaction", () => {
     expect(
       window.dispatch({
         kind: "initial-hydration",
-        hydration: hydration([row(30)], 1, compacting, attempt),
+        hydration: hydration([row(30)], 1, compacting, activeCompaction),
       }).kind,
     ).toBe("accepted");
     window.dispatch({ kind: "runtime-activity", activity: idle });
@@ -200,7 +249,7 @@ describe("transcript live membership and compaction", () => {
     expect(
       window.dispatch({
         kind: "compaction-status",
-        status: { ...attempt, State: "completed" },
+        status: completed,
       }),
     ).toEqual({ kind: "accepted", effects: [] });
     expect(window.snapshot).toBe(settled);
