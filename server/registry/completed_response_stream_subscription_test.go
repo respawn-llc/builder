@@ -258,7 +258,7 @@ func (r streamLifecycleRecorder) assertCompleted(t *testing.T) {
 }
 
 func hydrationContainsAssistantStream(hydration *clientui.TranscriptHydration, streamID runtimeids.AssistantStreamID) bool {
-	for _, row := range hydration.CommittedRows {
+	for _, row := range hydration.TailSegment.Entries {
 		if row.Assistant != nil && row.Assistant.StreamID != nil && *row.Assistant.StreamID == streamID {
 			return true
 		}

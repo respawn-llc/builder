@@ -40,12 +40,29 @@ export const promptSchema = z
   })
   .strict();
 
+const tailSegmentSchema = z
+  .object({
+    OlderCursor: z.number().int().positive().nullable(),
+    HasMoreAbove: z.boolean(),
+    Entries: z.array(committedRowSchema),
+  })
+  .strict()
+  .superRefine((segment, context) => {
+    if (segment.HasMoreAbove === (segment.OlderCursor === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "OlderCursor must be present exactly when older history exists.",
+        path: ["OlderCursor"],
+      });
+    }
+  });
+
 export const hydrationSchema = z
   .object({
     SessionIdentity: sessionIdentitySchema,
     SessionStatus: sessionStatusSchema,
     RuntimeReadModelUpdate: runtimeReadModelUpdateSchema,
-    CommittedRows: nullableArray(committedRowSchema),
+    TailSegment: tailSegmentSchema,
     ActiveAssistant: assistantStreamFactsSchema.extend({ Text: assistantStreamContentSchema }).nullable(),
     ActiveThinkingStatus: thinkingStatusSchema.nullable(),
     ActiveReasoningTraces: nullableArray(reasoningTraceSchema),

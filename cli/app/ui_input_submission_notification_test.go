@@ -134,7 +134,7 @@ func TestTranscriptHydrationClearsNotificationStateWithoutReplayingRows(t *testi
 	hydration := ongoingHydrationMessage(1)
 	hydratedFinal := bellAssistantFinalMessageWithText(2, "hydrated historical answer")
 	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
-	hydrationPayload.CommittedRows = []clientui.TranscriptCommittedRow{
+	hydrationPayload.TailSegment.Entries = []clientui.TranscriptCommittedRow{
 		hydratedFinal.Payload().(clientui.TranscriptCommittedRow),
 	}
 	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))

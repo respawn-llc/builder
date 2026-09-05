@@ -462,7 +462,7 @@ func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
 				QueueAccepting: true,
 			},
 		},
-		CommittedRows: []clientui.TranscriptCommittedRow{},
+		TailSegment: clientui.TranscriptTailSegment{Entries: []clientui.TranscriptCommittedRow{}},
 	}))
 
 }

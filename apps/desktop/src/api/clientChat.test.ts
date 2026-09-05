@@ -172,7 +172,11 @@ function transcriptHydrationPayload() {
         DiagnosticRecovery: false,
       },
     },
-    CommittedRows: null,
+    TailSegment: {
+      OlderCursor: null,
+      HasMoreAbove: false,
+      Entries: [],
+    },
     ActiveAssistant: {
       StepID: sessionID,
       StreamID: sessionID,
@@ -480,6 +484,49 @@ describe("Desktop Chat read client", () => {
     expect(completions).toEqual([
       { code: 17, message: "subscriber overflow", reason: "subscriber_overflow" },
     ]);
+  });
+
+  it("rejects hydration whose older-history boundary has no cursor", () => {
+    const errors: Error[] = [];
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    client.chat.subscribeTranscript(target, {
+      onEvent: () => undefined,
+      onComplete: () => undefined,
+      onError: (error) => errors.push(error),
+    });
+    const payload = transcriptHydrationPayload();
+    payload.TailSegment.HasMoreAbove = true;
+
+    transport.emit("session.transcript", {
+      message: { sequence: 1, kind: "hydration", payload },
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(ContractError);
+  });
+
+  it("rejects hydration whose tail entries are absent", () => {
+    const errors: Error[] = [];
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    client.chat.subscribeTranscript(target, {
+      onEvent: () => undefined,
+      onComplete: () => undefined,
+      onError: (error) => errors.push(error),
+    });
+    const validPayload = transcriptHydrationPayload();
+    const payload = {
+      ...validPayload,
+      TailSegment: { ...validPayload.TailSegment, Entries: null },
+    };
+
+    transport.emit("session.transcript", {
+      message: { sequence: 1, kind: "hydration", payload },
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(ContractError);
   });
 });
 

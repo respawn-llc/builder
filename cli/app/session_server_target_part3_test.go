@@ -249,7 +249,7 @@ func waitForRemoteTranscriptAssistantFinal(
 			var rows []clientui.TranscriptCommittedRow
 			switch evt.Message.Kind() {
 			case clientui.TranscriptMessageHydration:
-				rows = evt.Message.Payload().(clientui.TranscriptHydration).CommittedRows
+				rows = evt.Message.Payload().(clientui.TranscriptHydration).TailSegment.Entries
 			case clientui.TranscriptMessageCommittedRow:
 				rows = []clientui.TranscriptCommittedRow{
 					evt.Message.Payload().(clientui.TranscriptCommittedRow),

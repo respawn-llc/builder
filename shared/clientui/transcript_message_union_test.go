@@ -52,7 +52,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			RuntimeReadModelUpdate: update,
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
-			CommittedRows:          []TranscriptCommittedRow{},
+			TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		}), TranscriptMessageHydration},
 		{"committed row", NewTranscriptEvent(TranscriptCommittedRow{
 			Visibility: transcript.EntryVisibilityOngoing,

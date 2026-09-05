@@ -35,7 +35,7 @@ func TestTranscriptReasoningTraceContractSeparatesThinkingStatusAndOrderedTraces
 		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
-		CommittedRows:          []TranscriptCommittedRow{},
+		TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 		ActiveThinkingStatus:   &status,
 		ActiveReasoningTraces:  []TranscriptReasoningTraceUpdate{trace},
@@ -118,7 +118,7 @@ func TestTranscriptHydrationRejectsDuplicateReasoningTraceIdentityAndWrongOwner(
 		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
-		CommittedRows:          []TranscriptCommittedRow{},
+		TailSegment:            TranscriptTailSegment{Entries: []TranscriptCommittedRow{}},
 		ActiveReasoningTraces:  []TranscriptReasoningTraceUpdate{trace, trace},
 	}
 	if err := hydration.Validate(); err == nil {
@@ -207,7 +207,7 @@ func TestTranscriptHydrationRejectsCommittedReasoningCorrelation(t *testing.T) {
 		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
 		SessionIdentity:        transcriptTestSessionIdentity(t),
 		SessionStatus:          transcriptTestSessionStatus(),
-		CommittedRows: []TranscriptCommittedRow{{
+		TailSegment: TranscriptTailSegment{Entries: []TranscriptCommittedRow{{
 			Visibility: transcript.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       TranscriptRowReasoningTrace,
@@ -218,7 +218,7 @@ func TestTranscriptHydrationRejectsCommittedReasoningCorrelation(t *testing.T) {
 				Text:                "Planning",
 				ProvisionalIdentity: &identity,
 			},
-		}},
+		}}},
 	}
 	if err := hydration.Validate(); err == nil {
 		t.Fatal("accepted committed reasoning correlation in hydration")

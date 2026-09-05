@@ -1,5 +1,6 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type { DesktopProcess } from "./processes";
+export { committedRowSchema as chatTranscriptCommittedRowSchema } from "./chatSchemas";
 export type {
   ChatApi,
   ChatAcceptedDiagnostic,

@@ -158,7 +158,7 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 	final := "done"
 	fastModeEnabled := true
 	events := []TranscriptEvent{
-		NewTranscriptEvent(TranscriptHydration{RuntimeReadModelUpdate: update, SessionIdentity: transcriptTestSessionIdentity(t), SessionStatus: transcriptTestSessionStatus(), CommittedRows: []TranscriptCommittedRow{}}),
+		NewTranscriptEvent(TranscriptHydration{RuntimeReadModelUpdate: update, SessionIdentity: transcriptTestSessionIdentity(t), SessionStatus: transcriptTestSessionStatus(), TailSegment: TranscriptTailSegment{Entries: []TranscriptCommittedRow{}}}),
 		NewTranscriptEvent(TranscriptCommittedRow{Visibility: transcript.EntryVisibilityOngoing, Integrity: transcript.RowIntegrityValid, Kind: TranscriptRowAssistant, Assistant: &TranscriptAssistantRow{StepID: stepID, Text: "done", Phase: transcript.AssistantPhaseFinal}}),
 		NewTranscriptEvent(TranscriptAssistantDelta{StepID: stepID, StreamID: streamID, Delta: "hello", Phase: transcript.AssistantPhaseFinal}),
 		NewTranscriptEvent(TranscriptAssistantStreamAbort{StepID: stepID, StreamID: streamID, Reason: AssistantStreamAbortSuperseded}),
