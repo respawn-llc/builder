@@ -44,7 +44,6 @@ This repository contains Kent - a coding agent focused on output quality, built 
 - `server/tools/definitions.go`
   - Centralized compile-time tool interface declarations (name, descriptions, JSON schemas).
 - `docs/dev/specs/terminology.md` - DDD's ubiquitous language, must read during design phases to communicate with user.
-- `.kent/skills/kent-prompt-development` owns internal prompt-development guidance. `prompts/skills/prompting` owns the generated user-facing prompt-writing and agent-coordination skill; keep internal harness-design guidance out of generated skills.
 
 ## Product Principles 
 These should guide default architectural choices in addition to user preferences.
