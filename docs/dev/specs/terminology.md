@@ -206,7 +206,7 @@ A workflow executable node that runs a local executable on the Kent server inste
 
 The model, provider, generation settings, enabled tools, and native web-search mode that a Session uses for one contract generation. These values stay fixed until a product operation creates a new contract generation. `compact_and_continue_session` establishes a fresh target-node generation when that target starts, including when the selected history was compacted eagerly after an earlier assignment completed. Ordinary compaction can refresh system and reviewer instructions within the existing contract generation. Developer context remains part of the transcript.
 
-The automatic-compaction threshold and Compaction Mode are activation policy, not Session Contract fields. A Session preserves its context window and provider-capability facts across runs for continuity, but those facts and the activation policy do not independently invalidate prompt caches or rotate cache lineage.
+The context window, automatic-compaction threshold, and Compaction Mode are activation policy, not Session Contract fields. A Session preserves its provider-capability facts across runs for continuity. These facts and the activation policy do not independently invalidate prompt caches or rotate cache lineage.
 
 ### Runtime Parameter Contract
 
