@@ -2,6 +2,16 @@ import { workflowEditorEnglish } from "./workflowEditorEn";
 
 export const englishResources = {
   translation: {
+    chatSettings: {
+      operationFailed: "Could not change Chat settings",
+      rejections: {
+        agent_locked: "The Agent is locked for this Session.",
+        agent_unavailable: "This Agent is no longer available.",
+        thinking_unavailable: "This Thinking value is unavailable.",
+        fast_unavailable: "Fast mode is unavailable for this Agent.",
+        auto_compaction_policy_locked: "The Session policy controls Auto-compaction.",
+      },
+    },
     app: {
       title: "Kent",
       subtitle: "Workflow remote control",

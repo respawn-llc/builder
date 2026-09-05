@@ -1,82 +1,174 @@
-import { useEffect, useEffectEvent, useReducer } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   ContractError,
+  errorMessage,
   type ChatSettingsMutation,
+  type ChatContext,
+  type ChatSettings,
+  type ChatSettingsSessionFacts,
+  type ChatSettingsMutationResponse,
   type ChatSettingsRead,
   type ChatSettingsTarget,
   type InitialChatSettings,
   type NewChatSettingsCatalog,
 } from "@/api";
 import { useAppServices } from "@/app-facade";
+import { showStatusToast } from "@/ui";
 
-export type ChatSettingsOptions = Readonly<{
-  target: Extract<ChatSettingsTarget, { kind: "new_chat" }>;
-  onInitialSettingsChange(settings: InitialChatSettings): void;
-}>;
+export type ChatSettingsOptions =
+  | Readonly<{
+      target: Extract<ChatSettingsTarget, { kind: "new_chat" }>;
+      onInitialSettingsChange(settings: InitialChatSettings): void;
+    }>
+  | Readonly<{
+      target: Extract<ChatSettingsTarget, { kind: "session" }>;
+      onContextChange(context: ChatContext): void;
+    }>;
 
 type ReadyNewChat = Readonly<{
   kind: "ready-new-chat";
   catalog: NewChatSettingsCatalog;
   initialSettings: InitialChatSettings;
 }>;
+type ReadySession = Readonly<{
+  kind: "ready-session";
+  settings: ChatSettings;
+  session: ChatSettingsSessionFacts;
+  lastDelivered: ChatSettings;
+}>;
+type LoadingState = Readonly<{ kind: "loading-new-chat" }> | Readonly<{ kind: "loading-session" }>;
 type SettingsState =
-  | Readonly<{ kind: "loading-new-chat" }>
+  | LoadingState
   | Readonly<{ kind: "failed-new-chat"; error: unknown }>
-  | ReadyNewChat;
+  | Readonly<{ kind: "failed-session"; error: unknown }>
+  | ReadyNewChat
+  | ReadySession;
 
 export type ChatSettingsFeature =
-  | Exclude<SettingsState, ReadyNewChat>
-  | (ReadyNewChat & Readonly<{ activate(operation: ChatSettingsMutation): void }>);
+  | Exclude<SettingsState, ReadyNewChat | ReadySession>
+  | (ReadyNewChat & Readonly<{ activate(operation: ChatSettingsMutation): void }>)
+  | (Omit<ReadySession, "lastDelivered"> &
+      Readonly<{ activate(operation: ChatSettingsMutation): Promise<ChatSettingsMutationResponse> }>);
 
 type SettingsAction =
   | Readonly<{ kind: "loading" }>
-  | Readonly<{ kind: "loaded"; response: Extract<ChatSettingsRead, { kind: "new_chat" }> }>
-  | Readonly<{ kind: "failed"; error: unknown }>
+  | Readonly<{ kind: "loaded"; response: ChatSettingsRead }>
+  | Readonly<{ kind: "failed"; targetKind: ChatSettingsTarget["kind"]; error: unknown }>
+  | Readonly<{ kind: "mutated"; response: ChatSettingsMutationResponse }>
+  | Readonly<{ kind: "mutation-failed" }>
   | Readonly<{ kind: "activated"; operation: ChatSettingsMutation }>;
+type TargetState = Readonly<{ target: ChatSettingsTarget; state: SettingsState }>;
 
-export function useChatSettings({
-  target,
-  onInitialSettingsChange,
-}: ChatSettingsOptions): ChatSettingsFeature {
+export function useChatSettings(options: ChatSettingsOptions): ChatSettingsFeature {
+  const { target } = options;
   const { api } = useAppServices();
-  const [state, dispatch] = useReducer(settingsReducer, { kind: "loading-new-chat" });
+  const { t } = useTranslation();
   const { projectID } = target;
+  const targetKind = target.kind;
+  const sessionID = target.kind === "session" ? target.sessionID : null;
   const workspaceKind = "workspaceID" in target.workspace ? "workspaceID" : "workspaceRoot";
   const workspaceValue =
     "workspaceID" in target.workspace ? target.workspace.workspaceID : target.workspace.workspaceRoot;
-  useEffect(() => {
-    let observing = true;
-    dispatch({ kind: "loading" });
-    const requestedTarget: ChatSettingsOptions["target"] = {
-      kind: "new_chat",
+  const requestedTarget = useMemo<ChatSettingsTarget>(() => {
+    const project = {
       projectID,
       workspace:
         workspaceKind === "workspaceID" ? { workspaceID: workspaceValue } : { workspaceRoot: workspaceValue },
     };
+    return sessionID === null ? { ...project, kind: "new_chat" } : { ...project, kind: "session", sessionID };
+  }, [projectID, workspaceKind, workspaceValue, sessionID]);
+  const [owned, dispatchOwned] = useReducer(
+    (
+      current: TargetState,
+      action: Readonly<{ target: ChatSettingsTarget; action: SettingsAction }>,
+    ): TargetState => {
+      if (action.action.kind === "loading") {
+        return { target: action.target, state: loadingState(action.target.kind) };
+      }
+      if (current.target !== action.target) return current;
+      return { target: current.target, state: settingsReducer(current.state, action.action) };
+    },
+    requestedTarget,
+    (initialTarget): TargetState => ({ target: initialTarget, state: loadingState(initialTarget.kind) }),
+  );
+  const state = owned.target === requestedTarget ? owned.state : loadingState(targetKind);
+  const dispatch = useCallback(
+    (action: SettingsAction) => {
+      dispatchOwned({ target: requestedTarget, action });
+    },
+    [requestedTarget],
+  );
+  const observation = useRef<ChatSettingsTarget | null>(null);
+  useEffect(() => {
+    observation.current = requestedTarget;
+    dispatch({ kind: "loading" });
     void api.chat.getSettings(requestedTarget).then(
       (response) => {
-        if (!observing) return;
-        if (response.kind !== "new_chat") {
-          dispatch({ kind: "failed", error: new ContractError("New Chat Settings returned a Session.") });
+        if (observation.current !== requestedTarget) return;
+        if (response.kind !== targetKind) {
+          dispatch({
+            kind: "failed",
+            targetKind,
+            error: new ContractError("Chat Settings returned a different target kind."),
+          });
           return;
         }
         dispatch({ kind: "loaded", response });
       },
       (error: unknown) => {
-        if (observing) dispatch({ kind: "failed", error });
+        if (observation.current === requestedTarget) dispatch({ kind: "failed", targetKind, error });
       },
     );
     return () => {
-      observing = false;
+      observation.current = null;
     };
-  }, [api, projectID, workspaceKind, workspaceValue]);
+  }, [api, requestedTarget, targetKind, dispatch]);
 
-  const reportSelection = useEffectEvent(onInitialSettingsChange);
+  const reportSelection = useEffectEvent((selection: InitialChatSettings) => {
+    if ("onInitialSettingsChange" in options) options.onInitialSettingsChange(selection);
+  });
   useEffect(() => {
     if (state.kind === "ready-new-chat") reportSelection(state.initialSettings);
   }, [state]);
 
+  function reportOperationFailure(body: string) {
+    showStatusToast({
+      id: "chat-settings-operation",
+      tone: "danger",
+      title: t("chatSettings.operationFailed"),
+      body,
+    });
+  }
+
+  if (state.kind === "ready-session") {
+    if (target.kind !== "session" || !("onContextChange" in options)) return loadingState(target.kind);
+    const ready: Extract<ChatSettingsFeature, { kind: "ready-session" }> = {
+      kind: state.kind,
+      settings: state.settings,
+      session: state.session,
+      async activate(operation) {
+        dispatch({ kind: "activated", operation });
+        let response: ChatSettingsMutationResponse;
+        try {
+          response = await api.chat.mutateSettings(target, operation);
+        } catch (error) {
+          if (observation.current !== requestedTarget) throw error;
+          dispatch({ kind: "mutation-failed" });
+          reportOperationFailure(errorMessage(error));
+          throw error;
+        }
+        if (observation.current !== requestedTarget) return response;
+        dispatch({ kind: "mutated", response });
+        options.onContextChange(response.context);
+        if (response.result.kind === "rejected")
+          reportOperationFailure(t(`chatSettings.rejections.${response.result.reason}`));
+        return response;
+      },
+    };
+    return ready;
+  }
   if (state.kind !== "ready-new-chat") return state;
   return {
     ...state,
@@ -86,23 +178,91 @@ export function useChatSettings({
   };
 }
 
-function settingsReducer(state: SettingsState, action: SettingsAction): SettingsState {
+function loadingState(kind: ChatSettingsTarget["kind"]): LoadingState {
+  return kind === "new_chat" ? { kind: "loading-new-chat" } : { kind: "loading-session" };
+}
+
+function settingsReducer(
+  state: SettingsState,
+  action: Exclude<SettingsAction, { kind: "loading" }>,
+): SettingsState {
   switch (action.kind) {
-    case "loading":
-      return { kind: "loading-new-chat" };
     case "loaded":
-      return {
-        kind: "ready-new-chat",
-        catalog: action.response.catalog,
-        initialSettings: action.response.initialSettings,
-      };
+      return loadedState(action.response);
     case "failed":
-      return { kind: "failed-new-chat", error: action.error };
+      return action.targetKind === "new_chat"
+        ? { kind: "failed-new-chat", error: action.error }
+        : { kind: "failed-session", error: action.error };
+    case "mutated":
+      return loadedState({
+        kind: "session",
+        settings: action.response.settings,
+        session: action.response.session,
+      });
+    case "mutation-failed":
+      return state.kind === "ready-session" ? { ...state, settings: state.lastDelivered } : state;
     case "activated": {
+      if (state.kind === "ready-session")
+        return { ...state, settings: activateSession(state.settings, action.operation) };
       if (state.kind !== "ready-new-chat") return state;
       const initialSettings = activateNewChat(state, action.operation);
       return initialSettings === state.initialSettings ? state : { ...state, initialSettings };
     }
+  }
+}
+
+function loadedState(response: ChatSettingsRead): ReadyNewChat | ReadySession {
+  return response.kind === "session"
+    ? {
+        kind: "ready-session",
+        settings: response.settings,
+        session: response.session,
+        lastDelivered: response.settings,
+      }
+    : {
+        kind: "ready-new-chat",
+        catalog: response.catalog,
+        initialSettings: response.initialSettings,
+      };
+}
+
+function activateSession(current: ChatSettings, operation: ChatSettingsMutation): ChatSettings {
+  switch (operation.kind) {
+    case "agent": {
+      const choice = current.agentChoices.find((candidate) => candidate.role === operation.role);
+      if (choice === undefined) throw new Error("Selected Agent is not in the Session choices.");
+      return {
+        ...current,
+        selectedAgent: { role: choice.role, model: choice.model, thinking: choice.thinking },
+      };
+    }
+    case "supervisor":
+      return { ...current, supervisor: { ...current.supervisor, value: operation.value } };
+    case "thinking":
+      return current.thinking.kind === "unsupported"
+        ? current
+        : {
+            ...current,
+            thinking: { ...current.thinking, value: operation.value },
+            selectedAgent: { ...current.selectedAgent, thinking: operation.value },
+          };
+    case "fast":
+      return current.fast.kind === "unsupported"
+        ? current
+        : { ...current, fast: { ...current.fast, value: operation.enabled } };
+    case "questions":
+      return { ...current, questions: { ...current.questions, enabled: operation.enabled } };
+    case "auto_compaction":
+      return current.autoCompaction.policy === "optional"
+        ? {
+            ...current,
+            autoCompaction: {
+              ...current.autoCompaction,
+              stored: operation.enabled,
+              effective: operation.enabled,
+            },
+          }
+        : current;
   }
 }
 
