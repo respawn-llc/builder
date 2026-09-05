@@ -1866,6 +1866,29 @@ func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID s
 	return i, err
 }
 
+const getSessionChatSettingsTaskIdentity = `-- name: GetSessionChatSettingsTaskIdentity :one
+SELECT
+    task.id AS task_id,
+    task.short_id AS task_short_id
+FROM sessions session
+JOIN task_records task ON task.id = session.task_id
+WHERE session.id = ?1
+LIMIT 1
+`
+
+type GetSessionChatSettingsTaskIdentityRow struct {
+	TaskID      string
+	TaskShortID string
+}
+
+func (q *Queries) GetSessionChatSettingsTaskIdentity(ctx context.Context, sessionID string) (GetSessionChatSettingsTaskIdentityRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionChatSettingsTaskIdentity, sessionID)
+	var i GetSessionChatSettingsTaskIdentityRow
+	err := recordQueryError(ctx, row.Scan(&i.TaskID, &i.TaskShortID), getSessionChatSettingsTaskIdentity, 1)
+
+	return i, err
+}
+
 const getSessionDeletionState = `-- name: GetSessionDeletionState :one
 SELECT
     CAST(EXISTS (

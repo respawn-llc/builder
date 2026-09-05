@@ -57,6 +57,25 @@ func TestChatSettingsReadContract(t *testing.T) {
 	}).ValidateForTarget(session); err != nil {
 		t.Fatalf("materialized response: %v", err)
 	}
+	taskID := mustChatSettingsTaskID(t, "task-1")
+	taskShortID := "KENT-416"
+	if err := (ChatSettingsReadResponse{
+		Session: &ChatSettingsSessionFacts{
+			SessionID:   sessionID,
+			TaskID:      &taskID,
+			TaskShortID: &taskShortID,
+		},
+	}).ValidateForTarget(session); err != nil {
+		t.Fatalf("materialized response with Task identity: %v", err)
+	}
+	for name, facts := range map[string]ChatSettingsSessionFacts{
+		"Task ID only":       {SessionID: sessionID, TaskID: &taskID},
+		"Task Short ID only": {SessionID: sessionID, TaskShortID: &taskShortID},
+	} {
+		if err := (ChatSettingsReadResponse{Session: &facts}).ValidateForTarget(session); err == nil {
+			t.Fatalf("%s response accepted an incomplete Task identity", name)
+		}
+	}
 }
 
 func TestChatSettingsMutationRequiresSession(t *testing.T) {
@@ -118,6 +137,15 @@ func mustChatSettingsSessionID(t *testing.T, raw string) runtimeids.SessionID {
 	id, err := runtimeids.ParseSessionID(raw)
 	if err != nil {
 		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+	}
+	return id
+}
+
+func mustChatSettingsTaskID(t *testing.T, raw string) string {
+	t.Helper()
+	id, err := runtimeids.ParseTaskID(raw)
+	if err != nil {
+		t.Fatalf("ParseTaskID(%q): %v", raw, err)
 	}
 	return id
 }

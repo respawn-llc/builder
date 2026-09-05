@@ -248,9 +248,21 @@ message SessionFacts {
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   optional string task_id = 3 [
-    (buf.validate.field).string.uuid = true,
-    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
   ];
+  optional string task_short_id = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.session_task_identity"
+    message: "Task ID and Task Short ID must both be present or absent"
+    expression: "has(this.task_id) == has(this.task_short_id)"
+  };
 }
 
 message ReadSuccess {

@@ -183,6 +183,22 @@ type ChatSettingsSessionFacts struct {
 	SessionID         runtimeids.SessionID  `json:"session_id"`
 	PreviousSessionID *runtimeids.SessionID `json:"previous_session_id,omitempty"`
 	TaskID            *string               `json:"task_id,omitempty"`
+	TaskShortID       *string               `json:"task_short_id,omitempty"`
+}
+
+type ChatSettingsTaskIdentity struct {
+	TaskID      string
+	TaskShortID string
+}
+
+func (i ChatSettingsTaskIdentity) Validate() error {
+	if _, err := runtimeids.ParseTaskID(i.TaskID); err != nil {
+		return fmt.Errorf("task_id: %w", err)
+	}
+	if strings.TrimSpace(i.TaskShortID) == "" || strings.TrimSpace(i.TaskShortID) != i.TaskShortID {
+		return errors.New("task_short_id is invalid")
+	}
+	return nil
 }
 
 type ChatSettingsReadResponse struct {
@@ -365,9 +381,15 @@ func (r ChatSettingsReadResponse) ValidateForTarget(target ChatSettingsReadTarge
 		if r.Session.PreviousSessionID != nil && r.Session.PreviousSessionID.IsZero() {
 			return errors.New("previous Session ID is invalid")
 		}
+		if (r.Session.TaskID == nil) != (r.Session.TaskShortID == nil) {
+			return errors.New("Task ID and Task Short ID must both be present or absent")
+		}
 		if r.Session.TaskID != nil {
-			if _, err := runtimeids.ParseTaskID(*r.Session.TaskID); err != nil {
-				return fmt.Errorf("task_id: %w", err)
+			if err := (ChatSettingsTaskIdentity{
+				TaskID:      *r.Session.TaskID,
+				TaskShortID: *r.Session.TaskShortID,
+			}).Validate(); err != nil {
+				return err
 			}
 		}
 	}
