@@ -245,7 +245,10 @@ To respond, run: kent run steer <source-session-id> "message"
 - Compaction starts a new bounded active conversation from compacted output while retaining the full durable session history. The compacted output and all new generation context are committed atomically before later model work.
 - Fresh main hydration, Reviewer request construction, and post-compaction hydration share one canonical stable prefix: applicable Headless context, Subagents, Skills, Worktree context, Agents.md instructions, then active Goal continuation or Workflow context.
 - Fresh main and Reviewer requests append Environment after that stable prefix.
-- Post-compaction hydration inserts compacted or handoff output and manual user carryover before the same Environment suffix.
+- Post-compaction hydration inserts compacted or handoff output and manual user carryover before the same Environment suffix, except for the provider-native continuation ordering below.
+- Successful provider-native compaction must place its continuation reminder as the first ordinary developer message after the system prompt, before other developer context, the unchanged encrypted checkpoint, and Environment. The reminder must belong to the same committed replacement and use the ordinary developer-notice contract. Local compaction uses its summary wrapper without that native reminder.
+- Compaction continuation guidance preserves the original user objective, subsequent corrections, decisions, constraints, and remaining work, and directs reuse of completed work and verification unless new evidence makes them stale.
+- A single editable Markdown document must own compaction continuation guidance. Native compaction inserts that guidance directly; the local handoff-summary wrapper includes it through a template.
 - Handoff output includes the user-authored future-agent message in the atomic history replacement.
 - Goal and Workflow remain alternative Session-mode context in their respective slots.
 - Outside Workflow execution, Kent includes an active Goal continuation only for an active Goal.

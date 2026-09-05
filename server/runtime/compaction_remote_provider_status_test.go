@@ -430,6 +430,10 @@ func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 				*item.MessageType == llm.MessageTypeCompactionSummary {
 				summaries++
 			}
+			if item.Type == llm.ResponseItemTypeMessage && item.MessageType == nil &&
+				item.Role != nil && *item.Role == llm.RoleDeveloper {
+				t.Fatalf("local fallback retained a native continuation reminder: %+v", item)
+			}
 		}
 		if len(client.compactionCalls) != 1 || len(client.calls) != 1 || summaries != 1 {
 			t.Fatalf(

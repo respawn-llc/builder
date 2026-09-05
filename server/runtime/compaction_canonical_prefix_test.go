@@ -69,9 +69,11 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	}
 
 	items := engine.transcriptRuntimeState().SnapshotItems()
-	if len(items) < 7 {
+	if len(items) < 8 {
 		t.Fatalf("canonical replacement items = %+v, want remote output and canonical context", items)
 	}
+	assertCompactionReplacementOrder(t, items, false)
+	items = items[1:]
 	if items[0].Type != llm.ResponseItemTypeMessage ||
 		items[0].MessageType == nil ||
 		*items[0].MessageType != llm.MessageTypeHeadlessMode {
@@ -118,6 +120,7 @@ func assertCompactionReplacementOrder(t *testing.T, items []llm.ResponseItem, wa
 	var environmentIndex *int
 	var carryoverIndex *int
 	var futureIndex *int
+	var nativeReminderIndex *int
 	for index, item := range items {
 		if item.Type == llm.ResponseItemTypeCompaction ||
 			(item.Type == llm.ResponseItemTypeMessage &&
@@ -127,6 +130,16 @@ func assertCompactionReplacementOrder(t *testing.T, items []llm.ResponseItem, wa
 				t.Fatalf("replacement contains multiple compacted outputs: %+v", items)
 			}
 			compactedIndex = textutil.Value(index)
+		}
+		if item.Type == llm.ResponseItemTypeMessage && item.MessageType == nil &&
+			item.Role != nil && *item.Role == llm.RoleDeveloper {
+			if nativeReminderIndex != nil {
+				t.Fatalf("replacement contains duplicate native reminders: %+v", items)
+			}
+			nativeReminderIndex = textutil.Value(index)
+			if item.Content == nil {
+				t.Fatalf("native reminder must contain continuation guidance: %+v", item)
+			}
 		}
 		if item.Type != llm.ResponseItemTypeMessage || item.MessageType == nil {
 			continue
@@ -155,9 +168,17 @@ func assertCompactionReplacementOrder(t *testing.T, items []llm.ResponseItem, wa
 			items,
 		)
 	}
-	if *environmentIndex != *compactedIndex+1 || *carryoverIndex != *environmentIndex+1 {
+	wantCarryoverIndex := *environmentIndex + 1
+	if items[*compactedIndex].Type == llm.ResponseItemTypeCompaction {
+		if nativeReminderIndex == nil || *nativeReminderIndex != 0 {
+			t.Fatalf("native reminder must be the first ordinary developer message: %+v", items)
+		}
+	} else if nativeReminderIndex != nil {
+		t.Fatalf("local compaction must not contain a native reminder: %+v", items)
+	}
+	if *environmentIndex != *compactedIndex+1 || *carryoverIndex != wantCarryoverIndex {
 		t.Fatalf(
-			"replacement order must be stable context -> compacted output -> Environment -> carryover with no interleaving: %+v",
+			"replacement must retain compacted output -> Environment -> carryover ordering: %+v",
 			items,
 		)
 	}

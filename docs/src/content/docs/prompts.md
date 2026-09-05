@@ -35,6 +35,10 @@ Kent provides a generated `prompting` skill for writing agent assignments, start
 
 Disable it with `[skills] prompting = false` in your configuration. This removes it from the model's skill catalog without changing the system prompt, available-role guidance, or other context.
 
+## Compaction Continuation
+
+Local handoff summaries include guidance to continue the original task, preserve user decisions and corrections, and reuse completed work. Provider-native compaction places the same guidance in the first ordinary developer message after the system prompt, before other context and the encrypted checkpoint. Kent preserves the checkpoint unchanged.
+
 ## Goal Continuation
 
 After successful automatic, manual, or handoff compaction, a non-workflow session with an active goal resumes with the exact goal text and Kent's goal work and completion guidance. Paused, completed, cleared, and absent goals add no continuation guidance, and reopening a session without compaction does not add it.

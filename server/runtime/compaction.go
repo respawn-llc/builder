@@ -713,7 +713,15 @@ func (e *Engine) compactNowWithAcceptance(
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
-	replacementItems := append(llm.ItemsFromMessages(postReplacementMeta.StablePrefix), llm.CloneResponseItems(result.items)...)
+	var replacementItems []llm.ResponseItem
+	if result.engine == "remote" {
+		replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{{
+			Role:    llm.RoleDeveloper,
+			Content: textutil.Value(prompts.CompactionContinuationReminder),
+		}})...)
+	}
+	replacementItems = append(replacementItems, llm.ItemsFromMessages(postReplacementMeta.StablePrefix)...)
+	replacementItems = append(replacementItems, llm.CloneResponseItems(result.items)...)
 	replacementItems = append(replacementItems, llm.ItemsFromMessages(postReplacementMeta.Environment)...)
 	if preservedUserMessageText != nil {
 		if preservedMessage, ok := compactionPreservedUserMessage(*preservedUserMessageText); ok {

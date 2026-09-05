@@ -279,7 +279,8 @@ var (
 	SystemPromptFinalAnswerAndFormatting             = mustPrompt("system_prompt/final_answer_formatting.md")
 	ToolPreamblesPrompt                              = mustPrompt("tool_preambles_prompt.md")
 	CompactionPrompt                                 = mustPrompt("compaction_prompt.md")
-	CompactionSummaryPrefix                          = mustPrompt("compaction_summary_prefix.md")
+	CompactionContinuationReminder                   = strings.TrimSpace(mustPrompt("compaction_continuation_reminder.md"))
+	CompactionSummaryPrefix                          = renderCompactionSummaryPrefix()
 	CompactionSoonReminderPrompt                     = mustPrompt("compaction_soon_reminder.md")
 	CompactionSoonReminderTriggerHandoffPrompt       = mustPrompt("compaction_soon_reminder_trigger_handoff.md")
 	GoalNudgePrompt                                  = mustPrompt("goal/nudge.md")
@@ -872,6 +873,16 @@ func renderSystemPromptTemplateWithSections(text string, args SystemPromptTempla
 		return "", err
 	}
 	return renderNamedTemplate("system prompt", trimmed, data)
+}
+
+func renderCompactionSummaryPrefix() string {
+	rendered, err := renderNamedTemplate("compaction summary prefix", mustPrompt("compaction_summary_prefix.md"), struct {
+		CompactionContinuationReminder string
+	}{CompactionContinuationReminder: CompactionContinuationReminder})
+	if err != nil {
+		panic(err)
+	}
+	return rendered
 }
 
 func renderNamedTemplate(name string, text string, data any) (string, error) {

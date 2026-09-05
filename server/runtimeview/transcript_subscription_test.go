@@ -402,6 +402,45 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 }
 
+func TestDeveloperMessageProjectsAsRegularNotice(t *testing.T) {
+	entry := runtime.ChatEntry{
+		Visibility: transcript.EntryVisibilityOngoing,
+		Role:       string(transcript.EntryRoleDeveloperContext),
+		Text:       "continuation context",
+		CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{
+			EventSequence: 1,
+		},
+	}
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                runtime.EventLocalEntryAdded,
+		LocalEntryProjected: true,
+		LocalEntry:          &entry,
+	})
+	if len(messages) != 1 {
+		t.Fatalf("native reminder events = %d, want one", len(messages))
+	}
+	live := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
+		CommittedRows: runtime.TranscriptCommittedRowFactsFromSnapshot(runtime.ChatSnapshot{
+			Entries: []runtime.ChatEntry{entry},
+		}),
+	})
+	if len(hydration.CommittedRows) != 1 {
+		t.Fatalf("hydrated native reminder rows = %d, want one", len(hydration.CommittedRows))
+	}
+	for _, row := range []clientui.TranscriptCommittedRow{live, hydration.CommittedRows[0]} {
+		if row.Visibility != transcript.EntryVisibilityOngoing ||
+			row.Kind != clientui.TranscriptRowNotice ||
+			row.Notice == nil ||
+			row.Notice.MessageType != nil {
+			t.Fatalf("developer context must use the ordinary notice contract: %+v", row)
+		}
+		if err := row.Validate(); err != nil {
+			t.Fatalf("native reminder notice contract: %v", err)
+		}
+	}
+}
+
 func TestTranscriptCommittedRowsProjectCommitTime(t *testing.T) {
 	committedAt := transcript.CommittedAtUnixMs(123)
 	stepID := runtimeStepIDPointer(transcriptProjectionStepID)

@@ -1,11 +1,14 @@
 package runtime
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMessage(t *testing.T) {
@@ -14,6 +17,8 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
+	client.compactionResponses[0].Checkpoint.Raw = json.RawMessage(`{"type":"compaction","id":"compaction-checkpoint","encrypted_content":"encrypted","provider_extension":{"retained":true}}`)
+	checkpoint := llm.CloneResponseItems([]llm.ResponseItem{client.compactionResponses[0].Checkpoint})[0]
 	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:           "gpt-5",
 		GlobalConfigDir: globalConfigDir,
@@ -70,6 +75,12 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 		llm.MessageTypeEnvironment,
 		llm.MessageTypeCompactionPreservedUserMessage,
 	})
+	persistedItems := make([]llm.ResponseItem, 0, len(replacement.Items))
+	for _, item := range replacement.Items {
+		persistedItems = append(persistedItems, llmResponseItemFromSessionHistory(item))
+	}
+	assertCompactionReplacementOrder(t, persistedItems, false)
+	assertCompactionCheckpointUnchanged(t, persistedItems, checkpoint)
 
 	for _, event := range window.Records[replacementIndex+1:] {
 		message, ok := mustSessionEventPayload(event).(session.MessageRecord)
@@ -77,6 +88,55 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 			continue
 		}
 		t.Fatalf("replacement followed by typed developer meta record: %+v", event)
+	}
+
+	reopenedStore := mustOpenTestSession(t, store.Dir())
+	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, newTestToolRegistry(t), Config{
+		Model:           "gpt-5",
+		GlobalConfigDir: globalConfigDir,
+	})
+	for range 2 {
+		request, err := reopened.buildRequest(t.Context(), "", true)
+		if err != nil {
+			t.Fatalf("build reopened request: %v", err)
+		}
+		assertCompactionReplacementOrder(t, request.Items, false)
+		assertCompactionCheckpointUnchanged(t, request.Items, checkpoint)
+	}
+
+	page, err := TranscriptNewestSegmentPageFromEventLog(mustMaterializeTestEventLog(t, reopenedStore), "")
+	if err != nil {
+		t.Fatalf("project persisted replacement: %v", err)
+	}
+	notices := 0
+	for _, entry := range page.Snapshot.Entries {
+		if entry.Role != string(transcript.EntryRoleDeveloperContext) || entry.MessageType != "" {
+			continue
+		}
+		notices++
+		if entry.Visibility != transcript.EntryVisibilityOngoing {
+			t.Fatalf("native reminder must use regular developer-context visibility: %+v", entry)
+		}
+	}
+	if notices != 1 {
+		t.Fatalf("persisted native reminder notices = %d, want one", notices)
+	}
+}
+
+func assertCompactionCheckpointUnchanged(t *testing.T, items []llm.ResponseItem, want llm.ResponseItem) {
+	t.Helper()
+	count := 0
+	for _, item := range items {
+		if item.Type != llm.ResponseItemTypeCompaction {
+			continue
+		}
+		count++
+		if !reflect.DeepEqual(item, want) {
+			t.Fatalf("encrypted checkpoint changed: got %+v, want %+v", item, want)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("encrypted checkpoints = %d, want one", count)
 	}
 }
 
