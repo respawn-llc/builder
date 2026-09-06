@@ -116,7 +116,7 @@ export type { CatalogContractErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
 export type { WorkflowTaskCreateSelectionErrorReason } from "./errors";
 export type { TaskSearchErrorReason } from "./errors";
-export { ChatOperationError, chatErrorMessage } from "./chatErrors";
+export { ChatOperationError } from "./chatErrors";
 export type { ChatError } from "./chatErrors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";

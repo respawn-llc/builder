@@ -127,24 +127,3 @@ function agentPreparationCategory(
       throw new ContractError("Chat operation returned an invalid Agent preparation category.");
   }
 }
-
-export function chatErrorMessage(error: ChatError): string {
-  switch (error.kind) {
-    case "session_not_found":
-      return "This Session no longer exists.";
-    case "workspace_not_registered":
-      return "This workspace is no longer registered.";
-    case "agent_preparation":
-      return `The ${error.agent} agent could not be prepared.`;
-    case "auth_required":
-      return "Sign in before starting this Chat.";
-    case "server_not_ready":
-      return "Kent is not ready to start this Chat yet.";
-    case "runtime_unavailable":
-      return "This Session is not available right now.";
-    case "internal_failure":
-      return "Kent could not complete the Chat operation.";
-    case "unknown":
-      return `Kent could not complete the Chat operation (${error.code}).`;
-  }
-}
