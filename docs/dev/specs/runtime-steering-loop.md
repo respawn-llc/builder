@@ -31,7 +31,7 @@
 - Setting changes enter neither user-visible Pending Work nor the post-turn Queue.
 - The server publishes each successful setting change and its typed transient feedback to every connected client.
 - A setting change affects later provider and compaction requests and never alters an Agent Step already running.
-- Setting changes create no model-visible entries or transcript rows.
+- Setting changes create no model-visible entries or transcript rows except for the cache-preserving Thinking configuration items defined by Model Requests And Cache Continuity.
 - An operator Thinking change and a Workflow-owned Thinking change have no relative ordering or precedence guarantee when they overlap.
 - Kent does not delay either change, assign a shared winner order, or reconcile the two owners. Request acceptance and response order do not determine the effective Thinking value.
 - The effective live Thinking value is whichever independently owned write applies last.
@@ -121,17 +121,28 @@
 ## Protected Agent Steps
 
 - An Agent Step begins when Kent starts a provider request and ends after Kent handles the response, every caused tool call, and every committed tool result needed before another provider request.
-- Provider input, model settings, tools, model context, execution target, Working Directory, and already-applied transcript input stay fixed for the complete Agent Step.
+- Model settings, tools, model context, execution target, Working Directory, and already-applied transcript input stay fixed for the complete Agent Step.
+- Provider input stays fixed except for additional human instructions delivered through native steering.
 - Ordinary Session mutations do not change those facts while the Agent Step is running.
 - An accepted mutation that needs a Step Boundary waits until the running Agent Step ends.
-- An already-running Agent Step is never preempted by Worktree work, compaction, Reviewer work, or later human input.
+- An already-running Agent Step is never preempted by Worktree work, compaction, or Reviewer work. Human input may use native steering as defined below.
 - Exact Question, Approval, Stop, Goal, Workflow-completion, and caused-output rules use the matching live Exact Execution Scope described by their owning specifications.
+
+## Native Human Steering
+
+- On supported models at first-party OpenAI API-key and ChatGPT Codex OAuth endpoints, ordinary human Send/Steer must use native mid-turn steering during model generation.
+- Unsupported models and other providers must retain ordinary boundary delivery.
+- Native steering must preserve earlier output and must not cancel already-started tools.
+- Post-turn Queue must retain its post-turn behavior. Inter-agent developer messages must retain ordinary boundary delivery.
+- Kent must assume submitted native steers arrived and must use existing error-to-composer restoration behavior on errors.
+- Native steering must not add delivery reconciliation, automatic replay, or steering-specific recovery.
+- Native steering must not introduce special ordering, concurrency, race, or atomicity guarantees.
 
 ## Step Boundaries And Next Work
 
 - At each Step Boundary, Kent applies accepted boundary-required Session mutations in order until the next operation starts or no boundary-required mutation remains.
 - Mutations accepted while this processing is underway join the same acceptance-ordered drain.
-- Human input normally applies at the first Step Boundary after acceptance.
+- Human input that does not use native steering normally applies at the first Step Boundary after acceptance.
 - Kent never begins a third provider request with accepted human text still unapplied.
 - Time spent inside an Agent Step or concrete long-running domain work does not count as another provider request for that limit.
 - Later short mutations may apply while a foreground shell process or Worktree transition is still running.

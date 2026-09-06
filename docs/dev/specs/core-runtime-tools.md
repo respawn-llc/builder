@@ -180,8 +180,9 @@ To respond, run: kent run steer <source-session-id> "message"
 - Sessions can stop and resume. The persistence root is configurable and defaults to `~/.kent`; their durable location model is Project, Workspace, then Worktree.
 - Except for an active agent rebinding its own Session under the self-agent rule below, moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
 - An accepted cross-Project move retires an idle Active Session Runtime before moving the Session. Opening the Session in the destination Project creates a fresh learned-Workspace cache.
-- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, when the Question-history command performs its explicitly requested backward history read, or when streaming a complete Session into an archive.
-- Transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
+- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, when the Question-history, Session log, or Session search commands perform their explicitly requested backward history reads, or when streaming a complete Session into an archive.
+- Session history commands must stream backward with bounded memory. The CLI Commands specification owns their scope, output, progress, and cancellation behavior.
+- Other transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
 - `server_host` and `server_port` explicitly select the daemon address; Kent binds exactly that address and fails startup if it is occupied. Local same-machine optimization is additive and cannot override either explicit setting.
 - Session activation and release identify the exact session resource generation. A stale release is a successful no-op and cannot close or detach a replacement generation.
 - Clients and servers using incompatible protocol generations refuse the connection; operators must upgrade and restart both before making requests.
@@ -226,6 +227,12 @@ To respond, run: kent run steer <source-session-id> "message"
 - Every generation request has a required tool-choice mode: automatic or required. Missing or unknown modes are invalid.
 - Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
 - Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity. Exact counting of a built request preserves its tool mode and complete tool set; standalone estimation uses automatic choice.
+- On supported models and request modes, existing human and Workflow Thinking controls must use native configuration updates while keeping the original request-level reasoning effort unchanged.
+- Kent must retain dispatched configuration updates in their original conversation positions without creating an ordinary visible Chat message.
+- Changes made before dispatch must use the final effective Thinking value without producing adjacent configuration updates.
+- Compaction must re-establish the effective Thinking effort for subsequent generation through the supported configuration-update protocol.
+- An existing Session must initialize its fixed reasoning baseline from its current effective Thinking level when it first uses configuration updates. This initialization may cause a cache miss and must not reconstruct or rewrite earlier requests.
+- Unsupported models and request modes must retain ordinary Thinking behavior.
 
 ## Fast Mode And Context Usage
 
@@ -245,6 +252,12 @@ To respond, run: kent run steer <source-session-id> "message"
 ## Compaction
 
 - Compaction starts a new bounded active conversation from compacted output while retaining the full durable session history. The compacted output and all new generation context are committed atomically before later model work.
+- `compaction_mode=dynamic` must be the default when configuration does not explicitly select a mode. Explicit `local`, `native`, and `none` selections must retain their behavior.
+- Dynamic compaction must ask the model which carryover-summary sections are relevant, assemble the handoff prompt from the selected section templates, and generate the resulting sectioned carryover.
+- Dynamic sections must be sections of the handoff summary, not separate persistent note files.
+- Dynamic compaction must use the existing compaction and handoff lifecycle. Selecting this mode must not change compaction trigger timing or add a separate context-reset tool.
+- Dynamic compaction must start the fresh active context with its carryover and guidance explaining the handoff and the Session history commands for recovering older information.
+- Dynamic compaction must not rewrite or roll back already-sent section-selection history.
 - Fresh main hydration, Reviewer request construction, and post-compaction hydration share one canonical stable prefix: applicable Headless context, Subagents, Skills, Worktree context, Agents.md instructions, then active Goal continuation or Workflow context.
 - Fresh main and Reviewer requests append Environment after that stable prefix.
 - Post-compaction hydration inserts compacted or handoff output and manual user carryover before the same Environment suffix, except for the provider-native continuation ordering below.

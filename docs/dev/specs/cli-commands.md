@@ -149,6 +149,32 @@
 - JSON mode emits exactly one final object to stdout and remains quiet while the command runs.
 - Successful operations exit 0, operational failures exit 1, and usage failures exit 2.
 
+## Session Identity And Log Path
+
+- `kent session-id` must report the invoking Session's ID and its actual absolute server-side Session log path.
+- Human output must identify both values so the Session ID and log path can be distinguished.
+- The command must retain its harness-only scope and fail when the invoking Session ID is unavailable.
+- The command must resolve the path through the server's authoritative Session location.
+- A server or path-resolution failure must produce an error and unsuccessful exit status rather than a successful ID-only result or a fabricated path.
+
+## Session History Commands
+
+- `kent session log` must retrieve conversation content from one Session. `kent session search <query>` must search conversation content from one Session.
+- Both commands must accept `--session <session-id>` and otherwise use the invoking agent's Session. They must permit reading the invoking agent's own Session and fail when no Session can be selected.
+- Both commands must accept `--user`, `--assistant`, and `--tools`. With no role flags, they must select user and assistant content only. Explicit role flags must select their union.
+- Tool history must expose recorded tool calls and their recorded results, including available arguments and failure outcomes. Reading history must not rerun tools or expand it into separate raw process logs.
+- Both commands must accept `--offset` as a stable position in persisted Session history. A position must refer to stored data rather than a line number in rendered output.
+- Both commands must accept `--max-handoffs` to limit the history windows traversed from the selected starting position. The count must include the window containing that position and reject values below 1. At the newest history position, the current unfinished window counts as one.
+- `kent session log` must default to the current window and one previous window, equivalent to `--max-handoffs 2` when no offset is selected.
+- `kent session search` must default to the entire selected Session. An omitted history-scope limit must not be encoded as a numeric sentinel.
+- Search results must include the server-side Session log path, a stable position that `kent session log` can consume, and the matching content or snippet. Search must support requested surrounding context and the same type filters as retrieval.
+- Authenticated local and remote CLI clients must receive the actual server-side log path for direct inspection.
+- Search must use case-sensitive literal matching by default and support `--ignore-case`.
+- Both commands must stream their output without command-level match-count, per-item output, or total-output caps. Existing command-output postprocessing remains responsible for truncation when an agent invokes the CLI through a shell tool.
+- Both commands must report progress during long reads, support cancellation, and preserve already-emitted output when a later read fails.
+- The server must own Session history reads. A remote CLI must be able to retrieve a returned position through `kent session log` without opening the server's filesystem path locally.
+- Session history commands must not introduce a search index or a second authoritative history store.
+
 ## Question Commands
 
 - `kent question` shows the first pending ordinary Question or live internal access request. `kent questions` is an alias.
