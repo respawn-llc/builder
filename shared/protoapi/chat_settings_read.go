@@ -2,10 +2,12 @@ package protoapi
 
 import (
 	"errors"
+	"fmt"
 
 	pb "core/shared/protoapi/gen/kent/api/chat_settings"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
 
@@ -174,6 +176,12 @@ func ChatSettingsErrorFromProto(value *pb.ReadError) error {
 		return ServerNotReadyFromProto(detail.ServerNotReady)
 	case *pb.ReadError_WorkspaceNotRegistered:
 		return serverapi.ErrWorkspaceNotRegistered
+	case *pb.ReadError_SessionNotFound:
+		sessionID, err := runtimeids.ParseSessionID(detail.SessionNotFound.SessionId)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: %s", sessioncontract.ErrSessionNotFound, sessionID)
 	case *pb.ReadError_InternalFailure:
 		return InternalFailureFromProto(detail.InternalFailure)
 	case *pb.ReadError_ChatSettingsAgentPreparation:
