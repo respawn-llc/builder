@@ -12,7 +12,6 @@ import { useTranslation } from "react-i18next";
 
 import {
   ContractError,
-  errorMessage,
   type ChatSettingsMutation,
   type ChatContext,
   type ChatSettings,
@@ -26,6 +25,7 @@ import {
 import { useAppServices } from "@/app-facade";
 import { showStatusToast } from "@/ui";
 import { ChatSettingsView, type ChatSettingsViewProps } from "./ChatSettingsView";
+import { settingsOperationFailureMessage } from "./chatSettingsPresentation";
 
 export type ChatSettingsNavigation = Readonly<{
   openTask(taskID: string): void;
@@ -160,7 +160,7 @@ function useSettingsState(
   const readSettings = useEffectEvent((kind: "initial" | "refresh") => {
     function failed(error: unknown) {
       if (observation.current !== requestedTarget) return;
-      if (kind === "refresh") reportOperationFailure(errorMessage(error));
+      if (kind === "refresh") reportOperationFailure(settingsOperationFailureMessage(t, error));
       else dispatch({ kind: "failed", targetKind, error });
     }
     void api.chat.getSettings(requestedTarget).then((response) => {
@@ -221,7 +221,7 @@ function useSettingsState(
         } catch (error) {
           if (observation.current !== requestedTarget) throw error;
           dispatch({ kind: "mutation-failed" });
-          reportOperationFailure(errorMessage(error));
+          reportOperationFailure(settingsOperationFailureMessage(t, error));
           throw error;
         }
         if (observation.current !== requestedTarget) return response;

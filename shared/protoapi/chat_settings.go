@@ -10,9 +10,6 @@ import (
 )
 
 func ChatSettingsReadTargetFromProto(request *pb.ReadRequest) (serverapi.ChatSettingsReadTarget, error) {
-	if err := Validate(request); err != nil {
-		return serverapi.ChatSettingsReadTarget{}, err
-	}
 	switch target := request.Target.(type) {
 	case *pb.ReadRequest_NewChat:
 		return serverapi.NewChatSettingsTarget(target.NewChat.ProjectId, target.NewChat.WorkspaceId), nil

@@ -11,9 +11,6 @@ import (
 )
 
 func ChatSettingsMutationFromProto(request *pb.MutationRequest) (serverapi.ChatSettingsMutationRequest, error) {
-	if err := Validate(request); err != nil {
-		return serverapi.ChatSettingsMutationRequest{}, err
-	}
 	id, err := runtimeids.ParseSessionID(request.Session.SessionId)
 	if err != nil {
 		return serverapi.ChatSettingsMutationRequest{}, err

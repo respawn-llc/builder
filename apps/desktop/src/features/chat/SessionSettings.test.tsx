@@ -2,12 +2,14 @@ import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@te
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
-import type {
-  ChatContext,
-  ChatSettings,
-  ChatSettingsMutationResponse,
-  ChatSettingsRead,
-  InitialChatSettings,
+import {
+  ChatOperationError,
+  RpcError,
+  type ChatContext,
+  type ChatSettings,
+  type ChatSettingsMutationResponse,
+  type ChatSettingsRead,
+  type InitialChatSettings,
 } from "@/api";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import { useChatSettings, type ChatSettingsOptions, type ChatSettingsFeature } from "./index";
@@ -88,23 +90,44 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const settingsFailureOperation = "settings.commit";
+const settingsFailureCause = "disk full";
+
+function typedSettingsFailure() {
+  return new ChatOperationError(
+    new RpcError({
+      code: -32_000,
+      message: "settings.commit (internal_failure)",
+      method: "kent.api.chat_settings.chat_settings_service.mutate",
+    }),
+    {
+      kind: "internal_failure",
+      operation: settingsFailureOperation,
+      cause: settingsFailureCause,
+    },
+  );
+}
+
+function SessionSettingsChipHost({
+  availability = "available",
+}: Readonly<{ availability?: "available" | "disconnected" }>) {
+  const feature = useChatSettings({
+    ...connected,
+    target,
+    serverMutationAvailability: availability,
+    onContextChange: () => undefined,
+  });
+  return feature.kind === "ready-session" ? feature.settingsChip : null;
+}
+
 it("activates nested Settings controls once and suppresses disconnected Session activations", async () => {
   const services = createTestServices([]);
   vi.spyOn(services.api.chat, "getSettings").mockResolvedValue(initialRead);
   const mutate = vi.spyOn(services.api.chat, "mutateSettings").mockResolvedValue(response());
   const user = userEvent.setup();
-  function Host({ availability }: Readonly<{ availability: "available" | "disconnected" }>) {
-    const feature = useChatSettings({
-      ...connected,
-      target,
-      serverMutationAvailability: availability,
-      onContextChange: vi.fn(),
-    });
-    return feature.kind === "ready-session" ? feature.settingsChip : null;
-  }
   const view = render(
     <TestAppProviders services={services}>
-      <Host availability="available" />
+      <SessionSettingsChipHost availability="available" />
     </TestAppProviders>,
   );
   await user.click(await screen.findByRole("button", { name: appI18n.t("chatSettings.open") }));
@@ -129,7 +152,7 @@ it("activates nested Settings controls once and suppresses disconnected Session 
   mutate.mockClear();
   view.rerender(
     <TestAppProviders services={services}>
-      <Host availability="disconnected" />
+      <SessionSettingsChipHost availability="disconnected" />
     </TestAppProviders>,
   );
   for (const control of [
@@ -140,6 +163,139 @@ it("activates nested Settings controls once and suppresses disconnected Session 
     fireEvent.click(control);
   }
   expect(mutate).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    policy: "disabled" as const,
+    autoCompaction: {
+      policy: "disabled" as const,
+      stored: true,
+      effective: false as const,
+      editability: { kind: "policy_disabled" as const },
+    },
+  },
+  {
+    policy: "required" as const,
+    autoCompaction: {
+      policy: "required" as const,
+      stored: false,
+      effective: true as const,
+      editability: { kind: "workflow_lock" as const },
+    },
+  },
+])("shows authoritative $policy Auto-compaction as on while unavailable", async ({ autoCompaction }) => {
+  const services = createTestServices([]);
+  vi.spyOn(services.api.chat, "getSettings").mockResolvedValue({
+    ...initialRead,
+    settings: { ...settings, autoCompaction },
+  });
+  const user = userEvent.setup();
+  render(
+    <TestAppProviders services={services}>
+      <SessionSettingsChipHost />
+    </TestAppProviders>,
+  );
+  await user.click(await screen.findByRole("button", { name: appI18n.t("chatSettings.open") }));
+  const control = within(screen.getByRole("dialog")).getByRole("switch", {
+    name: appI18n.t("chatSettings.autoCompaction"),
+  });
+  expect(control).toBeChecked();
+  expect(control).toBeDisabled();
+});
+
+it("sends repeated Supervisor segment activations while an earlier request is pending", async () => {
+  const services = createTestServices([]);
+  vi.spyOn(services.api.chat, "getSettings").mockResolvedValue(initialRead);
+  const first = deferred<ChatSettingsMutationResponse>();
+  const second = deferred<ChatSettingsMutationResponse>();
+  const mutate = vi
+    .spyOn(services.api.chat, "mutateSettings")
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(second.promise);
+  const user = userEvent.setup();
+  render(
+    <TestAppProviders services={services}>
+      <SessionSettingsChipHost />
+    </TestAppProviders>,
+  );
+  await user.click(await screen.findByRole("button", { name: appI18n.t("chatSettings.open") }));
+  const always = within(screen.getByRole("dialog")).getByRole("radio", {
+    name: appI18n.t("chatSettings.supervisorAlways"),
+  });
+  await user.click(always);
+  expect(always).toBeChecked();
+  await user.click(always);
+  expect(mutate).toHaveBeenCalledTimes(2);
+  expect(mutate).toHaveBeenNthCalledWith(1, target, { kind: "supervisor", value: "all" });
+  expect(mutate).toHaveBeenNthCalledWith(2, target, { kind: "supervisor", value: "all" });
+  await act(async () => {
+    first.resolve(response());
+    second.resolve(response());
+    await Promise.all([first.promise, second.promise]);
+  });
+});
+
+it("keeps server-editable single-value Thinking available for explicit activation", async () => {
+  const services = createTestServices([]);
+  const singleValueThinking: ChatSettings = {
+    ...settings,
+    thinking: {
+      kind: "enumerated",
+      value: "medium",
+      baselineValue: "medium",
+      values: ["medium"],
+      editability: { kind: "editable" },
+    },
+  };
+  vi.spyOn(services.api.chat, "getSettings").mockResolvedValue({
+    ...initialRead,
+    settings: singleValueThinking,
+  });
+  const mutate = vi
+    .spyOn(services.api.chat, "mutateSettings")
+    .mockResolvedValue(response(singleValueThinking));
+  const user = userEvent.setup();
+  render(
+    <TestAppProviders services={services}>
+      <SessionSettingsChipHost />
+    </TestAppProviders>,
+  );
+  await user.click(await screen.findByRole("button", { name: appI18n.t("chatSettings.open") }));
+  const control = within(screen.getByRole("dialog")).getByRole("slider");
+  expect(control).toBeEnabled();
+  Object.defineProperties(control, {
+    setPointerCapture: { value: vi.fn() },
+    releasePointerCapture: { value: vi.fn() },
+  });
+  await user.click(control);
+  expect(mutate).toHaveBeenCalledExactlyOnceWith(target, { kind: "thinking", value: "medium" });
+});
+
+it("surfaces typed Chat operation diagnostics for an ordinary mutation failure", async () => {
+  const services = createTestServices([]);
+  vi.spyOn(services.api.chat, "getSettings").mockResolvedValue(initialRead);
+  const failure = typedSettingsFailure();
+  vi.spyOn(services.api.chat, "mutateSettings").mockRejectedValue(failure);
+  const notice = vi.spyOn(ui, "showStatusToast").mockImplementation(() => undefined);
+  const { result } = renderHook(() => useChatSettings({ ...connected, target, onContextChange: vi.fn() }), {
+    wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
+      <TestAppProviders services={services}>{children}</TestAppProviders>
+    ),
+  });
+  await waitFor(() => {
+    expect(result.current.kind).toBe("ready-session");
+  });
+  await act(async () => {
+    if (result.current.kind !== "ready-session" || result.current.serverMutationAvailability !== "available")
+      throw new Error("Expected available Session.");
+    await result.current.activate({ kind: "questions", enabled: false }).catch(() => undefined);
+  });
+  const body = notice.mock.lastCall?.[0].body;
+  expect(body).toContain(settingsFailureOperation);
+  expect(body).toContain(settingsFailureCause);
+  expect(notice.mock.lastCall?.[0].onAction).toBeUndefined();
+  notice.mockRestore();
 });
 
 it("loads ordinary Session Settings through the same feature boundary", async () => {
@@ -698,11 +854,13 @@ it("preserves whichever authoritative projection is current when a refresh fails
     await mutation.promise;
   });
   await act(async () => {
-    refresh.reject(new Error("read failed"));
+    refresh.reject(typedSettingsFailure());
     await refresh.promise.catch(() => undefined);
   });
   expect(result.current).toMatchObject({ kind: "ready-session", settings: delivered.settings });
   expect(notice).toHaveBeenCalledOnce();
+  expect(notice.mock.lastCall?.[0].body).toContain(settingsFailureOperation);
+  expect(notice.mock.lastCall?.[0].body).toContain(settingsFailureCause);
   expect(notice.mock.lastCall?.[0].onAction).toBeUndefined();
   expect(getSettings).toHaveBeenCalledTimes(2);
   notice.mockRestore();

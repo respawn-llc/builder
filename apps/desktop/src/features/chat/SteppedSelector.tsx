@@ -86,7 +86,7 @@ export function SteppedSelector<Value extends string>({
         />
         <input
           className="app-region-no-drag absolute inset-0 m-0 h-full w-full cursor-pointer touch-none opacity-0 disabled:cursor-not-allowed"
-          disabled={disabled || values.length === 1}
+          disabled={disabled}
           max={values.length - 1}
           min={0}
           onChange={(event) => {

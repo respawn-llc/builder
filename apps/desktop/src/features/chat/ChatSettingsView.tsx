@@ -148,6 +148,9 @@ export function ChatSettingsView(props: ChatSettingsViewProps) {
                 <SegmentedControl
                   ariaLabel={t("chatSettings.supervisor")}
                   disabled={reason(supervisor.editability) !== undefined}
+                  onValueActivate={(value) => {
+                    if (value === supervisor.value) activate({ kind: "supervisor", value });
+                  }}
                   onValueChange={(value) => {
                     activate({ kind: "supervisor", value });
                   }}
@@ -201,7 +204,11 @@ export function ChatSettingsView(props: ChatSettingsViewProps) {
               reason={reason(settings.questions.editability)}
             />
             <SettingsSwitch
-              checked={settings.autoCompaction.effective}
+              checked={
+                settings.autoCompaction.policy === "disabled"
+                  ? settings.autoCompaction.stored
+                  : settings.autoCompaction.effective
+              }
               label={t("chatSettings.autoCompaction")}
               onChange={(enabled) => {
                 activate({ kind: "auto_compaction", enabled });
