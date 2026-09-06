@@ -28,7 +28,7 @@ func (c *sessionRuntimeClient) ReadChatSettings() (serverapi.ChatSettings, error
 	if err != nil {
 		return serverapi.ChatSettings{}, err
 	}
-	return response.Settings, nil
+	return response.Session.Settings, nil
 }
 
 func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettingsMutationOperation) (serverapi.ChatSettingsMutationResponse, error) {

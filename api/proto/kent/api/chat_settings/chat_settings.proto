@@ -3,11 +3,39 @@ syntax = "proto3";
 package kent.api.chat_settings;
 
 import "buf/validate/validate.proto";
+import "kent/api/auth/auth.proto";
 import "kent/api/chat_context/chat_context.proto";
+import "kent/api/server/server.proto";
 import "kent/api/shared/foundation.proto";
 import "kent/api/shared/validation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/chat_settings;chatsettingspb";
+
+message InitialChatSettings {
+  string agent_role = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  SupervisorValue supervisor = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string thinking = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+  optional bool fast = 4;
+  optional bool questions_enabled = 5;
+  optional bool auto_compaction_enabled = 6;
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat.initial_settings_complete"
+    message: "initial Chat settings must include Questions and Auto-compaction selections"
+    expression: "has(this.questions_enabled) && has(this.auto_compaction_enabled)"
+  };
+}
 
 message NewChatTarget {
   string project_id = 1 [
@@ -248,14 +276,85 @@ message SessionFacts {
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   optional string task_id = 3 [
-    (buf.validate.field).string.uuid = true,
-    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+    (buf.validate.field).string.min_len = 6,
+    (buf.validate.field).string.prefix = "task-",
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
   ];
+  optional string task_short_id = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.session_task_identity"
+    message: "Task ID and Task Short ID must both be present or absent"
+    expression: "has(this.task_id) == has(this.task_short_id)"
+  };
 }
 
 message ReadSuccess {
+  oneof target {
+    option (buf.validate.oneof).required = true;
+
+    NewChatCatalog new_chat = 1;
+    SessionSettings session = 2;
+  }
+}
+
+message SessionSettings {
   Settings settings = 1 [(buf.validate.field).required = true];
-  optional SessionFacts session = 2;
+  SessionFacts session = 2 [(buf.validate.field).required = true];
+}
+
+message NewChatCatalog {
+  repeated NewChatAgentChoice choices = 1 [(buf.validate.field).repeated.min_items = 1];
+  InitialChatSettings initial_settings = 2 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.unique_agents"
+    message: "New Chat Agent roles must be unique"
+    expression: "this.choices.map(choice, choice.agent.role).unique()"
+  };
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.initial_agent_choice"
+    message: "initial Agent must have a catalog choice"
+    expression: "this.choices.exists(choice, choice.agent.role == this.initial_settings.agent_role)"
+  };
+}
+
+message NewChatAgentChoice {
+  AgentChoice agent = 1 [(buf.validate.field).required = true];
+  InitialChatSettings baseline = 2 [(buf.validate.field).required = true];
+  Supervisor supervisor = 3 [(buf.validate.field).required = true];
+  optional Thinking thinking = 4;
+  optional Fast fast = 5;
+  Questions questions = 6 [(buf.validate.field).required = true];
+  AutoCompaction auto_compaction = 7 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.chat_settings.complete_choice_baseline"
+    message: "Agent baseline must agree with its capability and setting projections"
+    expression:
+      "this.baseline.agent_role == this.agent.role && "
+      "this.baseline.supervisor == this.supervisor.value && "
+      "this.baseline.supervisor == this.supervisor.baseline && "
+      "has(this.baseline.thinking) == has(this.thinking) && "
+      "(!has(this.thinking) || (this.baseline.thinking == this.thinking.value && this.baseline.thinking == this.thinking.baseline_value)) && "
+      "has(this.baseline.fast) == has(this.fast) && "
+      "(!has(this.fast) || this.baseline.fast == this.fast.value) && "
+      "this.baseline.questions_enabled == this.questions.enabled && "
+      "this.baseline.auto_compaction_enabled == this.auto_compaction.stored"
+  };
+}
+
+message SessionNotFoundDetails {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message WorkspaceNotRegisteredDetails {}
@@ -296,6 +395,24 @@ message ReadError {
         error_code: "internal_failure"
       }
     ];
+    SessionNotFoundDetails session_not_found = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "session_not_found"
+      }
+    ];
+    kent.api.auth.AuthRequiredDetails auth_required = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "auth_required"
+      }
+    ];
+    kent.api.server.ServerNotReadyDetails server_not_ready = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
   }
 }
 
@@ -327,8 +444,7 @@ message MutationOperation {
     }];
     string thinking = 3 [
       (buf.validate.field).string.min_len = 1,
-      (buf.validate.field).string.(kent.api.shared.nonblank) = true,
-      (buf.validate.field).string.(kent.api.shared.trimmed) = true
+      (buf.validate.field).string.(kent.api.shared.nonblank) = true
     ];
     bool fast_enabled = 4;
     bool questions_enabled = 5;
@@ -377,7 +493,7 @@ message MutationResult {
 message MutationSuccess {
   MutationResult result = 1 [(buf.validate.field).required = true];
   Settings settings = 2 [(buf.validate.field).required = true];
-  optional SessionFacts session = 3;
+  SessionFacts session = 3 [(buf.validate.field).required = true];
   kent.api.chat_context.Context context = 4 [(buf.validate.field).required = true];
 }
 
@@ -402,7 +518,6 @@ service ChatSettingsService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "chat.settings.read"
     };
   }
   rpc Mutate(MutationRequest) returns (MutationResponse) {
@@ -412,7 +527,6 @@ service ChatSettingsService {
       scope_policy: SCOPE_POLICY_NONE
       direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED
-      legacy_wire_name: "chat.settings.mutate"
     };
   }
 }

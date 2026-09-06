@@ -2369,6 +2369,15 @@ WHERE id = sqlc.arg(session_id)
   AND task_id IS NOT NULL
 ORDER BY task_id ASC;
 
+-- name: GetSessionChatSettingsTaskIdentity :one
+SELECT
+    task.id AS task_id,
+    task.short_id AS task_short_id
+FROM sessions session
+JOIN task_records task ON task.id = session.task_id
+WHERE session.id = sqlc.arg(session_id)
+LIMIT 1;
+
 -- name: BindSessionToTask :execrows
 UPDATE sessions
 SET task_id = sqlc.arg(task_id)

@@ -3,37 +3,26 @@ package sessionlaunch
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
-	"strings"
 
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
-	chatpb "core/shared/protoapi/gen/kent/api/chat"
+	"core/shared/protoapi"
 	chatsettingspb "core/shared/protoapi/gen/kent/api/chat_settings"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
 type InitialChatCreation struct {
-	Settings   InitialChatSettings
+	Settings   serverapi.InitialChatSettings
 	InputDraft *string
 }
 
-type InitialChatSettings struct {
-	AgentRole             string
-	Supervisor            serverapi.ChatSettingsSupervisorValue
-	Thinking              *string
-	Fast                  *bool
-	QuestionsEnabled      bool
-	AutoCompactionEnabled bool
-}
-
 func initialChatCreationFromGenerated(
-	settings *chatpb.InitialChatSettings,
+	settings *chatsettingspb.InitialChatSettings,
 	inputDraft *string,
 ) (*InitialChatCreation, error) {
 	if settings == nil {
@@ -42,32 +31,12 @@ func initialChatCreationFromGenerated(
 		}
 		return nil, nil
 	}
-	var supervisor serverapi.ChatSettingsSupervisorValue
-	switch settings.Supervisor {
-	case chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_OFF:
-		supervisor = serverapi.ChatSettingsSupervisorOff
-	case chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_AFTER_EDITS:
-		supervisor = serverapi.ChatSettingsSupervisorAfterEdits
-	case chatsettingspb.SupervisorValue_SUPERVISOR_VALUE_ALWAYS:
-		supervisor = serverapi.ChatSettingsSupervisorAlways
-	default:
-		return nil, fmt.Errorf("generated initial Chat Supervisor %v is invalid", settings.Supervisor)
-	}
-	if settings.QuestionsEnabled == nil {
-		return nil, errors.New("generated initial Chat Questions selection is required")
-	}
-	if settings.AutoCompactionEnabled == nil {
-		return nil, errors.New("generated initial Chat Auto-compaction selection is required")
+	selection, err := protoapi.InitialChatSettingsFromProto(settings)
+	if err != nil {
+		return nil, err
 	}
 	creation := &InitialChatCreation{
-		Settings: InitialChatSettings{
-			AgentRole:             settings.AgentRole,
-			Supervisor:            supervisor,
-			Thinking:              textutil.Pointer(settings.Thinking),
-			Fast:                  textutil.Pointer(settings.Fast),
-			QuestionsEnabled:      *settings.QuestionsEnabled,
-			AutoCompactionEnabled: *settings.AutoCompactionEnabled,
-		},
+		Settings:   selection,
 		InputDraft: textutil.Pointer(inputDraft),
 	}
 	return creation, nil
@@ -78,33 +47,6 @@ func (c InitialChatCreation) Validate(mode launch.Mode, intent serverapi.Session
 		return err
 	}
 	return c.Settings.Validate()
-}
-
-func (s InitialChatSettings) Validate() error {
-	agent := strings.TrimSpace(s.AgentRole)
-	if agent == "" {
-		return errors.New("initial Chat Agent is required")
-	}
-	if agent != s.AgentRole {
-		return errors.New("initial Chat Agent must not have leading or trailing whitespace")
-	}
-	switch s.Supervisor {
-	case serverapi.ChatSettingsSupervisorOff,
-		serverapi.ChatSettingsSupervisorAfterEdits,
-		serverapi.ChatSettingsSupervisorAlways:
-	default:
-		return fmt.Errorf("initial Chat Supervisor %q is invalid", s.Supervisor)
-	}
-	if s.Thinking != nil {
-		thinking := strings.TrimSpace(*s.Thinking)
-		if thinking == "" {
-			return errors.New("initial Chat Thinking is required when present")
-		}
-		if thinking != *s.Thinking {
-			return errors.New("initial Chat Thinking must not have leading or trailing whitespace")
-		}
-	}
-	return nil
 }
 
 func (s *Service) prepareInitialChatCreation(

@@ -132,7 +132,7 @@ func (s chatSettingsService) mutateSessionChatSettings(
 	}
 	if result.Kind == serverapi.ChatSettingsMutationApplied {
 		registry := s.core.safeBundles().Runtime.runtimeRegistry
-		feedback, publishFeedback, feedbackErr := transcriptSessionSettingFeedback(operation, changed, settings.Settings)
+		feedback, publishFeedback, feedbackErr := transcriptSessionSettingFeedback(operation, changed, settings.Session.Settings)
 		if feedbackErr != nil {
 			slog.ErrorContext(
 				responseCtx,
@@ -157,7 +157,7 @@ func (s chatSettingsService) mutateSessionChatSettings(
 			)
 		}
 	}
-	return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings.Settings, Session: settings.Session, Context: contextFacts}, nil
+	return serverapi.ChatSettingsMutationResponse{Result: result, Settings: settings.Session.Settings, Session: &settings.Session.Session, Context: contextFacts}, nil
 }
 
 func transcriptSessionSettingFeedback(

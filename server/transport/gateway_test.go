@@ -32,6 +32,7 @@ import (
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
 	chatpb "core/shared/protoapi/gen/kent/api/chat"
+	chatsettingspb "core/shared/protoapi/gen/kent/api/chat_settings"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
@@ -1663,7 +1664,7 @@ func TestGatewayAuthorizesNewChatAndSessionSettingsTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadChatSettings Session: %v", err)
 	}
-	if sessionSettings.Session == nil || sessionSettings.Session.SessionID != sessionID {
+	if sessionSettings.Session == nil || sessionSettings.Session.Session.SessionID != sessionID {
 		t.Fatalf("Session settings response = %+v", sessionSettings.Session)
 	}
 
@@ -1671,16 +1672,20 @@ func TestGatewayAuthorizesNewChatAndSessionSettingsTargets(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 	requireGatewayProjectAttachment(t, conn, "attach-project-chat-settings", &connectionpb.AttachProjectRequest{ProjectId: appCore.ProjectID()})
-	mismatched := callGatewayExpectError(
+	mismatched := &chatsettingspb.ReadResult{}
+	callGatewayDescriptor(
 		t,
 		conn,
 		"chat-settings-project-mismatch",
-		protocol.MethodChatSettingsRead,
-		serverapi.ChatSettingsReadRequest{
-			Target: serverapi.NewChatSettingsTarget("project-foreign", workspace.ID),
+		chatsettingspb.File_kent_api_chat_settings_chat_settings_proto.Services().ByName("ChatSettingsService").Methods().ByName("Read"),
+		&chatsettingspb.ReadRequest{
+			Target: &chatsettingspb.ReadRequest_NewChat{NewChat: &chatsettingspb.NewChatTarget{
+				ProjectId: "project-foreign", WorkspaceId: workspace.ID,
+			}},
 		},
+		mismatched,
 	)
-	if mismatched.Code == 0 {
+	if mismatched.GetError().GetWorkspaceNotRegistered() == nil {
 		t.Fatalf("New Chat project mismatch unexpectedly succeeded")
 	}
 }

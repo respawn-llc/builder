@@ -152,8 +152,6 @@ func implementsValidator(t reflect.Type) bool {
 var routeContracts = []Route{
 	unary[serverapi.ChatContextRequest, serverapi.ChatContextResponse](protocol.MethodChatContextGet, AuthPreServerAuth, ScopeSessionActiveProjectIfSet, ConnectionControl),
 	unary[serverapi.PromptCommandCatalogRequest, serverapi.PromptCommandCatalogResponse](protocol.MethodPromptCommandCatalogGet, AuthServer, ScopeProjectWorkspace, ConnectionControl),
-	unary[serverapi.ChatSettingsReadRequest, serverapi.ChatSettingsReadResponse](protocol.MethodChatSettingsRead, AuthServer, ScopeNone, ConnectionControl),
-	unary[serverapi.ChatSettingsMutationRequest, serverapi.ChatSettingsMutationResponse](protocol.MethodChatSettingsMutate, AuthServer, ScopeNone, ConnectionControl),
 	unary[serverapi.WorkflowCreateRequest, serverapi.WorkflowCreateResponse](protocol.MethodWorkflowCreate, AuthServer, ScopeProjectView, ConnectionUnscoped),
 	unary[serverapi.WorkflowCreateAndLinkProjectRequest, serverapi.WorkflowCreateAndLinkProjectResponse](protocol.MethodWorkflowCreateAndLinkProject, AuthServer, ScopeProjectView, ConnectionUnscoped),
 	unary[serverapi.WorkflowUpdateRequest, serverapi.WorkflowGetResponse](protocol.MethodWorkflowUpdate, AuthServer, ScopeProjectView, ConnectionUnscoped),

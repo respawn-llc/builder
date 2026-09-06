@@ -1,6 +1,7 @@
 import type { DescMethod, Message, MessageShape } from "@app/server-api-contract";
 import type { ChatOperationError as WireChatOperationError } from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
 import { AgentPreparationCategory } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
+import type { ReadError } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
 import type {
   ListPendingWorkError,
   LiveStopError,
@@ -37,6 +38,7 @@ export class ChatOperationError extends RpcError {
 
 type ChatWireError =
   | WireChatOperationError
+  | ReadError
   | ListPendingWorkError
   | LiveStopError
   | RemovePendingWorkError
@@ -123,26 +125,5 @@ function agentPreparationCategory(
       return "internal_preparation";
     case AgentPreparationCategory.UNSPECIFIED:
       throw new ContractError("Chat operation returned an invalid Agent preparation category.");
-  }
-}
-
-export function chatErrorMessage(error: ChatError): string {
-  switch (error.kind) {
-    case "session_not_found":
-      return "This Session no longer exists.";
-    case "workspace_not_registered":
-      return "This workspace is no longer registered.";
-    case "agent_preparation":
-      return `The ${error.agent} agent could not be prepared.`;
-    case "auth_required":
-      return "Sign in before starting this Chat.";
-    case "server_not_ready":
-      return "Kent is not ready to start this Chat yet.";
-    case "runtime_unavailable":
-      return "This Session is not available right now.";
-    case "internal_failure":
-      return "Kent could not complete the Chat operation.";
-    case "unknown":
-      return `Kent could not complete the Chat operation (${error.code}).`;
   }
 }

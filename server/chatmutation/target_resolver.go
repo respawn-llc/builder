@@ -8,6 +8,7 @@ import (
 	"core/server/session"
 	"core/shared/protoapi"
 	chatpb "core/shared/protoapi/gen/kent/api/chat"
+	chatsettingspb "core/shared/protoapi/gen/kent/api/chat_settings"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -94,7 +95,7 @@ func (r *TargetResolver) Resolve(
 	if err != nil {
 		return ResolvedTarget{}, err
 	}
-	settings := proto.Clone(newChat.InitialSettings).(*chatpb.InitialChatSettings)
+	settings := proto.Clone(newChat.InitialSettings).(*chatsettingspb.InitialChatSettings)
 	response, err := service.PlanSession(ctx, &sessionlaunchpb.SessionPlanRequest{
 		Mode:                sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_INTERACTIVE,
 		Intent:              intent,

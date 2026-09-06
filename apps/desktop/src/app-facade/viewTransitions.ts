@@ -1,4 +1,4 @@
-export type ViewTransitionScope = "route" | "board-card";
+export type ViewTransitionScope = "route" | "board-card" | "chat-settings";
 
 export type ViewTransitionOptions = Readonly<{
   scope: ViewTransitionScope;
