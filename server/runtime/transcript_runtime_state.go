@@ -108,7 +108,11 @@ func (s *transcriptRuntimeState) liveToolLedger() *transcriptLiveToolLedger {
 
 func (s *transcriptRuntimeState) RecordLiveToolStart(stepID string, call llm.ToolCall) error {
 	if ledger := s.liveToolLedger(); ledger != nil {
-		return ledger.RecordStart(transcriptLiveToolStartFromCall(stepID, call))
+		start, err := transcriptLiveToolStartFromCallChecked(stepID, call)
+		if err != nil {
+			return err
+		}
+		return ledger.RecordStart(start)
 	}
 	return nil
 }
@@ -125,20 +129,28 @@ func (s *transcriptRuntimeState) SeedLiveTools(starts []TranscriptLiveToolStart)
 	}
 }
 
-func (s *transcriptRuntimeState) ToolCallSnapshot(callID string) (llm.ToolCall, bool) {
+func (s *transcriptRuntimeState) ToolCallSnapshot(callID string) (llm.ToolCall, bool, error) {
 	if ledger := s.liveToolLedger(); ledger != nil {
 		if start, ok := ledger.Lookup(callID); ok && start.Presentation != nil {
+			presentation, err := transcript.TryEncodeToolCallMeta(*start.Presentation)
+			if err != nil {
+				return llm.ToolCall{}, false, fmt.Errorf(
+					"encode live tool call presentation snapshot: %w",
+					err,
+				)
+			}
 			return llm.ToolCall{
 				ID:           start.ToolCallID,
 				Name:         start.ToolName,
-				Presentation: transcript.EncodeToolCallMeta(*start.Presentation),
-			}, true
+				Presentation: presentation,
+			}, true, nil
 		}
 	}
 	if chat := s.chatProjection(); chat != nil {
-		return chat.toolCallSnapshot(callID)
+		call, ok := chat.toolCallSnapshot(callID)
+		return call, ok, nil
 	}
-	return llm.ToolCall{}, false
+	return llm.ToolCall{}, false, nil
 }
 
 func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {

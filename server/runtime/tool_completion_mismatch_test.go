@@ -276,15 +276,17 @@ func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session
 			}
 		}
 	}
-	if completion == nil || completion.Presentation == nil || completion.Presentation.PatchRender == nil {
+	if completion == nil || completion.Presentation == nil ||
+		completion.Presentation.PatchPresentation == nil ||
+		completion.Presentation.PatchPresentation.Changes == nil {
 		t.Fatalf("missing fallback completion presentation: %+v", completion)
 	}
 	if feedback == nil || feedback.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
 		t.Fatalf("missing typed mismatch feedback: %+v", feedback)
 	}
-	for _, file := range completion.Presentation.PatchRender.Files {
-		for _, deletion := range file.WholeFileDeletions {
-			if deletion.Disposition != nil {
+	for _, file := range completion.Presentation.PatchPresentation.Changes.Files {
+		for _, operation := range file.Operations {
+			if operation.Deletion != nil && operation.Deletion.Disposition != nil {
 				t.Fatalf("fallback fabricated deletion disposition: %+v", completion.Presentation)
 			}
 		}

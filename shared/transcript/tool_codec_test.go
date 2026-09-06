@@ -8,19 +8,20 @@ import (
 	patchformat "core/shared/transcript/patchformat"
 )
 
-func TestDecodeToolCallMetaTreatsEmptyObjectAsAbsent(t *testing.T) {
-	meta, ok := DecodeToolCallMeta(json.RawMessage(`{}`))
-	if ok {
-		t.Fatalf("expected empty tool metadata to decode as absent, got %+v", meta)
+func TestDecodeToolCallMetaTreatsEmptyObjectAsInvalid(t *testing.T) {
+	result := DecodeToolCallMeta(json.RawMessage(`{}`))
+	if result.Kind != ToolCallMetaDecodeInvalid || result.Cause == nil {
+		t.Fatalf("expected empty tool metadata to decode as invalid, got %+v", result)
 	}
 }
 
 func TestDecodeToolCallMetaRoundTripsNonEmptyMetadata(t *testing.T) {
 	raw := EncodeToolCallMeta(ToolCallMeta{ToolName: "shell", Command: "echo hi"})
-	meta, ok := DecodeToolCallMeta(raw)
-	if !ok {
-		t.Fatal("expected tool metadata to decode successfully")
+	result := DecodeToolCallMeta(raw)
+	if result.Kind != ToolCallMetaDecodeCurrent || result.Meta == nil {
+		t.Fatalf("expected current tool metadata, got %+v", result)
 	}
+	meta := result.Meta
 	if meta.ToolName != "shell" || meta.Command != "echo hi" {
 		t.Fatalf("unexpected decoded metadata: %+v", meta)
 	}
@@ -35,10 +36,11 @@ func TestEncodeDecodeToolCallMetaRoundTripsShellDialect(t *testing.T) {
 			ShellDialect: ToolShellDialectWindowsCommand,
 		},
 	})
-	meta, ok := DecodeToolCallMeta(raw)
-	if !ok {
-		t.Fatal("expected tool metadata to decode successfully")
+	result := DecodeToolCallMeta(raw)
+	if result.Kind != ToolCallMetaDecodeCurrent || result.Meta == nil {
+		t.Fatalf("expected current tool metadata, got %+v", result)
 	}
+	meta := result.Meta
 	if meta.RenderHint == nil {
 		t.Fatalf("expected render hint, got %+v", meta)
 	}
@@ -57,10 +59,11 @@ func TestEncodeDecodeToolCallMetaRoundTripsShellOutputStatus(t *testing.T) {
 		MovedToBackground:  true,
 		ShellExitCode:      &exitCode,
 	})
-	meta, ok := DecodeToolCallMeta(raw)
-	if !ok {
-		t.Fatal("expected tool metadata to decode successfully")
+	result := DecodeToolCallMeta(raw)
+	if result.Kind != ToolCallMetaDecodeCurrent || result.Meta == nil {
+		t.Fatalf("expected current tool metadata, got %+v", result)
 	}
+	meta := result.Meta
 	if !meta.RawOutputRequested || !meta.OutputTruncated || !meta.MovedToBackground ||
 		meta.ShellExitCode == nil || *meta.ShellExitCode != 7 {
 		t.Fatalf("expected shell output status to round-trip, got %+v", meta)
@@ -95,21 +98,36 @@ func TestEncodeDecodeToolCallMetaPreservesDeletionDispositionPresence(t *testing
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			raw := EncodeToolCallMeta(ToolCallMeta{
-				ToolName: "patch",
-				PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
-					RelPath: "target.txt",
-					WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-						ID:          id,
-						Disposition: test.disposition,
+			presentation := patchformat.Render(
+				"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+				"/workspace",
+			)
+			if test.disposition != nil {
+				finalized, mismatch := patchformat.ApplyWholeFileDeletionFacts(
+					presentation,
+					[]patchformat.WholeFileDeletionFact{{
+						PhysicalGroup: test.disposition.PhysicalGroup,
+						OperationIDs:  []patchformat.WholeFileDeletionOperationID{id},
+						Removed:       test.disposition.Removed,
 					}},
-				}}},
-			})
-			meta, ok := DecodeToolCallMeta(raw)
-			if !ok || meta.PatchRender == nil {
-				t.Fatalf("decode finalized patch metadata: ok=%t meta=%+v", ok, meta)
+				)
+				if mismatch != nil {
+					t.Fatalf("finalize deletion presentation: %v", mismatch)
+				}
+				presentation = finalized
 			}
-			removed := patchformat.RemovedLineCount(meta.PatchRender.Files[0])
+			raw := EncodeToolCallMeta(ToolCallMeta{
+				ToolName:          "patch",
+				PatchPresentation: &presentation,
+			})
+			result := DecodeToolCallMeta(raw)
+			if result.Kind != ToolCallMetaDecodeCurrent ||
+				result.Meta == nil ||
+				result.Meta.PatchPresentation == nil ||
+				result.Meta.PatchPresentation.Changes == nil {
+				t.Fatalf("decode finalized patch metadata: %+v", result)
+			}
+			removed := result.Meta.PatchPresentation.Changes.Files[0].Removed
 			if test.wantRemoved == nil {
 				if removed != nil {
 					t.Fatalf("removed count = %d, want absent", *removed)
@@ -123,7 +141,7 @@ func TestEncodeDecodeToolCallMetaPreservesDeletionDispositionPresence(t *testing
 	}
 }
 
-func TestDecodeToolCallMetaAcceptsLegacyDeletionOperationWithoutDisposition(t *testing.T) {
+func TestDecodeToolCallMetaRejectsLegacyPatchMetadataBeforeNormalization(t *testing.T) {
 	raw := json.RawMessage(`{
 		"ToolName":"patch",
 		"PatchRender":{
@@ -135,14 +153,8 @@ func TestDecodeToolCallMetaAcceptsLegacyDeletionOperationWithoutDisposition(t *t
 		}
 	}`)
 
-	meta, ok := DecodeToolCallMeta(raw)
-	if !ok || meta.PatchRender == nil {
-		t.Fatalf("decode legacy patch metadata: ok=%t meta=%+v", ok, meta)
-	}
-	file := meta.PatchRender.Files[0]
-	if file.Removed != 1 ||
-		len(file.WholeFileDeletions) != 1 ||
-		file.WholeFileDeletions[0].Disposition != nil {
-		t.Fatalf("legacy patch metadata was reclassified: %+v", file)
+	result := DecodeToolCallMeta(raw)
+	if result.Kind != ToolCallMetaDecodeInvalid || result.Cause == nil {
+		t.Fatalf("legacy patch metadata decoded as current: %+v", result)
 	}
 }

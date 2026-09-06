@@ -370,7 +370,7 @@ func cloneDetailTranscriptRows(entries []clientui.TranscriptCommittedRow) []clie
 			copyRow.Tool.CondensedText = textutil.Pointer(row.Tool.CondensedText)
 			if row.Tool.Presentation != nil {
 				presentation := transcript.NormalizeToolCallMeta(*row.Tool.Presentation)
-				presentation.PatchRender = patchformat.Clone(presentation.PatchRender)
+				presentation.PatchPresentation = patchformat.ClonePresentation(presentation.PatchPresentation)
 				copyRow.Tool.Presentation = &presentation
 			}
 		}

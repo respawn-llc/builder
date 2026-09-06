@@ -80,6 +80,10 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		if err != nil {
 			return fmt.Errorf("restore session message record: %w", err)
 		}
+		msg, err = normalizeMessageForTranscriptChecked(msg, "")
+		if err != nil {
+			return fmt.Errorf("restore session message transcript presentation: %w", err)
+		}
 		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 		if provenanceErr != nil {
 			return provenanceErr

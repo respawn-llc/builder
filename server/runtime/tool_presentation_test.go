@@ -5,6 +5,7 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 	"testing"
 )
 
@@ -19,17 +20,23 @@ func TestNormalizeToolCallForTranscriptUsesCustomPatchInput(t *testing.T) {
 	}
 
 	normalized := normalizeToolCallForTranscript(call, "/workspace")
-	meta, ok := transcript.DecodeToolCallMeta(normalized.Presentation)
-	if !ok || meta == nil {
-		t.Fatalf("expected presentation metadata for custom patch call")
+	decoded := transcript.DecodeToolCallMeta(normalized.Presentation)
+	if decoded.Kind != transcript.ToolCallMetaDecodeCurrent || decoded.Meta == nil {
+		t.Fatalf("expected current presentation metadata for custom patch call: %+v", decoded)
 	}
-	if !meta.HasPatchSummary() || !meta.HasPatchDetail() || meta.PatchRender == nil {
-		t.Fatalf("expected patch summary/detail/render metadata, got %+v", meta)
+	meta := decoded.Meta
+	if meta.PatchPresentation == nil ||
+		meta.PatchPresentation.Variant != patchformat.PresentationVariantChanges ||
+		meta.PatchPresentation.Changes == nil ||
+		len(meta.PatchPresentation.Changes.Files) != 1 {
+		t.Fatalf("expected current patch change facts, got %+v", meta)
 	}
-	if meta.PatchSummary != "./cli/app/ui_status.go +2 -1" {
-		t.Fatalf("unexpected custom patch summary: %q", meta.PatchSummary)
+	file := meta.PatchPresentation.Changes.Files[0]
+	if file.Path.Relative != "./cli/app/ui_status.go" ||
+		file.Added != 2 || file.Removed == nil || *file.Removed != 1 {
+		t.Fatalf("unexpected custom patch facts: %+v", file)
 	}
-	if meta.Command == patchText {
-		t.Fatalf("expected command to be rendered patch detail, not raw freeform payload")
+	if meta.Command != "" || meta.CompactText != "" {
+		t.Fatalf("obsolete patch text projection retained: %+v", meta)
 	}
 }

@@ -124,17 +124,13 @@ func TestApplyToolResultPresentationDeltaCopiesShellExitCode(t *testing.T) {
 }
 
 func TestApplyToolResultPresentationDeltaFinalizesGroupedDeletionFactsWithoutMutatingCallMetadata(t *testing.T) {
-	rendered := patchformat.Render(
+	presentation := patchformat.Render(
 		"*** Begin Patch\n*** Delete File: target.txt\n*** Delete File: target.txt\n*** End Patch\n",
 		"/workspace",
 	)
 	meta := ToolCallMeta{
-		ToolName:     "patch",
-		Command:      rendered.DetailText(),
-		CompactText:  rendered.SummaryText(),
-		PatchDetail:  rendered.DetailText(),
-		PatchSummary: rendered.SummaryText(),
-		PatchRender:  &rendered,
+		ToolName:          "patch",
+		PatchPresentation: &presentation,
 	}
 	first := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	delta := &ToolResultPresentationDelta{
@@ -156,53 +152,51 @@ func TestApplyToolResultPresentationDeltaFinalizesGroupedDeletionFactsWithoutMut
 	if mismatch != nil {
 		t.Fatalf("apply deletion presentation delta: %+v", mismatch)
 	}
-	if applied.PatchRender == nil {
-		t.Fatal("finalized patch render is absent")
+	if applied.PatchPresentation == nil || applied.PatchPresentation.Changes == nil {
+		t.Fatal("finalized patch change facts are absent")
 	}
-	if removed := patchformat.RemovedLineCount(applied.PatchRender.Files[0]); removed == nil || *removed != 5 {
-		t.Fatalf("finalized removed count = %v, want known 5", removed)
+	file := applied.PatchPresentation.Changes.Files[0]
+	if file.Removed == nil || *file.Removed != 5 {
+		t.Fatalf("finalized removed count = %v, want known 5", file.Removed)
 	}
-	if applied.Command != applied.PatchDetail ||
-		applied.CompactText != applied.PatchSummary ||
-		applied.PatchDetail != applied.PatchRender.DetailText() ||
-		applied.PatchSummary != applied.PatchRender.SummaryText() {
-		t.Fatalf("finalized patch aliases are stale: %+v", applied)
+	if applied.Command != "" || applied.CompactText != "" {
+		t.Fatalf("finalized patch retained obsolete text projections: %+v", applied)
 	}
-	if meta.PatchRender.Files[0].WholeFileDeletions[0].Disposition != nil {
-		t.Fatalf("authoritative call metadata was mutated: %+v", meta.PatchRender.Files[0])
+	if meta.PatchPresentation.Changes.Files[0].Operations[0].Deletion.Disposition != nil {
+		t.Fatalf("authoritative call metadata was mutated: %+v", meta.PatchPresentation)
 	}
 }
 
 func TestApplyToolResultPresentationDeltaPreservesPendingDispositionForFailedDeletion(t *testing.T) {
-	rendered := patchformat.Render(
+	presentation := patchformat.Render(
 		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
 		"/workspace",
 	)
 
 	applied, mismatch := ApplyToolResultPresentationDelta(
-		ToolCallMeta{ToolName: "patch", PatchRender: &rendered},
+		ToolCallMeta{ToolName: "patch", PatchPresentation: &presentation},
 		nil,
 		ToolResultPresentationOutcomeFailed,
 	)
 	if mismatch != nil {
 		t.Fatalf("apply failed deletion presentation: %+v", mismatch)
 	}
-	if applied.PatchRender == nil {
-		t.Fatal("failed deletion lost prepared patch render")
+	if applied.PatchPresentation == nil || applied.PatchPresentation.Changes == nil {
+		t.Fatal("failed deletion lost prepared patch change facts")
 	}
-	if removed := patchformat.RemovedLineCount(applied.PatchRender.Files[0]); removed != nil {
+	if removed := applied.PatchPresentation.Changes.Files[0].Removed; removed != nil {
 		t.Fatalf("failed deletion fabricated removed count %d", *removed)
 	}
 }
 
 func TestApplyToolResultPresentationDeltaReturnsTypedMissingFactMismatch(t *testing.T) {
-	rendered := patchformat.Render(
+	presentation := patchformat.Render(
 		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
 		"/workspace",
 	)
 
 	_, mismatch := ApplyToolResultPresentationDelta(
-		ToolCallMeta{ToolName: "patch", PatchRender: &rendered},
+		ToolCallMeta{ToolName: "patch", PatchPresentation: &presentation},
 		&ToolResultPresentationDelta{},
 		ToolResultPresentationOutcomeSuccessful,
 	)

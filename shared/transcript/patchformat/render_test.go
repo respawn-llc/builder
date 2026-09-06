@@ -2,24 +2,31 @@ package patchformat
 
 import "testing"
 
-func TestRenderFormatsSummaryAndDetailFromParsedPatch(t *testing.T) {
+func TestRenderBuildsTypedChangesFromParsedPatch(t *testing.T) {
 	patchText := "*** Begin Patch\n*** Update File: dir/a.go\n-old\n+new\n*** Add File: b.go\n+hello\n*** End Patch\n"
-	rendered := Render(patchText, "/workspace")
+	presentation := Render(patchText, "/workspace")
 
-	if got := rendered.SummaryText(); got != "./dir/a.go +1 -1\n./b.go +1" {
-		t.Fatalf("unexpected summary: %q", got)
+	if !presentation.Valid() || presentation.Variant != PresentationVariantChanges ||
+		presentation.Changes == nil || len(presentation.Changes.Files) != 2 {
+		t.Fatalf("unexpected presentation: %+v", presentation)
 	}
-	if got := rendered.DetailText(); got != "/workspace/dir/a.go\n-old\n+new\n/workspace/b.go\n+hello" {
-		t.Fatalf("unexpected detail: %q", got)
+	update := presentation.Changes.Files[0]
+	if update.Path != (Path{Absolute: "/workspace/dir/a.go", Relative: "./dir/a.go"}) ||
+		update.Added != 1 || update.Removed == nil || *update.Removed != 1 ||
+		len(update.Operations) != 1 || update.Operations[0].Kind != FileOperationUpdate {
+		t.Fatalf("unexpected update facts: %+v", update)
 	}
-	if len(rendered.DetailLines) != 5 {
-		t.Fatalf("expected detail line metadata, got %+v", rendered.DetailLines)
+	add := presentation.Changes.Files[1]
+	if add.Path != (Path{Absolute: "/workspace/b.go", Relative: "./b.go"}) ||
+		add.Added != 1 || add.Removed == nil || *add.Removed != 0 ||
+		len(add.Operations) != 1 || add.Operations[0].Kind != FileOperationAdd {
+		t.Fatalf("unexpected add facts: %+v", add)
 	}
-	if rendered.DetailLines[0].Kind != RenderedLineKindFile || rendered.DetailLines[0].Path != "/workspace/dir/a.go" {
-		t.Fatalf("expected first detail file header metadata, got %+v", rendered.DetailLines[0])
-	}
-	if rendered.DetailLines[3].Kind != RenderedLineKindFile || rendered.DetailLines[3].Path != "/workspace/b.go" {
-		t.Fatalf("expected second detail file header metadata, got %+v", rendered.DetailLines[3])
+	if got := update.Operations[0].Groups; len(got) != 1 ||
+		len(got[0].Lines) != 2 ||
+		got[0].Lines[0] != (ChangedLine{Kind: ChangedLineRemoved, Content: "old"}) ||
+		got[0].Lines[1] != (ChangedLine{Kind: ChangedLineAdded, Content: "new"}) {
+		t.Fatalf("unexpected ordered changed lines: %+v", got)
 	}
 }
 
@@ -38,20 +45,13 @@ func TestParseHeredocRequiresExactEOFDelimiter(t *testing.T) {
 	}
 }
 
-func TestRenderFallsBackToRawForUnparseablePatch(t *testing.T) {
-	rendered := Render("not a structured patch payload", "/workspace")
+func TestRenderClassifiesUnparseablePatchAsInvalidInput(t *testing.T) {
+	presentation := Render("not a structured patch payload", "/workspace")
 
-	if got := rendered.SummaryText(); got != "not a structured patch payload" {
-		t.Fatalf("unexpected raw summary: %q", got)
-	}
-	if got := rendered.DetailText(); got != "not a structured patch payload" {
-		t.Fatalf("unexpected raw detail: %q", got)
-	}
-	if len(rendered.Files) != 0 {
-		t.Fatalf("expected raw fallback to omit file metadata, got %+v", rendered.Files)
-	}
-	if len(rendered.DetailLines) != 1 || rendered.DetailLines[0].Kind != RenderedLineKindRaw {
-		t.Fatalf("expected raw detail line metadata, got %+v", rendered.DetailLines)
+	if !presentation.Valid() || presentation.Variant != PresentationVariantInvalidInput ||
+		presentation.InvalidInput == nil ||
+		presentation.InvalidInput.InputDetail != "not a structured patch payload" {
+		t.Fatalf("unexpected invalid-input presentation: %+v", presentation)
 	}
 }
 
@@ -61,15 +61,16 @@ func TestFormatUsesMoveTargetForRenderedPaths(t *testing.T) {
 		t.Fatalf("parse patch: %v", err)
 	}
 
-	rendered := Format(doc, "/workspace")
-	if len(rendered.Files) != 1 {
-		t.Fatalf("expected one rendered file, got %+v", rendered.Files)
+	changes := Format(doc, "/workspace")
+	if len(changes.Files) != 1 {
+		t.Fatalf("expected one changed file, got %+v", changes.Files)
 	}
-	if rendered.Files[0].AbsPath != "/workspace/dest.txt" || rendered.Files[0].RelPath != "./dest.txt" {
-		t.Fatalf("expected move target paths, got %+v", rendered.Files[0])
-	}
-	if got := rendered.DetailText(); got != "/workspace/dest.txt\n-old\n+new" {
-		t.Fatalf("unexpected moved detail: %q", got)
+	file := changes.Files[0]
+	if file.Path != (Path{Absolute: "/workspace/dest.txt", Relative: "./dest.txt"}) ||
+		len(file.Operations) != 1 || file.Operations[0].Kind != FileOperationMove ||
+		file.Operations[0].Source == nil ||
+		*file.Operations[0].Source != (Path{Absolute: "/workspace/src.txt", Relative: "./src.txt"}) {
+		t.Fatalf("expected move paths and operation, got %+v", file)
 	}
 }
 
@@ -93,14 +94,11 @@ func TestFormatPreservesRelativeOutsideWorkspacePath(t *testing.T) {
 		t.Fatalf("parse patch: %v", err)
 	}
 
-	rendered := Format(doc, "/workspace/project")
-	if len(rendered.Files) != 1 {
-		t.Fatalf("expected one rendered file, got %+v", rendered.Files)
+	changes := Format(doc, "/workspace/project")
+	if len(changes.Files) != 1 {
+		t.Fatalf("expected one changed file, got %+v", changes.Files)
 	}
-	if rendered.Files[0].RelPath != "../outside.go" {
-		t.Fatalf("expected outside-workspace relative path preserved, got %+v", rendered.Files[0])
-	}
-	if got := rendered.SummaryText(); got != "../outside.go +1" {
-		t.Fatalf("unexpected summary: %q", got)
+	if changes.Files[0].Path.Relative != "../outside.go" {
+		t.Fatalf("expected outside-workspace relative path preserved, got %+v", changes.Files[0])
 	}
 }

@@ -3,6 +3,7 @@ package transcript
 import (
 	"testing"
 
+	"core/shared/textutil"
 	patchformat "core/shared/transcript/patchformat"
 )
 
@@ -58,83 +59,84 @@ func TestEntryPayloadEqualTreatsEmptyToolMetadataAsAbsent(t *testing.T) {
 	}
 }
 
-func TestEntryPayloadEqualIncludesPatchRenderMetadata(t *testing.T) {
+func TestEntryPayloadEqualIncludesPatchPresentationMetadata(t *testing.T) {
+	leftPresentation := patchformat.Render(
+		"*** Begin Patch\n*** Add File: a.go\n+package a\n*** End Patch\n",
+		"/workspace",
+	)
+	rightPresentation := patchformat.Render(
+		"*** Begin Patch\n*** Add File: b.go\n+package b\n*** End Patch\n",
+		"/workspace",
+	)
 	left := EntryPayload{
 		Role:       "tool_call",
 		Text:       "patch",
 		ToolCallID: "call-1",
-		ToolCall: &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
-			SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "a.go"}},
-		}},
+		ToolCall: &ToolCallMeta{
+			ToolName:          "patch",
+			PatchPresentation: &leftPresentation,
+		},
 	}
 	right := EntryPayload{
 		Role:       "tool_call",
 		Text:       "patch",
 		ToolCallID: "call-1",
-		ToolCall: &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
-			SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "b.go"}},
-		}},
+		ToolCall: &ToolCallMeta{
+			ToolName:          "patch",
+			PatchPresentation: &rightPresentation,
+		},
 	}
 
 	if EntryPayloadEqual(left, right) {
-		t.Fatal("expected patch render summary change to make entries different")
+		t.Fatal("expected patch presentation change to make entries different")
 	}
 }
 
 func TestToolCallMetaEqualDistinguishesWholeFileDeletionDispositionStates(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	group := patchformat.WholeFileDeletionGroupID{FirstOperation: id}
-	legacy := &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
-		Files: []patchformat.RenderedFile{{RelPath: "target.txt"}},
-	}}
-	pending := &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
-		Files: []patchformat.RenderedFile{{
-			RelPath: "target.txt",
-			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-				ID: id,
-			}},
+	pendingPresentation := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+	pending := &ToolCallMeta{ToolName: "patch", PatchPresentation: &pendingPresentation}
+	zeroPresentation, mismatch := patchformat.ApplyWholeFileDeletionFacts(
+		pendingPresentation,
+		[]patchformat.WholeFileDeletionFact{{
+			PhysicalGroup: group,
+			OperationIDs:  []patchformat.WholeFileDeletionOperationID{id},
+			Removed:       0,
 		}},
-	}}
-	zero := &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
-		Files: []patchformat.RenderedFile{{
-			RelPath: "target.txt",
-			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-				ID: id,
-				Disposition: &patchformat.WholeFileDeletionDisposition{
-					PhysicalGroup: group,
-					Removed:       0,
-				},
-			}},
-		}},
-	}}
-
-	if ToolCallMetaEqual(legacy, pending) {
-		t.Fatal("legacy missing operation metadata equals explicit pending operation")
+	)
+	if mismatch != nil {
+		t.Fatalf("finalize zero-line deletion: %v", mismatch)
 	}
+	zero := &ToolCallMeta{ToolName: "patch", PatchPresentation: &zeroPresentation}
 	if ToolCallMetaEqual(pending, zero) {
 		t.Fatal("absent disposition equals present zero disposition")
 	}
 
 	positive := cloneToolCallMetaForEqualityTest(zero)
-	positive.PatchRender.Files[0].WholeFileDeletions[0].Disposition.Removed = 4
+	positive.PatchPresentation.Changes.Files[0].Removed = textutil.Value(4)
+	positive.PatchPresentation.Changes.Files[0].Operations[0].Deletion.Disposition.Removed = 4
 	if ToolCallMetaEqual(zero, positive) {
 		t.Fatal("present zero equals present positive disposition")
 	}
 
 	otherGroup := cloneToolCallMetaForEqualityTest(positive)
-	otherGroup.PatchRender.Files[0].WholeFileDeletions[0].Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 1
+	otherGroup.PatchPresentation.Changes.Files[0].Operations[0].Deletion.Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 1
 	if ToolCallMetaEqual(positive, otherGroup) {
 		t.Fatal("different physical group identity compares equal")
 	}
 
-	legacyCopy := cloneToolCallMetaForEqualityTest(legacy)
-	if !ToolCallMetaEqual(legacy, legacyCopy) {
-		t.Fatal("equivalent legacy renders compare different")
+	pendingCopy := cloneToolCallMetaForEqualityTest(pending)
+	if !ToolCallMetaEqual(pending, pendingCopy) {
+		t.Fatal("equivalent pending presentations compare different")
 	}
 }
 
 func cloneToolCallMetaForEqualityTest(source *ToolCallMeta) *ToolCallMeta {
 	cloned := *source
-	cloned.PatchRender = patchformat.Clone(source.PatchRender)
+	cloned.PatchPresentation = patchformat.ClonePresentation(source.PatchPresentation)
 	return &cloned
 }

@@ -193,8 +193,6 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *transcript.ToolCallMeta {
 		renderHint := *meta.RenderHint
 		copyMeta.RenderHint = &renderHint
 	}
-	if meta.PatchRender != nil {
-		copyMeta.PatchRender = patchformat.Clone(meta.PatchRender)
-	}
+	copyMeta.PatchPresentation = patchformat.ClonePresentation(meta.PatchPresentation)
 	return &copyMeta
 }

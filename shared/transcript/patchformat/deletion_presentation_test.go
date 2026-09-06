@@ -6,31 +6,34 @@ import (
 )
 
 func TestWholeFileDeletionPresentationFinalizesGroupedAliasesWithoutMutatingSource(t *testing.T) {
-	rendered := Format(Document{Hunks: []any{
+	changes := Format(Document{Hunks: []any{
 		DeleteFile{Path: "target.txt"},
 		DeleteFile{Path: "target.txt"},
 		DeleteFile{Path: "alias.txt"},
 	}}, "/workspace")
-	if len(rendered.Files) != 2 ||
-		len(rendered.Files[0].WholeFileDeletions) != 2 ||
-		len(rendered.Files[1].WholeFileDeletions) != 1 {
-		t.Fatalf("pending operations = %+v", rendered.Files)
+	if len(changes.Files) != 2 ||
+		len(changes.Files[0].Operations) != 2 ||
+		len(changes.Files[1].Operations) != 1 {
+		t.Fatalf("pending operations = %+v", changes.Files)
 	}
 	for ordinal, operation := range []WholeFileDeletionOperation{
-		rendered.Files[0].WholeFileDeletions[0],
-		rendered.Files[0].WholeFileDeletions[1],
-		rendered.Files[1].WholeFileDeletions[0],
+		*changes.Files[0].Operations[0].Deletion,
+		*changes.Files[0].Operations[1].Deletion,
+		*changes.Files[1].Operations[0].Deletion,
 	} {
 		if operation.ID.HunkOrdinal != ordinal || operation.Disposition != nil {
 			t.Fatalf("pending operation %d = %+v", ordinal, operation)
 		}
 	}
-	if RemovedLineCount(rendered.Files[0]) != nil {
+	if changes.Files[0].Removed != nil {
 		t.Fatal("pending deletion exposed a removal count")
 	}
 
 	first := WholeFileDeletionOperationID{HunkOrdinal: 0}
-	finalized, mismatch := ApplyWholeFileDeletionFacts(rendered, []WholeFileDeletionFact{{
+	finalized, mismatch := ApplyWholeFileDeletionFacts(Presentation{
+		Variant: PresentationVariantChanges,
+		Changes: &changes,
+	}, []WholeFileDeletionFact{{
 		PhysicalGroup: WholeFileDeletionGroupID{FirstOperation: first},
 		OperationIDs: []WholeFileDeletionOperationID{
 			first,
@@ -43,53 +46,49 @@ func TestWholeFileDeletionPresentationFinalizesGroupedAliasesWithoutMutatingSour
 		t.Fatalf("apply grouped fact: %+v", mismatch)
 	}
 	for index, file := range finalized.Files {
-		if removed := RemovedLineCount(file); removed == nil || *removed != 7 {
-			t.Fatalf("file %d removed count = %v, want known 7", index, removed)
+		if file.Removed == nil || *file.Removed != 7 {
+			t.Fatalf("file %d removed count = %v, want known 7", index, file.Removed)
 		}
-		for _, operation := range file.WholeFileDeletions {
-			if operation.Disposition == nil ||
-				operation.Disposition.PhysicalGroup.FirstOperation != first ||
-				operation.Disposition.Removed != 7 {
+		for _, operation := range file.Operations {
+			if operation.Deletion == nil ||
+				operation.Deletion.Disposition == nil ||
+				operation.Deletion.Disposition.PhysicalGroup.FirstOperation != first ||
+				operation.Deletion.Disposition.Removed != 7 {
 				t.Fatalf("file %d operation = %+v", index, operation)
 			}
 		}
 	}
-	if rendered.Files[0].WholeFileDeletions[0].Disposition != nil {
+	if changes.Files[0].Operations[0].Deletion.Disposition != nil {
 		t.Fatal("fact application mutated its source")
-	}
-	if slices.Equal(rendered.SummaryLines, finalized.SummaryLines) ||
-		finalized.SummaryText() != joinRenderedLines(finalized.SummaryLines) ||
-		finalized.DetailText() != joinRenderedLines(finalized.DetailLines) {
-		t.Fatal("fact application did not regenerate render aliases")
 	}
 }
 
 func TestWholeFileDeletionPresentationPreservesKnownZero(t *testing.T) {
-	rendered := Render(
+	presentation := Render(
 		"*** Begin Patch\n*** Delete File: empty.txt\n*** End Patch\n",
 		"/workspace",
 	)
 	id := WholeFileDeletionOperationID{HunkOrdinal: 0}
-	finalized, mismatch := ApplyWholeFileDeletionFacts(rendered, []WholeFileDeletionFact{{
+	finalized, mismatch := ApplyWholeFileDeletionFacts(presentation, []WholeFileDeletionFact{{
 		PhysicalGroup: WholeFileDeletionGroupID{FirstOperation: id},
 		OperationIDs:  []WholeFileDeletionOperationID{id},
 	}})
 	if mismatch != nil {
 		t.Fatalf("apply zero fact: %+v", mismatch)
 	}
-	if removed := RemovedLineCount(finalized.Files[0]); removed == nil || *removed != 0 {
-		t.Fatalf("removed count = %v, want present zero", removed)
+	if finalized.Files[0].Removed == nil || *finalized.Files[0].Removed != 0 {
+		t.Fatalf("removed count = %v, want present zero", finalized.Files[0].Removed)
 	}
 }
 
 func TestWholeFileDeletionPresentationReturnsTypedMismatchContext(t *testing.T) {
-	rendered := Render(
+	presentation := Render(
 		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
 		"/workspace",
 	)
 	received := []WholeFileDeletionOperationID{{HunkOrdinal: 9}}
 	group, count := WholeFileDeletionGroupID{FirstOperation: received[0]}, 3
-	_, mismatch := ApplyWholeFileDeletionFacts(rendered, []WholeFileDeletionFact{{
+	_, mismatch := ApplyWholeFileDeletionFacts(presentation, []WholeFileDeletionFact{{
 		PhysicalGroup: group,
 		OperationIDs:  received,
 		Removed:       count,
@@ -105,7 +104,7 @@ func TestWholeFileDeletionPresentationReturnsTypedMismatchContext(t *testing.T) 
 }
 
 func TestWholeFileDeletionPresentationRejectsNoncanonicalOperationOrder(t *testing.T) {
-	rendered := Format(Document{Hunks: []any{
+	changes := Format(Document{Hunks: []any{
 		DeleteFile{Path: "target.txt"},
 		DeleteFile{Path: "target.txt"},
 	}}, "/workspace")
@@ -115,7 +114,10 @@ func TestWholeFileDeletionPresentationRejectsNoncanonicalOperationOrder(t *testi
 	}
 	group := WholeFileDeletionGroupID{FirstOperation: received[0]}
 
-	_, mismatch := ApplyWholeFileDeletionFacts(rendered, []WholeFileDeletionFact{{
+	_, mismatch := ApplyWholeFileDeletionFacts(Presentation{
+		Variant: PresentationVariantChanges,
+		Changes: &changes,
+	}, []WholeFileDeletionFact{{
 		PhysicalGroup: group,
 		OperationIDs:  received,
 		Removed:       3,
@@ -131,20 +133,30 @@ func TestWholeFileDeletionPresentationRejectsNoncanonicalOperationOrder(t *testi
 
 func TestCloneOwnsNestedWholeFileDeletionMetadata(t *testing.T) {
 	id := WholeFileDeletionOperationID{HunkOrdinal: 0}
-	source := RenderedPatch{Files: []RenderedFile{{
-		WholeFileDeletions: []WholeFileDeletionOperation{{
-			ID: id,
-			Disposition: &WholeFileDeletionDisposition{
-				PhysicalGroup: WholeFileDeletionGroupID{FirstOperation: id},
-				Removed:       2,
-			},
-		}},
-	}}}
-	cloned := Clone(&source)
-	cloned.Files[0].WholeFileDeletions[0].ID.HunkOrdinal = 5
-	cloned.Files[0].WholeFileDeletions[0].Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 6
-	cloned.Files[0].WholeFileDeletions[0].Disposition.Removed = 7
-	if operation := source.Files[0].WholeFileDeletions[0]; operation.ID != id ||
+	removed := 2
+	deletion := WholeFileDeletionOperation{
+		ID: id,
+		Disposition: &WholeFileDeletionDisposition{
+			PhysicalGroup: WholeFileDeletionGroupID{FirstOperation: id},
+			Removed:       2,
+		},
+	}
+	source := Presentation{
+		Variant: PresentationVariantChanges,
+		Changes: &Changes{Files: []FileChange{{
+			Path:    Path{Absolute: "/workspace/target", Relative: "./target"},
+			Removed: &removed,
+			Operations: []FileOperation{{
+				Kind:     FileOperationDelete,
+				Deletion: &deletion,
+			}},
+		}}},
+	}
+	cloned := ClonePresentation(&source)
+	cloned.Changes.Files[0].Operations[0].Deletion.ID.HunkOrdinal = 5
+	cloned.Changes.Files[0].Operations[0].Deletion.Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 6
+	cloned.Changes.Files[0].Operations[0].Deletion.Disposition.Removed = 7
+	if operation := source.Changes.Files[0].Operations[0].Deletion; operation.ID != id ||
 		operation.Disposition == nil ||
 		operation.Disposition.PhysicalGroup.FirstOperation != id ||
 		operation.Disposition.Removed != 2 {

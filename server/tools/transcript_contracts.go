@@ -169,22 +169,11 @@ func triggerHandoffToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.R
 
 func patchToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
-		detail, compact, rendered, ok := parsePatchToolCall(raw, ctx.WorkingDir)
-		if !ok {
-			meta := defaultToolCallMeta(toolID)(ctx, raw)
-			meta.PatchSummary = meta.CompactText
-			meta.PatchDetail = meta.Command
-			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
-			return meta
-		}
+		presentation := parsePatchToolCall(raw, ctx.WorkingDir)
 		return transcript.ToolCallMeta{
-			ToolName:     string(toolID),
-			Command:      detail,
-			CompactText:  compact,
-			PatchSummary: compact,
-			PatchDetail:  detail,
-			PatchRender:  rendered,
-			RenderHint:   &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
+			ToolName:          string(toolID),
+			PatchPresentation: &presentation,
+			RenderHint:        &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 		}
 	}
 }
@@ -193,33 +182,32 @@ func editToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage)
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
 		value, err := jsoncontract.DecodeValue(raw)
 		if err != nil {
-			meta := defaultToolCallMeta(toolID)(ctx, raw)
-			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
-			return meta
+			return invalidEditToolCallMeta(toolID, raw)
 		}
 		path, pathPresent := stringField(value, "path")
 		oldString, oldStringPresent := exactStringField(value, "old_string")
 		newString, newStringPresent := exactStringField(value, "new_string")
-		if !pathPresent || path == "" ||
+		if !pathPresent || strings.TrimSpace(path) == "" ||
 			!oldStringPresent || !newStringPresent ||
 			oldString == newString {
-			meta := defaultToolCallMeta(toolID)(ctx, raw)
-			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
-			return meta
+			return invalidEditToolCallMeta(toolID, raw)
 		}
 		in := EditInput{Path: path, OldString: oldString, NewString: newString}
-		rendered := patchformat.RenderEdit(in.Path, in.OldString, in.NewString, ctx.WorkingDir)
-		detail := rendered.DetailText()
-		compact := rendered.SummaryText()
+		presentation := patchformat.RenderEdit(in.Path, in.OldString, in.NewString, ctx.WorkingDir)
 		return transcript.ToolCallMeta{
-			ToolName:     string(toolID),
-			Command:      detail,
-			CompactText:  compact,
-			PatchSummary: compact,
-			PatchDetail:  detail,
-			PatchRender:  &rendered,
-			RenderHint:   &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
+			ToolName:          string(toolID),
+			PatchPresentation: &presentation,
+			RenderHint:        &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 		}
+	}
+}
+
+func invalidEditToolCallMeta(toolID toolspec.ID, raw json.RawMessage) transcript.ToolCallMeta {
+	presentation := patchformat.InvalidInputPresentation(string(raw))
+	return transcript.ToolCallMeta{
+		ToolName:          string(toolID),
+		PatchPresentation: &presentation,
+		RenderHint:        &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 	}
 }
 
@@ -483,23 +471,18 @@ func parseTriggerHandoffToolCall(raw json.RawMessage) (string, string, bool) {
 	return strings.TrimSpace(in.SummarizerPrompt), strings.TrimSpace(in.FutureAgentMessage), true
 }
 
-func parsePatchToolCall(raw json.RawMessage, cwd string) (detail string, compact string, rendered *patchformat.RenderedPatch, ok bool) {
+func parsePatchToolCall(raw json.RawMessage, cwd string) patchformat.Presentation {
 	var patchText string
 	if err := json.Unmarshal(raw, &patchText); err != nil {
 		var payload struct {
-			Patch string `json:"patch"`
+			Patch *string `json:"patch"`
 		}
-		if payloadErr := json.Unmarshal(raw, &payload); payloadErr != nil {
-			return "", "", nil, false
+		if payloadErr := json.Unmarshal(raw, &payload); payloadErr != nil || payload.Patch == nil {
+			return patchformat.InvalidInputPresentation(string(raw))
 		}
-		patchText = payload.Patch
+		patchText = *payload.Patch
 	}
-	trimmedPatch := strings.TrimSpace(patchText)
-	if trimmedPatch == "" {
-		return "", "", nil, false
-	}
-	r := patchformat.Render(patchText, cwd)
-	return r.DetailText(), r.SummaryText(), &r, true
+	return patchformat.Render(patchText, cwd)
 }
 
 func detectShellRenderHint(ctx ToolCallContext, toolID toolspec.ID, raw json.RawMessage, command string) *transcript.ToolRenderHint {

@@ -75,9 +75,7 @@ func ToolCallMetaEqual(left, right *ToolCallMeta) bool {
 		normalizedLeft.CompactText == normalizedRight.CompactText &&
 		normalizedLeft.InlineMeta == normalizedRight.InlineMeta &&
 		normalizedLeft.TimeoutLabel == normalizedRight.TimeoutLabel &&
-		normalizedLeft.PatchSummary == normalizedRight.PatchSummary &&
-		normalizedLeft.PatchDetail == normalizedRight.PatchDetail &&
-		renderedPatchesEqual(normalizedLeft.PatchRender, normalizedRight.PatchRender) &&
+		patchPresentationsEqual(normalizedLeft.PatchPresentation, normalizedRight.PatchPresentation) &&
 		toolRenderHintsEqual(normalizedLeft.RenderHint, normalizedRight.RenderHint) &&
 		normalizedLeft.Question == normalizedRight.Question &&
 		slices.Equal(normalizedLeft.Suggestions, normalizedRight.Suggestions) &&
@@ -99,9 +97,7 @@ func toolCallMetaEmpty(meta ToolCallMeta) bool {
 		meta.CompactText == "" &&
 		meta.InlineMeta == "" &&
 		meta.TimeoutLabel == "" &&
-		meta.PatchSummary == "" &&
-		meta.PatchDetail == "" &&
-		meta.PatchRender == nil &&
+		meta.PatchPresentation == nil &&
 		meta.RenderHint == nil &&
 		meta.Question == "" &&
 		len(meta.Suggestions) == 0 &&
@@ -113,6 +109,64 @@ func toolCallMetaEmpty(meta ToolCallMeta) bool {
 		meta.ShellExitCode == nil
 }
 
+func patchPresentationsEqual(left, right *patchformat.Presentation) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	if left.Variant != right.Variant {
+		return false
+	}
+	if left.InvalidInput == nil || right.InvalidInput == nil {
+		if left.InvalidInput != nil || right.InvalidInput != nil {
+			return false
+		}
+	} else if left.InvalidInput.InputDetail != right.InvalidInput.InputDetail {
+		return false
+	}
+	if left.Changes == nil || right.Changes == nil {
+		return left.Changes == nil && right.Changes == nil
+	}
+	return slices.EqualFunc(left.Changes.Files, right.Changes.Files, fileChangesEqual)
+}
+
+func fileChangesEqual(left, right patchformat.FileChange) bool {
+	if left.Path != right.Path ||
+		left.Added != right.Added ||
+		!textutil.EqualOptional(left.Removed, right.Removed) {
+		return false
+	}
+	return slices.EqualFunc(left.Operations, right.Operations, fileOperationsEqual)
+}
+
+func fileOperationsEqual(left, right patchformat.FileOperation) bool {
+	if left.Kind != right.Kind {
+		return false
+	}
+	if left.Source == nil || right.Source == nil {
+		if left.Source != nil || right.Source != nil {
+			return false
+		}
+	} else if *left.Source != *right.Source {
+		return false
+	}
+	if !wholeFileDeletionOperationPointersEqual(left.Deletion, right.Deletion) {
+		return false
+	}
+	return slices.EqualFunc(left.Groups, right.Groups, func(left, right patchformat.ChangeGroup) bool {
+		return slices.Equal(left.Lines, right.Lines)
+	})
+}
+
+func wholeFileDeletionOperationPointersEqual(
+	left *patchformat.WholeFileDeletionOperation,
+	right *patchformat.WholeFileDeletionOperation,
+) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return wholeFileDeletionOperationsEqual(*left, *right)
+}
+
 func toolRenderHintsEqual(left, right *ToolRenderHint) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -121,32 +175,6 @@ func toolRenderHintsEqual(left, right *ToolRenderHint) bool {
 		left.Path == right.Path &&
 		left.ResultOnly == right.ResultOnly &&
 		left.ShellDialect == right.ShellDialect
-}
-
-func renderedPatchesEqual(left, right *patchformat.RenderedPatch) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return slices.EqualFunc(left.Files, right.Files, func(a, b patchformat.RenderedFile) bool {
-		return a.AbsPath == b.AbsPath &&
-			a.RelPath == b.RelPath &&
-			a.Added == b.Added &&
-			a.Removed == b.Removed &&
-			slices.Equal(a.Diff, b.Diff) &&
-			slices.EqualFunc(a.WholeFileDeletions, b.WholeFileDeletions, wholeFileDeletionOperationsEqual)
-	}) &&
-		slices.EqualFunc(left.SummaryLines, right.SummaryLines, func(a, b patchformat.RenderedLine) bool {
-			return a.Kind == b.Kind &&
-				a.Text == b.Text &&
-				a.FileIndex == b.FileIndex &&
-				a.Path == b.Path
-		}) &&
-		slices.EqualFunc(left.DetailLines, right.DetailLines, func(a, b patchformat.RenderedLine) bool {
-			return a.Kind == b.Kind &&
-				a.Text == b.Text &&
-				a.FileIndex == b.FileIndex &&
-				a.Path == b.Path
-		})
 }
 
 func wholeFileDeletionOperationsEqual(

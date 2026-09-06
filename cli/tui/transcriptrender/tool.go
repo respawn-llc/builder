@@ -3,7 +3,6 @@ package transcriptrender
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"core/shared/clientui"
 	"core/shared/config"
@@ -37,13 +36,20 @@ func renderToolRowWithLinkPresentation(
 		return []Line{renderBackgroundedShell(firstNonEmpty(meta.Command, display.Text), width, mode)}
 	}
 	if isPatchTool(meta) {
-		input := display.Text
 		result := optionalString(row.ResultSummary)
 		if mode == ModeDetailExpanded {
-			input = detailedToolText(meta, row.Text)
 			result = detailedToolResultText(row)
 		}
-		return renderPatchTool(role, input, display.InlineMeta, result, meta.PatchRender, width, mode, meta, syntax)
+		return renderPatchTool(
+			role,
+			meta.PatchPresentation,
+			display.InlineMeta,
+			result,
+			width,
+			mode,
+			meta,
+			syntax,
+		)
 	}
 	if mode == ModeDetailExpanded {
 		input := detailedToolText(meta, row.Text)
@@ -110,7 +116,16 @@ func RenderPendingTool(tool clientui.TranscriptToolStart, width int, themeName s
 	}
 	var lines []Line
 	if isPatchTool(meta) {
-		lines = renderPatchTool(role, text, "", "", meta.PatchRender, width, ModeOngoing, meta, nil)
+		lines = renderPatchTool(
+			role,
+			meta.PatchPresentation,
+			"",
+			"",
+			width,
+			ModeOngoing,
+			meta,
+			nil,
+		)
 	} else {
 		lines = renderTextBlockWithInlineMeta(role, text, inlineMeta, width, ModeOngoing, meta)
 	}
@@ -369,50 +384,85 @@ func detailedToolOutputLines(role StyleRole, output string, width int) []Line {
 
 func renderPatchTool(
 	role StyleRole,
-	text string,
+	presentation *patchformat.Presentation,
 	inlineMeta string,
 	result string,
-	rendered *patchformat.RenderedPatch,
 	width int,
 	mode Mode,
 	meta toolMeta,
 	syntax *syntaxProjector,
 ) []Line {
-	if mode == ModeDetailExpanded {
-		if lines, ok := renderStructuredPatch(rendered, contentWidth(role, width), syntax); ok {
-			if result != "" {
-				lines = append(lines, Line{Spans: []Span{contentRoleSpan("", role, ModeDetailExpanded)}})
+	if presentation == nil || !presentation.Valid() {
+		panic("render Patch/Edit tool without valid presentation")
+	}
+	switch presentation.Variant {
+	case patchformat.PresentationVariantChanges:
+		if mode == ModeDetailExpanded {
+			lines := renderPatchChangesDetail(
+				presentation.Changes,
+				contentWidth(role, width),
+				syntax,
+			)
+			if meta.IsError && result != "" {
+				lines = append(lines, Line{Spans: []Span{contentRoleSpan("", role, mode)}})
 				lines = append(lines, detailedToolOutputLines(role, result, contentWidth(role, width))...)
 			}
 			return attachPrefixWithMeta(role, lines, width, false, mode, meta)
 		}
-	}
-	if rendered == nil || len(rendered.SummaryLines) == 0 || mode == ModeDetailExpanded {
-		if mode == ModeDetailExpanded {
-			return renderDetailedToolTextBlock(role, text, result, width, meta)
+		return renderPatchChangesCompact(
+			role,
+			presentation.Changes,
+			inlineMeta,
+			width,
+			mode,
+			meta,
+		)
+	case patchformat.PresentationVariantInvalidInput:
+		label := invalidPatchInputLabel(meta.ToolName)
+		if mode != ModeDetailExpanded {
+			return renderTextBlockWithInlineMeta(role, label, inlineMeta, width, mode, meta)
 		}
-		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, meta)
-	}
-	lines := make([]Line, 0, len(rendered.Files))
-	for _, file := range rendered.Files {
-		path := firstNonEmpty(file.RelPath, file.AbsPath)
-		if path == "" {
-			continue
+		if !meta.IsError {
+			result = ""
 		}
+		return renderInvalidPatchInputDetail(
+			role,
+			presentation.InvalidInput.InputDetail,
+			result,
+			width,
+			meta,
+		)
+	default:
+		panic(fmt.Sprintf("render unsupported Patch/Edit presentation variant %q", presentation.Variant))
+	}
+}
+
+func renderPatchChangesCompact(
+	role StyleRole,
+	changes *patchformat.Changes,
+	inlineMeta string,
+	width int,
+	mode Mode,
+	meta toolMeta,
+) []Line {
+	lines := make([]Line, 0, len(changes.Files))
+	for _, file := range changes.Files {
 		var spans []Span
-		spans = append(spans, patchPathSpan(path, file.AbsPath, role))
-		if removed := patchformat.RemovedLineCount(file); removed != nil {
+		spans = append(spans, patchPathSpan(
+			safeTranscriptText(file.Path.Relative),
+			file.Path.Absolute,
+			role,
+		))
+		if file.Removed != nil &&
+			(*file.Removed > 0 || fileHasOnlyWholeFileDeletion(file)) {
 			spans = append(spans, roleSpan(" ", role))
-			spans = append(spans, SemanticSpan(fmt.Sprintf("-%d", *removed), StyleRoleToolError))
+			spans = append(spans, SemanticSpan(fmt.Sprintf("-%d", *file.Removed), StyleRoleToolError))
 		}
 		if file.Added > 0 {
 			spans = append(spans, roleSpan(" ", role))
 			spans = append(spans, SemanticSpan(fmt.Sprintf("+%d", file.Added), StyleRoleToolSuccess))
 		}
 		lines = append(lines, Line{Spans: spans})
-	}
-	if len(lines) == 0 {
-		lines = []Line{{Spans: []Span{roleSpan(text, role)}}}
 	}
 	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode, meta)
 }
@@ -422,35 +472,65 @@ const (
 	patchSyntaxBatchMaxBytes = 64 * 1024
 )
 
-type patchSourceKind uint8
-
-const (
-	patchSourceContext patchSourceKind = iota
-	patchSourceAdded
-	patchSourceRemoved
-)
-
 type patchSourceLine struct {
-	kind patchSourceKind
+	kind patchformat.ChangedLineKind
 	text string
 }
 
-func renderStructuredPatch(
-	rendered *patchformat.RenderedPatch,
+func renderPatchChangesDetail(
+	changes *patchformat.Changes,
 	width int,
 	syntax *syntaxProjector,
-) ([]Line, bool) {
-	if !hasStructuredPatchDetail(rendered) {
-		return nil, false
-	}
+) []Line {
 	if syntax == nil {
-		panic("render structured detail patch without syntax projector")
+		panic("render Patch/Edit changes without syntax projector")
 	}
 	width = max(1, width)
-	out := make([]Line, 0, len(rendered.DetailLines))
-	var currentLexer chroma.Lexer
+	out := make([]Line, 0, len(changes.Files))
+	for _, file := range changes.Files {
+		out = append(out, wrapPatchFileLine(file, width)...)
+		out = append(out, renderPatchFileSource(file, width, syntax)...)
+	}
+	return out
+}
+
+func wrapPatchFileLine(file patchformat.FileChange, width int) []Line {
+	spans := []Span{patchPathSpan(
+		safeTranscriptText(file.Path.Absolute),
+		file.Path.Absolute,
+		StyleRoleToolPatch,
+	)}
+	if fileHasOnlyWholeFileDeletion(file) && file.Removed != nil {
+		spans = append(spans, roleSpan(" ", StyleRoleToolPatch))
+		spans = append(spans, SemanticSpan(
+			fmt.Sprintf("-%d", *file.Removed),
+			StyleRoleToolError,
+		))
+	}
+	return wrapStyledLine(spans, width)
+}
+
+func fileHasOnlyWholeFileDeletion(file patchformat.FileChange) bool {
+	if len(file.Operations) == 0 {
+		return false
+	}
+	for _, operation := range file.Operations {
+		if operation.Kind != patchformat.FileOperationDelete {
+			return false
+		}
+	}
+	return true
+}
+
+func renderPatchFileSource(
+	file patchformat.FileChange,
+	width int,
+	syntax *syntaxProjector,
+) []Line {
+	out := make([]Line, 0)
 	var inferredLexer chroma.Lexer
 	inferredLexerResolved := false
+	lexer := lexers.Match(strings.TrimSpace(file.Path.Absolute))
 	pending := make([]patchSourceLine, 0, 16)
 	pendingBytes := 0
 	flushPending := func() {
@@ -462,89 +542,69 @@ func renderStructuredPatch(
 			sourceLines = append(sourceLines, line.text)
 		}
 		source := strings.Join(sourceLines, "\n")
-		lexer := currentLexer
-		if lexer == nil {
+		selectedLexer := lexer
+		if selectedLexer == nil {
 			if !inferredLexerResolved {
 				inferredLexer = lexers.Analyse(source)
 				inferredLexerResolved = true
 			}
-			lexer = inferredLexer
+			selectedLexer = inferredLexer
 		}
-		highlighted := syntax.highlight(lexer, source)
-		for index, sourceLine := range pending {
-			out = append(out, wrapPatchSourceLine(
-				sourceLine.kind,
-				highlighted[index],
-				width,
-			)...)
+		highlighted := syntax.highlight(selectedLexer, source)
+		for index, line := range pending {
+			out = append(out, wrapPatchSourceLine(line.kind, highlighted[index], width)...)
 		}
 		pending = pending[:0]
 		pendingBytes = 0
 	}
-	appendPending := func(kind patchSourceKind, text string) {
-		pending = append(pending, patchSourceLine{kind: kind, text: text})
-		pendingBytes += len(text) + 1
-		if len(pending) >= patchSyntaxBatchMaxLines || pendingBytes >= patchSyntaxBatchMaxBytes {
-			flushPending()
+	for _, operation := range file.Operations {
+		for _, group := range operation.Groups {
+			for _, line := range group.Lines {
+				text := safeTranscriptText(line.Content)
+				pending = append(pending, patchSourceLine{kind: line.Kind, text: text})
+				pendingBytes += len(text) + 1
+				if len(pending) >= patchSyntaxBatchMaxLines ||
+					pendingBytes >= patchSyntaxBatchMaxBytes {
+					flushPending()
+				}
+			}
 		}
-	}
-	for _, renderedLine := range rendered.DetailLines {
-		rawPath := renderedLine.Path
-		renderedLine.Text = safeTranscriptText(renderedLine.Text)
-		renderedLine.Path = safeTranscriptText(renderedLine.Path)
-		if renderedLine.Kind == patchformat.RenderedLineKindFile {
-			flushPending()
-			currentLexer = lexers.Match(strings.TrimSpace(renderedLine.Path))
-			inferredLexer = nil
-			inferredLexerResolved = false
-			out = append(out, wrapPatchMetadataLine(renderedLine.Text, rawPath, width)...)
-			continue
-		}
-		kind, text, source := classifyPatchDetailLine(renderedLine)
-		if source {
-			appendPending(kind, text)
-			continue
-		}
-		flushPending()
-		out = append(out, wrapPatchMetadataLine(renderedLine.Text, "", width)...)
 	}
 	flushPending()
-	if len(out) == 0 {
-		return nil, false
-	}
-	return out, true
+	return out
 }
 
-func hasStructuredPatchDetail(rendered *patchformat.RenderedPatch) bool {
-	if rendered == nil || len(rendered.DetailLines) == 0 {
-		return false
+func invalidPatchInputLabel(toolName string) string {
+	if toolID, ok := toolspec.ParseID(toolName); ok && toolID == toolspec.ToolEdit {
+		return "Edit failed"
 	}
-	for _, line := range rendered.DetailLines {
-		if line.Kind == patchformat.RenderedLineKindFile {
-			return true
+	return "Patch failed"
+}
+
+func renderInvalidPatchInputDetail(
+	role StyleRole,
+	input string,
+	result string,
+	width int,
+	meta toolMeta,
+) []Line {
+	bodyWidth := contentWidth(role, width)
+	lines := make([]Line, 0)
+	if input != "" {
+		lines = append(lines, textLines(
+			role,
+			wrapLines(safeTranscriptText(input), bodyWidth),
+			meta,
+			ModeDetailExpanded,
+		)...)
+	}
+	if result != "" {
+		if len(lines) > 0 {
+			lines = append(lines, Line{Spans: []Span{contentRoleSpan("", role, ModeDetailExpanded)}})
 		}
+		lines = append(lines, detailedToolOutputLines(role, result, bodyWidth)...)
 	}
-	return false
-}
-
-func classifyPatchDetailLine(line patchformat.RenderedLine) (patchSourceKind, string, bool) {
-	if line.Kind != patchformat.RenderedLineKindDiff {
-		return 0, "", false
-	}
-	if line.Text == "" {
-		return patchSourceContext, "", true
-	}
-	marker, markerWidth := utf8.DecodeRuneInString(line.Text)
-	switch marker {
-	case '+':
-		return patchSourceAdded, line.Text[markerWidth:], true
-	case '-':
-		return patchSourceRemoved, line.Text[markerWidth:], true
-	case ' ':
-		return patchSourceContext, line.Text[markerWidth:], true
-	default:
-		return 0, "", false
-	}
+	return attachPrefixWithMeta(role, lines, width, false, ModeDetailExpanded, meta)
 }
 
 func patchPathSpan(text, path string, role StyleRole) Span {
@@ -555,23 +615,21 @@ func patchPathSpan(text, path string, role StyleRole) Span {
 	return span
 }
 
-func wrapPatchMetadataLine(text, path string, width int) []Line {
-	return wrapStyledLine([]Span{patchPathSpan(text, path, StyleRoleToolPatch)}, width)
-}
-
-func wrapPatchSourceLine(kind patchSourceKind, source []Span, width int) []Line {
-	marker := " "
-	markerRole := StyleRoleToolPatch
-	background := LineBackgroundDefault
+func wrapPatchSourceLine(kind patchformat.ChangedLineKind, source []Span, width int) []Line {
+	var marker string
+	var markerRole StyleRole
+	var background LineBackground
 	switch kind {
-	case patchSourceAdded:
+	case patchformat.ChangedLineAdded:
 		marker = "+"
 		markerRole = StyleRoleToolSuccess
 		background = LineBackgroundDiffAdded
-	case patchSourceRemoved:
+	case patchformat.ChangedLineRemoved:
 		marker = "-"
 		markerRole = StyleRoleToolError
 		background = LineBackgroundDiffRemoved
+	default:
+		panic(fmt.Sprintf("render unsupported Patch/Edit changed-line kind %q", kind))
 	}
 	wrapped := wrapStyledLine(source, max(1, width-1))
 	out := make([]Line, 0, len(wrapped))
@@ -591,10 +649,7 @@ func wrapPatchSourceLine(kind patchSourceKind, source []Span, width int) []Line 
 }
 
 func isPatchTool(meta toolMeta) bool {
-	return transcript.IsPatchFamilyToolName(meta.ToolName) ||
-		meta.PatchRender != nil ||
-		meta.HasPatchSummary() ||
-		meta.HasPatchDetail()
+	return transcript.IsPatchFamilyToolName(meta.ToolName)
 }
 
 func isWebSearchTool(toolName string) bool {

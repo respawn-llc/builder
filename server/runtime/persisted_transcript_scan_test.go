@@ -3,7 +3,6 @@ package runtime
 import (
 	"encoding/json"
 	"strconv"
-	"strings"
 	"testing"
 
 	"core/server/llm"
@@ -12,6 +11,7 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestPersistedTranscriptScanCollectsRequestedPageOnly(t *testing.T) {
@@ -235,7 +235,7 @@ func TestFormatPersistedToolCallBuildsFallbackMetadata(t *testing.T) {
 	}
 }
 
-func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testing.T) {
+func TestPersistedTranscriptScanProjectsCurrentPatchPresentation(t *testing.T) {
 	t.Parallel()
 	singlePatch := "*** Begin Patch\n*** Update File: cli/app/ui_status.go\n@@\n type uiStatusAuthInfo struct {\n-\tSummary string\n+\tSummary string\n+\tReady bool\n }\n*** End Patch\n"
 	multiPatch := "*** Begin Patch\n*** Update File: a.go\n+new\n*** Update File: b.go\n-old\n*** End Patch\n"
@@ -272,35 +272,39 @@ func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testi
 	if len(page.Entries) != 6 {
 		t.Fatalf("len(page.Entries) = %d, want 6 (%+v)", len(page.Entries), page.Entries)
 	}
-	wantSummaries := map[string]string{
-		"call-patch-single": "./cli/app/ui_status.go +2 -1",
-		"call-patch-multi":  "./a.go +1\n./b.go -1",
-		"call-patch-raw":    rawPatch,
+	wantFiles := map[string]int{
+		"call-patch-single": 1,
+		"call-patch-multi":  2,
 	}
 	for _, entry := range page.Entries {
 		if entry.Role != "tool_call" {
 			continue
 		}
-		want, ok := wantSummaries[entry.ToolCallID]
+		if entry.ToolCall == nil || entry.ToolCall.PatchPresentation == nil {
+			t.Fatalf("expected persisted patch metadata for %s", entry.ToolCallID)
+		}
+		presentation := entry.ToolCall.PatchPresentation
+		if entry.ToolCallID == "call-patch-raw" {
+			if presentation.Variant != patchformat.PresentationVariantInvalidInput ||
+				presentation.InvalidInput == nil ||
+				presentation.InvalidInput.InputDetail != rawPatch {
+				t.Fatalf("unexpected invalid Patch presentation: %+v", presentation)
+			}
+			continue
+		}
+		want, ok := wantFiles[entry.ToolCallID]
 		if !ok {
 			t.Fatalf("unexpected patch call id %q", entry.ToolCallID)
 		}
-		if entry.ToolCall == nil {
-			t.Fatalf("expected persisted patch metadata for %s", entry.ToolCallID)
+		if presentation.Variant != patchformat.PresentationVariantChanges ||
+			presentation.Changes == nil ||
+			len(presentation.Changes.Files) != want {
+			t.Fatalf("unexpected Patch changes for %s: %+v", entry.ToolCallID, presentation)
 		}
-		if entry.ToolCallID != "call-patch-raw" && entry.ToolCall.PatchRender == nil {
-			t.Fatalf("expected persisted patch render metadata for %s, got %+v", entry.ToolCallID, entry.ToolCall)
-		}
-		if entry.ToolCall.PatchSummary != want {
-			t.Fatalf("unexpected persisted patch summary for %s: got %q want %q", entry.ToolCallID, entry.ToolCall.PatchSummary, want)
-		}
-		if strings.Contains(entry.ToolCall.PatchSummary, "Edited:") || strings.Contains(entry.ToolCall.PatchDetail, "Edited:") || strings.Contains(entry.ToolCall.PatchSummary, "*** Begin Patch") {
-			t.Fatalf("expected persisted patch metadata without Edited/raw payload for %s, got %+v", entry.ToolCallID, entry.ToolCall)
-		}
-		delete(wantSummaries, entry.ToolCallID)
+		delete(wantFiles, entry.ToolCallID)
 	}
-	if len(wantSummaries) != 0 {
-		t.Fatalf("missing persisted patch calls: %+v", wantSummaries)
+	if len(wantFiles) != 0 {
+		t.Fatalf("missing persisted patch calls: %+v", wantFiles)
 	}
 }
 

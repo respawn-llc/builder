@@ -14,6 +14,7 @@ import (
 	edittool "core/server/tools/edit"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
@@ -126,8 +127,10 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 		t.Fatalf("persisted Edit input = %s, want canonical provider input", persistedCall.Input)
 	}
 	persistedMeta := transcriptToolCallMeta(*persistedCall, workspace)
-	if persistedMeta.PatchRender == nil || len(persistedMeta.PatchRender.Files) != 1 ||
-		persistedMeta.PatchRender.Files[0].RelPath != "./a.txt" {
+	if persistedMeta.PatchPresentation == nil ||
+		persistedMeta.PatchPresentation.Changes == nil ||
+		len(persistedMeta.PatchPresentation.Changes.Files) != 1 ||
+		persistedMeta.PatchPresentation.Changes.Files[0].Path.Relative != "./a.txt" {
 		t.Fatalf("persisted Edit presentation = %+v, want a.txt diff", persistedMeta)
 	}
 
@@ -141,7 +144,9 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 		if entry.Role == "tool_call" {
 			callMetaName = entry.ToolCall.ToolName
 		}
-		if entry.Role == "tool_result_ok" && entry.ToolCall.PatchRender != nil {
+		if entry.Role == "tool_result_ok" &&
+			entry.ToolCall.PatchPresentation != nil &&
+			entry.ToolCall.PatchPresentation.Variant == patchformat.PresentationVariantChanges {
 			resultHasDiff = true
 		}
 	}

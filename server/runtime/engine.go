@@ -1299,7 +1299,18 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 			continue
 		}
 		hosted := executionCalls.hosted[ref.index]
-		normalized := normalizeToolCallForTranscript(hosted.Call, e.transcriptWorkingDir())
+		normalized, normalizeErr := normalizeToolCallForTranscriptChecked(
+			hosted.Call,
+			e.transcriptWorkingDir(),
+		)
+		if normalizeErr != nil {
+			return abortBeforeLocalExecution(fmt.Errorf(
+				"normalize hosted tool call presentation (call_id=%s tool=%s): %w",
+				hosted.Call.ID,
+				hosted.Call.Name,
+				normalizeErr,
+			))
+		}
 		if err := e.steer(stepID, steerEventIntent(Event{
 			Kind:                       EventToolCallStarted,
 			StepID:                     exactStepIDPointer(stepID),

@@ -11,8 +11,8 @@ import (
 )
 
 func TestDetailPatchHyperlinkClosesBeforeUnselectedAndSelectedPadding(t *testing.T) {
-	rendered := patchformat.Render("*** Begin Patch\n*** Update File: dir/file.go\n-old\n+new\n*** End Patch\n", "/worktree")
-	row := clientui.TranscriptCommittedRow{Visibility: transcript.EntryVisibilityDetail, Integrity: transcript.RowIntegrityValid, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{ToolName: "patch", Presentation: &transcript.ToolCallMeta{PatchRender: &rendered}}}
+	presentation := patchformat.Render("*** Begin Patch\n*** Update File: dir/file.go\n-old\n+new\n*** End Patch\n", "/worktree")
+	row := clientui.TranscriptCommittedRow{Visibility: transcript.EntryVisibilityDetail, Integrity: transcript.RowIntegrityValid, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{ToolName: "patch", Presentation: &transcript.ToolCallMeta{ToolName: "patch", PatchPresentation: &presentation}}}
 	for _, selected := range []bool{false, true} {
 		model := NewModel()
 		model.expanded = map[int]struct{}{0: {}}

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { renderedPatchSchema } from "./chatPatchSchemas";
+import { patchPresentationSchema } from "./chatPatchSchemas";
 
 export const nonBlank = z.string().refine((value) => value.trim().length > 0);
 export const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
@@ -239,10 +239,11 @@ export const assistantRowSchema = z
     committed_at_unix_ms: optionalNullable(committedAtSchema),
   })
   .strict();
+const patchPresentationOwnerNames = new Set(["patch", "edit", "replace", "write"]);
 export const toolMetaSchema = z
   .object({
     ToolName: z.string(),
-    Presentation: z.string(),
+    Presentation: z.enum(["default", "shell", "ask_question"]),
     RenderBehavior: z.string(),
     IsShell: z.boolean(),
     UserInitiated: z.boolean(),
@@ -250,9 +251,7 @@ export const toolMetaSchema = z
     CompactText: z.string(),
     InlineMeta: z.string(),
     TimeoutLabel: z.string(),
-    PatchSummary: z.string(),
-    PatchDetail: z.string(),
-    PatchRender: optionalNullable(renderedPatchSchema),
+    PatchPresentation: patchPresentationSchema.nullable(),
     RenderHint: optionalNullable(
       z
         .object({
@@ -272,7 +271,43 @@ export const toolMetaSchema = z
     MovedToBackground: z.boolean(),
     ShellExitCode: optionalNullable(z.number().int()),
   })
-  .strict();
+  .strict()
+  .superRefine((meta, context) => {
+    const ownsPatchPresentation = patchPresentationOwnerNames.has(meta.ToolName);
+    if (ownsPatchPresentation !== (meta.PatchPresentation != null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["PatchPresentation"],
+        message: ownsPatchPresentation
+          ? "Patch/Edit presentation is required"
+          : "non-Patch tool cannot carry Patch/Edit presentation",
+      });
+    }
+  });
+
+export function validateToolPresentationOwner(
+  owner: Readonly<{
+    ToolName: string;
+    Presentation?: z.output<typeof toolMetaSchema> | null | undefined;
+  }>,
+  context: z.RefinementCtx,
+) {
+  if (patchPresentationOwnerNames.has(owner.ToolName) && owner.Presentation == null) {
+    context.addIssue({
+      code: "custom",
+      path: ["Presentation"],
+      message: "Patch/Edit presentation is required",
+    });
+    return;
+  }
+  if (owner.Presentation != null && owner.Presentation.ToolName !== owner.ToolName) {
+    context.addIssue({
+      code: "custom",
+      path: ["Presentation", "ToolName"],
+      message: "presentation tool name does not match tool identity",
+    });
+  }
+}
 export const questionAnswerSchema = z
   .object({
     SelectedOptionNumber: optionalNullable(z.number().int()),
@@ -291,7 +326,8 @@ export const toolRowSchema = z
     Presentation: optionalNullable(toolMetaSchema),
     QuestionAnswer: optionalNullable(questionAnswerSchema),
   })
-  .strict();
+  .strict()
+  .superRefine(validateToolPresentationOwner);
 export const reasoningIdentitySchema = z
   .object({
     Provider: z

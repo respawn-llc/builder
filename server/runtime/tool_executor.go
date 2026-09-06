@@ -61,7 +61,26 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 		toolID := prepared.toolID
 		knownTool := prepared.knownTool
 		executableCall := prepared.executableCall
-		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
+		transcriptCall, normalizeErr := normalizeToolCallForTranscriptChecked(
+			executableCall,
+			e.transcriptWorkingDir(),
+		)
+		if normalizeErr != nil {
+			failure := fmt.Errorf(
+				"normalize tool call presentation (call_id=%s tool=%s): %w",
+				call.ID,
+				executableCall.Name,
+				normalizeErr,
+			)
+			fatal := e.abortResultGroupForOperationalFailure(
+				stepID,
+				collector,
+				failure,
+			)
+			cancelExecution()
+			callErrs[i] = fatal
+			break
+		}
 		started := Event{Kind: EventToolCallStarted, StepID: exactStepIDPointer(stepID), ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
