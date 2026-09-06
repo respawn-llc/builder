@@ -21,7 +21,12 @@ const target = {
   workspace: { workspaceID: "workspace-1" },
   sessionID,
 } as const;
+const navigation = {
+  openTask: vi.fn<(taskID: string) => void>(),
+  openParentSession: vi.fn<(previousSessionID: string) => void>(),
+};
 const connected = {
+  ...navigation,
   serverMutationAvailability: "available",
   authoritativeRefreshGeneration: Symbol("initial"),
 } as const;
@@ -559,6 +564,7 @@ it("exposes no Session activation while the host reports disconnected", async ()
         target,
         onContextChange: vi.fn(),
         serverMutationAvailability: "available",
+        ...navigation,
         authoritativeRefreshGeneration: generation,
       },
       wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
@@ -573,6 +579,7 @@ it("exposes no Session activation while the host reports disconnected", async ()
     target,
     onContextChange: vi.fn(),
     serverMutationAvailability: "disconnected",
+    ...navigation,
     authoritativeRefreshGeneration: generation,
   });
   expect(result.current).toMatchObject({
@@ -588,6 +595,7 @@ it("exposes no Session activation while the host reports disconnected", async ()
     target,
     onContextChange: vi.fn(),
     serverMutationAvailability: "available",
+    ...navigation,
     authoritativeRefreshGeneration: generation,
   });
   expect(result.current).toMatchObject({ kind: "ready-session", serverMutationAvailability: "available" });
@@ -611,6 +619,7 @@ it("starts one refresh per changed host generation and re-enables mutations befo
         target,
         onContextChange: vi.fn(),
         serverMutationAvailability: "disconnected",
+        ...navigation,
         authoritativeRefreshGeneration: initialGeneration,
       },
       wrapper: ({ children }: Readonly<{ children: ReactNode }>) => (
@@ -625,6 +634,7 @@ it("starts one refresh per changed host generation and re-enables mutations befo
     target,
     onContextChange: vi.fn(),
     serverMutationAvailability: "available",
+    ...navigation,
     authoritativeRefreshGeneration: nextGeneration,
   };
   rerender(available);

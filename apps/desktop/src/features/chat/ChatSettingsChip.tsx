@@ -1,5 +1,15 @@
-import { Zap } from "lucide-react";
+import { Settings, Zap } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+
+import {
+  InteractiveChip,
+  PopoverTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/ui";
 
 type SummaryProps = Readonly<{
   role: string;
@@ -8,7 +18,32 @@ type SummaryProps = Readonly<{
   fast: boolean;
 }>;
 
-export function ChatSettingsSummary(props: SummaryProps) {
+export function ChatSettingsChip(props: SummaryProps) {
+  const { t } = useTranslation();
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <InteractiveChip aria-label={t("chatSettings.open")} className="min-w-0">
+              <Settings className="shrink-0" size={14} />
+              <ChatSettingsSummary {...props} />
+            </InteractiveChip>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>
+          {props.role}: {props.model}
+          {props.thinking === null ? null : ` ${props.thinking}`}
+          {props.fast ? (
+            <Zap className="ml-[var(--space-1)] inline text-[var(--color-secondary)]" size={14} />
+          ) : null}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+function ChatSettingsSummary(props: SummaryProps) {
   const viewportRef = useRef<HTMLSpanElement>(null);
   const contentRef = useRef<HTMLSpanElement>(null);
   const [overflow, setOverflow] = useState(false);

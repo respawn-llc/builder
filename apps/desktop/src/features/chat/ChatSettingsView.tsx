@@ -1,32 +1,31 @@
-import { Settings, Zap } from "lucide-react";
+import { Zap } from "lucide-react";
 import { useId, useState } from "react";
 import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type ChatSettingsMutation } from "@/api";
 import { runViewTransition, useAppServices } from "@/app-facade";
-import {
-  InteractiveChip,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  SegmentedControl,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/ui";
+import { Popover, PopoverContent, SegmentedControl } from "@/ui";
 
 import { settingsDisabledReason, settingsPresentation } from "./chatSettingsPresentation";
 import { ThinkingSelector } from "./ThinkingSelector";
-import { ChatSettingsSummary } from "./ChatSettingsSummary";
+import { ChatSettingsChip } from "./ChatSettingsChip";
 import { CustomThinkingEditor } from "./CustomThinkingEditor";
 import { SettingsRow, SettingsSwitch } from "./ChatSettingsRows";
 import { ChatSettingsAgentRow } from "./ChatSettingsAgentRow";
-import type { ReadyChatSettings } from "./useChatSettings";
+import type { ChatSettingsNavigation, ReadyChatSettings } from "./useChatSettings";
+import { ChatSettingsSessionFacts } from "./ChatSettingsSessionFacts";
 import "./chatSettings.css";
 
-export function ChatSettingsView({ feature }: Readonly<{ feature: ReadyChatSettings }>) {
+export type ChatSettingsViewProps =
+  | Readonly<{ feature: Extract<ReadyChatSettings, { kind: "ready-new-chat" }> }>
+  | Readonly<{
+      feature: Extract<ReadyChatSettings, { kind: "ready-session" }>;
+      navigation: ChatSettingsNavigation;
+    }>;
+
+export function ChatSettingsView(props: ChatSettingsViewProps) {
+  const { feature } = props;
   const { t } = useTranslation();
   const { logger } = useAppServices();
   const [view, setView] = useState<"closed" | "overview" | "agents">("closed");
@@ -97,25 +96,7 @@ export function ChatSettingsView({ feature }: Readonly<{ feature: ReadyChatSetti
         setView(open ? "overview" : "closed");
       }}
     >
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
-              <InteractiveChip aria-label={t("chatSettings.open")} className="min-w-0">
-                <Settings className="shrink-0" size={14} />
-                <ChatSettingsSummary {...summary} />
-              </InteractiveChip>
-            </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent>
-            {summary.role}: {summary.model}
-            {summary.thinking === null ? null : ` ${summary.thinking}`}
-            {summary.fast ? (
-              <Zap className="ml-[var(--space-1)] inline text-[var(--color-secondary)]" size={14} />
-            ) : null}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <ChatSettingsChip {...summary} />
       <PopoverContent
         align="start"
         className="w-96 max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] grid-rows-[minmax(0,1fr)] gap-0 overflow-hidden p-[var(--space-1)]"
@@ -227,6 +208,18 @@ export function ChatSettingsView({ feature }: Readonly<{ feature: ReadyChatSetti
               }}
               reason={reason(settings.autoCompaction.editability, settings.autoCompaction.policy)}
             />
+            {"navigation" in props ? (
+              <ChatSettingsSessionFacts
+                facts={props.feature.session}
+                navigation={props.navigation}
+                closeAndNavigate={(action) => {
+                  flushSync(() => {
+                    setView("closed");
+                  });
+                  action();
+                }}
+              />
+            ) : null}
           </div>
         </div>
       </PopoverContent>

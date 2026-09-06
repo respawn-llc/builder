@@ -3,6 +3,9 @@ import { workflowEditorEnglish } from "./workflowEditorEn";
 export const englishResources = {
   translation: {
     chatSettings: {
+      toParentChat: "To parent chat",
+      copied: "Copied to clipboard",
+      copyFailed: "Could not copy Session ID",
       open: "Chat settings",
       supervisor: "Supervisor",
       supervisorEdits: "Edits",

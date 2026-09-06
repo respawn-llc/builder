@@ -25,19 +25,25 @@ import {
 } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { showStatusToast } from "@/ui";
-import { ChatSettingsView } from "./ChatSettingsView";
+import { ChatSettingsView, type ChatSettingsViewProps } from "./ChatSettingsView";
+
+export type ChatSettingsNavigation = Readonly<{
+  openTask(taskID: string): void;
+  openParentSession(previousSessionID: string): void;
+}>;
 
 export type ChatSettingsOptions =
   | Readonly<{
       target: Extract<ChatSettingsTarget, { kind: "new_chat" }>;
       onInitialSettingsChange(settings: InitialChatSettings): void;
     }>
-  | Readonly<{
-      target: Extract<ChatSettingsTarget, { kind: "session" }>;
-      serverMutationAvailability: "available" | "disconnected";
-      authoritativeRefreshGeneration: unknown;
-      onContextChange(context: ChatContext): void;
-    }>;
+  | (ChatSettingsNavigation &
+      Readonly<{
+        target: Extract<ChatSettingsTarget, { kind: "session" }>;
+        serverMutationAvailability: "available" | "disconnected";
+        authoritativeRefreshGeneration: unknown;
+        onContextChange(context: ChatContext): void;
+      }>);
 
 type ReadyNewChat = Readonly<{
   kind: "ready-new-chat";
@@ -85,7 +91,17 @@ type TargetState = Readonly<{ target: ChatSettingsTarget; state: SettingsState }
 export function useChatSettings(options: ChatSettingsOptions): ChatSettingsFeature {
   const feature = useSettingsState(options);
   if (feature.kind !== "ready-new-chat" && feature.kind !== "ready-session") return feature;
-  return { ...feature, settingsChip: createElement(ChatSettingsView, { feature }) };
+  let viewProps: ChatSettingsViewProps;
+  if (feature.kind === "ready-session") {
+    if (!("openTask" in options)) throw new Error("Session Settings requires Session navigation callbacks.");
+    viewProps = {
+      feature,
+      navigation: { openTask: options.openTask, openParentSession: options.openParentSession },
+    };
+  } else {
+    viewProps = { feature };
+  }
+  return { ...feature, settingsChip: createElement(ChatSettingsView, viewProps) };
 }
 
 function useSettingsState(
