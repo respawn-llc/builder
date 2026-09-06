@@ -13,7 +13,6 @@ export function ThinkingSelector({
   disabled: boolean;
   onCommit(value: string): void;
 }>) {
-  const { t } = useTranslation();
   return (
     <SteppedSelector
       activeTone={thinkingTone}
@@ -22,13 +21,18 @@ export function ThinkingSelector({
       value={thinking.value}
       values={thinking.values}
     >
-      {(value) => (
-        <div className="flex min-w-0 items-center gap-[var(--space-3)]">
-          <span className="min-w-0 flex-1 truncate">{t("chatSettings.thinking")}</span>
-          <span className="shrink-0 font-mono text-[var(--color-muted)]">{value}</span>
-        </div>
-      )}
+      {(value) => <ThinkingHeading value={value} />}
     </SteppedSelector>
+  );
+}
+
+export function ThinkingHeading({ value }: Readonly<{ value: string }>) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-w-0 items-center gap-[var(--space-3)]">
+      <span className="min-w-0 flex-1 truncate">{t("chatSettings.thinking")}</span>
+      <span className="shrink-0 font-mono text-[var(--color-muted)]">{value}</span>
+    </div>
   );
 }
 

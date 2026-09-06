@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
 import type {
@@ -11,6 +12,7 @@ import type {
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import { useChatSettings, type ChatSettingsOptions, type ChatSettingsFeature } from "./index";
 import * as ui from "@/ui";
+import { appI18n } from "@/i18n";
 
 const sessionID = "123e4567-e89b-42d3-a456-426614174000";
 const target = {
@@ -80,6 +82,60 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+it("activates nested Settings controls once and suppresses disconnected Session activations", async () => {
+  const services = createTestServices([]);
+  vi.spyOn(services.api.chat, "getSettings").mockResolvedValue(initialRead);
+  const mutate = vi.spyOn(services.api.chat, "mutateSettings").mockResolvedValue(response());
+  const user = userEvent.setup();
+  function Host({ availability }: Readonly<{ availability: "available" | "disconnected" }>) {
+    const feature = useChatSettings({
+      ...connected,
+      target,
+      serverMutationAvailability: availability,
+      onContextChange: vi.fn(),
+    });
+    return feature.kind === "ready-session" ? feature.settingsChip : null;
+  }
+  const view = render(
+    <TestAppProviders services={services}>
+      <Host availability="available" />
+    </TestAppProviders>,
+  );
+  await user.click(await screen.findByRole("button", { name: appI18n.t("chatSettings.open") }));
+  const popover = screen.getByRole("dialog");
+  await user.click(within(popover).getByRole("radio", { name: appI18n.t("chatSettings.supervisorAlways") }));
+  expect(mutate).toHaveBeenCalledExactlyOnceWith(target, { kind: "supervisor", value: "all" });
+  mutate.mockClear();
+  for (const [label, operation] of [
+    [appI18n.t("chatSettings.fast"), { kind: "fast", enabled: true }],
+    [appI18n.t("chatSettings.questions"), { kind: "questions", enabled: false }],
+    [appI18n.t("chatSettings.autoCompaction"), { kind: "auto_compaction", enabled: false }],
+  ] as const) {
+    await user.click(within(popover).getByRole("switch", { name: label }));
+    expect(mutate).toHaveBeenCalledExactlyOnceWith(target, operation);
+    mutate.mockClear();
+  }
+  const thinkingInput = within(popover).getByRole("textbox", { name: appI18n.t("chatSettings.thinking") });
+  await user.clear(thinkingInput);
+  await user.type(thinkingInput, "custom value");
+  await user.click(within(popover).getByRole("button", { name: appI18n.t("chatSettings.commitThinking") }));
+  expect(mutate).toHaveBeenCalledExactlyOnceWith(target, { kind: "thinking", value: "custom value" });
+  mutate.mockClear();
+  view.rerender(
+    <TestAppProviders services={services}>
+      <Host availability="disconnected" />
+    </TestAppProviders>,
+  );
+  for (const control of [
+    ...within(popover).getAllByRole("switch"),
+    ...within(popover).getAllByRole("radio"),
+    within(popover).getByRole("button", { name: appI18n.t("chatSettings.commitThinking") }),
+  ]) {
+    fireEvent.click(control);
+  }
+  expect(mutate).not.toHaveBeenCalled();
+});
 
 it("loads ordinary Session Settings through the same feature boundary", async () => {
   const services = createTestServices([]);
@@ -519,12 +575,13 @@ it("exposes no Session activation while the host reports disconnected", async ()
     serverMutationAvailability: "disconnected",
     authoritativeRefreshGeneration: generation,
   });
-  expect(result.current).toEqual({
+  expect(result.current).toMatchObject({
     kind: "ready-session",
     settings,
     session: initialRead.session,
     serverMutationAvailability: "disconnected",
   });
+  expect(result.current).not.toHaveProperty("activate");
   expect(getSettings).toHaveBeenCalledOnce();
   expect(mutate).not.toHaveBeenCalled();
   rerender({

@@ -3,6 +3,19 @@ import { workflowEditorEnglish } from "./workflowEditorEn";
 export const englishResources = {
   translation: {
     chatSettings: {
+      open: "Chat settings",
+      supervisor: "Supervisor",
+      supervisorEdits: "Edits",
+      supervisorAlways: "Always",
+      supervisorOff: "Off",
+      fast: "Fast mode",
+      questions: "Questions",
+      autoCompaction: "Auto-compaction",
+      commitThinking: "Save Thinking",
+      workflowLock: "Locked by workflow",
+      cachingLock: "Locked by caching policy",
+      required: "Required by workflow",
+      policyDisabled: "Disabled by Session policy",
       thinking: "Thinking",
       operationFailed: "Could not change Chat settings",
       rejections: {

@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef } from "react";
+import {
+  createElement,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useReducer,
+  useRef,
+  type ReactElement,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -16,6 +25,7 @@ import {
 } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { showStatusToast } from "@/ui";
+import { ChatSettingsView } from "./ChatSettingsView";
 
 export type ChatSettingsOptions =
   | Readonly<{
@@ -48,8 +58,7 @@ type SettingsState =
   | ReadyNewChat
   | ReadySession;
 
-export type ChatSettingsFeature =
-  | Exclude<SettingsState, ReadyNewChat | ReadySession>
+export type ReadyChatSettings =
   | (ReadyNewChat & Readonly<{ activate(operation: ChatSettingsMutation): void }>)
   | (Omit<ReadySession, "lastDelivered"> &
       (
@@ -59,6 +68,10 @@ export type ChatSettingsFeature =
           }>
         | Readonly<{ serverMutationAvailability: "disconnected" }>
       ));
+
+export type ChatSettingsFeature =
+  | Exclude<SettingsState, ReadyNewChat | ReadySession>
+  | (ReadyChatSettings & Readonly<{ settingsChip: ReactElement }>);
 
 type SettingsAction =
   | Readonly<{ kind: "loading" }>
@@ -70,6 +83,14 @@ type SettingsAction =
 type TargetState = Readonly<{ target: ChatSettingsTarget; state: SettingsState }>;
 
 export function useChatSettings(options: ChatSettingsOptions): ChatSettingsFeature {
+  const feature = useSettingsState(options);
+  if (feature.kind !== "ready-new-chat" && feature.kind !== "ready-session") return feature;
+  return { ...feature, settingsChip: createElement(ChatSettingsView, { feature }) };
+}
+
+function useSettingsState(
+  options: ChatSettingsOptions,
+): Exclude<SettingsState, ReadyNewChat | ReadySession> | ReadyChatSettings {
   const { target } = options;
   const { api } = useAppServices();
   const { t } = useTranslation();
@@ -169,7 +190,7 @@ export function useChatSettings(options: ChatSettingsOptions): ChatSettingsFeatu
         serverMutationAvailability: "disconnected",
       };
     const ready: Extract<
-      ChatSettingsFeature,
+      ReadyChatSettings,
       { kind: "ready-session"; serverMutationAvailability: "available" }
     > = {
       kind: state.kind,
