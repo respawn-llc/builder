@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -10,6 +11,45 @@ import (
 	"core/server/tools"
 	"core/shared/runtimeids"
 )
+
+func TestSteeringDrainIncludesMessagesAcceptedDuringDrain(t *testing.T) {
+	var engine *Engine
+	var admissionErr error
+	injectDuringDrain := false
+	engine = mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventPendingWorkChanged && injectDuringDrain {
+				injectDuringDrain = false
+				_, admissionErr = engine.Steer(t.Context(), "accepted during the drain", nil)
+			}
+		},
+	})
+	err := engine.stepLifecycle.Run(t.Context(), exclusiveStepOptions{
+		EmitRunState: true, ActiveKind: ActiveKindUserTurn,
+	}, func(_ context.Context, stepID string) error {
+		for _, text := range []string{"first message", "second message"} {
+			if _, err := engine.Steer(t.Context(), text, nil); err != nil {
+				return err
+			}
+		}
+		injectDuringDrain = true
+		result, err := engine.messageFlow.CommitPendingUserInjections(stepID, steerUserInjections())
+		if err != nil {
+			return err
+		}
+		if admissionErr != nil {
+			return admissionErr
+		}
+		if result.flushed != 3 || engine.HasQueuedUserWork() {
+			t.Errorf("drain flushed %d messages and pending=%t; want all three delivered", result.flushed, engine.HasQueuedUserWork())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestAutoDrainContinuesTheUncommittedTailAfterCommittedFailure(t *testing.T) {
 	observerErr := errors.New("queued steer observer failed")

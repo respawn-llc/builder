@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -151,13 +150,20 @@ func TestAgentStepBoundaryDrainsEveryAcceptedSteerBeforeNextRequest(t *testing.T
 			steerDone <- err
 		}()
 	}
-	waitForAcceptedRuntimeOperationCount(t, engine, len(texts))
-	releaseRequest()
 	for range texts {
-		if err := <-steerDone; err != nil {
-			t.Fatalf("accept Agent Steer: %v", err)
+		select {
+		case err := <-steerDone:
+			if err != nil {
+				t.Fatalf("accept Agent Steer: %v", err)
+			}
+		case <-time.After(runtimeTestSynchronizationTimeout):
+			t.Fatal("Agent Steer acceptance waited for the Step Boundary")
 		}
 	}
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != len(texts) {
+		t.Fatalf("Pending Work before boundary = %+v, want every accepted Steer", pending.Items)
+	}
+	releaseRequest()
 	if err := <-runDone; err != nil {
 		t.Fatalf("Agent Turn: %v", err)
 	}
@@ -280,13 +286,12 @@ func TestAgentStepBoundaryDrainsSteersAcceptedWhileFollowingRequestIsPreparing(t
 		persistenceBlockReady <- persistenceBlock{entered: entered, release: release}
 		return nil
 	})
-	waitForAcceptedRuntimeOperationCount(t, engine, 1)
-	releaseInitialRequest()
 	block := <-persistenceBlockReady
 	t.Cleanup(block.release)
 	if err := <-firstSteerDone; err != nil {
 		t.Fatalf("accept first Agent Steer: %v", err)
 	}
+	releaseInitialRequest()
 	select {
 	case <-block.entered:
 	case <-time.After(runtimeTestSynchronizationTimeout):
@@ -294,25 +299,23 @@ func TestAgentStepBoundaryDrainsSteersAcceptedWhileFollowingRequestIsPreparing(t
 	}
 
 	secondSteerDone, secondSteerMessage := queueSteer("second steer", nil)
-	waitForAcceptedRuntimeOperationCount(t, engine, 1)
-	thirdSteerDone, thirdSteerMessage := queueSteer("third steer", nil)
-	waitForAcceptedRuntimeOperationCount(t, engine, 2)
-	block.release()
-	select {
-	case <-followingRequestStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("following provider request did not start")
-	}
 	var secondSteerErr, thirdSteerErr error
 	select {
 	case secondSteerErr = <-secondSteerDone:
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for the second Steer to be accepted")
 	}
+	thirdSteerDone, thirdSteerMessage := queueSteer("third steer", nil)
 	select {
 	case thirdSteerErr = <-thirdSteerDone:
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for the third Steer to be accepted")
+	}
+	block.release()
+	select {
+	case <-followingRequestStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("following provider request did not start")
 	}
 
 	client.mu.Lock()
@@ -464,19 +467,18 @@ func TestWorktreeTransitionRunsBeforeQueuedHumanProviderTurn(t *testing.T) {
 		}
 		humanDone <- err
 	}()
-	waitForAcceptedRuntimeOperationCount(t, engine, 1)
-	close(releaseTool)
 	select {
 	case <-humanApplying:
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("queued Human input did not apply at the preceding Step Boundary")
+		t.Fatal("Human input did not enter acceptance during the protected Step")
 	}
 
 	transitionStarted := make(chan struct{})
+	transitionScheduled := make(chan struct{})
 	releaseTransition := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), nil, func() error {
+		transitionDone <- engine.RunExecutionTargetTransition(t.Context(), func() { close(transitionScheduled) }, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil
@@ -486,6 +488,8 @@ func TestWorktreeTransitionRunsBeforeQueuedHumanProviderTurn(t *testing.T) {
 	if err := <-humanDone; err != nil {
 		t.Fatalf("accept queued Human input: %v", err)
 	}
+	pendingWorkTestWait(t, transitionScheduled, "Worktree transition scheduling")
+	close(releaseTool)
 
 	select {
 	case <-transitionStarted:
@@ -1412,7 +1416,7 @@ func TestSteersAcceptedDuringCompactionFullyDrainIntoTheFollowingAgentStep(t *te
 
 	texts := []string{"first steer", "second steer", "third steer"}
 	for _, text := range texts {
-		if _, err := engine.QueueUserMessageForAutoDrain(t.Context(), text); err != nil {
+		if _, err := engine.Steer(t.Context(), text, nil); err != nil {
 			t.Fatalf("accept %q during compaction: %v", text, err)
 		}
 	}
@@ -1429,7 +1433,15 @@ func TestSteersAcceptedDuringCompactionFullyDrainIntoTheFollowingAgentStep(t *te
 	if len(requests) != 1 {
 		t.Fatalf("post-compaction provider requests = %d, want 1", len(requests))
 	}
-	assertRequestHasUserMessage(t, requests[0], strings.Join(texts, "\n\n"), true)
+	var actual []string
+	for _, message := range requestMessages(requests[0]) {
+		if message.Role == llm.RoleUser {
+			actual = append(actual, messageContent(message))
+		}
+	}
+	if !slices.Equal(actual, texts) {
+		t.Fatalf("post-compaction human messages = %q, want distinct ordered messages %q", actual, texts)
+	}
 	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 0 {
 		t.Fatalf("Pending Work after post-compaction request = %+v, want empty", pending.Items)
 	}

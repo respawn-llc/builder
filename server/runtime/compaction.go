@@ -366,7 +366,13 @@ func (c *defaultContextCompactor) compactContext(
 	e.pauseQueuedUserAutoDrain()
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
-	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
+	run := c.steps.RunNext
+	if activeKind == ActiveKindPreSubmitCompaction {
+		// A pre-submit check must yield to an existing turn so Send can Steer it.
+		// Waiting for that turn to finish would prevent the input reaching its boundaries.
+		run = c.steps.Run
+	}
+	err := run(ctx, exclusiveStepOptions{ActiveKind: activeKind, Reservation: reservation}, func(stepCtx context.Context, stepID string) error {
 		if requireEligibility {
 			if e.compactionRuntimeState().ActiveSnapshot() != nil {
 				return c.reportManualCompactionSelectionFailure(stepID, requestID, ErrManualCompactionActive)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1288,13 +1289,13 @@ func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
 		SessionID: store.Meta().SessionID,
 		Text:      " steer live ",
 	})
+	var result runtimeControlLiveSteerResult
 	select {
-	case result := <-steerDone:
-		t.Fatalf("LiveSteer completed before the protected Step boundary: %+v", result)
-	case <-time.After(25 * time.Millisecond):
+	case result = <-steerDone:
+	case <-time.After(time.Second):
+		t.Fatal("LiveSteer did not accept pending input during generation")
 	}
 	close(client.release)
-	result := <-steerDone
 	if result.err != nil {
 		t.Fatalf("LiveSteer: %v", result.err)
 	}
@@ -1336,13 +1337,13 @@ func TestServiceLiveSteerAgentCallerUsesOneWrappedDeveloperMessage(t *testing.T)
 		CallerSessionID: &sourceText,
 		Text:            "steer live",
 	})
+	var result runtimeControlLiveSteerResult
 	select {
-	case result := <-steerDone:
-		t.Fatalf("LiveSteer completed before the protected Step boundary: %+v", result)
-	case <-time.After(25 * time.Millisecond):
+	case result = <-steerDone:
+	case <-time.After(time.Second):
+		t.Fatal("Agent Steer did not accept pending input during generation")
 	}
 	close(client.release)
-	result := <-steerDone
 	if result.err != nil {
 		t.Fatalf("LiveSteer: %v", result.err)
 	}
@@ -2402,7 +2403,11 @@ func TestServiceSubmitUserShellCommandDoesNotRecordPromptHistory(t *testing.T) {
 
 func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
-	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
+	releaseFirst := sync.OnceFunc(func() { close(client.releaseFirst) })
+	releaseSecond := sync.OnceFunc(func() { close(client.releaseSecond) })
+	t.Cleanup(releaseFirst)
+	t.Cleanup(releaseSecond)
+	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 16)
 	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
@@ -2430,46 +2435,40 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the first model request")
 	}
-	queuedText := "use the existing lld installation"
-	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", queuedText)
-	steeringDone := submitUserTurnRuntimeControlAsync(service, steeringReq)
-	select {
-	case result := <-steeringDone:
-		t.Fatalf("SubmitUserTurn completed before the protected Step boundary: %+v", result)
-	case <-time.After(25 * time.Millisecond):
+	texts := []string{"use the existing lld installation", "verify the result", "report the remaining limitations"}
+	for _, text := range texts {
+		steeringDone := submitUserTurnRuntimeControlAsync(service, runtimeControlUserTurnRequest(store, text, text))
+		select {
+		case result := <-steeringDone:
+			if result.err != nil {
+				t.Fatalf("Send during model generation: %v", result.err)
+			}
+			steered := result.response
+			if steered.ResultKind != clientui.UserTurnResultKindQueued || !steered.Steered || steered.QueueItemID == "" {
+				t.Fatalf("Send = %+v, want steering acceptance", steered)
+			}
+			waitForRuntimeControlQueuedStatus(t, queuedStatuses, steered.QueueItemID, runtime.QueuedUserMessageAccepted)
+		case <-time.After(time.Second):
+			t.Fatal("Send waited for model execution instead of accepting steering")
+		}
 	}
-	close(client.releaseFirst)
-	var steeringResult runtimeControlSubmitUserTurnResult
-	select {
-	case steeringResult = <-steeringDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("SubmitUserTurn did not complete after the protected Step boundary")
-	}
-	if steeringResult.err != nil {
-		t.Fatalf("SubmitUserTurn while model was thinking: %v", steeringResult.err)
-	}
-	steered := steeringResult.response
-	if steered.ResultKind != clientui.UserTurnResultKindQueued || !steered.Steered || steered.QueueItemID == "" {
-		t.Fatalf("SubmitUserTurn while model was thinking = %+v, want accepted steering", steered)
-	}
-	waitForRuntimeControlQueuedStatus(t, queuedStatuses, steered.QueueItemID, runtime.QueuedUserMessageAccepted)
+	releaseFirst()
 	select {
 	case <-client.secondStarted:
 	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the next safe-boundary model request")
 	}
 
-	found := false
+	var received []string
 	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
-		if message.Role == llm.RoleUser && message.Content != nil && *message.Content == queuedText {
-			found = true
-			break
+		if message.Role == llm.RoleUser && message.Content != nil {
+			received = append(received, *message.Content)
 		}
 	}
-	if !found {
-		t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+	if !slices.Equal(received, append([]string{"start"}, texts...)) {
+		t.Fatalf("next model request did not receive every separate steer in order: %q", received)
 	}
-	close(client.releaseSecond)
+	releaseSecond()
 	waitForRuntimeControlIdle(t, engine)
 	if engine.HasActiveLiveRunGroup() {
 		t.Fatal("submitted steering kept stale live-run ownership after the turn completed")
@@ -2523,18 +2522,11 @@ func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission
 	if calls := resolver.calls.Load(); calls != 1 {
 		t.Fatalf("resolver calls before queue admission = %d, want 1", calls)
 	}
-	select {
-	case result := <-steeringDone:
-		t.Fatalf("SubmitUserTurn completed before the protected Step boundary: %+v", result)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	close(client.releaseFirst)
 	var steeringResult runtimeControlSubmitUserTurnResult
 	select {
 	case steeringResult = <-steeringDone:
 	case <-time.After(5 * time.Second):
-		t.Fatal("SubmitUserTurn prompt command did not complete after the protected Step boundary")
+		t.Fatal("prompt command did not accept steering during generation")
 	}
 	if steeringResult.err != nil {
 		t.Fatalf("SubmitUserTurn prompt command while model was thinking: %v", steeringResult.err)
@@ -2554,6 +2546,7 @@ func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission
 		t.Fatalf("expanded prompt history count = %d, want 0", got)
 	}
 
+	close(client.releaseFirst)
 	select {
 	case <-client.secondStarted:
 	case <-time.After(5 * time.Second):
@@ -2725,10 +2718,11 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 }
 
-func TestServiceInterruptRejectsPendingSteeringBeforeStoppingActiveRun(t *testing.T) {
+func TestServiceInterruptRestoresEveryPendingSteerWithoutRestart(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
 	defer close(client.releaseFirst)
 	defer close(client.releaseSecond)
+	restored := make(chan runtime.HumanInputInterruptedEvent, 4)
 	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
@@ -2737,7 +2731,13 @@ func TestServiceInterruptRejectsPendingSteeringBeforeStoppingActiveRun(t *testin
 		t,
 		client,
 		registry,
-		runtime.Config{},
+		runtime.Config{
+			OnEvent: func(event runtime.Event) {
+				if event.HumanInputInterrupted != nil {
+					restored <- *event.HumanInputInterrupted
+				}
+			},
+		},
 		func(runtimeids.SessionResourceRef, runtime.Event) {},
 	)
 	activeReq := runtimeControlUserTurnRequest(store, "active-turn", "start")
@@ -2754,20 +2754,16 @@ func TestServiceInterruptRejectsPendingSteeringBeforeStoppingActiveRun(t *testin
 		t.Fatal("active turn did not reach model thinking")
 	}
 
-	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", "do not continue after interrupt")
-	type steeringResult struct {
-		response serverapi.RuntimeSubmitUserTurnResponse
-		err      error
-	}
-	steeringDone := make(chan steeringResult, 1)
-	go func() {
-		response, steeringErr := service.SubmitUserTurn(context.Background(), steeringReq)
-		steeringDone <- steeringResult{response: response, err: steeringErr}
-	}()
-	select {
-	case result := <-steeringDone:
-		t.Fatalf("Steering completed before the protected Step boundary: %+v", result)
-	case <-time.After(25 * time.Millisecond):
+	texts := []string{"first pending steer", "second pending steer", "third pending steer"}
+	ids := make([]string, 0, len(texts))
+	for _, text := range texts {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		response, err := service.SubmitUserTurn(ctx, runtimeControlUserTurnRequest(store, text, text))
+		cancel()
+		if err != nil {
+			t.Fatalf("accept pending steer: %v", err)
+		}
+		ids = append(ids, response.QueueItemID)
 	}
 
 	_, err = service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
@@ -2779,13 +2775,18 @@ func TestServiceInterruptRejectsPendingSteeringBeforeStoppingActiveRun(t *testin
 	if engine.HasQueuedUserWork() {
 		t.Fatal("interrupt left accepted steering queued")
 	}
-	result := <-steeringDone
-	if !errors.Is(result.err, serverapi.ErrRuntimeCommandNotAccepted) ||
-		!errors.Is(result.err, context.Canceled) {
-		t.Fatalf("SubmitUserTurn steering error = %v, want canceled not-accepted result", result.err)
-	}
-	if result.response != (serverapi.RuntimeSubmitUserTurnResponse{}) {
-		t.Fatalf("SubmitUserTurn steering response = %+v, want zero response", result.response)
+	select {
+	case event := <-restored:
+		if len(event.Items) != len(texts) {
+			t.Fatalf("restored %d messages, want %d", len(event.Items), len(texts))
+		}
+		for index, item := range event.Items {
+			if item.QueueItemID != ids[index] || item.Text != texts[index] {
+				t.Fatalf("restored message %d = %+v, want %s/%q", index, item, ids[index], texts[index])
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not publish pending steering for composer restoration")
 	}
 	select {
 	case <-client.secondStarted:

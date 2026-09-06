@@ -264,15 +264,12 @@ func (h *supervisorTurnHarness) queueOrdinarySteer(t *testing.T) <-chan error {
 	}
 	descriptor := mustOpenSessionDescriptor(t, h.sessionID)
 	steered := make(chan error, 1)
-	go func() {
-		steered <- h.authority.RunCurrentTurn(h.ctx, descriptor,
-			func(commit func() (bool, error)) (bool, error) { return commit() },
-			func(ctx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) error {
-				_, err := engine.QueueAgentSteer(ctx, steer, accept)
-				return err
-			})
-	}()
-	h.awaitPendingOperation(t)
+	steered <- h.authority.RunCurrentTurn(h.ctx, descriptor,
+		func(commit func() (bool, error)) (bool, error) { return commit() },
+		func(ctx context.Context, engine *runtime.Engine, accept runtime.CommandAcceptance) error {
+			_, err := engine.QueueAgentSteer(ctx, steer, accept)
+			return err
+		})
 	return steered
 }
 
@@ -360,7 +357,7 @@ func TestSupervisorFeedbackJoinsBusyHumanExactExecution(t *testing.T) {
 		if !live || current.Scope().ID() != second.Scope().ID() {
 			t.Fatal("human execution retired before Supervisor feedback admission")
 		}
-		h.awaitPendingOperation(t)
+		h.awaitActivity(t, clientui.ReviewerActivityAddressingFeedback)
 		withFeedback.reply <- commentary
 		withFeedback = h.awaitModel(t, h.main)
 	}

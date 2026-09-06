@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,104 @@ import (
 
 	"github.com/google/uuid"
 )
+
+func TestConcurrentLiveSteerPendingOrderMatchesDeliveryAndStop(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stop=%t", stop), func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			var first sync.Once
+			client := &hookClient{
+				response: finalTextResponse("done"),
+				beforeReturn: func() error {
+					var err error
+					first.Do(func() {
+						close(started)
+						<-release
+						if stop {
+							err = context.Canceled
+						}
+					})
+					return err
+				},
+			}
+			var mu sync.Mutex
+			var restored []string
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+				Model: "gpt-5",
+				OnEvent: func(event Event) {
+					if event.HumanInputInterrupted != nil {
+						mu.Lock()
+						for _, item := range event.HumanInputInterrupted.Items {
+							restored = append(restored, item.Text)
+						}
+						mu.Unlock()
+					}
+				},
+			})
+			done := make(chan error, 1)
+			go func() {
+				_, err := engine.SubmitUserMessage(t.Context(), "start")
+				done <- err
+			}()
+			pendingWorkTestWait(t, started, "held provider")
+			const count = 64
+			gate := make(chan struct{})
+			results := make(chan error, count)
+			for i := range count {
+				go func() {
+					<-gate
+					_, accepted, err := engine.QueueUserMessageForActiveRun(t.Context(), fmt.Sprintf("input-%d", i), nil)
+					if err == nil && !accepted {
+						err = errors.New("live steer was not accepted")
+					}
+					results <- err
+				}()
+			}
+			close(gate)
+			for range count {
+				pendingWorkTestNoError(t, <-results)
+			}
+			pending := pendingWorkTestSnapshot(t, engine)
+			want := make([]string, 0, count)
+			for _, item := range pending.Items {
+				want = append(want, item.CanonicalInput)
+			}
+			if stop {
+				stopped, err := engine.TryInterruptActiveRun()
+				pendingWorkTestNoError(t, err)
+				if !stopped {
+					t.Fatal("Stop did not stop active execution")
+				}
+			}
+			close(release)
+			if err := <-done; err != nil && !(stop && errors.Is(err, context.Canceled)) {
+				t.Fatal(err)
+			}
+			waitEngineLifecycleTasks(t, engine)
+			var got []string
+			if stop {
+				mu.Lock()
+				got = slices.Clone(restored)
+				mu.Unlock()
+			} else {
+				client.mu.Lock()
+				calls := slices.Clone(client.calls)
+				client.mu.Unlock()
+				if len(calls) != 2 {
+					t.Fatalf("provider calls = %d, want initial and continuation", len(calls))
+				}
+				for _, message := range requestMessages(calls[1]) {
+					if message.Role == llm.RoleUser && messageContent(message) != "start" {
+						got = append(got, messageContent(message))
+					}
+				}
+			}
+			if len(want) != count || !slices.Equal(got, want) {
+				t.Fatalf("observed order = %v\nPending Work order = %v", got, want)
+			}
+		})
+	}
+}
 
 func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
 	store := mustCreateTestSession(t)
@@ -77,7 +177,7 @@ func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
 	}
 }
 
-func TestQueueMessageForActiveRunStopsWhenRuntimeFIFOCloses(t *testing.T) {
+func TestQueueMessageForActiveRunCancellationPreventsAcceptance(t *testing.T) {
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.liveRun.beginStep(&RunSnapshot{
 		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
@@ -93,8 +193,10 @@ func TestQueueMessageForActiveRunStopsWhenRuntimeFIFOCloses(t *testing.T) {
 		err      error
 	}
 	done := make(chan result, 1)
+	caller, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	go func() {
-		_, accepted, err := eng.QueueUserMessageForActiveRun(t.Context(), "queued", func() error {
+		_, accepted, err := eng.QueueUserMessageForActiveRun(caller, "queued", func() error {
 			close(entered)
 			<-release
 			return nil
@@ -104,16 +206,16 @@ func TestQueueMessageForActiveRunStopsWhenRuntimeFIFOCloses(t *testing.T) {
 	select {
 	case <-entered:
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("queued message did not enter Runtime operation")
+		t.Fatal("queued message did not enter acceptance")
 	}
-	eng.runtimeFIFO.beginClose()
+	cancel()
 	close(release)
 	got := <-done
 	if got.accepted || !errors.Is(got.err, context.Canceled) {
 		t.Fatalf("queue result accepted=%t err=%v, want unaccepted canceled operation", got.accepted, got.err)
 	}
 	if eng.HasQueuedUserWork() {
-		t.Fatal("Runtime FIFO shutdown admitted queued message")
+		t.Fatal("caller cancellation admitted queued message")
 	}
 }
 
@@ -350,39 +452,39 @@ func TestInstantStopBroadcastsRemovedHumanInputInAcceptanceOrder(t *testing.T) {
 		})
 		firstDone <- queuedResult{item: item, accepted: accepted, err: err}
 	}()
-	waitForAcceptedRuntimeOperationCount(t, eng, 1)
-	close(releaseTool)
 	select {
 	case <-firstApplying:
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("first queued input did not apply at the preceding Step Boundary")
+		t.Fatal("first queued input did not enter acceptance during the protected Step")
 	}
 
+	close(releaseFirstApplication)
+	first := <-firstDone
+	if first.err != nil || !first.accepted {
+		t.Fatalf("queue first input accepted=%t err=%v", first.accepted, first.err)
+	}
 	secondDone := make(chan queuedResult, 1)
 	go func() {
 		item, accepted, err := eng.QueueUserMessageForActiveRun(t.Context(), "second", nil)
 		secondDone <- queuedResult{item: item, accepted: accepted, err: err}
 	}()
 	transitionStarted := make(chan struct{})
+	transitionScheduled := make(chan struct{})
 	releaseTransition := make(chan struct{})
 	transitionDone := make(chan error, 1)
 	go func() {
-		transitionDone <- eng.RunExecutionTargetTransition(t.Context(), nil, func() error {
+		transitionDone <- eng.RunExecutionTargetTransition(t.Context(), func() { close(transitionScheduled) }, func() error {
 			close(transitionStarted)
 			<-releaseTransition
 			return nil
 		})
 	}()
-	waitForAcceptedRuntimeOperationCount(t, eng, 2)
-	close(releaseFirstApplication)
-	first := <-firstDone
-	if first.err != nil || !first.accepted {
-		t.Fatalf("queue first input accepted=%t err=%v", first.accepted, first.err)
-	}
 	second := <-secondDone
 	if second.err != nil || !second.accepted {
 		t.Fatalf("queue second input accepted=%t err=%v", second.accepted, second.err)
 	}
+	pendingWorkTestWait(t, transitionScheduled, "Worktree transition scheduling")
+	close(releaseTool)
 	select {
 	case <-transitionStarted:
 	case <-time.After(runtimeTestSynchronizationTimeout):

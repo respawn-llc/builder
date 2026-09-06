@@ -574,7 +574,7 @@ func (s *defaultStepExecutor) buildActiveTurnRequestAtBoundary(
 		}
 		// Request preparation may persist contract state. Reopen the boundary
 		// when mutations arrived during that work, then rebuild from their result.
-		if !s.engine.HasPendingRuntimeOperations() {
+		if !s.engine.HasPendingRuntimeOperations() && !s.messages.HasPendingUserSteers() {
 			return request, nil
 		}
 		if err := s.engine.stepLifecycle.BeginAgentStepBoundary(ctx); err != nil {

@@ -62,7 +62,6 @@ type steeringMessage struct {
 	eventPolicy           steeringMessageEventPolicy
 	persist               bool
 	provenanceDestination **TranscriptCommittedRowProvenance
-	emitUserFlushEvent    bool
 }
 
 type steeringAssistantCommit struct {
@@ -243,14 +242,6 @@ func steerAssistantCommitIntent(
 			},
 		}},
 	}
-}
-
-func steerUserMessageWithFlushIntent(msg llm.Message) steeringIntent {
-	intent := steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{msg})
-	var provenance *TranscriptCommittedRowProvenance
-	intent.items[0].message.provenanceDestination = &provenance
-	intent.items[0].message.emitUserFlushEvent = true
-	return intent
 }
 
 func steerLocalEntryIntent(entry storedLocalEntry) steeringIntent {
@@ -902,15 +893,6 @@ func (e *Engine) applySteeringItem(provenance steeringProvenance, item steeringI
 			item.message.provenanceDestination,
 		)
 		item.recordCommitReceipt(receipt)
-		if err == nil && receipt.Committed && item.message.emitUserFlushEvent {
-			if flushed := flushedUserMessageEvent(
-				*item.message.provenanceDestination,
-				item.message.message,
-				provenance.stepID(),
-			); flushed != nil {
-				err = errors.Join(err, e.emitRaw(*flushed))
-			}
-		}
 		return err
 	}
 	if item.goalNoticeAndStatus != nil {

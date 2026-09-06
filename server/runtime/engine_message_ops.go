@@ -728,6 +728,7 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 	pending := e.messageFlow.DrainPendingUserInjections()
 	messages := append([]QueuedUserMessage(nil), pending...)
 	if len(pending) != 0 {
+		e.completeLiveRunQueueItems(queuedUserMessageIDSet(pending))
 		for _, item := range pending {
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 		}

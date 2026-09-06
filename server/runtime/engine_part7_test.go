@@ -272,15 +272,15 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for reviewer request")
 	}
-	_, queued, err := eng.SubmitUserMessageOrSteerWithAcceptance(
+	queued, err := eng.Steer(
 		context.Background(),
 		"steer reviewer follow-up",
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", err)
+		t.Fatalf("Steer: %v", err)
 	}
-	if queued == nil {
+	if queued.ID == "" {
 		t.Fatal("Steer was not accepted into Pending Work")
 	}
 	deadline := time.Now().Add(runtimeTestSynchronizationTimeout)

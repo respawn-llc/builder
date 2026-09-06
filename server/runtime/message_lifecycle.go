@@ -437,14 +437,6 @@ func queuedUserMessageFlushGroups(messages []queuedUserMessage) ([]queuedUserMes
 			continue
 		}
 		message := pending.message.Message
-		if message.Role == llm.RoleUser && len(groups) > 0 && groups[len(groups)-1].message.Role == llm.RoleUser {
-			group := &groups[len(groups)-1]
-			group.message.Content = textutil.Value(strings.Join([]string{*group.message.Content, text}, "\n\n"))
-			group.batch = append(group.batch, text)
-			group.queueItems = append(group.queueItems, queueItems...)
-			group.pending = append(group.pending, pending)
-			continue
-		}
 		groups = append(groups, queuedUserMessageFlushGroup{
 			message:    message,
 			batch:      []string{text},
@@ -495,28 +487,33 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 }
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
-	var claim *queuedUserMessageClaim
-	switch selection.(type) {
-	case allPendingUserInjectionSelection:
-		claim = m.queue.ClaimAll()
-	case steerUserInjectionSelection:
-		claim = m.queue.ClaimSteers()
-	default:
-		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
+	result := userInjectionCommitResult{}
+	for {
+		var claim *queuedUserMessageClaim
+		switch selection.(type) {
+		case allPendingUserInjectionSelection:
+			claim = m.queue.ClaimAll()
+		case steerUserInjectionSelection:
+			claim = m.queue.ClaimSteers()
+		default:
+			return result, fmt.Errorf("unsupported user injection selection %T", selection)
+		}
+		if claim == nil {
+			return result, nil
+		}
+		if err := m.commitPendingUserInjections(stepID, selection, claim, &result); err != nil {
+			return result, err
+		}
 	}
-	if claim == nil {
-		return userInjectionCommitResult{}, nil
-	}
-	return m.commitPendingUserInjections(stepID, selection, claim)
 }
 
 func (m *defaultMessageLifecycle) commitPendingUserInjections(
 	stepID string,
 	selection userInjectionSelection,
 	claim *queuedUserMessageClaim,
-) (userInjectionCommitResult, error) {
+	result *userInjectionCommitResult,
+) error {
 	e := m.engine
-	result := userInjectionCommitResult{}
 	defer func() {
 		e.removeStoppedLiveRunQueueItems(func() []QueuedUserMessage {
 			return m.queue.ReleaseClaim(claim)
@@ -525,7 +522,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(
 
 	groups, err := queuedUserMessageFlushGroups(claim.items)
 	if err != nil {
-		return result, err
+		return err
 	}
 	for index, group := range groups {
 		receipt, err := e.steerWithCommitReceipt(
@@ -541,9 +538,9 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(
 			}
 			if _, steerOnly := selection.(steerUserInjectionSelection); steerOnly {
 				err = errors.Join(err, m.failDefinitelyUncommittedSteerClaim(claim, groups[index:]))
-				return result, &resultGroupFatal{Committed: false, Cause: err}
+				return &resultGroupFatal{Committed: false, Cause: err}
 			}
-			return result, err
+			return err
 		}
 		committedQueueItemIDs := queuedUserMessageIDSet(group.queueItems)
 		m.queue.FinalizeClaimItems(claim, committedQueueItemIDs)
@@ -559,10 +556,10 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(
 		result.flushed++
 		e.publishPendingWorkChanged()
 		if err != nil {
-			return result, err
+			return err
 		}
 	}
-	return result, nil
+	return nil
 }
 
 func (m *defaultMessageLifecycle) failDefinitelyUncommittedSteerClaim(

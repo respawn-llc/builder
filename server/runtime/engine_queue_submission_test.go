@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,59 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 )
+
+func TestStopRestoresSteerAndPostTurnQueueWithoutContinuation(t *testing.T) {
+	client := newBlockingThenQueuedClient()
+	var mu sync.Mutex
+	var restored []InterruptedHumanInput
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.HumanInputInterrupted != nil {
+				mu.Lock()
+				restored = append(restored, event.HumanInputInterrupted.Items...)
+				mu.Unlock()
+			}
+		},
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(t.Context(), "start")
+		done <- err
+	}()
+	pendingWorkTestWait(t, client.started, "held provider")
+	steer, err := engine.Steer(t.Context(), "steer", nil)
+	pendingWorkTestNoError(t, err)
+	queued, err := engine.QueueUserMessage(t.Context(), "queue")
+	pendingWorkTestNoError(t, err)
+	stopped, err := engine.TryInterruptActiveRun()
+	pendingWorkTestNoError(t, err)
+	close(client.releaseC)
+	if !stopped {
+		t.Fatal("Stop did not stop the held provider")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stopped turn = %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	mu.Lock()
+	items := append([]InterruptedHumanInput(nil), restored...)
+	mu.Unlock()
+	if len(items) != 2 || items[0].QueueItemID != steer.ID || items[1].QueueItemID != queued.ID {
+		t.Fatalf("restored inputs = %+v, want Steer then Queue", items)
+	}
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 0 {
+		t.Fatalf("Stop left Pending Work: %+v", pending.Items)
+	}
+	client.mu.Lock()
+	calls := len(client.calls)
+	client.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("Stop launched continuation: provider calls = %d", calls)
+	}
+	_, err = engine.SubmitUserMessage(t.Context(), "subsequent send")
+	pendingWorkTestNoError(t, err)
+}
 
 func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}}}}
@@ -40,15 +94,6 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 			err  error
 		}{item: queued, err: err}
 	}()
-	select {
-	case result := <-queuedDone:
-		t.Fatalf("post-turn Queue applied before the protected Step boundary: %+v/%v", result.item, result.err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("active turn completion: %v", err)
-	}
 	var queued QueuedUserMessage
 	select {
 	case result := <-queuedDone:
@@ -57,10 +102,20 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 		}
 		queued = result.item
 	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("post-turn Queue did not apply at the protected Step boundary")
+		t.Fatal("post-turn Queue acceptance waited for the protected Step boundary")
 	}
 	if queued.ID == "" {
 		t.Fatal("post-turn Queue accepted an empty item")
+	}
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 1 || pending.Items[0].ID.String() != queued.ID {
+		t.Fatalf("Pending Work during protected Step = %+v, want accepted Queue item", pending.Items)
+	}
+	if calls := fakeClientCallCount(client); calls != 0 {
+		t.Fatalf("queued work model calls during protected Step = %d, want none", calls)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("active turn completion: %v", err)
 	}
 	waitEngineLifecycleTasks(t, engine)
 	if calls := fakeClientCallCount(client); calls != 0 {
@@ -68,6 +123,46 @@ func TestPostTurnQueueDoesNotLaunchIndependentTurn(t *testing.T) {
 	}
 	if !engine.HasQueuedUserWork() {
 		t.Fatal("post-turn Queue did not remain pending for an Agent Turn")
+	}
+	_, err := engine.RemovePendingWork(t.Context(), mustQueueItemID(queued.ID))
+	pendingWorkTestNoError(t, err)
+	if engine.HasActiveLiveRunGroup() || engine.HasQueuedUserWork() {
+		t.Fatal("removing the last Queue item retained its accepting execution")
+	}
+}
+
+func TestPostTurnQueueDoesNotHoldCompletedLiveRun(t *testing.T) {
+	client, started, releaseProvider := newGatedHookClient(finalTextResponse("done"), finalTextResponse("unexpected continuation"))
+	defer releaseProvider()
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(t.Context(), "start")
+		done <- err
+	}()
+	pendingWorkTestWait(t, started, "held provider")
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), runtimeTestSynchronizationTimeout)
+	defer cancelWait()
+	handle, err := engine.CaptureActiveRunResult(waitCtx)
+	pendingWorkTestNoError(t, err)
+	queued, err := engine.QueueUserMessage(t.Context(), "later")
+	pendingWorkTestNoError(t, err)
+	releaseProvider()
+	pendingWorkTestNoError(t, <-done)
+	waitEngineLifecycleTasks(t, engine)
+	result, err := handle.Wait()
+	pendingWorkTestNoError(t, err)
+	if result.Status != RunStatusCompleted || result.ResultKind != LiveRunResultAssistantFinalAnswer {
+		t.Fatalf("completed live result = %+v", result)
+	}
+	if engine.HasActiveLiveRunGroup() {
+		t.Fatal("post-turn Queue retained the completed execution")
+	}
+	if pending := pendingWorkTestSnapshot(t, engine); len(pending.Items) != 1 || pending.Items[0].ID.String() != queued.ID {
+		t.Fatalf("post-turn Queue = %+v, want accepted item still pending", pending.Items)
+	}
+	if calls := hookClientCallCount(client); calls != 1 {
+		t.Fatalf("Queue launched a continuation: provider calls = %d", calls)
 	}
 }
 
@@ -77,20 +172,19 @@ func TestQueuedUserMessageCallerCancellationStopsWaitAndPreventsLaterAcceptance(
 		t.Fatalf("pause Runtime FIFO: %v", err)
 	}
 	caller, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	accepting := make(chan struct{})
 	accept := func(commit func() (bool, error)) (bool, error) {
-		select {
-		case <-caller.Done():
-			return false, context.Cause(caller)
-		default:
-			return commit()
-		}
+		close(accepting)
+		<-caller.Done()
+		return false, context.Cause(caller)
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := engine.QueueUserMessageForAutoDrainWithAcceptance(caller, "canceled input", accept)
+		_, err := engine.Steer(caller, "canceled input", accept)
 		done <- err
 	}()
-	waitForPendingRuntimeOperation(t, engine)
+	pendingWorkTestWait(t, accepting, "Steer acceptance while Runtime FIFO is paused")
 
 	cancel()
 	select {

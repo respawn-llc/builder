@@ -635,21 +635,21 @@ func testAcceptedLiveWorkflowSteeringToolChoice(t *testing.T, useAutomaticToolCh
 		t.Fatal("timed out waiting for active workflow request")
 	}
 	type steeringResult struct {
-		queued *QueuedUserMessage
+		queued QueuedUserMessage
 		err    error
 	}
 	steeringDone := make(chan steeringResult, 1)
 	go func() {
-		_, queued, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "steer active workflow", nil)
+		queued, err := eng.Steer(context.Background(), "steer active workflow", nil)
 		steeringDone <- steeringResult{queued: queued, err: err}
 	}()
 	releaseClient()
 	steering := <-steeringDone
 	if steering.err != nil {
-		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", steering.err)
+		t.Fatalf("Steer: %v", steering.err)
 	}
 	queued := steering.queued
-	if queued == nil {
+	if queued.ID == "" {
 		t.Fatal("expected accepted live steering to queue on active workflow")
 	}
 	if err := <-submitDone; err != nil {
@@ -1301,12 +1301,12 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	}
 	steeringDone := make(chan error, 1)
 	go func() {
-		_, _, err := eng.SubmitUserMessageOrSteerWithAcceptance(context.Background(), "accepted steering", nil)
+		_, err := eng.Steer(context.Background(), "accepted steering", nil)
 		steeringDone <- err
 	}()
 	releaseRun()
 	if err := <-steeringDone; err != nil {
-		t.Fatalf("SubmitUserMessageOrSteerWithAcceptance: %v", err)
+		t.Fatalf("Steer: %v", err)
 	}
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit: %v", err)
@@ -1378,28 +1378,39 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 		item, err := eng.QueueUserMessage(t.Context(), "do not submit after run release")
 		queueDone <- queuedResult{item: item, err: err}
 	}()
-	releaseRun()
 	queuedSubmission := <-queueDone
 	if queuedSubmission.err != nil {
 		t.Fatalf("queue pending message: %v", queuedSubmission.err)
 	}
 	queued := queuedSubmission.item
+	if _, err := eng.Steer(t.Context(), "also reject pending steer", nil); err != nil {
+		t.Fatalf("accept pending Steer: %v", err)
+	}
+	releaseRun()
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	waitEngineLifecycleTasks(t, eng)
+	if eng.HasActiveLiveRunGroup() {
+		t.Fatal("terminal Queue and Steer rejection retained the completed execution")
+	}
 	if got := hookClientCallCount(client); got != 1 {
 		t.Fatalf("model calls = %d, want terminal completion to avoid queued turn", got)
 	}
-	if len(statuses) != 2 ||
-		statuses[0].Status != QueuedUserMessageAccepted ||
-		statuses[1].Status != QueuedUserMessageFailed {
-		t.Fatalf("queued statuses = %+v, want accepted then failed", statuses)
+	var queuedStatuses []QueuedUserMessageStatusEvent
+	for _, status := range statuses {
+		if status.QueueItemID == queued.ID {
+			queuedStatuses = append(queuedStatuses, status)
+		}
 	}
-	if statuses[1].QueueItemID != queued.ID ||
-		statuses[1].Text != "do not submit after run release" ||
-		statuses[1].FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
-		t.Fatalf("failed queue status = %+v, want terminal completion failure for %q", statuses[1], queued.ID)
+	if len(queuedStatuses) != 2 ||
+		queuedStatuses[0].Status != QueuedUserMessageAccepted ||
+		queuedStatuses[1].Status != QueuedUserMessageFailed {
+		t.Fatalf("queued statuses = %+v, want accepted then failed", queuedStatuses)
+	}
+	if queuedStatuses[1].Text != "do not submit after run release" ||
+		queuedStatuses[1].FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
+		t.Fatalf("failed queue status = %+v, want terminal completion failure for %q", queuedStatuses[1], queued.ID)
 	}
 	if pending := eng.messageFlow.PendingUserMessages(); len(pending) != 0 {
 		t.Fatalf("pending queue = %+v, want terminal steering removed", pending)

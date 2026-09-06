@@ -3,8 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"maps"
-	"strings"
 	"time"
 
 	"core/server/llm"
@@ -339,22 +337,7 @@ func (e *Engine) waitQueuedUserAutoDrainAllowed(ctx context.Context) error {
 	}
 }
 
-func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
-	if strings.TrimSpace(text) == "" {
-		return UserTurnResult{}, nil, errors.New("empty message")
-	}
-	item, err := e.QueueUserMessageForAutoDrainWithAcceptance(ctx, text, accept)
-	if err != nil {
-		return UserTurnResult{}, nil, err
-	}
-	return UserTurnResult{}, &item, nil
-}
-
-func (e *Engine) QueueUserMessageForAutoDrain(ctx context.Context, text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, true, nil)
-}
-
-func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(ctx context.Context, text string, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) Steer(ctx context.Context, text string, accept CommandAcceptance) (QueuedUserMessage, error) {
 	return e.queueUserMessage(ctx, text, true, accept)
 }
 
@@ -480,13 +463,6 @@ func (e *Engine) clearQueuedUserWorkScheduled(
 	e.queuedUserWorkMu.Unlock()
 	completion.complete(struct{}{}, err)
 	return true
-}
-
-func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {
-	if len(in) == 0 {
-		return nil
-	}
-	return maps.Clone(in)
 }
 
 func (e *Engine) DrainQueuedUserMessagesBeforeClose(ctx context.Context) error {

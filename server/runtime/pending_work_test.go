@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 
 	firstSteer := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.QueueUserMessageForAutoDrain(context.Background(), "first steer")
+		return engine.Steer(context.Background(), "first steer", nil)
 	})
 	guidance := "keep details"
 	admission := runtimeinput.ManualCompactionAdmission{
@@ -42,7 +43,7 @@ func TestPendingWorkProjectsAcceptedMessageAndCompactionOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondSteer := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.QueueUserMessageForAutoDrain(context.Background(), "second steer")
+		return engine.Steer(context.Background(), "second steer", nil)
 	})
 	queued := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
 		return engine.QueueUserMessage(context.Background(), "post-turn queue")
@@ -129,7 +130,7 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 
 	message := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.QueueUserMessageForAutoDrain(context.Background(), "restore message")
+		return engine.Steer(context.Background(), "restore message", nil)
 	})
 	messageID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 		return runtimeids.ParseQueueItemID(message.ID)
@@ -176,23 +177,26 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 
 func TestStoppedHumanInputPublishesPendingWorkChangedWithoutBlockingList(t *testing.T) {
 	var interruption *HumanInputInterruptedEvent
+	var firstChange sync.Once
 	changed, unblock, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 	first := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.QueueUserMessageForAutoDrain(context.Background(), "stopped")
+		return engine.Steer(context.Background(), "stopped", nil)
 	})
 	second := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.QueueUserMessageForAutoDrain(context.Background(), "retained")
+		return engine.Steer(context.Background(), "retained", nil)
 	})
 	engine.cfg.OnEvent = func(event Event) {
 		switch event.Kind {
 		case EventHumanInputInterrupted:
 			interruption = event.HumanInputInterrupted
 		case EventPendingWorkChanged:
-			close(changed)
-			<-unblock
-			close(delivered)
+			firstChange.Do(func() {
+				close(changed)
+				<-unblock
+				close(delivered)
+			})
 		}
 	}
 
