@@ -50,18 +50,20 @@
 - `steer` applies submitted input through that accepted mutation order.
 - `queue` remains the separate post-turn user Queue.
 - A human steer remains one user message and applies as one first-in, first-out Session mutation.
-- A `kent run steer` invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
-- A `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
-- A steer issued from another Session contains exactly:
+- A `kent run steer` invoked from another Session must emit each accepted submission as a separate developer-role `agent_steer` message in submission order.
+- A `kent run` invoked from another Session must submit its assignment as the same developer-role `agent_steer` message, whether it creates a Session or continues an existing Session.
+- Human-started Run prompts must remain user messages.
+- Kent must not rewrite existing conversation history to change sender attribution.
+- An agent-issued Run assignment or steer must contain exactly:
 
 ```text
-Agent from session <source-session-id> said:
-> <submitted steer text>
+Agent from another session said:
+> <submitted text>
 
-To respond, run: kent run steer <source-session-id> "message"
+You can use `kent run steer <source-session-id> "message"` to respond.
 ```
 
-- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
+- Kent must insert one literal `>` followed by one space immediately before the submitted text. It must not add quote markers to later lines.
 - The message includes the source Session ID and omits its name.
 - A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
 - Prompt history stores the complete wrapped message.

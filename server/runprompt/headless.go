@@ -78,7 +78,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	if plan.Goal != nil {
 		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
 	}
-	agentSteer, err := agentSteerForRunPrompt(req, openingExisting)
+	agentSteer, err := agentSteerForRunPrompt(req)
 	if err != nil {
 		return nil, err
 	}
@@ -103,8 +103,8 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	}, nil
 }
 
-func agentSteerForRunPrompt(req serverapi.RunPromptRequest, openingExisting bool) (*runtime.AgentSteer, error) {
-	if !openingExisting || req.CallerSessionID == nil {
+func agentSteerForRunPrompt(req serverapi.RunPromptRequest) (*runtime.AgentSteer, error) {
+	if req.CallerSessionID == nil {
 		return nil, nil
 	}
 	sourceID, err := runtimeids.ParseSessionID(*req.CallerSessionID)
