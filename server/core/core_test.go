@@ -506,7 +506,7 @@ func TestChatSettingsMaterializedReadUsesDetachedSessionSnapshotWithoutRebinding
 	if err != nil {
 		t.Fatalf("ReadChatSettings detached Session: %v", err)
 	}
-	if response.Session == nil || response.Session.SessionID != sessionID {
+	if response.Session == nil || response.Session.Session.SessionID != sessionID {
 		t.Fatalf("detached response = %+v", response)
 	}
 	executionTarget, err := appCore.MetadataStore().ResolveSessionExecutionTarget(

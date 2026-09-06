@@ -13,6 +13,7 @@ export type SegmentedControlProps<Value extends string> = Readonly<{
   ariaLabel: string;
   className?: string | undefined;
   disabled?: boolean;
+  onValueActivate?(value: Value): void;
   onValueChange(value: Value): void;
   options: readonly SegmentedControlOption<Value>[];
   value: Value;
@@ -22,6 +23,7 @@ export function SegmentedControl<Value extends string>({
   ariaLabel,
   className,
   disabled = false,
+  onValueActivate,
   onValueChange,
   options,
   value,
@@ -78,6 +80,9 @@ export function SegmentedControl<Value extends string>({
           className="relative z-10 h-full min-h-0 min-w-9 rounded-[calc(var(--radius-m)-var(--space-1))] bg-transparent px-[var(--space-2)] text-xs font-extrabold text-[var(--color-muted)] outline-none transition-[color,opacity] duration-[var(--motion-fast)] motion-reduce:transition-none hover:text-[var(--color-on-island)] focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] disabled:cursor-not-allowed disabled:opacity-45 data-[state=checked]:text-[var(--color-on-island)] [@media(pointer:coarse)]:min-w-11"
           disabled={option.disabled}
           key={option.value}
+          onClick={() => {
+            onValueActivate?.(option.value);
+          }}
           value={option.value}
         >
           {option.label}

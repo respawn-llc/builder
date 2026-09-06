@@ -40,11 +40,11 @@ func TestChatSettingsReadContract(t *testing.T) {
 	}
 
 	newChat := NewChatSettingsTarget("project-1", "workspace-1")
-	if err := (ChatSettingsReadResponse{}).ValidateForTarget(newChat); err != nil {
-		t.Fatalf("New Chat response: %v", err)
+	if err := (ChatSettingsReadResponse{}).ValidateForTarget(newChat); err == nil {
+		t.Fatal("New Chat response accepted an absent catalog")
 	}
 	if err := (ChatSettingsReadResponse{
-		Session: &ChatSettingsSessionFacts{SessionID: sessionID},
+		Session: &SessionChatSettings{Session: ChatSettingsSessionFacts{SessionID: sessionID}},
 	}).ValidateForTarget(newChat); err == nil {
 		t.Fatal("New Chat response accepted Session facts")
 	}
@@ -53,9 +53,28 @@ func TestChatSettingsReadContract(t *testing.T) {
 		t.Fatal("materialized response accepted absent Session facts")
 	}
 	if err := (ChatSettingsReadResponse{
-		Session: &ChatSettingsSessionFacts{SessionID: sessionID},
+		Session: &SessionChatSettings{Session: ChatSettingsSessionFacts{SessionID: sessionID}},
 	}).ValidateForTarget(session); err != nil {
 		t.Fatalf("materialized response: %v", err)
+	}
+	taskID := mustChatSettingsTaskID(t, "task-1")
+	taskShortID := "KENT-416"
+	if err := (ChatSettingsReadResponse{
+		Session: &SessionChatSettings{Session: ChatSettingsSessionFacts{
+			SessionID:   sessionID,
+			TaskID:      &taskID,
+			TaskShortID: &taskShortID,
+		}},
+	}).ValidateForTarget(session); err != nil {
+		t.Fatalf("materialized response with Task identity: %v", err)
+	}
+	for name, facts := range map[string]ChatSettingsSessionFacts{
+		"Task ID only":       {SessionID: sessionID, TaskID: &taskID},
+		"Task Short ID only": {SessionID: sessionID, TaskShortID: &taskShortID},
+	} {
+		if err := (ChatSettingsReadResponse{Session: &SessionChatSettings{Session: facts}}).ValidateForTarget(session); err == nil {
+			t.Fatalf("%s response accepted an incomplete Task identity", name)
+		}
 	}
 }
 
@@ -118,6 +137,15 @@ func mustChatSettingsSessionID(t *testing.T, raw string) runtimeids.SessionID {
 	id, err := runtimeids.ParseSessionID(raw)
 	if err != nil {
 		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+	}
+	return id
+}
+
+func mustChatSettingsTaskID(t *testing.T, raw string) string {
+	t.Helper()
+	id, err := runtimeids.ParseTaskID(raw)
+	if err != nil {
+		t.Fatalf("ParseTaskID(%q): %v", raw, err)
 	}
 	return id
 }

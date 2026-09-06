@@ -5,7 +5,7 @@ import {
   type CompactionNotAccepted,
   type InputNotAccepted,
 } from "@app/server-api-contract/gen/kent/api/chat/chat_pb";
-import { SupervisorValue } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
+import type { SupervisorValue } from "@app/server-api-contract/gen/kent/api/chat_settings/chat_settings_pb";
 import {
   LiveService,
   LiveStopStatus,
@@ -23,6 +23,7 @@ import {
 
 import { requireProjectAttachment } from "./chatAttachment";
 import { requireChatSuccess } from "./chatErrors";
+import { supervisorToWire } from "./chatSupervisor";
 import { nonBlank } from "./chatSchemas";
 import { requireChatProjectTarget, requireChatSessionID } from "./chatTarget";
 import type { ChatActivation, ChatApi, ChatMutationTarget } from "./chatTypes";
@@ -247,7 +248,7 @@ function mutationTarget(
         workspaceId: workspaceID,
         initialSettings: {
           agentRole: target.initialSettings.agentRole,
-          supervisor: supervisorValue(target.initialSettings.supervisor),
+          supervisor: supervisorToWire(target.initialSettings.supervisor),
           ...(target.initialSettings.thinking === null ? {} : { thinking: target.initialSettings.thinking }),
           ...(target.initialSettings.fast === null ? {} : { fast: target.initialSettings.fast }),
           questionsEnabled: target.initialSettings.questionsEnabled,
@@ -270,17 +271,6 @@ function mutationSessionID(
     throw new ContractError(`${operation} response Session does not match the request.`);
   }
   return returnedSessionID;
-}
-
-function supervisorValue(value: "off" | "edits" | "all"): SupervisorValue {
-  switch (value) {
-    case "off":
-      return SupervisorValue.OFF;
-    case "edits":
-      return SupervisorValue.AFTER_EDITS;
-    case "all":
-      return SupervisorValue.ALWAYS;
-  }
 }
 
 function chatActivation(activation: ChatActivation) {

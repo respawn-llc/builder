@@ -131,7 +131,7 @@ func TestChatSettingsMutationReturnsAfterRuntimeAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadChatSettings before mutation: %v", err)
 	}
-	initialQuestions := before.Settings.Questions.Enabled
+	initialQuestions := before.Session.Settings.Questions.Enabled
 	requestedQuestions := !initialQuestions
 
 	const ownerID = "chat-settings-acceptance-test"
@@ -140,7 +140,7 @@ func TestChatSettingsMutationReturnsAfterRuntimeAcceptance(t *testing.T) {
 		OwnerID:               ownerID,
 		ActiveSettings:        resolved.Config.Settings,
 		QuestionsEnabled:      textutil.Value(initialQuestions),
-		AutoCompactionEnabled: textutil.Value(before.Settings.AutoCompaction.Effective),
+		AutoCompactionEnabled: textutil.Value(before.Session.Settings.AutoCompaction.Effective),
 		Source:                resolved.Config.Source,
 	})
 	if err != nil {

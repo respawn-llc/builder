@@ -100,7 +100,7 @@ func (s *Service) PrepareSessionChatSettingsOperation(
 func (s *Service) prepareSessionChatSettings(
 	ctx context.Context,
 	meta session.Meta,
-) (PreparedChatSettingsOperationInput, *string, error) {
+) (PreparedChatSettingsOperationInput, *serverapi.ChatSettingsTaskIdentity, error) {
 	planner := s.planner
 	if planner.ReloadConfig != nil {
 		var err error
@@ -161,7 +161,7 @@ func (s *Service) prepareSessionChatSettings(
 			persistedThinking = &thinking
 		}
 	}
-	taskID, err := s.workflowTaskID(ctx, meta.SessionID)
+	taskIdentity, err := s.chatSettingsTaskIdentity(ctx, meta.SessionID)
 	if err != nil {
 		return PreparedChatSettingsOperationInput{}, nil, err
 	}
@@ -172,9 +172,9 @@ func (s *Service) prepareSessionChatSettings(
 		PersistedThinking:  persistedThinking,
 		Catalog:            catalog,
 		Locked:             meta.Locked,
-		WorkflowLocked:     taskID != nil,
+		WorkflowLocked:     taskIdentity != nil,
 		CompactionMode:     planner.Config.Settings.CompactionMode,
-	}, taskID, nil
+	}, taskIdentity, nil
 }
 
 func (s *Service) NewChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
@@ -198,20 +198,11 @@ func (s *Service) NewChatSettings(ctx context.Context) (serverapi.ChatSettingsRe
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	entry, ok := catalog.Lookup(config.DefaultSubagentRole)
-	if !ok {
-		return serverapi.ChatSettingsReadResponse{}, errors.New("default Chat Agent baseline is missing")
-	}
-	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog:        catalog,
-		Agent:          config.DefaultSubagentRole,
-		Settings:       entry.Settings.Baseline,
-		CompactionMode: planner.Config.Settings.CompactionMode,
-	})
+	projected, err := projectNewChatCatalog(catalog, planner.Config.Settings.CompactionMode)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	return serverapi.ChatSettingsReadResponse{Settings: settings}, nil
+	return serverapi.ChatSettingsReadResponse{NewChat: &projected}, nil
 }
 
 func (s *Service) SessionChatSettings(
@@ -222,7 +213,7 @@ func (s *Service) SessionChatSettings(
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	input, taskID, err := s.prepareSessionChatSettings(ctx, *record.Meta)
+	input, taskIdentity, err := s.prepareSessionChatSettings(ctx, *record.Meta)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
@@ -239,31 +230,41 @@ func (s *Service) SessionChatSettings(
 	}
 	facts := &serverapi.ChatSettingsSessionFacts{
 		SessionID:         sessionID,
-		TaskID:            taskID,
 		PreviousSessionID: record.Meta.PreviousSessionID,
 	}
+	if taskIdentity != nil {
+		facts.TaskID = &taskIdentity.TaskID
+		facts.TaskShortID = &taskIdentity.TaskShortID
+	}
 	return serverapi.ChatSettingsReadResponse{
-		Settings: settings,
-		Session:  facts,
+		Session: &serverapi.SessionChatSettings{Settings: settings, Session: *facts},
 	}, nil
 }
 
-func (s *Service) workflowTaskID(ctx context.Context, sessionID string) (*string, error) {
+func (s *Service) chatSettingsTaskIdentity(
+	ctx context.Context,
+	sessionID string,
+) (*serverapi.ChatSettingsTaskIdentity, error) {
 	reader, ok := s.planner.PersistedSessions.(interface {
-		WorkflowTaskIDForSession(context.Context, string) (*string, error)
+		ChatSettingsTaskIdentityForSession(
+			context.Context,
+			string,
+		) (*serverapi.ChatSettingsTaskIdentity, error)
 	})
 	if !ok {
-		return nil, errors.New("workflow Task reader is required")
+		return nil, errors.New("Chat Settings Task identity reader is required")
 	}
-	taskID, err := reader.WorkflowTaskIDForSession(ctx, sessionID)
+	identity, err := reader.ChatSettingsTaskIdentityForSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if taskID == nil {
+	if identity == nil {
 		return nil, nil
 	}
-	validated, err := runtimeids.ParseTaskID(*taskID)
-	return &validated, err
+	if err := identity.Validate(); err != nil {
+		return nil, err
+	}
+	return identity, nil
 }
 
 func (s *Service) PlanSession(

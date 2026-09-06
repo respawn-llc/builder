@@ -354,7 +354,7 @@ func TestPlanLaunchSessionCreatesIndependentMainSessionWithInitialChatState(t *t
 		Mode:   launch.ModeInteractive,
 		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		InitialChat: &InitialChatCreation{
-			Settings: InitialChatSettings{
+			Settings: serverapi.InitialChatSettings{
 				AgentRole:             config.DefaultSubagentRole,
 				Supervisor:            serverapi.ChatSettingsSupervisorAlways,
 				Thinking:              textutil.Value("high"),
@@ -434,7 +434,7 @@ func TestPlanLaunchSessionReturnsNoSessionWhenOrdinaryCreationPersistenceFails(t
 		Mode:   launch.ModeInteractive,
 		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		InitialChat: &InitialChatCreation{
-			Settings: InitialChatSettings{
+			Settings: serverapi.InitialChatSettings{
 				AgentRole:             config.DefaultSubagentRole,
 				Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
 				QuestionsEnabled:      true,
@@ -480,7 +480,7 @@ func TestPlanLaunchSessionMakesInitialChatVisibleWithoutDraft(t *testing.T) {
 		Mode:   launch.ModeInteractive,
 		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		InitialChat: &InitialChatCreation{
-			Settings: InitialChatSettings{
+			Settings: serverapi.InitialChatSettings{
 				AgentRole:             config.DefaultSubagentRole,
 				Supervisor:            serverapi.ChatSettingsSupervisorAfterEdits,
 				QuestionsEnabled:      true,
@@ -549,7 +549,7 @@ func TestPlanLaunchSessionRebasesRemovedInitialAgentToReloadedDefaultBaseline(t 
 		Mode:   launch.ModeInteractive,
 		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		InitialChat: &InitialChatCreation{
-			Settings: InitialChatSettings{
+			Settings: serverapi.InitialChatSettings{
 				AgentRole:             "worker",
 				Supervisor:            serverapi.ChatSettingsSupervisorAlways,
 				Thinking:              &thinking,

@@ -72,3 +72,4 @@ description: Kent GUI design guide for desktop/web UI work. Use when designing o
 ## Components
 
 - Never invent single-use widgets. First check the list of existing components before any layout work. If needed component is missing, define it not inside the feature, but directly in the UI Kit code. Built a card? Make it customizable and place it in the ui kit. When the user asks for a new feature, assume expanding and reusing ui-kit is part of the feature work, plan for it, account for it.
+- Every disabled interactive control must have a tooltip that explains the exact typed reason when known, or the possible reasons only when one exact reason is unavailable. Use concise localized product language and reuse the UI-kit tooltip treatment established by Workflow Editor.

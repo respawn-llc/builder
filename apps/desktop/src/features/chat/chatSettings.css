@@ -1,0 +1,13 @@
+@media (prefers-reduced-motion: no-preference) {
+  .view-transition-chat-settings::view-transition-old(root),
+  .view-transition-chat-settings::view-transition-new(root) {
+    animation: none;
+  }
+
+  .view-transition-chat-settings::view-transition-group(*),
+  .view-transition-chat-settings::view-transition-old(*),
+  .view-transition-chat-settings::view-transition-new(*) {
+    animation-duration: var(--motion-morph);
+    animation-timing-function: ease-in-out;
+  }
+}

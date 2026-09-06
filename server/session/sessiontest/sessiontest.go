@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"core/server/session"
+	"core/shared/serverapi"
 
 	"core/internal/testharness/recordstore"
 )
@@ -161,6 +162,13 @@ func (p *Persistence) ResolvePersistedSession(_ context.Context, sessionID strin
 		return session.PersistedSessionRecord{}, session.ErrSessionNotFound
 	}
 	return record, nil
+}
+
+func (*Persistence) ChatSettingsTaskIdentityForSession(
+	context.Context,
+	string,
+) (*serverapi.ChatSettingsTaskIdentity, error) {
+	return nil, nil
 }
 
 func clonePersistedSessionRecord(record session.PersistedSessionRecord) session.PersistedSessionRecord {
