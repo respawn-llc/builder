@@ -307,7 +307,7 @@ func exerciseQuestionResolution(t *testing.T, answer, delayedSupervisor bool) {
 		}
 		release()
 	}
-	var pendingPromptID clientui.PromptID
+	var pendingToolCallID clientui.ToolCallID
 	promptCtx, cancelPrompt := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancelPrompt()
 	for {
@@ -322,7 +322,7 @@ func exerciseQuestionResolution(t *testing.T, answer, delayedSupervisor bool) {
 		if prompt.Status != clientui.TranscriptPromptStatusPending {
 			continue
 		}
-		pendingPromptID = prompt.PromptID
+		pendingToolCallID = prompt.ToolCallID
 		if delayedSupervisor {
 			followUp, live := authority.SessionExecution(id)
 			if !live || followUp.Scope().ID() == handle.Scope().ID() {
@@ -332,7 +332,7 @@ func exerciseQuestionResolution(t *testing.T, answer, delayedSupervisor bool) {
 		}
 		if answer {
 			answers, err := authority.ResolvePromptBatch(t.Context(), id, prompt.StepID, []sessionruntime.PromptAnswerCommand{{
-				PromptID: prompt.PromptID,
+				ToolCallID: prompt.ToolCallID,
 				Payload: sessionruntime.PromptQuestionAnswerCommand{
 					Answer: tools.AskQuestionAnswer{Freeform: textutil.Value("Native steering")},
 				},
@@ -360,7 +360,7 @@ func exerciseQuestionResolution(t *testing.T, answer, delayedSupervisor bool) {
 			t.Fatal(err)
 		}
 		hydration := transcriptPayload[clientui.TranscriptHydration](t, nextTranscriptMessage(t, reopenedSubscription))
-		if len(hydration.PendingPrompts) != 1 || hydration.PendingPrompts[0].PromptID != pendingPromptID {
+		if len(hydration.PendingPrompts) != 1 || hydration.PendingPrompts[0].ToolCallID != pendingToolCallID {
 			t.Fatalf("reopened transcript did not restore the pending question: %+v", hydration.PendingPrompts)
 		}
 		if err := reopenedSubscription.Close(); err != nil {

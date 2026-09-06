@@ -22,7 +22,7 @@ func SplitInlineMeta(line string) (string, string) {
 
 func CompactToolCallText(meta *ToolCallMeta, text string) string {
 	normalized := normalizeToolTextMeta(meta)
-	candidates := []string{normalized.CompactText, normalized.PatchSummary, normalized.Command, text}
+	candidates := []string{normalized.CompactText, normalized.Command, text}
 	if !IsPatchFamilyToolName(normalized.ToolName) {
 		candidates = append(candidates, normalized.ToolName)
 	}
@@ -31,7 +31,7 @@ func CompactToolCallText(meta *ToolCallMeta, text string) string {
 
 func DetailedToolCallText(meta *ToolCallMeta, text string) string {
 	normalized := normalizeToolTextMeta(meta)
-	candidates := []string{normalized.PatchDetail, normalized.Command, normalized.CompactText, text}
+	candidates := []string{normalized.Command, normalized.CompactText, text}
 	if !IsPatchFamilyToolName(normalized.ToolName) {
 		candidates = append(candidates, normalized.ToolName)
 	}

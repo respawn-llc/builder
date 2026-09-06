@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -60,7 +61,26 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 		toolID := prepared.toolID
 		knownTool := prepared.knownTool
 		executableCall := prepared.executableCall
-		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
+		transcriptCall, normalizeErr := normalizeToolCallForTranscriptChecked(
+			executableCall,
+			e.transcriptWorkingDir(),
+		)
+		if normalizeErr != nil {
+			failure := fmt.Errorf(
+				"normalize tool call presentation (call_id=%s tool=%s): %w",
+				call.ID,
+				executableCall.Name,
+				normalizeErr,
+			)
+			fatal := e.abortResultGroupForOperationalFailure(
+				stepID,
+				collector,
+				failure,
+			)
+			cancelExecution()
+			callErrs[i] = fatal
+			break
+		}
 		started := Event{Kind: EventToolCallStarted, StepID: exactStepIDPointer(stepID), ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
@@ -97,7 +117,13 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				serialGate.wait(serialOrdinal)
 				defer serialGate.done(serialOrdinal)
 			}
-			res, completed, callErr := t.executePreparedToolCall(executionCtx, stepID, runID, tc, toolID, knownTool, inputErr, askBatch)
+			callCtx := tools.WithExecutionIdentity(executionCtx, tools.ExecutionIdentity{
+				RunID:      runID,
+				StepID:     stepID,
+				ToolCallID: clientui.ToolCallID(tc.ID),
+			})
+			callCtx = tools.WithApprovalLifecycle(callCtx, tools.NewApprovalLifecycle())
+			res, completed, callErr := t.executePreparedToolCall(callCtx, stepID, runID, tc, toolID, knownTool, inputErr, askBatch)
 			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
@@ -264,7 +290,7 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 		return tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, true, nil
 	}
 	result, err := handler.Call(
-		tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{RunID: runID, StepID: stepID}),
+		ctx,
 		tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: t.engine.cfg.AskQuestionBatchSkipped},
 	)
 	if err != nil {
@@ -305,12 +331,15 @@ type executorToolCall struct {
 func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workflowActive bool, calls []llm.ToolCall) ([]executorToolCall, error) {
 	prepared := make([]executorToolCall, 0, len(calls))
 	askCandidateIndexes := make([]int, 0)
-	askCandidatePromptIDs := make([]string, 0)
+	askCandidateToolCallIDs := make([]string, 0)
 	registeredTools := registeredToolIDs(engine)
 	for i := range calls {
 		call := calls[i]
 		if strings.TrimSpace(call.ID) == "" {
 			return nil, fmt.Errorf("%w (tool=%s)", ErrMissingProviderToolCallID, call.Name)
+		}
+		if err := clientui.ToolCallID(call.ID).Validate(); err != nil {
+			return nil, fmt.Errorf("invalid provider tool call id (tool=%s): %w", call.Name, err)
 		}
 		toolID, knownTool := toolspec.ResolveModelToolName(call.Name, registeredTools)
 		executableCall := call
@@ -354,22 +383,22 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			continue
 		}
 		askCandidateIndexes = append(askCandidateIndexes, len(prepared)-1)
-		askCandidatePromptIDs = append(askCandidatePromptIDs, executableCall.ID)
+		askCandidateToolCallIDs = append(askCandidateToolCallIDs, executableCall.ID)
 	}
 	if len(askCandidateIndexes) == 0 {
 		return prepared, nil
 	}
 	for ordinal, index := range askCandidateIndexes {
-		promptIDs := append([]string(nil), askCandidatePromptIDs...)
+		toolCallIDs := append([]string(nil), askCandidateToolCallIDs...)
 		call := prepared[index].executableCall
 		prepared[index].askQuestionBatch = &tools.AskQuestionBatchMetadata{
 			Origin:              tools.AskQuestionOriginModelTool,
 			RunID:               runID,
 			StepID:              stepID,
-			PromptID:            call.ID,
-			BatchPromptIDs:      promptIDs,
+			ToolCallID:          call.ID,
+			BatchToolCallIDs:    toolCallIDs,
 			CandidateOrdinal:    ordinal,
-			PreparedPromptCount: len(promptIDs),
+			PreparedPromptCount: len(toolCallIDs),
 		}
 	}
 	return prepared, nil

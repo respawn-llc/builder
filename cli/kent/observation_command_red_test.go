@@ -74,7 +74,7 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 			SessionID: &sessionID,
 			NodeKey:   stringPointerForTest("build"),
 			Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-				PromptID: "ask-1", SessionID: taskObservationSessionID(t, sessionID),
+				ToolCallID: "ask-1", SessionID: taskObservationSessionID(t, sessionID),
 				StepID: questionCommandStepID(), Question: "Proceed?", Suggestions: []string{"Yes"},
 			}},
 		}},
@@ -107,14 +107,14 @@ func TestTaskObservationUsesSessionTargetsForParallelQuestions(t *testing.T) {
 			{
 				Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &firstSession,
 				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-					PromptID: "ask-1", SessionID: taskObservationSessionID(t, firstSession),
+					ToolCallID: "ask-1", SessionID: taskObservationSessionID(t, firstSession),
 					StepID: questionCommandStepID(), Question: "One?",
 				}},
 			},
 			{
 				Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &secondSession,
 				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-					PromptID: "ask-2", SessionID: taskObservationSessionID(t, secondSession),
+					ToolCallID: "ask-2", SessionID: taskObservationSessionID(t, secondSession),
 					StepID: questionCommandStepID(), Question: "Two?",
 				}},
 			},

@@ -61,11 +61,13 @@ func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
 	if got := meta.ToolName; got != string(toolspec.ToolEdit) {
 		t.Fatalf("started tool name = %q, want edit", got)
 	}
-	if meta.PatchRender == nil || len(meta.PatchRender.Files) != 1 {
+	if meta.PatchPresentation == nil ||
+		meta.PatchPresentation.Changes == nil ||
+		len(meta.PatchPresentation.Changes.Files) != 1 {
 		t.Fatalf("started edit presentation = %+v, want one structured file", meta)
 	}
-	file := meta.PatchRender.Files[0]
-	if file.Added != 1 || file.Removed != 1 {
+	file := meta.PatchPresentation.Changes.Files[0]
+	if file.Added != 1 || file.Removed == nil || *file.Removed != 1 {
 		t.Fatalf("started edit file = %+v, want one addition and one removal", file)
 	}
 }

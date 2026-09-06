@@ -6,6 +6,7 @@ import { useOpacityExit } from "./motion";
 import "./TranscriptDisclosure.css";
 
 export type TranscriptDisclosureIconTone = "neutral" | "warning" | "error" | "success";
+export type TranscriptDisclosureSummaryMode = "single-line" | "multiline";
 
 export type TranscriptDisclosureProps = Readonly<{
   actions?: ReactNode;
@@ -17,6 +18,7 @@ export type TranscriptDisclosureProps = Readonly<{
   iconTone?: TranscriptDisclosureIconTone | undefined;
   liveStatus?: ReactNode;
   summary: ReactNode;
+  summaryMode?: TranscriptDisclosureSummaryMode | undefined;
   typeLabel?: ReactNode;
 }>;
 
@@ -37,6 +39,7 @@ export function TranscriptDisclosure({
   iconTone = "neutral",
   liveStatus,
   summary,
+  summaryMode = "single-line",
   typeLabel,
 }: TranscriptDisclosureProps) {
   const bodyId = `transcript-disclosure-body-${useId()}`;
@@ -58,6 +61,7 @@ export function TranscriptDisclosure({
           setExpanded((current) => !current);
         }}
         summary={summary}
+        summaryMode={summaryMode}
         typeLabel={typeLabel}
       />
       {bodyPhase === "hidden" ? null : (
@@ -92,6 +96,7 @@ function TranscriptDisclosureHeader({
   liveStatus,
   onToggle,
   summary,
+  summaryMode,
   typeLabel,
 }: Readonly<{
   actions?: ReactNode;
@@ -104,10 +109,16 @@ function TranscriptDisclosureHeader({
   liveStatus?: ReactNode;
   onToggle: () => void;
   summary: ReactNode;
+  summaryMode: TranscriptDisclosureSummaryMode;
   typeLabel?: ReactNode;
 }>) {
   return (
-    <header className="relative grid min-h-9 grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)]">
+    <header
+      className={cx(
+        "relative grid min-h-9 grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)]",
+        summaryMode === "multiline" ? "items-start" : "items-center",
+      )}
+    >
       <button
         aria-controls={bodyId}
         aria-expanded={expanded}
@@ -132,7 +143,12 @@ function TranscriptDisclosureHeader({
           {typeLabel}
         </span>
       )}
-      <span className="pointer-events-none relative z-0 min-w-0 truncate text-left text-sm text-[var(--color-on-background)]">
+      <span
+        className={cx(
+          "pointer-events-none relative z-0 min-w-0 text-left text-sm text-[var(--color-on-background)]",
+          summaryMode === "multiline" ? "transcript-disclosure-summary--multiline" : "truncate",
+        )}
+      >
         {summary}
       </span>
       <div className="pointer-events-none relative z-10 flex min-w-0 items-center justify-end gap-[var(--space-1)]">

@@ -341,7 +341,7 @@ func hydrationHasNoTerminalRows(hydration *clientui.TranscriptHydration) bool {
 	if hydration.ActiveAssistant != nil {
 		return false
 	}
-	for _, row := range hydration.CommittedRows {
+	for _, row := range hydration.TailSegment.Entries {
 		switch transcript.NormalizeEntryVisibility(transcript.EntryVisibility(row.Visibility)) {
 		case transcript.EntryVisibilityOngoing, transcript.EntryVisibilityOngoingCollapsed:
 			return false

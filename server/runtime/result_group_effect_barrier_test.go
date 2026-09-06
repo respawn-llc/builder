@@ -151,9 +151,9 @@ func (p approvalBarrierProbe) Call(
 	call tools.Call,
 ) (tools.Result, error) {
 	_, err := p.broker.Ask(ctx, tools.AskQuestionRequest{
-		ID:       call.ID + "-approval",
-		Question: "Approve?",
-		Approval: true,
+		ToolCallID: call.ID,
+		Question:   "Approve?",
+		Approval:   true,
 		ApprovalOptions: []tools.AskQuestionApprovalOption{{
 			Decision: tools.AskQuestionApprovalDecisionAllowOnce,
 			Label:    "Allow once",

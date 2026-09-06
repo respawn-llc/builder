@@ -405,7 +405,7 @@ func handoffRequestFromToolCall(call llm.ToolCall) (*handoffRequest, bool) {
 }
 
 func queuedUserMessageText(message QueuedUserMessage) (string, error) {
-	text, err := message.DisplayText()
+	text, err := message.ExecutionText()
 	if err != nil {
 		return "", err
 	}
@@ -490,11 +490,11 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 	result := userInjectionCommitResult{}
 	for {
 		var claim *queuedUserMessageClaim
-		switch selection.(type) {
+		switch selected := selection.(type) {
 		case allPendingUserInjectionSelection:
 			claim = m.queue.ClaimAll()
 		case steerUserInjectionSelection:
-			claim = m.queue.ClaimSteers()
+			claim = m.queue.ClaimSteersAndIDs(selected.queueItemIDs)
 		default:
 			return result, fmt.Errorf("unsupported user injection selection %T", selection)
 		}
@@ -551,7 +551,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(
 				result.queueItemIDs[queueItemID] = struct{}{}
 			}
 		}
-		e.completeLiveRunQueueItems(committedQueueItemIDs)
+		e.completeQueuedUserMessages(committedQueueItemIDs)
 		result.startedStep = result.startedStep || startsAgentStep(group.message)
 		result.flushed++
 		e.publishPendingWorkChanged()
@@ -587,16 +587,16 @@ func (m *defaultMessageLifecycle) failDefinitelyUncommittedSteerClaim(
 	if len(technical)+len(stopped) == 0 {
 		return restorationErr
 	}
+	e.completeQueuedUserMessages(ids)
 	e.publishPendingWorkChanged()
-	e.liveRun.clearStoppedQueueItems(typedQueueItemIDSet(queuedUserMessageIDSet(stopped)))
 	return restorationErr
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
+func (m *defaultMessageLifecycle) QueueUserMessage(input QueuedUserInput, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
-	return m.queue.Queue(text, association...)
+	return m.queue.Queue(input, association...)
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage, association ...queuedUserMessageAssociation) (QueuedUserMessage, error) {

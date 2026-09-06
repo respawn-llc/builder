@@ -9,7 +9,7 @@ import (
 
 func TestPromptFollowUpContractCarriesOnlyFullIdentityAndTerminalOutcome(t *testing.T) {
 	for contract, fields := range map[reflect.Type][]string{
-		reflect.TypeOf(PromptFollowUpWatchRequest{}):         {"SessionID", "StepID", "PromptID"},
+		reflect.TypeOf(PromptFollowUpWatchRequest{}):         {"SessionID", "StepID", "ToolCallID"},
 		reflect.TypeOf(PromptFollowUpEvent{}):                {"Kind"},
 		reflect.TypeOf(protocol.PromptFollowUpEventParams{}): {"Event"},
 		reflect.TypeOf(protocol.PromptFollowUpEvent{}):       {"Kind"},
@@ -26,7 +26,7 @@ func TestPromptFollowUpContractCarriesOnlyFullIdentityAndTerminalOutcome(t *test
 	if field := reflect.TypeOf(PromptFollowUpEvent{}).Field(0); field.Type != reflect.TypeOf(PromptFollowUpEventKind("")) {
 		t.Fatalf("follow-up event Kind type = %v", field.Type)
 	}
-	request := PromptFollowUpWatchRequest{SessionID: mustPromptBatchSessionID(t), StepID: mustPromptBatchStepID(t), PromptID: "prompt-1"}
+	request := PromptFollowUpWatchRequest{SessionID: mustPromptBatchSessionID(t), StepID: mustPromptBatchStepID(t), ToolCallID: "prompt-1"}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("validate request: %v", err)
 	}

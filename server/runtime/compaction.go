@@ -272,6 +272,24 @@ func (c *defaultContextCompactor) scheduleManualCompaction(
 	return session.CommitReceipt{}, err
 }
 
+func (e *Engine) manualCompactionAdmissionError() error {
+	if e.compactionRuntimeState().ActiveSnapshot() != nil {
+		return ErrManualCompactionActive
+	}
+	active := e.ActiveRun()
+	planningSnapshot := e.compactionPlanningSnapshot()
+	if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
+		return errCompactionDisabledModeNone
+	}
+	if e.compactionRuntimeState().ManualCompactionEligible() {
+		return nil
+	}
+	if active != nil && isAgentStepKind(active.ActiveKind) {
+		return nil
+	}
+	return ErrManualCompactionTooSoon
+}
+
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
 	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, nil, false)
 }

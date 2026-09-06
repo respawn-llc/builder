@@ -2,15 +2,25 @@ package metadata
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
 
 func TestSessionContextBudgetCutoverPreservesOtherSessionFacts(t *testing.T) {
+	for _, version := range []int64{88, 89} {
+		t.Run(fmt.Sprintf("from-version-%d", version), func(t *testing.T) {
+			testSessionContextBudgetCutoverPreservesOtherSessionFacts(t, version)
+		})
+	}
+}
+
+func testSessionContextBudgetCutoverPreservesOtherSessionFacts(t *testing.T, version int64) {
+	t.Helper()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 88)
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, version)
 	if err != nil {
 		t.Fatal(err)
 	}

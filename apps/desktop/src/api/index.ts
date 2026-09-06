@@ -1,10 +1,20 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type { DesktopProcess } from "./processes";
+export { committedRowSchema as chatTranscriptCommittedRowSchema } from "./chatSchemas";
 export type {
   ChatApi,
+  ChatAcceptedDiagnostic,
+  ChatActivation,
+  ChatCompactionInvocation,
+  ChatCompactionResult,
   ChatContext,
   ChatContextTarget,
+  ChatForkEditInput,
+  ChatInitialSettings,
+  ChatInputMutationResult,
   ChatMainView,
+  ChatMutationTarget,
+  ChatNotAcceptedReason,
   ChatProjectTarget,
   ChatRuntimeAttachment,
   ChatRuntimeRelease,
@@ -90,6 +100,8 @@ export type { CatalogContractErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
 export type { WorkflowTaskCreateSelectionErrorReason } from "./errors";
 export type { TaskSearchErrorReason } from "./errors";
+export { ChatOperationError, chatErrorMessage } from "./chatErrors";
+export type { ChatError } from "./chatErrors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
@@ -117,12 +129,6 @@ export type {
 } from "./pendingWork";
 export type * from "./schemas/worktree";
 export { rpcErrorCodes } from "./rpcErrorCodes";
-export { decodePendingWorkError, PendingWorkError } from "./clientPendingWork";
-export type {
-  ManualCompactionErrorReason,
-  PendingWorkErrorDetail,
-  PendingWorkFailure,
-} from "./clientPendingWork";
 export { WorktreeError } from "./clientWorktree";
 export type { WorktreeErrorDetail } from "./clientWorktree";
 export { workflowIDSchema } from "./schemas/workflowID";
@@ -251,6 +257,7 @@ export type { WorkflowGraphDraft } from "./workflowGraphModels";
 export type {
   AttentionQuestionPrompt,
   ApprovalQuestionPrompt,
+  FileAccessTarget,
   OrdinaryQuestionPrompt,
   PromptIdentity,
 } from "./promptModels";

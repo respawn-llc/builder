@@ -84,7 +84,8 @@ type AttentionNotificationQuestionState struct {
 }
 
 type AttentionNotificationApprovalState struct {
-	Message string `json:"message"`
+	Message       *string            `json:"message,omitempty"`
+	AccessTargets []FileAccessTarget `json:"access_targets,omitempty"`
 }
 
 type AttentionNotificationWorkflowApprovalState struct {

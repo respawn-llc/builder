@@ -223,6 +223,24 @@ export const englishResources = {
         noPromptPreview: "No prompt preview",
       },
     },
+    chat: {
+      toolRows: {
+        backgrounded: "Backgrounded",
+        collapse: "Collapse tool details",
+        copy: "Copy tool details",
+        copyFailed: "Could not copy tool details",
+        copySucceeded: "Copied tool details to clipboard",
+        editFailed: "Edit failed",
+        edited: "Edited:",
+        exitCode: "exit {{code}}",
+        expand: "Expand tool details",
+        moreLines_one: "{{count}} more line",
+        moreLines_other: "{{count}} more lines",
+        patchFailed: "Patch failed",
+        searchedWeb: 'Searched the web for "{{query}}"',
+        viewedImage: "Viewed image at {{path}}",
+      },
+    },
     projectEdit: {
       title: "Project",
       loadingTitle: "Loading project",
@@ -415,6 +433,8 @@ export const englishResources = {
       stopping: "Stopping",
     },
     task: {
+      accessApprovalIntro: "Agent wants to access a batch of files, but {{count}} are outside workspace dir:",
+      accessApprovalQuestion: "Allow this access?",
       sessionStarted: "Session started",
       title: "Task",
       identifier: "ID",

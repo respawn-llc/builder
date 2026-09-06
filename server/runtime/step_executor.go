@@ -647,10 +647,17 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		return preparedCompletedResponse{}, err
 	}
 	for index := range preparedLocalCalls {
-		acceptedCalls.local[index] = normalizeToolCallForTranscript(
+		normalized, normalizeErr := normalizeToolCallForTranscriptChecked(
 			preparedLocalCalls[index].executableCall,
 			e.transcriptWorkingDir(),
 		)
+		if normalizeErr != nil {
+			return preparedCompletedResponse{}, fmt.Errorf(
+				"normalize accepted tool call presentation: %w",
+				normalizeErr,
+			)
+		}
+		acceptedCalls.local[index] = normalized
 	}
 	assistantMsg.ToolCalls = acceptedCalls.toolCalls()
 	phaseTurn.Assistant = assistantMsg

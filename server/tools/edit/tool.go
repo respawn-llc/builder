@@ -356,18 +356,20 @@ func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath,
 		return resolvedPath{}, editFileAccessFailure(preflight)
 	}
 	accessCall := t.fileAccess.BeginCall()
-	first := accessCall.Authorize(ctx, requested, cleaned)
-	if !first.IsAllowed() {
-		return resolvedPath{}, editFileAccessFailure(first)
+	prepared := accessCall.Prepare(ctx, []tools.FileAccessTarget{{
+		RequestedPath: requested,
+		ResolvedPath:  preApprovalReal,
+	}})
+	if !prepared.IsAllowed() {
+		return resolvedPath{}, editFileAccessFailure(prepared)
 	}
 	real, err := resolveRealTarget(cleaned)
 	if err != nil {
 		return resolvedPath{}, err
 	}
-	accessCall.ReuseApproval(cleaned, real)
-	second := accessCall.Authorize(ctx, requested, real)
-	if !second.IsAllowed() {
-		return resolvedPath{}, editFileAccessFailure(second)
+	authorized := accessCall.Authorize(ctx, requested, real)
+	if !authorized.IsAllowed() {
+		return resolvedPath{}, editFileAccessFailure(authorized)
 	}
 	return resolvedPath{cleaned: cleaned, real: real, symlink: t.isUserSymlink(cleaned, real)}, nil
 }

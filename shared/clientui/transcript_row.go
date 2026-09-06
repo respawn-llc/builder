@@ -420,7 +420,7 @@ func (r TranscriptToolRow) Validate() error {
 	if err := validateOptionalNonEmptyString("transcript tool row condensed text", r.CondensedText); err != nil {
 		return err
 	}
-	return nil
+	return validateTranscriptToolPresentation("transcript tool row", r.ToolName, r.Presentation)
 }
 
 func (r TranscriptNoticeRow) Validate() error {

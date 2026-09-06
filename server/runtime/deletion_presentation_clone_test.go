@@ -17,11 +17,12 @@ func TestRuntimeToolPresentationCloneBoundariesOwnDeletionMetadata(t *testing.T)
 
 	for name, cloned := range clones {
 		t.Run(name, func(t *testing.T) {
-			cloned.PatchRender.Files[0].WholeFileDeletions[0].ID.HunkOrdinal = 5
-			cloned.PatchRender.Files[0].WholeFileDeletions[0].Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 6
-			cloned.PatchRender.Files[0].WholeFileDeletions[0].Disposition.Removed = 7
+			deletion := cloned.PatchPresentation.Changes.Files[0].Operations[0].Deletion
+			deletion.ID.HunkOrdinal = 5
+			deletion.Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 6
+			deletion.Disposition.Removed = 7
 
-			operation := source.PatchRender.Files[0].WholeFileDeletions[0]
+			operation := source.PatchPresentation.Changes.Files[0].Operations[0].Deletion
 			if operation.ID.HunkOrdinal != 0 ||
 				operation.Disposition == nil ||
 				operation.Disposition.PhysicalGroup.FirstOperation.HunkOrdinal != 0 ||
@@ -34,17 +35,31 @@ func TestRuntimeToolPresentationCloneBoundariesOwnDeletionMetadata(t *testing.T)
 
 func deletionCloneTestMeta() *transcript.ToolCallMeta {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	removed := 2
 	return &transcript.ToolCallMeta{
 		ToolName: "patch",
-		PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
-			RelPath: "target.txt",
-			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-				ID: id,
-				Disposition: &patchformat.WholeFileDeletionDisposition{
-					PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
-					Removed:       2,
+		PatchPresentation: &patchformat.Presentation{
+			Variant: patchformat.PresentationVariantChanges,
+			Changes: &patchformat.Changes{
+				Files: []patchformat.FileChange{
+					{
+						Path:    patchformat.Path{Absolute: "/workspace/target.txt", Relative: "target.txt"},
+						Removed: &removed,
+						Operations: []patchformat.FileOperation{
+							{
+								Kind: patchformat.FileOperationDelete,
+								Deletion: &patchformat.WholeFileDeletionOperation{
+									ID: id,
+									Disposition: &patchformat.WholeFileDeletionDisposition{
+										PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
+										Removed:       2,
+									},
+								},
+							},
+						},
+					},
 				},
-			}},
-		}}},
+			},
+		},
 	}
 }

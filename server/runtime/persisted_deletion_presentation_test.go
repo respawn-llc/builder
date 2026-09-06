@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"core/server/llm"
@@ -26,7 +28,10 @@ func TestPersistedToolCompletionRestoresDeletionDispositionWithoutFilesystemAcce
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			meta := restoredDeletionPresentation(t, deletionPersistenceMeta(id, test.disposition))
-			removed := patchformat.RemovedLineCount(meta.PatchRender.Files[0])
+			if meta.PatchPresentation == nil || meta.PatchPresentation.Changes == nil {
+				t.Fatalf("restored Patch presentation = %+v", meta)
+			}
+			removed := meta.PatchPresentation.Changes.Files[0].Removed
 			if test.want == nil {
 				if removed != nil {
 					t.Fatalf("restored removed count = %d, want absent", *removed)
@@ -38,30 +43,24 @@ func TestPersistedToolCompletionRestoresDeletionDispositionWithoutFilesystemAcce
 	}
 }
 
-func TestPersistedToolCompletionPreservesLegacyMissingDispositionState(t *testing.T) {
+func TestPersistedToolCompletionNormalizesLegacyMissingDispositionAsPending(t *testing.T) {
 	t.Parallel()
-	const legacySummary, legacyDetail = "legacy summary", "legacy detail"
-	meta := restoredDeletionPresentation(t, map[string]any{
-		"ToolName":     "patch",
-		"PatchSummary": legacySummary,
-		"PatchDetail":  legacyDetail,
-		"PatchRender": map[string]any{
-			"Files": []any{map[string]any{
-				"RelPath": "target.txt",
-				"Removed": 1,
-				"WholeFileDeletions": []any{map[string]any{
-					"id": map[string]any{"hunk_ordinal": 0},
-				}},
-			}},
-		},
-	})
-	file := meta.PatchRender.Files[0]
-	if meta.PatchSummary != legacySummary ||
-		meta.PatchDetail != legacyDetail ||
-		file.Removed != 1 ||
-		len(file.WholeFileDeletions) != 1 ||
-		file.WholeFileDeletions[0].Disposition != nil {
-		t.Fatalf("legacy presentation was reclassified: %+v", meta)
+	meta := restoredDeletionPresentation(t, legacyDeletionMetadata(
+		patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+		nil,
+		[]string{"-old"},
+	))
+	if meta.PatchPresentation == nil || meta.PatchPresentation.Changes == nil {
+		t.Fatalf("restored Patch presentation = %+v", meta)
+	}
+	file := meta.PatchPresentation.Changes.Files[0]
+	if file.Removed != nil ||
+		len(file.Operations) != 2 ||
+		file.Operations[0].Kind != patchformat.FileOperationUpdate ||
+		file.Operations[1].Kind != patchformat.FileOperationDelete ||
+		file.Operations[1].Deletion == nil ||
+		file.Operations[1].Deletion.Disposition != nil {
+		t.Fatalf("legacy pending deletion normalization = %+v", file)
 	}
 }
 
@@ -85,11 +84,12 @@ func restoredDeletionPresentation(t *testing.T, presentation any) *transcript.To
 		mustPersistedScanEvent(t, "tool_completed", storedToolCompletion{
 			CallID: callID, Name: "patch", Output: json.RawMessage(`{"ok":true}`),
 			Presentation: func() *transcript.ToolCallMeta {
-				decoded, ok := transcript.DecodeToolCallMeta(rawPresentation)
-				if !ok {
-					t.Fatal("decode presentation")
+				result := transcript.DecodeToolCallMeta(rawPresentation)
+				if result.Kind != transcript.ToolCallMetaDecodeLegacyNormalized ||
+					result.Meta == nil {
+					t.Fatalf("decode presentation: %+v", result)
 				}
-				return decoded
+				return result.Meta
 			}(),
 		}),
 	}
@@ -100,7 +100,7 @@ func restoredDeletionPresentation(t *testing.T, presentation any) *transcript.To
 	}
 	for _, entry := range scan.CollectedPageSnapshot().Entries {
 		if entry.ToolCallID == callID && entry.Role == "tool_result_ok" &&
-			entry.ToolCall != nil && entry.ToolCall.PatchRender != nil {
+			entry.ToolCall != nil && entry.ToolCall.PatchPresentation != nil {
 			return entry.ToolCall
 		}
 	}
@@ -111,14 +111,96 @@ func restoredDeletionPresentation(t *testing.T, presentation any) *transcript.To
 func deletionPersistenceMeta(
 	id patchformat.WholeFileDeletionOperationID,
 	disposition *patchformat.WholeFileDeletionDisposition,
-) *transcript.ToolCallMeta {
-	return &transcript.ToolCallMeta{
-		ToolName: "patch",
-		PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
-			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-				ID: id, Disposition: disposition,
+) map[string]any {
+	return legacyDeletionMetadata(id, disposition, nil)
+}
+
+func legacyDeletionMetadata(
+	id patchformat.WholeFileDeletionOperationID,
+	disposition *patchformat.WholeFileDeletionDisposition,
+	changedDiff []string,
+) map[string]any {
+	diff := append([]string(nil), changedDiff...)
+	diff = append(diff, "-<deleted file>")
+	removed := 0
+	for _, line := range changedDiff {
+		if len(line) > 0 && line[0] == '-' {
+			removed++
+		}
+	}
+	oldRemoved := removed
+	knownRemoved := removed > 0
+	if disposition != nil {
+		knownRemoved = true
+		oldRemoved += disposition.Removed
+	}
+	summary := "./target.txt"
+	if knownRemoved {
+		summary += fmt.Sprintf(" -%d", oldRemoved)
+	}
+	detailLines := []any{
+		map[string]any{
+			"Kind":      "file",
+			"Text":      "/workspace/target.txt",
+			"FileIndex": 0,
+			"Path":      "/workspace/target.txt",
+		},
+	}
+	for _, line := range diff {
+		detailLines = append(detailLines, map[string]any{
+			"Kind":      "diff",
+			"Text":      line,
+			"FileIndex": 0,
+			"Path":      "",
+		})
+	}
+	detail := "/workspace/target.txt\n" + strings.Join(diff, "\n")
+	return map[string]any{
+		"ToolName":               "patch",
+		"Presentation":           "default",
+		"RenderBehavior":         "default",
+		"IsShell":                false,
+		"UserInitiated":          false,
+		"Command":                detail,
+		"CompactText":            summary,
+		"InlineMeta":             "",
+		"TimeoutLabel":           "",
+		"PatchSummary":           summary,
+		"PatchDetail":            detail,
+		"Question":               "",
+		"Suggestions":            nil,
+		"RecommendedOptionIndex": 0,
+		"OmitSuccessfulResult":   true,
+		"RawOutputRequested":     false,
+		"OutputTruncated":        false,
+		"MovedToBackground":      false,
+		"ShellExitCode":          nil,
+		"RenderHint": map[string]any{
+			"Kind":         "diff",
+			"Path":         "",
+			"ResultOnly":   false,
+			"ShellDialect": "",
+		},
+		"PatchRender": map[string]any{
+			"Files": []any{map[string]any{
+				"AbsPath": "/workspace/target.txt",
+				"RelPath": "./target.txt",
+				"Added":   0,
+				"Removed": removed,
+				"Diff":    diff,
+				"WholeFileDeletions": []any{map[string]any{
+					"id":          id,
+					"disposition": disposition,
+				}},
 			}},
-		}}},
+			"SummaryLines": []any{map[string]any{
+				"Kind":      "file",
+				"Text":      summary,
+				"FileIndex": 0,
+				"Path":      "./target.txt",
+			}},
+			"DetailLines": detailLines,
+		},
 	}
 }
 

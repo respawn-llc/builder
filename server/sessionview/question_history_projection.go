@@ -29,8 +29,33 @@ func projectQuestionHistoryRecord(
 	if !ok || completion.Name != "ask_question" || completion.IsError {
 		return nil, nil
 	}
-	presentation, ok := transcript.DecodeToolCallMeta(completion.Presentation)
-	if !ok || strings.TrimSpace(presentation.Question) == "" {
+	decoded := transcript.DecodeToolCallMeta(completion.Presentation)
+	var presentation *transcript.ToolCallMeta
+	switch decoded.Kind {
+	case transcript.ToolCallMetaDecodeAbsent:
+		return nil, nil
+	case transcript.ToolCallMetaDecodeCurrent, transcript.ToolCallMetaDecodeLegacyNormalized:
+		if decoded.Meta == nil {
+			return nil, fmt.Errorf(
+				"event sequence %d Question presentation decode returned no metadata",
+				record.Seq(),
+			)
+		}
+		presentation = decoded.Meta
+	case transcript.ToolCallMetaDecodeInvalid:
+		return nil, fmt.Errorf(
+			"event sequence %d Question presentation is invalid: %w",
+			record.Seq(),
+			decoded.Cause,
+		)
+	default:
+		return nil, fmt.Errorf(
+			"event sequence %d Question presentation decode returned unknown outcome %d",
+			record.Seq(),
+			decoded.Kind,
+		)
+	}
+	if strings.TrimSpace(presentation.Question) == "" {
 		return nil, nil
 	}
 	question := strings.TrimSpace(presentation.Question)

@@ -282,13 +282,16 @@ func TestPersistedTranscriptScanPreservesWholeFileDeletionDisposition(t *testing
 		want        *int
 	}{
 		{name: "absent disposition"},
-		{name: "zero removed", disposition: persistedDeletionDisposition(id, 0), want: textutil.Value(0)},
-		{name: "positive removed", disposition: persistedDeletionDisposition(id, 5), want: textutil.Value(5)},
+		{name: "zero removed", disposition: deletionDisposition(id, 0), want: textutil.Value(0)},
+		{name: "positive removed", disposition: deletionDisposition(id, 5), want: textutil.Value(5)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			meta := persistedDeletionPresentation(t, persistedDeletionMeta(id, test.disposition))
-			removed := patchformat.RemovedLineCount(meta.PatchRender.Files[0])
+			if meta.PatchPresentation == nil || meta.PatchPresentation.Changes == nil {
+				t.Fatalf("restored Patch presentation = %+v", meta)
+			}
+			removed := meta.PatchPresentation.Changes.Files[0].Removed
 			if test.want == nil {
 				if removed != nil {
 					t.Fatalf("restored removed count = %d, want absent", *removed)
@@ -302,36 +305,38 @@ func TestPersistedTranscriptScanPreservesWholeFileDeletionDisposition(t *testing
 	}
 }
 
-func TestPersistedTranscriptScanPreservesLegacyDeletionPresentation(t *testing.T) {
+func TestPersistedTranscriptScanNormalizesLegacyDeletionPresentation(t *testing.T) {
 	t.Parallel()
-	const legacySummary, legacyDetail = "legacy summary", "legacy detail"
-	meta := persistedDeletionPresentation(t, transcript.ToolCallMeta{
-		ToolName:     "patch",
-		PatchSummary: legacySummary,
-		PatchDetail:  legacyDetail,
-		PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
-			RelPath: "target.txt",
-			Removed: 1,
-			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-				ID: patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
-			}},
-		}}},
-	})
-	file := meta.PatchRender.Files[0]
-	if meta.PatchSummary != legacySummary ||
-		meta.PatchDetail != legacyDetail ||
-		file.Removed != 1 ||
-		len(file.WholeFileDeletions) != 1 ||
-		file.WholeFileDeletions[0].Disposition != nil {
-		t.Fatalf("legacy presentation was reclassified: %+v", meta)
+	meta := persistedDeletionPresentation(t, legacyDeletionMetadata(
+		patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+		nil,
+		nil,
+	))
+	if meta.PatchPresentation == nil || meta.PatchPresentation.Changes == nil {
+		t.Fatalf("restored Patch presentation = %+v", meta)
+	}
+	file := meta.PatchPresentation.Changes.Files[0]
+	if file.Removed != nil ||
+		len(file.Operations) != 1 ||
+		file.Operations[0].Kind != patchformat.FileOperationDelete ||
+		file.Operations[0].Deletion == nil ||
+		file.Operations[0].Deletion.Disposition != nil {
+		t.Fatalf("legacy deletion normalization = %+v", file)
 	}
 }
 
-func persistedDeletionPresentation(t *testing.T, presentation transcript.ToolCallMeta) *transcript.ToolCallMeta {
+func persistedDeletionPresentation(t *testing.T, presentation any) *transcript.ToolCallMeta {
 	t.Helper()
 	store := mustCreateTestSession(t)
 	const callID = "call-delete"
-	rawPresentation := transcript.EncodeToolCallMeta(presentation)
+	rawPresentation, err := json.Marshal(presentation)
+	if err != nil {
+		t.Fatalf("marshal legacy presentation: %v", err)
+	}
+	decoded := transcript.DecodeToolCallMeta(rawPresentation)
+	if decoded.Kind != transcript.ToolCallMetaDecodeLegacyNormalized || decoded.Meta == nil {
+		t.Fatalf("decode legacy presentation: %+v", decoded)
+	}
 	records := []session.EventRecord{
 		appendPersistedTranscriptRecord(t, store, llm.Message{
 			Role: llm.RoleAssistant,
@@ -343,7 +348,7 @@ func persistedDeletionPresentation(t *testing.T, presentation transcript.ToolCal
 		}),
 		appendPersistedTranscriptRecord(t, store, storedToolCompletion{
 			CallID: callID, Name: string(toolspec.ToolPatch), Output: json.RawMessage(`{"ok":true}`),
-			Presentation: &presentation,
+			Presentation: decoded.Meta,
 			ProviderItems: []llm.ResponseItem{{
 				Type:   llm.ResponseItemTypeCustomToolOutput,
 				CallID: textutil.Value(callID),
@@ -366,23 +371,6 @@ func persistedDeletionPresentation(t *testing.T, presentation transcript.ToolCal
 func persistedDeletionMeta(
 	id patchformat.WholeFileDeletionOperationID,
 	disposition *patchformat.WholeFileDeletionDisposition,
-) transcript.ToolCallMeta {
-	return transcript.ToolCallMeta{
-		ToolName: "patch",
-		PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
-			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
-				ID: id, Disposition: disposition,
-			}},
-		}}},
-	}
-}
-
-func persistedDeletionDisposition(
-	id patchformat.WholeFileDeletionOperationID,
-	removed int,
-) *patchformat.WholeFileDeletionDisposition {
-	return &patchformat.WholeFileDeletionDisposition{
-		PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
-		Removed:       removed,
-	}
+) map[string]any {
+	return legacyDeletionMetadata(id, disposition, nil)
 }

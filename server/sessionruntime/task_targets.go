@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/workflow"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 )
 
@@ -26,8 +27,8 @@ const (
 )
 
 type PendingPromptReference struct {
-	ID   string
-	Kind PendingPromptKind
+	ToolCallID clientui.ToolCallID
+	Kind       PendingPromptKind
 }
 
 type TaskExecution struct {
@@ -222,7 +223,7 @@ func (e TaskExecution) validate() error {
 		if err := prompt.validate(); err != nil {
 			return fmt.Errorf("pending prompt %d: %w", index, err)
 		}
-		if index != 0 && e.PendingPrompts[index-1].ID >= prompt.ID {
+		if index != 0 && e.PendingPrompts[index-1].ToolCallID >= prompt.ToolCallID {
 			return errors.New("live workflow execution pending prompts are not sorted and unique")
 		}
 	}
@@ -247,14 +248,14 @@ func (e TaskExecution) validate() error {
 }
 
 func (p PendingPromptReference) validate() error {
-	if strings.TrimSpace(p.ID) == "" {
-		return errors.New("pending prompt id is required")
+	if err := p.ToolCallID.Validate(); err != nil {
+		return err
 	}
 	switch p.Kind {
 	case PendingPromptKindQuestion, PendingPromptKindSessionApproval:
 		return nil
 	default:
-		return fmt.Errorf("pending prompt %q has invalid kind %q", p.ID, p.Kind)
+		return fmt.Errorf("pending prompt for tool call %q has invalid kind %q", p.ToolCallID, p.Kind)
 	}
 }
 

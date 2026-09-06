@@ -36,6 +36,11 @@ func (e *Engine) scheduleOperationalPendingWork(ctx context.Context, request ope
 	if err := request.item.Validate(); err != nil {
 		return err
 	}
+	if request.item.Kind == runtimeinput.PendingWorkItemKindManualCompaction {
+		if err := e.manualCompactionAdmissionError(); err != nil {
+			return err
+		}
+	}
 	reservationKind := exclusiveStepReservationWorktreeTransition
 	if request.item.Kind == runtimeinput.PendingWorkItemKindManualCompaction {
 		reservationKind = exclusiveStepReservationManualCompaction

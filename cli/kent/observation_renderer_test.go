@@ -13,13 +13,20 @@ import (
 
 func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 	question := serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
-		PromptID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
-		StepID: questionCommandStepID(), Question: "dynamic question",
+		ToolCallID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
+		StepID:  questionCommandStepID(),
 		Options: []clientui.ApprovalOption{{Label: "dynamic allow", Decision: clientui.ApprovalDecisionAllowOnce}},
+		AccessTargets: []clientui.FileAccessTarget{{
+			RequestedPath: "/alias/file", ResolvedPath: "/real/file",
+		}},
 	}}
 	var output bytes.Buffer
 	writeObservedQuestion(&output, question, "kent question answer --session session-dynamic --option <number>")
-	for _, value := range []string{"dynamic question", "dynamic allow", "session-dynamic"} {
+	for _, value := range []string{
+		clientui.FormatFileAccessApprovalMarkdown(question.Approval.AccessTargets),
+		"dynamic allow",
+		"session-dynamic",
+	} {
 		if !strings.Contains(output.String(), value) {
 			t.Fatalf("output %q does not contain dynamic value %q", output.String(), value)
 		}
@@ -34,7 +41,7 @@ func TestRunWatchApprovalHintTargetsSession(t *testing.T) {
 		Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind: serverapi.RuntimeLiveWatchQuestion,
 			Question: &serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
-				PromptID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
+				ToolCallID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
 				StepID: questionCommandStepID(), Question: "Allow access?",
 				Options: []clientui.ApprovalOption{{
 					Label: "Allow once",

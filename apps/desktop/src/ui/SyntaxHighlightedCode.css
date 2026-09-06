@@ -1,0 +1,56 @@
+.syntax-highlighted-code {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.syntax-highlighted-code > code {
+  display: block;
+  min-inline-size: max-content;
+  white-space: pre;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  user-select: text;
+}
+
+.syntax-highlighted-code-token {
+  color: color-mix(
+    in srgb,
+    var(--shiki-light) 25%,
+    var(--syntax-highlighted-code-semantic-color, var(--shiki-light))
+  );
+}
+
+.syntax-highlighted-code-line {
+  display: block;
+  min-block-size: 1lh;
+}
+
+[data-theme="dark"] .syntax-highlighted-code-token {
+  color: color-mix(
+    in srgb,
+    var(--shiki-dark) 25%,
+    var(--syntax-highlighted-code-semantic-color, var(--shiki-dark))
+  );
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .syntax-highlighted-code-token {
+    color: color-mix(
+      in srgb,
+      var(--shiki-dark) 25%,
+      var(--syntax-highlighted-code-semantic-color, var(--shiki-dark))
+    );
+  }
+}

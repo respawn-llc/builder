@@ -477,7 +477,7 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 	}
 	row := ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload().(clientui.TranscriptCommittedRow)
 	row.User.Text = "committed hydration row"
-	hydration.CommittedRows = []clientui.TranscriptCommittedRow{row}
+	hydration.TailSegment.Entries = []clientui.TranscriptCommittedRow{row}
 	hydration.ActiveAssistant = &clientui.TranscriptAssistantStream{
 		StepID:   stepID,
 		StreamID: runtimeids.NewAssistantStreamID(),

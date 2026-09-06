@@ -43,7 +43,15 @@ func (e *Engine) finalizeLiveToolCompletion(result tools.Result) finalizedToolCo
 			result.Name,
 		))
 	}
-	call, ok := e.transcriptRuntimeState().ToolCallSnapshot(result.CallID)
+	call, ok, snapshotErr := e.transcriptRuntimeState().ToolCallSnapshot(result.CallID)
+	if snapshotErr != nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: authoritative call presentation is invalid (call_id=%q tool=%q): %v",
+			result.CallID,
+			result.Name,
+			snapshotErr,
+		))
+	}
 	if !ok {
 		panic(fmt.Sprintf(
 			"tool result presentation invariant violated: authoritative call is unavailable at completion boundary (call_id=%q tool=%q)",

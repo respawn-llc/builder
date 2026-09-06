@@ -2,6 +2,7 @@ package startup
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/server/auth"
@@ -9,6 +10,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
 	"core/server/core"
+	"core/server/metadata"
 	"core/shared/apicontract"
 	"core/shared/config"
 )
@@ -95,9 +97,17 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 	)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
+		panicOnMetadataMigrationFailure(err)
 		return nil, err
 	}
 	return appCore, nil
+}
+
+func panicOnMetadataMigrationFailure(err error) {
+	var migrationErr *metadata.WorkspaceChatDraftCutoverMigrationError
+	if errors.As(err, &migrationErr) {
+		panic(err)
+	}
 }
 
 func coreOptionsForBootstrap(req serverbootstrap.Request, rootLease *core.RootLockLease) core.Options {

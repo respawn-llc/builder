@@ -34,7 +34,7 @@ func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntim
 	projectID := strings.TrimSpace(ref.ProjectID)
 	taskID := strings.TrimSpace(string(ref.CurrentNode.TaskID))
 	sessionID := resource.SessionID().String()
-	askID := strings.TrimSpace(snapshot.Request.ID)
+	askID := strings.TrimSpace(snapshot.Request.ToolCallID)
 	switch {
 	case projectID == "":
 		return fmt.Errorf("workflow prompt scope %s has no project id", scope.ID())
@@ -66,21 +66,21 @@ func (r *RuntimeRegistry) publishTaskQuestionCleared(sessionID string, snapshot 
 	}
 	projectID := strings.TrimSpace(target.ProjectID)
 	taskID := strings.TrimSpace(target.TaskID)
-	promptID := strings.TrimSpace(snapshot.Request.ID)
+	toolCallID := strings.TrimSpace(snapshot.Request.ToolCallID)
 	targetSessionID := strings.TrimSpace(target.SessionID)
 	switch {
 	case projectID == "":
-		return fmt.Errorf("workflow prompt %q attention target has no project id", promptID)
+		return fmt.Errorf("workflow prompt %q attention target has no project id", toolCallID)
 	case target.WorkflowID == nil || target.WorkflowID.IsZero():
-		return fmt.Errorf("workflow prompt %q attention target has no workflow id", promptID)
+		return fmt.Errorf("workflow prompt %q attention target has no workflow id", toolCallID)
 	case taskID == "":
-		return fmt.Errorf("workflow prompt %q attention target has no task id", promptID)
-	case promptID == "":
-		return fmt.Errorf("workflow prompt attention target has no prompt id")
+		return fmt.Errorf("workflow prompt %q attention target has no task id", toolCallID)
+	case toolCallID == "":
+		return fmt.Errorf("workflow prompt attention target has no tool call id")
 	case targetSessionID == "":
-		return fmt.Errorf("workflow prompt %q attention target has no session id", promptID)
+		return fmt.Errorf("workflow prompt %q attention target has no session id", toolCallID)
 	case targetSessionID != strings.TrimSpace(sessionID):
-		return fmt.Errorf("workflow prompt %q attention target session %q does not match resolved session %q", promptID, targetSessionID, sessionID)
+		return fmt.Errorf("workflow prompt %q attention target session %q does not match resolved session %q", toolCallID, targetSessionID, sessionID)
 	}
 	workflowID := *target.WorkflowID
 	if err := r.workflowEventPublisher(context.Background(), serverapi.WorkflowProjectEvent{
@@ -88,7 +88,7 @@ func (r *RuntimeRegistry) publishTaskQuestionCleared(sessionID string, snapshot 
 		Resource:         serverapi.WorkflowProjectEventResourceTask,
 		Action:           serverapi.WorkflowProjectEventActionQuestionCleared,
 		PrimaryEntityID:  taskID,
-		RelatedIDs:       []string{targetSessionID, promptID},
+		RelatedIDs:       []string{targetSessionID, toolCallID},
 		OccurredAtUnixMs: time.Now().UTC().UnixMilli(),
 	}); err != nil {
 		return fmt.Errorf("publish workflow question cleared event: %w", err)

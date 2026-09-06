@@ -3,6 +3,7 @@ package edit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,7 @@ func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 	tool := newTestToolWithFilesystemContext(
 		t,
 		filesystemContext,
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 			approvalCalls++
 			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),
@@ -267,78 +268,30 @@ func TestPreserveCurlyQuotesKeepsOpeningSingleQuote(t *testing.T) {
 	}
 }
 
-func TestOutsideWorkspaceAncestorAliasUsesSingleCallApproval(t *testing.T) {
-	workspace := t.TempDir()
-	outside := newNonTemporaryOutsideDir(t)
-	targetDir := filepath.Join(outside, "target")
-	if err := os.Mkdir(targetDir, 0o755); err != nil {
-		t.Fatalf("create outside target dir: %v", err)
-	}
-	target := filepath.Join(targetDir, "target.txt")
-	writeEditTestFile(t, target, "old\n", 0o644)
-	alias := filepath.Join(outside, "alias")
-	if err := os.Symlink(targetDir, alias); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	prompts := 0
-	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
-		prompts++
-		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
-	}))
-
-	result := callEdit(t, tool, map[string]any{"path": filepath.Join(alias, "target.txt"), "old_string": "old", "new_string": "new"})
-	requireEditSuccess(t, result)
-	if prompts != 1 {
-		t.Fatalf("outside approval prompts = %d, want 1", prompts)
-	}
-	assertEditTestFileContent(t, target, "new\n")
-}
-
-func TestOutsideWorkspaceMissingAncestorAliasUsesSingleCallApproval(t *testing.T) {
-	workspace := t.TempDir()
-	outside := newNonTemporaryOutsideDir(t)
-	targetDir := filepath.Join(outside, "target")
-	if err := os.Mkdir(targetDir, 0o755); err != nil {
-		t.Fatalf("create outside target dir: %v", err)
-	}
-	alias := filepath.Join(outside, "alias")
-	if err := os.Symlink(targetDir, alias); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	prompts := 0
-	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
-		prompts++
-		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
-	}))
-
-	result := callEdit(t, tool, map[string]any{"path": filepath.Join(alias, "new.txt"), "old_string": "", "new_string": "new\n"})
-	requireEditSuccess(t, result)
-	if prompts != 1 {
-		t.Fatalf("outside approval prompts = %d, want 1", prompts)
-	}
-	assertEditTestFileContent(t, filepath.Join(targetDir, "new.txt"), "new\n")
-}
-
-func TestOutsideWorkspaceFinalSymlinkRequiresRealPathApproval(t *testing.T) {
+func TestOutsideWorkspaceDenialReturnsTypedOuterOutcome(t *testing.T) {
 	workspace := t.TempDir()
 	outside := newNonTemporaryOutsideDir(t)
 	target := filepath.Join(outside, "target.txt")
 	writeEditTestFile(t, target, "old\n", 0o644)
-	link := filepath.Join(outside, "link.txt")
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	prompts := 0
-	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
-		prompts++
-		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
+	commentary := "keep it local"
+	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny, Commentary: &commentary}, nil
 	}))
 
-	result := callEdit(t, tool, map[string]any{"path": link, "old_string": "old", "new_string": "new"})
-	requireEditSuccess(t, result)
-	if prompts != 2 {
-		t.Fatalf("outside approval prompts = %d, want 2", prompts)
+	result := callEdit(t, tool, map[string]any{"path": target, "old_string": "old", "new_string": "new"})
+	if !result.IsError || result.CallID != "call" || result.Name != toolspec.ToolEdit || result.QuestionAnswer != nil {
+		t.Fatalf("terminal denied result = %+v", result)
 	}
+	denial := editFileAccessFailure(tools.FileAccessOutcome{
+		Kind: tools.FileAccessDeniedByUser, Request: tools.FileAccessRequest{RequestedPath: target},
+		Commentary: &commentary,
+	})
+	var typed failure
+	if !errors.As(denial, &typed) || typed.denialCommentary == nil ||
+		typed.denialCommentary.Value() == nil || *typed.denialCommentary.Value() != commentary {
+		t.Fatalf("typed edit denial commentary = %+v", typed.denialCommentary)
+	}
+	assertEditTestFileContent(t, target, "old\n")
 }
 
 func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
@@ -353,7 +306,7 @@ func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
 	prompts := 0
 	tool := newTestTool(t, workspace,
 		WithPathDenyPolicy(policy),
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessApprovalRequest) (tools.FileAccessApproval, error) {
 			prompts++
 			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),

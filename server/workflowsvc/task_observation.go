@@ -135,7 +135,7 @@ func (s *Service) taskQuestion(
 	if strings.TrimSpace(sessionID) == "" {
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
-	questionID := string(item.Question.PromptID)
+	questionID := string(item.Question.ToolCallID)
 	if strings.TrimSpace(questionID) == "" {
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
@@ -149,7 +149,7 @@ func (s *Service) taskQuestion(
 			return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 		}
 		ask := clientui.PendingAsk{
-			PromptID:               item.Question.PromptID,
+			ToolCallID:             item.Question.ToolCallID,
 			SessionID:              item.Question.SessionID,
 			StepID:                 item.Question.StepID,
 			Question:               text,
@@ -171,7 +171,7 @@ func (s *Service) taskQuestion(
 		var approval *clientui.PendingApproval
 		for index := range approvals {
 			candidate := &approvals[index]
-			if candidate.PromptID == item.Question.PromptID &&
+			if candidate.ToolCallID == item.Question.ToolCallID &&
 				candidate.SessionID == item.Question.SessionID &&
 				candidate.StepID == item.Question.StepID {
 				approval = candidate

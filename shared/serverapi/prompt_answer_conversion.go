@@ -25,11 +25,11 @@ func DeclinedPromptAnswer() PromptAnswer {
 }
 
 func PromptAnswerBatchEntryFrom(
-	promptID clientui.PromptID,
+	toolCallID clientui.ToolCallID,
 	answer PromptAnswer,
 ) (PromptAnswerBatchEntry, error) {
 	entry := PromptAnswerBatchEntry{
-		PromptID:       promptID,
+		ToolCallID:     toolCallID,
 		QuestionAnswer: answer.question,
 		ApprovalAnswer: answer.approval,
 		Declined:       answer.declined,

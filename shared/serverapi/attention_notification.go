@@ -276,8 +276,18 @@ func validateApprovalAttentionPayload(notification clientui.AttentionNotificatio
 	if notification.Question != nil || notification.WorkflowApproval != nil || notification.InterruptedCurrentNode != nil {
 		return errors.New("approval attention notification must not carry question, workflow-approval, or interrupted-current-node payloads")
 	}
-	if strings.TrimSpace(notification.Approval.Message) == "" {
-		return errors.New("approval attention notification payload message is required")
+	hasMessage := notification.Approval.Message != nil
+	hasAccessTargets := len(notification.Approval.AccessTargets) > 0
+	if hasMessage == hasAccessTargets {
+		return errors.New("approval attention notification requires either message or access_targets")
+	}
+	if hasMessage && strings.TrimSpace(*notification.Approval.Message) == "" {
+		return errors.New("approval attention notification payload message must be non-empty when present")
+	}
+	for index, target := range notification.Approval.AccessTargets {
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("approval attention notification access target %d: %w", index, err)
+		}
 	}
 	if notification.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
 		return errors.New("approval attention notification target must be session prompt")

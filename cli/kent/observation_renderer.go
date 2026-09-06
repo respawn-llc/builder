@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -23,7 +24,11 @@ func writeObservedQuestion(w io.Writer, question serverapi.ObservationQuestion, 
 			}
 		}
 	} else if question.Approval != nil {
-		fmt.Fprintln(w, question.Approval.Question)
+		if len(question.Approval.AccessTargets) > 0 {
+			fmt.Fprintln(w, clientui.FormatFileAccessApprovalMarkdown(question.Approval.AccessTargets))
+		} else {
+			fmt.Fprintln(w, question.Approval.Question)
+		}
 		fmt.Fprintln(w, questionSuggestionsHeading)
 		for i, option := range question.Approval.Options {
 			fmt.Fprintf(w, "%d. %s\n", i+1, option.Label)

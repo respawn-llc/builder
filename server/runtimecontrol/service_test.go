@@ -279,6 +279,29 @@ func waitForRuntimeControlIdle(t *testing.T, engine *runtime.Engine) {
 	}
 }
 
+func waitForRuntimeControlActiveRun(t *testing.T, engine *runtime.Engine) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for engine.ActiveRun() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for Runtime execution to start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func runtimeControlPendingWorkContains(
+	pending runtimeinput.PendingWork,
+	itemID runtimeids.QueueItemID,
+) bool {
+	for _, item := range pending.Items {
+		if item.ID == itemID {
+			return true
+		}
+	}
+	return false
+}
+
 func waitForRuntimeControlQueuedStatus(
 	t *testing.T,
 	statuses <-chan runtime.QueuedUserMessageStatusEvent,
@@ -2324,6 +2347,189 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	}
 }
 
+func TestServiceAdmitManualCompactionAcceptsEligibleIdleRuntime(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("seeded"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}},
+		compactionResponses: []llm.CompactionResponse{{
+			Checkpoint: llm.ResponseItem{
+				Type:             llm.ResponseItemTypeCompaction,
+				EncryptedContent: textutil.Value("checkpoint"),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}},
+	}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model:                        "gpt-5",
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	if _, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "seed-manual-compaction", "seed"),
+	); err != nil {
+		t.Fatalf("seed user turn: %v", err)
+	}
+	waitForRuntimeControlAssistantFinal(t, engine, "seeded")
+	waitForRuntimeControlIdle(t, engine)
+	requestID := runtimeids.NewCompactionRequestID()
+
+	accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if err != nil {
+		t.Fatalf("AdmitManualCompaction: %v", err)
+	}
+	if !accepted {
+		t.Fatal("eligible idle manual compaction was not accepted")
+	}
+}
+
+func TestServiceAdmitManualCompactionQueuesBehindActiveAgentStep(t *testing.T) {
+	client := &blockingRuntimeControlClient{}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model: "gpt-5",
+	})
+	if _, err := service.SubmitUserTurn(
+		t.Context(),
+		runtimeControlUserTurnRequest(store, "active-manual-compaction", "keep working"),
+	); err != nil {
+		t.Fatalf("start user turn: %v", err)
+	}
+	waitForRuntimeControlActiveRun(t, engine)
+	requestID := runtimeids.NewCompactionRequestID()
+
+	accepted, err := service.AdmitManualCompaction(t.Context(), serverapi.RuntimeCompactContextRequest{
+		SessionID: store.Meta().SessionID,
+		RequestID: requestID,
+		Admission: serverapi.ManualCompactionAdmission{},
+	})
+	if err != nil {
+		t.Fatalf("AdmitManualCompaction: %v", err)
+	}
+	if !accepted {
+		t.Fatal("manual compaction behind an active Agent Step was not accepted")
+	}
+	itemID, err := serverapi.PendingWorkItemIDFromCompactionRequest(requestID)
+	if err != nil {
+		t.Fatalf("Pending Work identity: %v", err)
+	}
+	pending, err := engine.PendingWorkSnapshot()
+	if err != nil {
+		t.Fatalf("Pending Work: %v", err)
+	}
+	if !runtimeControlPendingWorkContains(pending, itemID) {
+		t.Fatalf("manual compaction %s is absent from Pending Work: %+v", requestID, pending.Items)
+	}
+}
+
+func TestServiceAdmitQueuedPromptCommandUsesExpandedExecutionAndCanonicalPresentation(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	statuses := make(chan runtime.QueuedUserMessageStatusEvent, 2)
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			if event.QueuedUserMessageStatus != nil {
+				statuses <- *event.QueuedUserMessageStatus
+			}
+		},
+	})
+	resolver := &runtimeControlPromptCommandResolver{content: "expanded prompt body"}
+	service.WithPromptCommandResolver(resolver)
+	request := runtimeControlUserTurnRequest(store, "chat-queue-command", "unused")
+	request.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src")
+
+	result, err := service.AdmitChatQueuedUserInput(t.Context(), request)
+	if err != nil {
+		t.Fatalf("AdmitChatQueuedUserInput: %v", err)
+	}
+	if !result.Accepted || result.QueueItemID.IsZero() {
+		t.Fatalf("AdmitChatQueuedUserInput = %+v, want accepted Queue Item", result)
+	}
+	status := waitForRuntimeControlQueuedStatus(t, statuses, result.QueueItemID.String(), runtime.QueuedUserMessageAccepted)
+	if status.Text != "/review src" {
+		t.Fatalf("accepted Queue presentation = %q, want canonical command", status.Text)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("queued command did not start while the Runtime was idle")
+	}
+	if got := countUserMessagesWithContent(t, store, "expanded prompt body"); got != 1 {
+		t.Fatalf("expanded user message count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {
+		t.Fatalf("canonical prompt history count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "expanded prompt body"); got != 0 {
+		t.Fatalf("expanded prompt history count = %d, want 0", got)
+	}
+	if calls := resolver.calls.Load(); calls != 1 {
+		t.Fatalf("prompt resolver calls = %d, want 1", calls)
+	}
+	if err := engine.Interrupt(); err != nil {
+		t.Fatalf("Interrupt queued command: %v", err)
+	}
+	close(client.release)
+	waitForRuntimeControlIdle(t, engine)
+}
+
+func TestServiceChatAdmissionsPreservePromptHistoryFailureAfterAcceptance(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Service, context.Context, serverapi.RuntimeSubmitUserTurnRequest) (serverapi.ChatInputAdmissionResult, error)
+	}{
+		{name: "Steer", run: (*Service).AdmitChatUserTurn},
+		{name: "Queue", run: (*Service).AdmitChatQueuedUserInput},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+			historyErr := errors.New("prompt history unavailable")
+			runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).SetRecordError(historyErr)
+
+			result, err := test.run(
+				service,
+				t.Context(),
+				runtimeControlUserTurnRequest(store, "chat-history-failure", "accepted despite history failure"),
+			)
+			if err != nil {
+				t.Fatalf("%s admission: %v", test.name, err)
+			}
+			if !result.Accepted || result.QueueItemID.IsZero() {
+				t.Fatalf("%s result = %+v, want accepted Queue Item", test.name, result)
+			}
+			if !errors.Is(result.PromptHistoryFailure, historyErr) {
+				t.Fatalf("prompt-history failure = %v, want %v", result.PromptHistoryFailure, historyErr)
+			}
+			waitForRuntimeControlAssistantFinal(t, engine, "done")
+		})
+	}
+	t.Run("ordinary Submit keeps its response contract", func(t *testing.T) {
+		store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+		runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).
+			SetRecordError(errors.New("prompt history unavailable"))
+
+		response, err := service.SubmitUserTurn(
+			t.Context(),
+			runtimeControlUserTurnRequest(store, "ordinary-submit-history", "ordinary Submit"),
+		)
+		if err != nil {
+			t.Fatalf("SubmitUserTurn: %v", err)
+		}
+		if response.QueueItemID == "" {
+			t.Fatalf("SubmitUserTurn response = %+v, want accepted Queue Item", response)
+		}
+		waitForRuntimeControlAssistantFinal(t, engine, "done")
+	})
+}
+
 func TestServiceSubmitUserTurnPromptResolutionFailureIsNotAcceptedAndRemainsRetryable(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	resolutionErr := errors.New("prompt command disappeared")
@@ -2536,7 +2742,7 @@ func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission
 		t.Fatalf("SubmitUserTurn prompt command while model was thinking = %+v, want accepted steering", steered)
 	}
 	status := waitForRuntimeControlQueuedStatus(t, queuedStatuses, steered.QueueItemID, runtime.QueuedUserMessageAccepted)
-	if status.Text != "expanded prompt body" {
+	if status.Text != "/review src" {
 		t.Fatalf("accepted prompt-command queue status = %+v", status)
 	}
 	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {

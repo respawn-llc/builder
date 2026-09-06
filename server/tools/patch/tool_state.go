@@ -49,8 +49,9 @@ func (s *applyState) hasDeletedAncestor(path string) bool {
 
 func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error) {
 	type documentPath struct {
-		raw      string
-		resolved string
+		raw       string
+		resolved  string
+		mustExist bool
 	}
 	targets := make([]documentPath, 0, len(doc.Hunks))
 	addPath := func(raw string, mustExist bool) error {
@@ -71,7 +72,7 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 				return err
 			}
 		}
-		targets = append(targets, documentPath{raw: raw, resolved: resolved})
+		targets = append(targets, documentPath{raw: raw, resolved: resolved, mustExist: mustExist})
 		return nil
 	}
 	for _, hunk := range doc.Hunks {
@@ -95,13 +96,28 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 			}
 		}
 	}
+	accessTargets := make([]tools.FileAccessTarget, 0, len(targets))
+	for _, target := range targets {
+		accessTargets = append(accessTargets, tools.FileAccessTarget{
+			RequestedPath: target.raw,
+			ResolvedPath:  target.resolved,
+		})
+	}
+	if outcome := s.accessCall.Prepare(s.ctx, accessTargets); !outcome.IsAllowed() {
+		return nil, fileAccessFailure(outcome)
+	}
+
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
-		outcome := s.accessCall.Authorize(s.ctx, target.raw, target.resolved)
+		current, err := s.tool.resolvePathTarget(target.raw, target.mustExist)
+		if err != nil {
+			return nil, err
+		}
+		outcome := s.accessCall.Authorize(s.ctx, target.raw, current)
 		if !outcome.IsAllowed() {
 			return nil, fileAccessFailure(outcome)
 		}
-		paths = append(paths, target.resolved)
+		paths = append(paths, current)
 	}
 	return tools.LockFileAccessPaths(paths), nil
 }

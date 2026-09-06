@@ -21,6 +21,7 @@ import (
 
 var ErrAuthorityClosed = errors.New("session runtime authority is closed")
 var ErrExecutionNoLongerLive = errors.New("exact execution scope is no longer live")
+var ErrAgentRuntimePlanRequired = errors.New("agent runtime plan is required")
 
 type AuthorityOptions struct {
 	Debug             bool

@@ -30,7 +30,7 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 	}
 	snapshot := runtime.ChatSnapshot{Entries: entries}
 	liveFacts := runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot)
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{CommittedRows: liveFacts})
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{CommittedRows: liveFacts})
 	page, err := TranscriptPageFromSegment(
 		"58e121b5-30f7-4d0f-a1fa-fb3e6695e39c",
 		"name",
@@ -40,11 +40,11 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("project page: %v", err)
 	}
-	if !reflect.DeepEqual(hydration.CommittedRows, page.Entries) {
-		t.Fatalf("hydration/page Reviewer rows differ: hydration=%+v page=%+v", hydration.CommittedRows, page.Entries)
+	if !reflect.DeepEqual(hydration.TailSegment.Entries, page.Entries) {
+		t.Fatalf("hydration/page Reviewer rows differ: hydration=%+v page=%+v", hydration.TailSegment.Entries, page.Entries)
 	}
-	for index := range hydration.CommittedRows {
-		if err := hydration.CommittedRows[index].Validate(); err != nil {
+	for index := range hydration.TailSegment.Entries {
+		if err := hydration.TailSegment.Entries[index].Validate(); err != nil {
 			t.Fatalf("hydrated Reviewer row %d failed validation: %v", index, err)
 		}
 		if err := page.Entries[index].Validate(); err != nil {
@@ -67,8 +67,8 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 		liveRows := []clientui.TranscriptCommittedRow{
 			transcriptPayload[clientui.TranscriptCommittedRow](t, liveMessages[0]),
 		}
-		if len(liveRows) != 1 || !reflect.DeepEqual(liveRows[0], hydration.CommittedRows[index]) {
-			t.Fatalf("live Reviewer row %d differs: live=%+v hydration=%+v", index, liveRows, hydration.CommittedRows[index])
+		if len(liveRows) != 1 || !reflect.DeepEqual(liveRows[0], hydration.TailSegment.Entries[index]) {
+			t.Fatalf("live Reviewer row %d differs: live=%+v hydration=%+v", index, liveRows, hydration.TailSegment.Entries[index])
 		}
 	}
 	if len(liveFacts) != 2 || liveFacts[0].ReviewerFeedback == nil || liveFacts[1].ReviewerError == nil {
@@ -109,7 +109,7 @@ func TestQuestionAnswerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing
 	}
 	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{entry}}
 	facts := runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot)
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{CommittedRows: facts})
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{CommittedRows: facts})
 	page, err := TranscriptPageFromSegment(
 		sessionID,
 		"name",
@@ -131,26 +131,26 @@ func TestQuestionAnswerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing
 		},
 		CommittedProvenance: provenance,
 	})
-	if len(facts) != 1 || len(hydration.CommittedRows) != 1 || len(page.Entries) != 1 || len(liveMessages) != 1 {
+	if len(facts) != 1 || len(hydration.TailSegment.Entries) != 1 || len(page.Entries) != 1 || len(liveMessages) != 1 {
 		t.Fatalf(
 			"projected Question rows: facts=%d hydration=%d page=%d live=%d, want one each",
 			len(facts),
-			len(hydration.CommittedRows),
+			len(hydration.TailSegment.Entries),
 			len(page.Entries),
 			len(liveMessages),
 		)
 	}
 	liveRow := transcriptPayload[clientui.TranscriptCommittedRow](t, liveMessages[0])
-	if !reflect.DeepEqual(hydration.CommittedRows[0], page.Entries[0]) ||
-		!reflect.DeepEqual(hydration.CommittedRows[0], liveRow) {
+	if !reflect.DeepEqual(hydration.TailSegment.Entries[0], page.Entries[0]) ||
+		!reflect.DeepEqual(hydration.TailSegment.Entries[0], liveRow) {
 		t.Fatalf(
 			"Question rows differ: hydration=%+v page=%+v live=%+v",
-			hydration.CommittedRows[0],
+			hydration.TailSegment.Entries[0],
 			page.Entries[0],
 			liveRow,
 		)
 	}
-	got := hydration.CommittedRows[0]
+	got := hydration.TailSegment.Entries[0]
 	if got.Tool == nil || got.Tool.QuestionAnswer == nil ||
 		got.Tool.QuestionAnswer.SelectedOptionNumber == nil ||
 		*got.Tool.QuestionAnswer.SelectedOptionNumber != selected ||

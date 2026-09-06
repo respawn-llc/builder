@@ -20,12 +20,12 @@ type stubPromptResponder struct {
 	batchResults  []sessionruntime.PromptAnswerResult
 	batchErr      error
 
-	followUpCalls   int
-	followUpSession runtimeids.SessionID
-	followUpStep    runtimeids.StepID
-	followUpPrompt  clientui.PromptID
-	followUp        serverapi.PromptFollowUpSubscription
-	followUpErr     error
+	followUpCalls    int
+	followUpSession  runtimeids.SessionID
+	followUpStep     runtimeids.StepID
+	followUpToolCall clientui.ToolCallID
+	followUp         serverapi.PromptFollowUpSubscription
+	followUpErr      error
 }
 
 func (s *stubPromptResponder) ResolvePromptBatch(
@@ -45,12 +45,12 @@ func (s *stubPromptResponder) SubscribePromptFollowUp(
 	_ context.Context,
 	sessionID runtimeids.SessionID,
 	stepID runtimeids.StepID,
-	promptID clientui.PromptID,
+	toolCallID clientui.ToolCallID,
 ) (serverapi.PromptFollowUpSubscription, error) {
 	s.followUpCalls++
 	s.followUpSession = sessionID
 	s.followUpStep = stepID
-	s.followUpPrompt = promptID
+	s.followUpToolCall = toolCallID
 	return s.followUp, s.followUpErr
 }
 
@@ -70,9 +70,9 @@ func newPromptControlTestService() (*PromptControlService, *stubPromptResponder)
 func TestServiceSubscribeFollowUpInstallsWatcherBeforeReturning(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := serverapi.PromptFollowUpWatchRequest{
-		SessionID: runtimeids.NewSessionID(),
-		StepID:    promptControlStepID(t),
-		PromptID:  "prompt-1",
+		SessionID:  runtimeids.NewSessionID(),
+		StepID:     promptControlStepID(t),
+		ToolCallID: "prompt-1",
 	}
 	subscription := &stubPromptFollowUpSubscription{}
 	responder.followUp = subscription
@@ -84,18 +84,18 @@ func TestServiceSubscribeFollowUpInstallsWatcherBeforeReturning(t *testing.T) {
 	if got != subscription || responder.followUpCalls != 1 ||
 		responder.followUpSession != request.SessionID ||
 		responder.followUpStep != request.StepID ||
-		responder.followUpPrompt != request.PromptID {
+		responder.followUpToolCall != request.ToolCallID {
 		t.Fatalf("follow-up installation = subscription %p responder %+v", got, responder)
 	}
 }
 
-func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndValidatesReorderedResults(t *testing.T) {
+func TestServiceAnswerPromptBatchTranslatesMixedEntries(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := promptAnswerBatchRequest(t)
 	responder.batchResults = []sessionruntime.PromptAnswerResult{
-		{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-		{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-		{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
+		{ToolCallID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
+		{ToolCallID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
+		{ToolCallID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
 	}
 
 	response, err := service.AnswerPromptBatch(context.Background(), request)
@@ -131,73 +131,6 @@ func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndValidatesReorderedResu
 	}
 }
 
-func TestServiceAnswerPromptBatchRejectsMalformedRuntimeResultSets(t *testing.T) {
-	request := promptAnswerBatchRequest(t)
-	tests := []struct {
-		name    string
-		results []sessionruntime.PromptAnswerResult
-	}{
-		{
-			name: "missing",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-			},
-		},
-		{
-			name: "foreign",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "foreign", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-			},
-		},
-		{
-			name: "duplicate",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-				{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-			},
-		},
-		{
-			name: "invalid outcome",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcome("later")},
-				{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			service, responder := newPromptControlTestService()
-			responder.batchResults = test.results
-			if _, err := service.AnswerPromptBatch(context.Background(), request); err == nil {
-				t.Fatal("malformed runtime result set unexpectedly succeeded")
-			}
-		})
-	}
-}
-
-func TestServiceAnswerPromptBatchDoesNotMemoizeRepeatedInvocation(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	request := promptAnswerBatchRequest(t)
-	responder.batchResults = []sessionruntime.PromptAnswerResult{
-		{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-		{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-		{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-	}
-	for attempt := 0; attempt < 2; attempt++ {
-		if _, err := service.AnswerPromptBatch(context.Background(), request); err != nil {
-			t.Fatalf("AnswerPromptBatch attempt %d: %v", attempt+1, err)
-		}
-	}
-	if responder.batchCalls != 2 {
-		t.Fatalf("batch responder calls = %d, want 2 independent invocations", responder.batchCalls)
-	}
-}
-
 func promptAnswerBatchRequest(t *testing.T) serverapi.PromptAnswerBatchRequest {
 	t.Helper()
 	sessionID, err := runtimeids.ParseSessionID("session-1")
@@ -216,20 +149,20 @@ func promptAnswerBatchRequest(t *testing.T) serverapi.PromptAnswerBatchRequest {
 		StepID:    stepID,
 		Entries: []serverapi.PromptAnswerBatchEntry{
 			{
-				PromptID: "question-1",
+				ToolCallID: "question-1",
 				QuestionAnswer: &serverapi.PromptQuestionAnswer{
 					SelectedOptionNumber: &selected,
 					Freeform:             &questionCommentary,
 				},
 			},
 			{
-				PromptID: "approval-1",
+				ToolCallID: "approval-1",
 				ApprovalAnswer: &serverapi.PromptApprovalAnswer{
 					Decision:   clientui.ApprovalDecisionDeny,
 					Commentary: &approvalCommentary,
 				},
 			},
-			{PromptID: "declined-1", Declined: &serverapi.PromptDeclined{}},
+			{ToolCallID: "declined-1", Declined: &serverapi.PromptDeclined{}},
 		},
 	}
 }

@@ -1,12 +1,11 @@
 package runtime
 
 import (
-	goruntime "runtime"
+	"fmt"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -138,7 +137,7 @@ func clonePersistedToolCallMeta(meta *transcript.ToolCallMeta) *transcript.ToolC
 		renderHint := *meta.RenderHint
 		copyMeta.RenderHint = &renderHint
 	}
-	copyMeta.PatchRender = patchformat.Clone(meta.PatchRender)
+	copyMeta.PatchPresentation = patchformat.ClonePresentation(meta.PatchPresentation)
 	return &copyMeta
 }
 
@@ -161,17 +160,25 @@ func formatPersistedToolCall(call llm.ToolCall) ChatEntry {
 }
 
 func persistedTranscriptToolCallMeta(call llm.ToolCall) *transcript.ToolCallMeta {
-	if meta, ok := transcript.DecodeToolCallMeta(call.Presentation); ok {
-		return meta
+	decoded := transcript.DecodeToolCallMeta(call.Presentation)
+	switch decoded.Kind {
+	case transcript.ToolCallMetaDecodeCurrent, transcript.ToolCallMetaDecodeLegacyNormalized:
+		if decoded.Meta == nil {
+			panic(fmt.Sprintf(
+				"persisted tool call %q metadata decode outcome %d has no metadata",
+				call.ID,
+				decoded.Kind,
+			))
+		}
+		return decoded.Meta
+	case transcript.ToolCallMetaDecodeInvalid:
+	case transcript.ToolCallMetaDecodeAbsent:
+	default:
+		panic(fmt.Sprintf(
+			"persisted tool call %q metadata decode returned unknown outcome %d",
+			call.ID,
+			decoded.Kind,
+		))
 	}
-	input := call.Input
-	if call.Custom && call.CustomInput != nil &&
-		strings.TrimSpace(*call.CustomInput) != "" {
-		input = normalizeRuntimeToolInput(*call.CustomInput)
-	}
-	built := tools.BuildCallTranscriptMeta(call.Name, tools.ToolCallContext{
-		DefaultShellPath: currentTranscriptDefaultShellPath(),
-		GOOS:             goruntime.GOOS,
-	}, input)
-	return &built
+	return buildToolCallMeta(call, "")
 }

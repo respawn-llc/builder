@@ -9,8 +9,6 @@ import (
 
 const MaxProjectLabels = 100
 
-const ComparisonVersion = "kent-label-casefold-v1"
-
 func Fold(value string) string {
 	return norm.NFC.String(cases.Fold().String(norm.NFC.String(value)))
 }

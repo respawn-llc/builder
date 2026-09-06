@@ -2,6 +2,7 @@ package startup
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"core/server/authservice"
 	corepkg "core/server/core"
 	"core/server/metadata"
+	metadatamigrations "core/server/metadata/migrations"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -124,6 +126,83 @@ func TestStartServeServerRejectsSecondPersistenceRootOwner(t *testing.T) {
 	}
 	if first.Core == nil {
 		t.Fatal("first server lost its core after rejected second owner")
+	}
+}
+
+func TestStartServeServerPanicsWhenWorkspaceChatDraftCutoverFails(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	writeServeSettings(t, home, "model = \"gpt-5\"\n")
+	cfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	blockWorkspaceChatDraftCutover(t, cfg.PersistenceRoot)
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("StartServeServer returned instead of panicking")
+		}
+		panicErr, ok := recovered.(error)
+		if !ok {
+			t.Fatalf("panic = %T, want error", recovered)
+		}
+		var migrationErr *metadata.WorkspaceChatDraftCutoverMigrationError
+		if !errors.As(panicErr, &migrationErr) {
+			t.Fatalf("panic error = %v, want metadata migration failure", panicErr)
+		}
+	}()
+	server, err := StartServeServer(
+		context.Background(),
+		Request{
+			WorkspaceRoot:         workspace,
+			WorkspaceRootExplicit: true,
+			AllowUnauthenticated:  true,
+		},
+		envAuthHandler{},
+		nil,
+	)
+	if server != nil {
+		_ = server.Close()
+	}
+	t.Fatalf("StartServeServer returned server=%v error=%v", server, err)
+}
+
+func blockWorkspaceChatDraftCutover(t *testing.T, persistenceRoot string) {
+	t.Helper()
+	store, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		t.Fatalf("create current metadata database: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close current metadata database: %v", err)
+	}
+	databasePath := filepath.Join(persistenceRoot, "db", "main.sqlite3")
+	databaseURL, ok := config.LocalFileURL(databasePath)
+	if !ok {
+		t.Fatalf("metadata database path %q is not absolute", databasePath)
+	}
+	db, err := sql.Open("sqlite", databaseURL.String())
+	if err != nil {
+		t.Fatalf("open metadata database fixture: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`
+ALTER TABLE workspaces
+ADD COLUMN chat_draft_json TEXT
+CHECK (chat_draft_json IS NULL OR json_valid(chat_draft_json));
+
+DELETE FROM goose_db_version
+WHERE version_id >= ?;
+
+CREATE VIEW workspace_chat_draft_migration_blocker AS
+SELECT chat_draft_json
+FROM workspaces;
+`, metadatamigrations.WorkspaceChatDraftCutoverVersion); err != nil {
+		t.Fatalf("create blocked workspace Chat draft migration fixture: %v", err)
 	}
 }
 

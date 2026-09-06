@@ -213,8 +213,8 @@ func TestTaskDetailProjectsLiveAgentStates(t *testing.T) {
 			}
 			if test.approval {
 				execution.PendingPrompts = []sessionruntime.PendingPromptReference{{
-					ID:   "approval",
-					Kind: sessionruntime.PendingPromptKindSessionApproval,
+					ToolCallID: "approval",
+					Kind:       sessionruntime.PendingPromptKindSessionApproval,
 				}}
 			}
 			detail := taskDetailWithObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
@@ -590,8 +590,8 @@ func TestTaskListPreservesAllLiveAttentionThroughCanonicalStatus(t *testing.T) {
 							},
 							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
 							PendingPrompts: []sessionruntime.PendingPromptReference{
-								{ID: "question", Kind: sessionruntime.PendingPromptKindQuestion},
-								{ID: "approval", Kind: sessionruntime.PendingPromptKindSessionApproval},
+								{ToolCallID: "question", Kind: sessionruntime.PendingPromptKindQuestion},
+								{ToolCallID: "approval", Kind: sessionruntime.PendingPromptKindSessionApproval},
 							},
 						}},
 					},

@@ -338,7 +338,11 @@ func (e *Engine) waitQueuedUserAutoDrainAllowed(ctx context.Context) error {
 }
 
 func (e *Engine) Steer(ctx context.Context, text string, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, true, accept)
+	return e.SteerInput(ctx, plainQueuedUserInput(text), accept)
+}
+
+func (e *Engine) SteerInput(ctx context.Context, input QueuedUserInput, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueUserInput(ctx, input, true, true, accept)
 }
 
 func (e *Engine) HasQueuedUserWork() bool {
@@ -366,10 +370,11 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if e.failQueuedUserWorkIfTerminal() {
 		return false
 	}
-	if !e.messageFlow.HasPendingUserSteers() {
+	e.queuedUserWorkMu.Lock()
+	if !e.messageFlow.HasPendingUserSteers() && len(e.queuedUserAutoDrainIDSnapshot()) == 0 {
+		e.queuedUserWorkMu.Unlock()
 		return false
 	}
-	e.queuedUserWorkMu.Lock()
 	if e.queuedUserWorkScheduled {
 		e.queuedUserWorkMu.Unlock()
 		return true
@@ -400,7 +405,7 @@ func (e *Engine) processQueuedUserWork(
 			e.surfaceRunError(err)
 			return nil
 		}
-		_, receipt, _, err := e.submitQueuedUserMessages(ctx, steerUserInjections(), nil)
+		_, receipt, _, err := e.submitQueuedUserMessages(ctx, steerUserInjections(e.queuedUserAutoDrainIDSnapshot()), nil)
 		if err != nil {
 			if fatal, abort := resultGroupFatalFromError(err); abort {
 				e.clearQueuedUserWorkScheduled(completion, err)
@@ -454,7 +459,7 @@ func (e *Engine) clearQueuedUserWorkScheduled(
 	}
 	// Admission schedules under this same lock. Keep the current worker and
 	// its execution owner until accepted steers have drained.
-	if err == nil && e.messageFlow.HasPendingUserSteers() {
+	if err == nil && (e.messageFlow.HasPendingUserSteers() || len(e.queuedUserAutoDrainIDSnapshot()) > 0) {
 		e.queuedUserWorkMu.Unlock()
 		return false
 	}
@@ -463,6 +468,16 @@ func (e *Engine) clearQueuedUserWorkScheduled(
 	e.queuedUserWorkMu.Unlock()
 	completion.complete(struct{}{}, err)
 	return true
+}
+
+func (e *Engine) queuedUserAutoDrainIDSnapshot() map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, pending := range e.messageFlow.PendingUserMessageEntries() {
+		if pending.autoStart {
+			ids[pending.message.ID] = struct{}{}
+		}
+	}
+	return ids
 }
 
 func (e *Engine) DrainQueuedUserMessagesBeforeClose(ctx context.Context) error {

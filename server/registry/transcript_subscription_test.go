@@ -45,7 +45,7 @@ func transcriptBrokerHydration(t *testing.T) clientui.TranscriptEvent {
 				Reviewer: clientui.ReviewerActivityInactive,
 			},
 		},
-		CommittedRows: []clientui.TranscriptCommittedRow{},
+		TailSegment: clientui.TranscriptTailSegment{Entries: []clientui.TranscriptCommittedRow{}},
 	}
 	return clientui.NewTranscriptEvent(hydration)
 }
@@ -285,16 +285,18 @@ func TestSessionFeedSequencerHydrationProjectionUsesContractFailurePolicy(t *tes
 
 func TestRegistryHydrationCompositionUsesContractFailurePolicy(t *testing.T) {
 	registry := NewRuntimeRegistry()
-	snapshot := runtime.TranscriptHydrationSnapshot{
-		CommittedRows: []runtime.TranscriptCommittedRowFact{{
-			Locator: transcript.CommittedRowLocator{},
-		}},
+	tailPage := runtime.TranscriptSegmentPage{
+		Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
+			Role:                "user",
+			Text:                "malformed",
+			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{},
+		}}},
 	}
 	t.Run("production returns contract error", func(t *testing.T) {
 		restore := withTranscriptContractViolationPanic(false)
 		defer restore()
 		_, err := newSessionFeedSequencer(newTranscriptSubscriptionBroker()).Subscribe(func() (clientui.TranscriptHydration, error) {
-			return registry.composeTranscriptHydration(context.Background(), "", nil, snapshot)
+			return registry.composeTranscriptHydration(context.Background(), "", nil, runtime.TranscriptHydrationSnapshot{}, tailPage)
 		})
 		if err == nil {
 			t.Fatal("malformed hydration composition returned nil error")
@@ -313,7 +315,7 @@ func TestRegistryHydrationCompositionUsesContractFailurePolicy(t *testing.T) {
 			}
 		}()
 		_, _ = newSessionFeedSequencer(newTranscriptSubscriptionBroker()).Subscribe(func() (clientui.TranscriptHydration, error) {
-			return registry.composeTranscriptHydration(context.Background(), "", nil, snapshot)
+			return registry.composeTranscriptHydration(context.Background(), "", nil, runtime.TranscriptHydrationSnapshot{}, tailPage)
 		})
 	})
 }
@@ -482,7 +484,7 @@ func transcriptBrokerHydrationWithLocators(t *testing.T, locators []transcript.C
 	t.Helper()
 	hydration := transcriptBrokerHydration(t).Payload().(clientui.TranscriptHydration)
 	for _, locator := range locators {
-		hydration.CommittedRows = append(hydration.CommittedRows, transcriptBrokerCommittedRow(t, locator))
+		hydration.TailSegment.Entries = append(hydration.TailSegment.Entries, transcriptBrokerCommittedRow(t, locator))
 	}
 	return clientui.NewTranscriptEvent(hydration)
 }

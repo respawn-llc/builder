@@ -539,7 +539,7 @@ func (f authorityPromptFeed) PromptPendingScope(scope ExecutionScope, req tools.
 	if err != nil {
 		return err
 	}
-	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), stepID: stepID, requestID: req.ID}
+	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), stepID: stepID, requestID: req.ToolCallID}
 	return nil
 }
 
@@ -2586,7 +2586,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 
 	askID := uuid.NewString()
 	request := tools.AskQuestionRequest{
-		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
+		ToolCallID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
 	responseDone := make(chan promptAwaitTestResult, 1)
@@ -2674,7 +2674,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if err := <-waitingDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled waiting mutation error = %v, want context canceled", err)
 	}
-	second := tools.AskQuestionRequest{ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Again?"}
+	second := tools.AskQuestionRequest{ToolCallID: uuid.NewString(), StepID: uuid.NewString(), Question: "Again?"}
 	err = authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
 		started := make(chan struct{})
 		go func() {
@@ -2692,7 +2692,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("interruptible Agent Turn mutation: %v", err)
 	}
-	if pending := <-feed; pending.requestID != second.ID || pending.resolved {
+	if pending := <-feed; pending.requestID != second.ToolCallID || pending.resolved {
 		t.Fatalf("second pending prompt = %+v", pending)
 	}
 	close(releaseExecution)
@@ -2736,7 +2736,7 @@ func TestPendingPromptKeepsExactExecutionInterruptibleWithoutActiveRuntimeStep(t
 			})
 			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 			request := tools.AskQuestionRequest{
-				ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
+				ToolCallID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
 			}
 			awaitDone := make(chan error, 1)
 			handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
@@ -2753,7 +2753,7 @@ func TestPendingPromptKeepsExactExecutionInterruptibleWithoutActiveRuntimeStep(t
 			if err != nil {
 				t.Fatalf("start agent execution: %v", err)
 			}
-			if pending := <-feed; pending.scopeID != handle.Scope().ID() || pending.requestID != request.ID || pending.resolved {
+			if pending := <-feed; pending.scopeID != handle.Scope().ID() || pending.requestID != request.ToolCallID || pending.resolved {
 				t.Fatalf("pending prompt = %+v", pending)
 			}
 			var engine *runtime.Engine
@@ -2771,7 +2771,7 @@ func TestPendingPromptKeepsExactExecutionInterruptibleWithoutActiveRuntimeStep(t
 			if err := <-awaitDone; !errors.Is(err, context.Canceled) {
 				t.Fatalf("pending prompt result = %v, want context canceled", err)
 			}
-			if resolved := <-feed; resolved.requestID != request.ID || !resolved.resolved {
+			if resolved := <-feed; resolved.requestID != request.ToolCallID || !resolved.resolved {
 				t.Fatalf("resolved prompt = %+v", resolved)
 			}
 			page, err := engine.TranscriptNewestSegmentPage()
@@ -2811,7 +2811,7 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 	feed := make(authorityPromptFeed, 2)
 	store := newExecutionPromptStore(authority, scope, feed)
 	request := tools.AskQuestionRequest{
-		ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
+		ToolCallID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	resolution := testQuestionResolution("yes")
 
@@ -2830,8 +2830,8 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 	}()
 	select {
 	case pending := <-feed:
-		if pending.requestID != request.ID || pending.resolved {
-			t.Fatalf("pending prompt event = %+v, want pending request %q", pending, request.ID)
+		if pending.requestID != request.ToolCallID || pending.resolved {
+			t.Fatalf("pending prompt event = %+v, want pending request %q", pending, request.ToolCallID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("prompt registration waited for the Authority lock")
@@ -2845,8 +2845,8 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 			return
 		}
 		_, resolveErr := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{{
-			PromptID: clientui.PromptID(request.ID),
-			Payload:  PromptQuestionAnswerCommand{Answer: resolution},
+			ToolCallID: clientui.ToolCallID(request.ToolCallID),
+			Payload:    PromptQuestionAnswerCommand{Answer: resolution},
 		}})
 		submitDone <- resolveErr
 	}()
@@ -2889,9 +2889,9 @@ func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-prompts", "node-pending-prompts", nil)
 	requests := []tools.AskQuestionRequest{
-		{ID: "question-z", StepID: uuid.NewString(), Question: "Question"},
+		{ToolCallID: "question-z", StepID: uuid.NewString(), Question: "Question"},
 		{
-			ID:              "approval-a",
+			ToolCallID:      "approval-a",
 			StepID:          uuid.NewString(),
 			Approval:        true,
 			ApprovalOptions: []tools.AskQuestionApprovalOption{{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow"}},
@@ -2935,8 +2935,8 @@ func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 		t.Fatalf("pending prompts = %+v, want two prompts", prompts)
 	}
 	want := []PendingPromptReference{
-		{ID: "approval-a", Kind: PendingPromptKindSessionApproval},
-		{ID: "question-z", Kind: PendingPromptKindQuestion},
+		{ToolCallID: "approval-a", Kind: PendingPromptKindSessionApproval},
+		{ToolCallID: "question-z", Kind: PendingPromptKindQuestion},
 	}
 	for index, expected := range want {
 		if prompts[index] != expected {
@@ -2955,7 +2955,7 @@ func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 	}
 }
 
-func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing.T) {
+func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingToolCallIDs(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	feed := make(authorityPromptFeed, 1)
@@ -2971,7 +2971,7 @@ func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing
 	})
 
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	request := tools.AskQuestionRequest{ID: "duplicate-prompt", StepID: uuid.NewString(), Question: "Question"}
+	request := tools.AskQuestionRequest{ToolCallID: "duplicate-prompt", StepID: uuid.NewString(), Question: "Question"}
 	workflowRef := workflowExecutionRefForTest(t, "task-duplicate-prompt", "node-duplicate-prompt", nil)
 	handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
@@ -3004,7 +3004,7 @@ func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing
 
 func TestTaskExecutionRejectsPendingPromptsForQueuedAndScript(t *testing.T) {
 	ref := workflowExecutionRefForTest(t, "task-invalid-prompt-state", "node-invalid-prompt-state", nil)
-	pending := []PendingPromptReference{{ID: "question", Kind: PendingPromptKindQuestion}}
+	pending := []PendingPromptReference{{ToolCallID: "question", Kind: PendingPromptKindQuestion}}
 	for name, execution := range map[string]TaskExecution{
 		"queued": {
 			Ref:            ref,
@@ -3042,7 +3042,7 @@ func TestAuthorityResolvePromptBatchUsesExactFullKey(t *testing.T) {
 	})
 
 	askID := uuid.NewString()
-	request := tools.AskQuestionRequest{ID: askID, StepID: uuid.NewString(), Question: "Proceed?"}
+	request := tools.AskQuestionRequest{ToolCallID: askID, StepID: uuid.NewString(), Question: "Proceed?"}
 	workflowRef := workflowExecutionRefForTest(t, "task-exact-prompt", "node-exact-prompt", nil)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	responseDone := make(chan promptAwaitTestResult, 1)
@@ -3080,8 +3080,8 @@ func TestAuthorityResolvePromptBatchUsesExactFullKey(t *testing.T) {
 		t.Fatalf("wait agent execution: %v", err)
 	}
 	results, err := authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []PromptAnswerCommand{{
-		PromptID: clientui.PromptID(askID),
-		Payload:  PromptQuestionAnswerCommand{Answer: testQuestionResolution("late")},
+		ToolCallID: clientui.ToolCallID(askID),
+		Payload:    PromptQuestionAnswerCommand{Answer: testQuestionResolution("late")},
 	}})
 	if err != nil || len(results) != 1 || results[0].Outcome != PromptAnswerOutcomeSkipped {
 		t.Fatalf("retired prompt batch = (%+v, %v), want skipped", results, err)
@@ -3102,7 +3102,7 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	askID := uuid.NewString()
 	request := tools.AskQuestionRequest{
-		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
+		ToolCallID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-question-replacement", "node-question-replacement", nil)
 	handle, err := startWorkflowAgentExecutionForTest(t, authority, workflowAgentExecutionRequest{

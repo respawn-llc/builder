@@ -30,8 +30,8 @@ type AskQuestionBatchMetadata struct {
 	Origin              AskQuestionOrigin
 	RunID               string
 	StepID              string
-	PromptID            string
-	BatchPromptIDs      []string
+	ToolCallID          string
+	BatchToolCallIDs    []string
 	CandidateOrdinal    int
 	PreparedPromptCount int
 }

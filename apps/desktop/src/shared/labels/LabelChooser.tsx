@@ -33,7 +33,6 @@ import {
   type DeleteState,
   type RenameState,
 } from "./LabelChooserRows";
-import { labelNameContains, labelNamesEqual } from "./labelComparison";
 import type { LabelFilterAction, LabelFilterState } from "./labelFilterState";
 import {
   handleLabelChooserSearchKeyDown,
@@ -69,6 +68,18 @@ export type LabelChooserProps = Readonly<{
 }>;
 
 type LabelChooserChoice = Readonly<{ kind: "unlabeled" }> | Readonly<{ kind: "label"; label: ProjectLabel }>;
+
+function prepareLabelComparison(value: string): string {
+  return value.normalize("NFC").toUpperCase().normalize("NFC");
+}
+
+function labelNamesEqual(left: string, right: string): boolean {
+  return prepareLabelComparison(left) === prepareLabelComparison(right);
+}
+
+function labelNameContains(name: string, query: string): boolean {
+  return prepareLabelComparison(name).includes(prepareLabelComparison(query));
+}
 
 function renderLabelChooserSearch({
   canCreate,

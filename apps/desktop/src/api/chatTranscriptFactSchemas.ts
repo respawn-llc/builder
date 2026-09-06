@@ -11,6 +11,7 @@ import {
   reasoningIdentitySchema,
   text,
   toolMetaSchema,
+  validateToolPresentationOwner,
 } from "./chatSchemas";
 
 export const assistantPhaseSchema = z.enum(["commentary", "final_answer"]);
@@ -83,7 +84,8 @@ export const inFlightToolSchema = z
     ToolName: identifier,
     Presentation: optionalNullable(toolMetaSchema),
   })
-  .strict();
+  .strict()
+  .superRefine(validateToolPresentationOwner);
 
 export const backgroundActivitySchema = z
   .object({

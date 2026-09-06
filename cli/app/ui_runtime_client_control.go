@@ -39,7 +39,7 @@ func (c *sessionRuntimeClient) MutateChatSettings(operation serverapi.ChatSettin
 	ctx, cancel := context.WithTimeout(context.Background(), uiChatSettingsTimeout)
 	defer cancel()
 	response, err := c.chatSettings.MutateChatSettings(ctx, serverapi.ChatSettingsMutationRequest{
-		Target:    serverapi.SessionChatSettingsTarget(sessionID),
+		SessionID: sessionID,
 		Operation: operation,
 	})
 	if err != nil {

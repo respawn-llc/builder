@@ -5,15 +5,17 @@ import (
 	"testing"
 
 	"core/server/session"
+	"core/shared/transcript"
 )
 
-func TestQuestionHistoryProjectionSkipsMalformedCompletionPresentation(t *testing.T) {
+func TestQuestionHistoryProjectionHandlesMalformedCompletionPresentation(t *testing.T) {
 	tests := []struct {
 		name         string
 		version      int
 		presentation json.RawMessage
 		output       json.RawMessage
 		selected     *int
+		wantError    bool
 	}{
 		{
 			name:     "v2 absent presentation",
@@ -27,11 +29,12 @@ func TestQuestionHistoryProjectionSkipsMalformedCompletionPresentation(t *testin
 			presentation: json.RawMessage(`{"ToolName":"ask_question"}`),
 			output:       json.RawMessage(`"flattened"`),
 			selected:     sessionViewIntPointer(1),
+			wantError:    true,
 		},
 		{
 			name:         "v2 selected option outside Suggestions",
 			version:      session.EventLogVersionV2,
-			presentation: questionHistoryPresentation(`["only"]`),
+			presentation: questionHistoryPresentation([]string{"only"}),
 			output:       json.RawMessage(`"flattened"`),
 			selected:     sessionViewIntPointer(2),
 		},
@@ -44,7 +47,7 @@ func TestQuestionHistoryProjectionSkipsMalformedCompletionPresentation(t *testin
 		{
 			name:         "v1 non-string flattened output",
 			version:      session.EventLogVersionV1,
-			presentation: questionHistoryPresentation(`[]`),
+			presentation: questionHistoryPresentation(nil),
 			output:       json.RawMessage(`{"summary":"not a string"}`),
 			selected:     nil,
 		},
@@ -88,6 +91,12 @@ func TestQuestionHistoryProjectionSkipsMalformedCompletionPresentation(t *testin
 				}
 			}
 			projected, err := projectQuestionHistoryRecord(record, test.version)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("project malformed completion succeeded, want contract error")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("project malformed completion: %v", err)
 			}
@@ -98,11 +107,14 @@ func TestQuestionHistoryProjectionSkipsMalformedCompletionPresentation(t *testin
 	}
 }
 
-func questionHistoryPresentation(suggestionsJSON string) json.RawMessage {
-	return json.RawMessage(
-		`{"ToolName":"ask_question","Question":"Choose","Suggestions":` +
-			suggestionsJSON + `}`,
-	)
+func questionHistoryPresentation(suggestions []string) json.RawMessage {
+	return transcript.EncodeToolCallMeta(transcript.ToolCallMeta{
+		ToolName:       "ask_question",
+		Presentation:   transcript.ToolPresentationAskQuestion,
+		RenderBehavior: transcript.ToolCallRenderBehaviorAskQuestion,
+		Question:       "Choose",
+		Suggestions:    suggestions,
+	})
 }
 
 func sessionViewIntPointer(value int) *int {

@@ -1,0 +1,155 @@
+.transcript-tool-sections {
+  display: grid;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.transcript-tool-plain-text {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow: auto hidden;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
+  user-select: text;
+}
+
+.transcript-tool-status {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-tool-command-summary {
+  display: block;
+  min-inline-size: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-tool-exit-code {
+  justify-self: end;
+  color: var(--color-error);
+  font-family: var(--font-mono);
+}
+
+.transcript-tool-static-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+}
+
+.transcript-tool-static-icon {
+  display: grid;
+  place-items: center;
+}
+
+.transcript-patch-summary {
+  display: grid;
+  min-inline-size: 0;
+  gap: var(--space-1);
+}
+
+.transcript-patch-summary-label {
+  min-inline-size: 0;
+}
+
+.transcript-patch-summary-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-inline-size: 0;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-inline-start: var(--space-2);
+}
+
+.transcript-patch-path {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+
+.transcript-patch-counts {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+}
+
+.transcript-patch-count--removed {
+  color: var(--color-error);
+}
+
+.transcript-patch-count--added {
+  color: var(--color-success);
+}
+
+.transcript-patch-details,
+.transcript-patch-files,
+.transcript-patch-file {
+  display: grid;
+  min-inline-size: 0;
+}
+
+.transcript-patch-files {
+  gap: var(--space-3);
+}
+
+.transcript-patch-diagnostic {
+  margin-block-start: 1lh;
+}
+
+.transcript-patch-file {
+  gap: var(--space-2);
+}
+
+.transcript-patch-detail-path {
+  display: flex;
+  min-inline-size: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.transcript-patch-source-line {
+  min-inline-size: 0;
+  min-block-size: 1lh;
+  padding-inline: var(--space-2);
+}
+
+.transcript-patch-source-line::before {
+  display: inline-block;
+  inline-size: 1ch;
+  user-select: none;
+}
+
+.transcript-patch-source-line--removed::before {
+  content: "-";
+}
+
+.transcript-patch-source-line--added::before {
+  content: "+";
+}
+
+.transcript-patch-source-line--removed {
+  --syntax-highlighted-code-semantic-color: var(--color-error);
+
+  color: var(--color-error);
+}
+
+.transcript-patch-source-line--added {
+  --syntax-highlighted-code-semantic-color: var(--color-success);
+
+  color: var(--color-success);
+}

@@ -72,13 +72,13 @@ func TestPendingWorkCapacityRejectsWithoutMutation(t *testing.T) {
 	engine := pendingWorkTestEngine(t, Config{Model: "gpt-5"})
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 	for index := range runtimeinput.PendingWorkCapacity {
-		if _, err := engine.messageFlow.QueueUserMessage(fmt.Sprintf("pending %d", index)); err != nil {
+		if _, err := engine.messageFlow.QueueUserMessage(plainQueuedUserInput(fmt.Sprintf("pending %d", index))); err != nil {
 			t.Fatal(err)
 		}
 	}
 	before := pendingWorkTestSnapshot(t, engine)
 
-	_, err := engine.QueueUserMessage(context.Background(), "rejected")
+	_, err := engine.QueueUserInput(context.Background(), plainQueuedUserInput("rejected"))
 	var typed *serverapi.PendingWorkCapacityError
 	if !errors.Is(err, runtimeinput.ErrPendingWorkCapacity) || !errors.As(err, &typed) {
 		t.Fatalf("capacity error = %T %v", err, err)
@@ -130,14 +130,17 @@ func TestRemovePendingWorkRestoresTypedMessageAndCompactionInput(t *testing.T) {
 	releaseMaintenance := pendingWorkTestHoldMaintenance(t, engine)
 
 	message := pendingWorkTestMust(t, func() (QueuedUserMessage, error) {
-		return engine.Steer(context.Background(), "restore message", nil)
+		return engine.SteerInput(context.Background(), QueuedUserInput{
+			ExecutionText:         "expanded restore message",
+			CanonicalPresentation: "/review restore message",
+		}, nil)
 	})
 	messageID := pendingWorkTestMust(t, func() (runtimeids.QueueItemID, error) {
 		return runtimeids.ParseQueueItemID(message.ID)
 	})
 	restoration, err := engine.RemovePendingWork(context.Background(), messageID)
 	if err != nil || restoration.Kind != runtimeinput.PendingWorkItemKindMessage ||
-		restoration.CanonicalInput != "restore message" {
+		restoration.CanonicalInput != "/review restore message" {
 		t.Fatalf("message removal = %+v/%v", restoration, err)
 	}
 

@@ -109,8 +109,9 @@ func queueMessageLifecycleTestSteers(t *testing.T, engine *Engine, texts ...stri
 		}
 		item, err := engine.messageFlow.QueueUserMessageWithID(
 			QueuedUserMessage{
-				ID:      runtimeids.NewQueueItemID().String(),
-				Message: steer.Message(),
+				ID:                    runtimeids.NewQueueItemID().String(),
+				Message:               steer.Message(),
+				CanonicalPresentation: text,
 			},
 			queuedUserMessageAssociation{steerAdmission: engine.nextPendingWorkSteerAdmission()},
 		)

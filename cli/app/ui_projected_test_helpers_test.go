@@ -91,8 +91,8 @@ func resolvedPromptBatchResponse(request serverapi.PromptAnswerBatchRequest) ser
 	results := make([]serverapi.PromptAnswerBatchResult, 0, len(request.Entries))
 	for _, entry := range request.Entries {
 		results = append(results, serverapi.PromptAnswerBatchResult{
-			PromptID: entry.PromptID,
-			Outcome:  serverapi.PromptAnswerBatchOutcomeResolved,
+			ToolCallID: entry.ToolCallID,
+			Outcome:    serverapi.PromptAnswerBatchOutcomeResolved,
 		})
 	}
 	return serverapi.PromptAnswerBatchResponse{Results: results}
@@ -273,7 +273,7 @@ func testQuestionPrompt(id, question string, suggestions ...string) clientui.Tra
 	return clientui.TranscriptPrompt{
 		Kind:        clientui.TranscriptPromptKindQuestion,
 		Status:      clientui.TranscriptPromptStatusPending,
-		PromptID:    clientui.PromptID(id),
+		ToolCallID:  clientui.ToolCallID(id),
 		SessionID:   ongoingTestSessionID(),
 		StepID:      ongoingTestStepID(),
 		Question:    question,
@@ -286,7 +286,7 @@ func testApprovalPrompt(id, question string, decisions ...clientui.ApprovalDecis
 	return clientui.TranscriptPrompt{
 		Kind:            clientui.TranscriptPromptKindApproval,
 		Status:          clientui.TranscriptPromptStatusPending,
-		PromptID:        clientui.PromptID(id),
+		ToolCallID:      clientui.ToolCallID(id),
 		SessionID:       ongoingTestSessionID(),
 		StepID:          ongoingTestStepID(),
 		Question:        question,

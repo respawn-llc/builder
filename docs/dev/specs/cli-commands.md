@@ -185,13 +185,15 @@
 - If pending Task Questions belong to several Sessions, the command exits with failure, answers nothing, and lists each candidate Session name and ID.
 - A Task selector that selects the invoking agent's `KENT_SESSION_ID` is rejected.
 - The show command writes the Question or access-request text.
+- For a consolidated outside-workspace access request, show and follow-up output list each distinct path string supplied by the model once, in first-attempt order, before the access options. A repeated identical supplied path appears once. Different aliases remain separate items even when they resolve to one target. Each item shows the model-provided path and, when different, the real resolved path.
+- A consolidated outside-workspace access request begins with `Agent wants to access a batch of files, but <count> are outside workspace dir:`, renders each path item as a bullet, and ends with `Allow this access?`.
 - When ordinary suggestions or access options exist, the show command writes `Suggestions:` and a one-based numbered list.
 - An ordinary recommended suggestion ends with ` (recommended)`.
 - Access-option labels come from the authoritative internal Approval request.
 - The show command writes `No questions pending` and succeeds when no ordinary Question or access request is pending.
 - `kent question answer` requires `--option <one-based-number>`, non-blank `--commentary <text>`, or both.
 - An ordinary Question supports numbered options and freeform answers.
-- A live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object to its typed Approval decision and includes optional `--commentary` directly in the Approval answer.
+- A live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object and submits the typed decision with optional `--commentary` through the shared server-owned Approval action.
 - Commentary alone never implies an access decision.
 - `kent question answer` writes `No pending questions at the moment for that session` and exits with status 1 when no ordinary Question or access request is pending.
 - After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions and access requests again.
@@ -265,21 +267,8 @@
 - Run steer requires a Session ID, rejects attempts by a Session to target itself, and prints `ok` when accepted.
 - The target prints `Steered message: <full text>` with no later delivery notice.
 - Run steer never starts or queues work for an idle Session; it fails with the equivalent `kent run --continue <session-id> <message>` command.
-- Run steer invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
-- `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
-- A steer issued from another Session contains exactly:
-
-```text
-Agent from session <source-session-id> said:
-> <submitted steer text>
-
-To respond, run: kent run steer <source-session-id> "message"
-```
-
-- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
-- The message includes the source Session ID and omits its name.
+- Agent-issued `kent run`, `kent run --continue`, and `kent run steer` must use the shared attribution, formatting, and prompt-history behavior defined in [Core Tools And Runtime Integration](core-runtime-tools.md#core-tools-and-runtime-integration).
 - A present malformed `KENT_SESSION_ID` fails Run steer before submission. An absent or blank value uses human-steer behavior.
-- Prompt history stores the complete wrapped message.
 - `kent run stop <session-id>` interrupts an active Session regardless of client origin.
 - An exact Agent execution waiting for a Question or access request is active for Run stop even when it has no active model or tool step.
 - Run stop requires a Session ID, rejects attempts by a Session to target itself, prints `Stopped` when accepted, and prints `No active execution` as a successful no-op for idle or nonexistent Sessions.

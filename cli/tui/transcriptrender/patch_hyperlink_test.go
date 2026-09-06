@@ -29,21 +29,18 @@ func TestPatchHyperlinks(t *testing.T) {
 	assertPatchLink(t, RenderCommittedRow(patchRow(rendered), 12, "dark", ModeDetailExpanded).Lines, "/worktree/dir/file.go", "file:///worktree/dir/file.go")
 	moved := patchformat.Render("*** Begin Patch\n*** Update File: old.go\n*** Move to: new.go\n-old\n+new\n*** End Patch\n", "/worktree")
 	assertPatchLink(t, RenderCommittedRow(patchRow(moved), 80, "dark", ModeOngoing).Lines, "./new.go", "file:///worktree/new.go")
-	legacy := patchformat.Render(patch, "")
+	relative := patchformat.Render(patch, "")
 	for _, mode := range []Mode{ModeOngoing, ModeDetailExpanded} {
-		if text, _ := patchLink(RenderCommittedRow(patchRow(legacy), 80, "dark", mode).Lines); text != "" {
-			t.Fatalf("legacy path linked as %q", text)
+		if text, _ := patchLink(RenderCommittedRow(patchRow(relative), 80, "dark", mode).Lines); text != "" {
+			t.Fatalf("relative path linked as %q", text)
 		}
 	}
-	raw := clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{ToolName: "patch", Text: patch}}
-	for _, row := range []clientui.TranscriptCommittedRow{patchRow(legacy), raw} {
-		if text, _ := patchLink(RenderCommittedRow(row, 80, "dark", ModeOngoing).Lines); text != "" {
-			t.Fatalf("unstructured patch path linked as %q", text)
-		}
+	if text, _ := patchLink(RenderCommittedRow(patchRow(relative), 80, "dark", ModeOngoing).Lines); text != "" {
+		t.Fatalf("relative patch path linked as %q", text)
 	}
 }
-func patchRow(rendered patchformat.RenderedPatch) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{ToolName: "patch", Presentation: &transcript.ToolCallMeta{PatchRender: &rendered}}}
+func patchRow(presentation patchformat.Presentation) clientui.TranscriptCommittedRow {
+	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{ToolName: "patch", Presentation: &transcript.ToolCallMeta{ToolName: "patch", PatchPresentation: &presentation}}}
 }
 func patchLink(lines []Line) (text, url string) {
 	for _, line := range lines {

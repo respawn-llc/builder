@@ -43,7 +43,7 @@ func (a *recordingQuestionAttention) MarkTaskQuestionCleared(_ askquestion.AskQu
 }
 
 func (a *recordingQuestionAttention) MarkTaskQuestionSkipped(batch askquestion.AskQuestionBatchMetadata) {
-	a.skipped = append(a.skipped, batch.PromptID)
+	a.skipped = append(a.skipped, batch.ToolCallID)
 }
 
 func TestHandleTaskQuestionDeclineKeepsPreparedSuccessorsPending(t *testing.T) {
@@ -104,7 +104,6 @@ func taskQuestionRequestForTest(t *testing.T) TaskQuestionRequest {
 			SessionID:   "session-1",
 		},
 		Question: askquestion.AskQuestionRequest{
-			ID:         "ask-1",
 			Question:   "Proceed?",
 			Origin:     askquestion.AskQuestionOriginModelTool,
 			RunID:      "run-1",
@@ -114,8 +113,8 @@ func taskQuestionRequestForTest(t *testing.T) TaskQuestionRequest {
 				Origin:              askquestion.AskQuestionOriginModelTool,
 				RunID:               "run-1",
 				StepID:              "step-1",
-				PromptID:            "ask-1",
-				BatchPromptIDs:      []string{"ask-1", "ask-2"},
+				ToolCallID:          "ask-1",
+				BatchToolCallIDs:    []string{"ask-1", "ask-2"},
 				CandidateOrdinal:    0,
 				PreparedPromptCount: 2,
 			},

@@ -6,7 +6,7 @@ describe("questionAnswerBatchInput", () => {
       questionAnswerBatchInput({
         freeformAnswer: " \n ",
         kind: "ordinary",
-        promptID: "prompt-1",
+        toolCallID: "prompt-1",
         selectedOptionNumber: 1,
         sessionID: "session-1",
         stepID: "step-1",
@@ -17,7 +17,7 @@ describe("questionAnswerBatchInput", () => {
         commentary: " keep this ",
         decision: "allow_once",
         kind: "approval",
-        promptID: "prompt-2",
+        toolCallID: "prompt-2",
         sessionID: "session-1",
         stepID: "step-1",
       }).entries[0],

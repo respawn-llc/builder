@@ -270,8 +270,8 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 		}
 	}
 	background.SetMinimumExecToBgTime(opts.MinimumExecToBgTime)
-	patchOutsideWorkspaceApprover := NewOutsideWorkspaceApprover(broker, "editing")
-	readOutsideWorkspaceApprover := NewOutsideWorkspaceApprover(broker, "reading")
+	patchOutsideWorkspaceApprover := NewOutsideWorkspaceApprover(broker)
+	readOutsideWorkspaceApprover := NewOutsideWorkspaceApprover(broker)
 	var editPathDenyPolicy tools.PathDenyPolicy
 	if enabledToolsNeedEditDenyPolicy(opts.Enabled) {
 		var err error

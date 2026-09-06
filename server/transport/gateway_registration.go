@@ -299,6 +299,8 @@ func routeScopePolicy(scope sharedpb.ScopePolicy) apicontract.ScopePolicy {
 		return apicontract.ScopeProcessActiveProject
 	case sharedpb.ScopePolicy_SCOPE_POLICY_NOTIFICATION:
 		return apicontract.ScopeNotification
+	case sharedpb.ScopePolicy_SCOPE_POLICY_CHAT_TARGET:
+		return apicontract.ScopeChatTarget
 	default:
 		return ""
 	}

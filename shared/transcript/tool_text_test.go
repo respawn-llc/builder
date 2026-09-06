@@ -22,7 +22,6 @@ func TestCompactToolCallText(t *testing.T) {
 		want string
 	}{
 		{name: "compact text", meta: &ToolCallMeta{CompactText: "/tmp/file.go"}, want: "/tmp/file.go"},
-		{name: "patch summary", meta: &ToolCallMeta{PatchSummary: "cli/app"}, want: "cli/app"},
 		{name: "command", meta: &ToolCallMeta{Command: "go test ./..."}, want: "go test ./..."},
 		{name: "first text line", text: "pwd\n/tmp", want: "pwd"},
 		{name: "inline meta removed", text: "pwd" + InlineMetaSeparator + "timeout", want: "pwd"},
@@ -50,12 +49,8 @@ func TestDetailedToolCallText(t *testing.T) {
 		t.Fatalf("DetailedToolCallText = %q, want command before output", got)
 	}
 
-	patchMeta := &ToolCallMeta{
-		ToolName:    "patch",
-		PatchDetail: "cli/tui/model.go\n- old\n+ new",
-		Command:     "fallback command",
-	}
-	if got := DetailedToolCallText(patchMeta, "raw patch output"); got != "cli/tui/model.go\n- old\n+ new" {
-		t.Fatalf("DetailedToolCallText patch = %q, want full patch detail", got)
+	patchMeta := &ToolCallMeta{ToolName: "patch"}
+	if got := DetailedToolCallText(patchMeta, "raw patch output"); got != "raw patch output" {
+		t.Fatalf("DetailedToolCallText patch = %q, want supplied fallback text", got)
 	}
 }

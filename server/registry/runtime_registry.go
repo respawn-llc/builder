@@ -698,9 +698,13 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(ctx context.Context, id s
 	}
 	var sub *transcriptSubscription
 	err = entry.engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+		tailPage, pageErr := entry.engine.TranscriptNewestSegmentPage()
+		if pageErr != nil {
+			return fmt.Errorf("read transcript hydration tail segment: %w", pageErr)
+		}
 		var subscribeErr error
 		sub, subscribeErr = entry.sessionFeed.Subscribe(func() (clientui.TranscriptHydration, error) {
-			return r.composeTranscriptHydration(ctx, id, entry, snapshot)
+			return r.composeTranscriptHydration(ctx, id, entry, snapshot, tailPage)
 		})
 		return subscribeErr
 	})
@@ -726,7 +730,7 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	if entry == nil {
 		return fmt.Errorf(
 			"publish pending prompt %q for session %s generation %d: %w",
-			req.ID,
+			req.ToolCallID,
 			resource.SessionID(),
 			resource.Generation(),
 			serverapi.ErrStreamUnavailable,
@@ -749,7 +753,7 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	if !projected {
 		return fmt.Errorf(
 			"publish pending prompt %q for session %s generation %d: %w",
-			req.ID,
+			req.ToolCallID,
 			resource.SessionID(),
 			resource.Generation(),
 			serverapi.ErrStreamUnavailable,
@@ -799,7 +803,7 @@ func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, 
 		logAttentionNotificationOperationFailure(
 			"publish workflow prompt resolution event",
 			sessionID,
-			snapshot.Request.ID,
+			snapshot.Request.ToolCallID,
 			err,
 		)
 	}

@@ -145,6 +145,8 @@ type Engine struct {
 	lifecycleClosed         bool
 	closed                  atomic.Bool
 	runtimeFIFO             *runtimeOperationFIFO
+	approvalCommentaryMu    sync.Mutex
+	approvalCommentary      map[string][]runtimeDeferred[struct{}]
 	pendingWorkSteerOrdinal atomic.Uint64
 
 	store                       *session.Store
@@ -374,6 +376,7 @@ func (e *Engine) Close() error {
 		return nil
 	}
 	e.ensureLifecycle()
+	e.runtimeFIFO.beginClose()
 	interruptErr := e.Interrupt()
 	e.lifecycleMu.Lock()
 	if e.lifecycleClosed {
@@ -382,7 +385,6 @@ func (e *Engine) Close() error {
 	}
 	e.lifecycleClosed = true
 	e.closed.Store(true)
-	e.runtimeFIFO.beginClose()
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {
@@ -510,23 +512,68 @@ func (e *Engine) launchLifecycleTaskWithCompletion(
 }
 
 type QueuedUserMessage struct {
-	ID      string
-	Message llm.Message
+	ID                    string
+	Message               llm.Message
+	CanonicalPresentation string
+}
+
+type QueuedUserInput struct {
+	ExecutionText         string
+	CanonicalPresentation string
+}
+
+func (i QueuedUserInput) Validate() error {
+	if strings.TrimSpace(i.ExecutionText) == "" {
+		return errors.New("queued user input requires execution text")
+	}
+	if strings.TrimSpace(i.CanonicalPresentation) == "" {
+		return errors.New("queued user input requires canonical presentation")
+	}
+	return nil
+}
+
+func plainQueuedUserInput(text string) QueuedUserInput {
+	return QueuedUserInput{ExecutionText: text, CanonicalPresentation: text}
 }
 
 func (e *Engine) QueueUserMessage(ctx context.Context, text string) (QueuedUserMessage, error) {
-	return e.queueUserMessage(ctx, text, false, nil)
+	return e.queueUserInput(ctx, plainQueuedUserInput(text), false, false, nil)
 }
 
-func (e *Engine) queueUserMessage(ctx context.Context, text string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return e.queueMessage(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, forceAutoDrain, accept)
+func (e *Engine) QueueUserInput(ctx context.Context, input QueuedUserInput) (QueuedUserMessage, error) {
+	return e.queueUserInput(ctx, input, false, true, nil)
+}
+
+func (e *Engine) QueueUserInputWithAcceptance(
+	ctx context.Context,
+	input QueuedUserInput,
+	accept CommandAcceptance,
+) (QueuedUserMessage, error) {
+	return e.queueUserInput(ctx, input, false, true, accept)
+}
+
+func (e *Engine) queueUserInput(
+	ctx context.Context,
+	input QueuedUserInput,
+	forceAutoDrain bool,
+	autoStart bool,
+	accept CommandAcceptance,
+) (QueuedUserMessage, error) {
+	if err := input.Validate(); err != nil {
+		return QueuedUserMessage{}, err
+	}
+	return e.queueMessage(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(input.ExecutionText)}, input.CanonicalPresentation, forceAutoDrain, autoStart, accept)
 }
 
 func (e *Engine) QueueAgentSteer(ctx context.Context, steer AgentSteer, accept CommandAcceptance) (QueuedUserMessage, error) {
-	return e.queueMessage(ctx, steer.Message(), true, accept)
+	message := steer.Message()
+	if message.Content == nil {
+		return QueuedUserMessage{}, errInvalidQueuedUserMessage
+	}
+	return e.queueMessage(ctx, message, *message.Content, true, true, accept)
 }
 
-func (e *Engine) queueMessage(ctx context.Context, message llm.Message, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueMessage(ctx context.Context, message llm.Message, presentation string, forceAutoDrain, autoStart bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	if e == nil || e.closed.Load() {
 		return QueuedUserMessage{}, ErrEngineClosed
 	}
@@ -535,17 +582,18 @@ func (e *Engine) queueMessage(ctx context.Context, message llm.Message, forceAut
 			return QueuedUserMessage{}, err
 		}
 	}
-	return e.queueMessageRaw(message, forceAutoDrain, accept)
+	return e.queueMessageRaw(message, presentation, forceAutoDrain, autoStart, accept)
 }
 
-func (e *Engine) queueMessageRaw(message llm.Message, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
+func (e *Engine) queueMessageRaw(message llm.Message, presentation string, forceAutoDrain, autoStart bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if err := e.requirePendingWorkCapacity(); err != nil {
 		return QueuedUserMessage{}, err
 	}
 	liveItem := QueuedUserMessage{
-		ID:      runtimeids.NewQueueItemID().String(),
-		Message: message,
+		ID:                    runtimeids.NewQueueItemID().String(),
+		Message:               message,
+		CanonicalPresentation: presentation,
 	}
 	lane := runtimeinput.PendingWorkLaneQueue
 	if forceAutoDrain {
@@ -559,14 +607,14 @@ func (e *Engine) queueMessageRaw(message llm.Message, forceAutoDrain bool, accep
 				return false, nil
 			}
 			livePublication = true
-			queuedItem, queueErr := e.acceptPendingMessage(liveItem, lane)
+			queuedItem, queueErr := e.acceptPendingMessage(liveItem, lane, autoStart)
 			if queueErr == nil {
 				item = queuedItem
 			}
 			if queueErr != nil {
 				queueItemID := mustQueueItemID(liveItem.ID)
 				e.liveRun.finishQueueItemPublication(queueItemID)
-				e.completeLiveRunQueueItems(map[string]struct{}{liveItem.ID: {}})
+				e.completeQueuedUserMessages(map[string]struct{}{liveItem.ID: {}})
 				return false, queueErr
 			}
 			return true, nil
@@ -578,7 +626,7 @@ func (e *Engine) queueMessageRaw(message llm.Message, forceAutoDrain bool, accep
 			queueItemID := mustQueueItemID(item.ID)
 			if e.liveRun.finishQueueItemPublication(queueItemID) {
 				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
-			} else if forceAutoDrain {
+			} else if autoStart {
 				e.scheduleQueuedUserInjectionsIfIdle()
 			}
 			return item, nil
@@ -600,26 +648,26 @@ func (e *Engine) queueMessageRaw(message llm.Message, forceAutoDrain bool, accep
 	var item QueuedUserMessage
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
 		var queueErr error
-		item, queueErr = e.acceptPendingMessage(liveItem, lane)
+		item, queueErr = e.acceptPendingMessage(liveItem, lane, autoStart)
 		return queueErr == nil, queueErr
 	})
 	if err := commandAcceptanceResult(committed, err); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	if forceAutoDrain {
+	if autoStart {
 		e.scheduleQueuedUserInjectionsIfIdle()
 	}
 	return item, nil
 }
 
-func (e *Engine) acceptPendingMessage(item QueuedUserMessage, lane runtimeinput.PendingWorkLane) (QueuedUserMessage, error) {
+func (e *Engine) acceptPendingMessage(item QueuedUserMessage, lane runtimeinput.PendingWorkLane, autoStart bool) (QueuedUserMessage, error) {
 	e.lifecycleMu.Lock()
 	if e.closed.Load() || e.lifecycleClosed {
 		e.lifecycleMu.Unlock()
 		return QueuedUserMessage{}, ErrEngineClosed
 	}
 	e.outputMutationMu.Lock()
-	association := queuedUserMessageAssociation{}
+	association := queuedUserMessageAssociation{autoStart: autoStart}
 	switch lane {
 	case runtimeinput.PendingWorkLaneQueue:
 	case runtimeinput.PendingWorkLaneSteer:
@@ -1232,7 +1280,18 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 			continue
 		}
 		hosted := executionCalls.hosted[ref.index]
-		normalized := normalizeToolCallForTranscript(hosted.Call, e.transcriptWorkingDir())
+		normalized, normalizeErr := normalizeToolCallForTranscriptChecked(
+			hosted.Call,
+			e.transcriptWorkingDir(),
+		)
+		if normalizeErr != nil {
+			return abortBeforeLocalExecution(fmt.Errorf(
+				"normalize hosted tool call presentation (call_id=%s tool=%s): %w",
+				hosted.Call.ID,
+				hosted.Call.Name,
+				normalizeErr,
+			))
+		}
 		if err := e.steer(stepID, steerEventIntent(Event{
 			Kind:                       EventToolCallStarted,
 			StepID:                     exactStepIDPointer(stepID),

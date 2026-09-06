@@ -57,9 +57,7 @@ type ToolCallMeta struct {
 	CompactText            string
 	InlineMeta             string
 	TimeoutLabel           string
-	PatchSummary           string
-	PatchDetail            string
-	PatchRender            *patchformat.RenderedPatch
+	PatchPresentation      *patchformat.Presentation
 	RenderHint             *ToolRenderHint
 	Question               string
 	Suggestions            []string
@@ -111,20 +109,17 @@ func ApplyToolResultPresentationDelta(
 	if delta != nil {
 		facts = delta.WholeFileDeletionFacts
 	}
-	rendered := patchformat.RenderedPatch{}
-	if meta.PatchRender != nil {
-		rendered = *meta.PatchRender
-	}
-	finalized, mismatch := patchformat.ApplyWholeFileDeletionFacts(rendered, facts)
-	if mismatch != nil {
-		return NormalizeToolCallMeta(meta), mismatch
-	}
-	if meta.PatchRender != nil {
-		meta.PatchRender = &finalized
-		meta.PatchSummary = strings.TrimSpace(finalized.SummaryText())
-		meta.PatchDetail = strings.TrimSpace(finalized.DetailText())
-		meta.CompactText = meta.PatchSummary
-		meta.Command = meta.PatchDetail
+	if meta.PatchPresentation != nil &&
+		meta.PatchPresentation.Variant == patchformat.PresentationVariantChanges &&
+		meta.PatchPresentation.Changes != nil {
+		finalized, mismatch := patchformat.ApplyWholeFileDeletionFacts(
+			*meta.PatchPresentation,
+			facts,
+		)
+		if mismatch != nil {
+			return NormalizeToolCallMeta(meta), mismatch
+		}
+		meta.PatchPresentation = &finalized
 	}
 	return NormalizeToolCallMeta(meta), nil
 }
@@ -168,26 +163,8 @@ func NormalizeToolCallMeta(in ToolCallMeta) ToolCallMeta {
 	if strings.TrimSpace(out.TimeoutLabel) == "" {
 		out.TimeoutLabel = strings.TrimSpace(out.InlineMeta)
 	}
-	if out.PatchRender != nil {
-		if strings.TrimSpace(out.PatchSummary) == "" {
-			out.PatchSummary = strings.TrimSpace(out.PatchRender.SummaryText())
-		}
-		if strings.TrimSpace(out.PatchDetail) == "" {
-			out.PatchDetail = strings.TrimSpace(out.PatchRender.DetailText())
-		}
-	}
-	if strings.TrimSpace(out.Command) == "" {
-		out.Command = strings.TrimSpace(out.PatchDetail)
-	}
 	if strings.TrimSpace(out.CompactText) == "" {
-		if strings.TrimSpace(out.PatchSummary) != "" {
-			out.CompactText = strings.TrimSpace(out.PatchSummary)
-		} else {
-			out.CompactText = strings.TrimSpace(out.Command)
-		}
-	}
-	if out.HasPatchDetail() {
-		out.OmitSuccessfulResult = true
+		out.CompactText = strings.TrimSpace(out.Command)
 	}
 	return out
 }
@@ -222,6 +199,10 @@ func (m *ToolCallMeta) Valid() bool {
 	if m == nil || strings.TrimSpace(m.ToolName) == "" {
 		return false
 	}
+	patchFamily := IsPatchFamilyToolName(m.ToolName)
+	if patchFamily != (m.PatchPresentation != nil) {
+		return false
+	}
 	switch m.Presentation {
 	case ToolPresentationDefault, ToolPresentationShell, ToolPresentationAskQuestion:
 	default:
@@ -232,6 +213,9 @@ func (m *ToolCallMeta) Valid() bool {
 	default:
 		return false
 	}
+	if patchFamily && !m.PatchPresentation.Valid() {
+		return false
+	}
 	return m.RenderHint == nil || m.RenderHint.Valid()
 }
 
@@ -239,16 +223,13 @@ func (m *ToolCallMeta) HasCompactText() bool {
 	return m != nil && strings.TrimSpace(m.CompactText) != ""
 }
 
-func (m *ToolCallMeta) HasPatchDetail() bool {
-	return m != nil && strings.TrimSpace(m.PatchDetail) != ""
-}
-
-func (m *ToolCallMeta) HasPatchSummary() bool {
-	return m != nil && strings.TrimSpace(m.PatchSummary) != ""
-}
-
 func (h *ToolRenderHint) Valid() bool {
 	if h == nil {
+		return false
+	}
+	switch h.ShellDialect {
+	case "", ToolShellDialectPosix, ToolShellDialectPowerShell, ToolShellDialectWindowsCommand:
+	default:
 		return false
 	}
 	switch h.Kind {

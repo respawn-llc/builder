@@ -316,22 +316,22 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 			if err != nil {
 				return nil, err
 			}
-			promptsByID := make(map[clientui.PromptID]PendingPromptSnapshot, len(prompts))
+			promptsByID := make(map[clientui.ToolCallID]PendingPromptSnapshot, len(prompts))
 			for _, prompt := range prompts {
-				if err := prompt.PromptID.Validate(); err != nil {
+				if err := prompt.ToolCallID.Validate(); err != nil {
 					return nil, fmt.Errorf("task %q session %q pending prompt identity: %w", taskID, execution.Agent.SessionID, err)
 				}
-				if _, duplicate := promptsByID[prompt.PromptID]; duplicate {
-					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, prompt.PromptID)
+				if _, duplicate := promptsByID[prompt.ToolCallID]; duplicate {
+					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, prompt.ToolCallID)
 				}
-				promptsByID[prompt.PromptID] = prompt
+				promptsByID[prompt.ToolCallID] = prompt
 			}
 			for _, promptReference := range execution.PendingPrompts {
 				if promptReference.Kind != sessionruntime.PendingPromptKindQuestion &&
 					promptReference.Kind != sessionruntime.PendingPromptKindSessionApproval {
 					continue
 				}
-				prompt, present := promptsByID[clientui.PromptID(promptReference.ID)]
+				prompt, present := promptsByID[promptReference.ToolCallID]
 				if !present {
 					continue
 				}
@@ -343,15 +343,15 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 					continue
 				}
 				if prompt.Approval != (promptReference.Kind == sessionruntime.PendingPromptKindSessionApproval) {
-					return nil, fmt.Errorf("task %q session %q prompt %q changed prompt kind", taskID, execution.Agent.SessionID, promptReference.ID)
+					return nil, fmt.Errorf("task %q session %q prompt for tool call %q changed prompt kind", taskID, execution.Agent.SessionID, promptReference.ToolCallID)
 				}
 				occurredAt := prompt.CreatedAt.UnixMilli()
 				if occurredAt <= 0 {
-					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, promptReference.ID)
+					return nil, fmt.Errorf("task %q session %q prompt for tool call %q has no occurrence time", taskID, execution.Agent.SessionID, promptReference.ToolCallID)
 				}
 				currentNode := workflowCurrentNodeReference(execution.Ref.CurrentNode)
 				out = append(out, attentionCandidate{item: serverapi.WorkflowAttentionItem{
-					ID:               liveQuestionAttentionID(execution.Agent.SessionID, question.prompt.StepID, question.prompt.PromptID),
+					ID:               liveQuestionAttentionID(execution.Agent.SessionID, question.prompt.StepID, question.prompt.ToolCallID),
 					Kind:             "question",
 					ProjectID:        task.ProjectID,
 					WorkflowID:       task.WorkflowID,
@@ -375,9 +375,9 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 func liveQuestionAttentionID(
 	sessionID runtimeids.SessionID,
 	stepID runtimeids.StepID,
-	promptID clientui.PromptID,
+	toolCallID clientui.ToolCallID,
 ) string {
-	return "question:" + sessionID.String() + ":" + stepID.String() + ":" + string(promptID)
+	return "question:" + sessionID.String() + ":" + stepID.String() + ":" + string(toolCallID)
 }
 
 func (a *Attention) attachLiveQuestionSessionNames(ctx context.Context, candidates []attentionCandidate) error {

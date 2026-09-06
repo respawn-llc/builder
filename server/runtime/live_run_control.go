@@ -295,7 +295,11 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	if err := context.Cause(ctx); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Message: message}
+	item := QueuedUserMessage{
+		ID:                    runtimeids.NewQueueItemID().String(),
+		Message:               message,
+		CanonicalPresentation: *message.Content,
+	}
 	accepted, err := runCommandAcceptance(accept, func() (bool, error) {
 		if beforeQueue != nil {
 			if err := beforeQueue(); err != nil {
@@ -310,14 +314,14 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 			return false, context.Canceled
 		}
 		committed = true
-		queuedItem, queueErr := e.acceptPendingMessage(item, runtimeinput.PendingWorkLaneSteer)
+		queuedItem, queueErr := e.acceptPendingMessage(item, runtimeinput.PendingWorkLaneSteer, true)
 		if queueErr == nil {
 			item = queuedItem
 		}
 		if queueErr != nil {
 			queueItemID := mustQueueItemID(item.ID)
 			e.liveRun.finishQueueItemPublication(queueItemID)
-			e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
+			e.completeQueuedUserMessages(map[string]struct{}{item.ID: {}})
 			return false, queueErr
 		}
 		return true, nil
@@ -380,7 +384,7 @@ func (e *Engine) takeLiveRunStepResult(stepID string) (LiveRunResultKind, llm.Me
 	e.ensureOrchestrationCollaborators()
 	return e.liveRun.takeStepResult(stepID)
 }
-func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
+func (e *Engine) completeQueuedUserMessages(ids map[string]struct{}) {
 	if e == nil || len(ids) == 0 {
 		return
 	}
@@ -409,12 +413,8 @@ func (e *Engine) removeStoppedLiveRunQueueItems(remove func() []QueuedUserMessag
 	if len(removed) == 0 {
 		return
 	}
-	failed := make(map[runtimeids.QueueItemID]struct{}, len(removed))
-	for _, item := range removed {
-		failed[mustQueueItemID(item.ID)] = struct{}{}
-	}
+	e.completeQueuedUserMessages(queuedUserMessageIDSet(removed))
 	e.publishPendingWorkChanged()
-	e.liveRun.clearStoppedQueueItems(failed)
 }
 
 func (c *liveRunCoordinator) hasActive() bool {
@@ -790,20 +790,6 @@ func (c *liveRunCoordinator) interruptWhere(matches func(*liveRunGroup) bool) (b
 	close(done)
 	c.publishCompleted(liveRunResultForGroup(group))
 	return true, ids, goalLoop
-}
-
-func (c *liveRunCoordinator) clearStoppedQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
-	if c == nil || len(ids) == 0 {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for id := range ids {
-		delete(c.stoppedQueueItems, id)
-	}
-	if len(c.stoppedQueueItems) == 0 {
-		c.stoppedQueueItems = nil
-	}
 }
 
 func (c *liveRunCoordinator) markStoppedQueueItemsLocked(ids map[runtimeids.QueueItemID]struct{}) {

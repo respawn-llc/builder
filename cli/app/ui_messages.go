@@ -103,13 +103,12 @@ type chatSettingsDoneMsg struct {
 }
 
 type injectedQueueCreateDoneMsg struct {
-	token                    uint64
-	sessionID                runtimeids.SessionID
-	localID                  string
-	item                     clientui.QueuedUserMessage
-	completed                bool
-	approvalCommentaryAnswer *clientui.PromptAnswer
-	err                      error
+	token     uint64
+	sessionID runtimeids.SessionID
+	localID   string
+	item      clientui.QueuedUserMessage
+	completed bool
+	err       error
 }
 
 type injectedQueueDiscardDoneMsg struct {
@@ -234,19 +233,19 @@ type clipboardTextCopyDoneMsg struct {
 }
 
 type askEvent struct {
-	prompt           clientui.TranscriptPrompt
-	resolvedPromptID clientui.PromptID
+	prompt             clientui.TranscriptPrompt
+	resolvedToolCallID clientui.ToolCallID
 }
 
-func (e askEvent) promptID() string {
-	if strings.TrimSpace(string(e.resolvedPromptID)) != "" {
-		return strings.TrimSpace(string(e.resolvedPromptID))
+func (e askEvent) toolCallID() string {
+	if strings.TrimSpace(string(e.resolvedToolCallID)) != "" {
+		return strings.TrimSpace(string(e.resolvedToolCallID))
 	}
-	return strings.TrimSpace(string(e.prompt.PromptID))
+	return strings.TrimSpace(string(e.prompt.ToolCallID))
 }
 
 func (e askEvent) isResolution() bool {
-	return strings.TrimSpace(string(e.resolvedPromptID)) != ""
+	return strings.TrimSpace(string(e.resolvedToolCallID)) != ""
 }
 
 type askEventMsg struct {

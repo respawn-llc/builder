@@ -19,6 +19,13 @@ type userTurnProjection struct {
 	HistoryText   string
 }
 
+func (p userTurnProjection) queuedInput() runtime.QueuedUserInput {
+	return runtime.QueuedUserInput{
+		ExecutionText:         p.ExecutionText,
+		CanonicalPresentation: p.HistoryText,
+	}
+}
+
 func queuedUserTurnResponse(compacted bool, queueItemID string) serverapi.RuntimeSubmitUserTurnResponse {
 	return serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, ResultKind: clientui.UserTurnResultKindQueued, Steered: true, QueueItemID: queueItemID}
 }
@@ -59,20 +66,52 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	request := canonicalUserTurnRequest(req)
 	return runRuntimeCommand(ctx, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
-		projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
-		if err != nil {
-			return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
-		}
-		attempt := newRuntimeCommandAttempt(ctx)
-		defer attempt.Finish()
-		response, commandErr := s.submitUserTurn(attempt, request, projection, req)
-		if commandErr == nil {
-			commandErr = response.Validate()
-		}
-		return response, attempt.Accepted(), commandErr
+		response, accepted, _, err := s.admitUserTurn(ctx, req)
+		return response, accepted, err
 	})
+}
+
+func (s *Service) AdmitChatUserTurn(
+	ctx context.Context,
+	req serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.ChatInputAdmissionResult, error) {
+	response, accepted, historyErr, commandErr := s.admitUserTurn(ctx, req)
+	if !accepted {
+		return serverapi.ChatInputAdmissionResult{}, commandErr
+	}
+	queueItemID, parseErr := runtimeids.ParseQueueItemID(response.QueueItemID)
+	return serverapi.ChatInputAdmissionResult{
+		QueueItemID:          queueItemID,
+		Accepted:             true,
+		PromptHistoryFailure: historyErr,
+	}, errors.Join(commandErr, parseErr)
+}
+
+func (s *Service) admitUserTurn(
+	ctx context.Context,
+	req serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.RuntimeSubmitUserTurnResponse, bool, error, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, nil, err
+	}
+	request := canonicalUserTurnRequest(req)
+	projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, nil, err
+	}
+	attempt := newRuntimeCommandAttempt(ctx)
+	defer attempt.Finish()
+	response, commandErr := s.submitUserTurn(attempt, request, projection, req)
+	if commandErr == nil {
+		commandErr = response.Validate()
+	}
+	accepted := attempt.Accepted()
+	var historyErr error
+	if accepted {
+		historyErr = s.recordAcceptedUserTurnHistory(request, projection)
+	}
+	return response, accepted, historyErr, commandErr
 }
 
 func (s *Service) submitUserTurn(
@@ -115,9 +154,9 @@ func (s *Service) submitUserTurn(
 				}
 			}
 		}
-		queued, err := engine.Steer(
+		queued, err := engine.SteerInput(
 			runCtx,
-			projection.ExecutionText,
+			projection.queuedInput(),
 			accept,
 		)
 		if err != nil {
@@ -180,22 +219,21 @@ func (s *Service) submitUserTurn(
 			}
 		}
 	}
-	if attempt.Accepted() {
-		s.recordAcceptedUserTurnHistory(request, projection)
-	}
 	return response, err
 }
 
 func (s *Service) recordAcceptedUserTurnHistory(
 	request sessionUserTurnRequest,
 	projection userTurnProjection,
-) {
+) error {
 	if _, err := s.recordPromptHistory(context.Background(), request.SessionID, projection.HistoryText); err != nil {
-		_ = s.withRuntime(context.Background(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		reportErr := s.withRuntime(context.Background(), request.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			engine.ReportPromptHistoryPersistError(err.Error())
 			return nil
 		})
+		return errors.Join(err, reportErr)
 	}
+	return nil
 }
 
 func (s *Service) runPreSubmitCompaction(

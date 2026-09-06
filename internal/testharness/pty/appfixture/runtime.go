@@ -424,14 +424,8 @@ func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (sessio
 	input := append(json.RawMessage(nil), entry.ToolInput...)
 	meta := tools.BuildCallTranscriptMeta(toolName, tools.ToolCallContext{WorkingDir: workspaceRoot}, input)
 	if patchText := strings.TrimSpace(entry.ToolPatch); patchText != "" {
-		rendered := patchformat.Render(patchText, workspaceRoot)
-		meta.PatchRender = &rendered
-		meta.PatchSummary = strings.TrimSpace(rendered.SummaryText())
-		meta.PatchDetail = strings.TrimSpace(rendered.DetailText())
-		meta.CompactText = meta.PatchSummary
-		if meta.Command == "" {
-			meta.Command = meta.PatchDetail
-		}
+		presentation := patchformat.Render(patchText, workspaceRoot)
+		meta.PatchPresentation = &presentation
 	}
 	output := append(json.RawMessage(nil), entry.ToolOutput...)
 	if len(output) == 0 {
