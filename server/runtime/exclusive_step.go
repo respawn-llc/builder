@@ -200,9 +200,6 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	if clearReasoningErr := s.engine.steer(stepID, steerClearReasoningStateIntent()); clearReasoningErr != nil {
 		err = errors.Join(err, fmt.Errorf("clear reasoning state at agent step termination: %w", clearReasoningErr))
 	}
-	if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
-		err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
-	}
 	finishedAt := time.Now().UTC()
 	status := statusFromRunError(err)
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)

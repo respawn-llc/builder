@@ -264,9 +264,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
 		}
-		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
-			return stepLoopResult{}, err
-		}
 		if err := e.stepLifecycle.BeginAgentStepBoundary(ctx); err != nil {
 			return stepLoopResult{}, err
 		}
@@ -520,9 +517,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 			if !assistantEventEmitted {
 				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
-			}
-			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
-				return stepLoopResult{}, err
 			}
 			resolvedCommittedStart, resolvedCommittedStartSet = committedAssistantCoordinateFields(resolvedCommittedCoordinate)
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil

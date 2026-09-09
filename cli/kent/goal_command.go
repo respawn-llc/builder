@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"core/prompts"
 	"core/shared/client"
@@ -16,8 +15,6 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
-
-const goalCommandTimeout = 5 * time.Second
 
 type goalRuntimeUnavailablePresentationError struct {
 	SessionID string
@@ -42,14 +39,16 @@ type goalCommandRemote interface {
 
 var goalCommandRemoteOpener = openGoalCommandRemote
 
-func withGoalCommandRemote(stderr io.Writer, run func(goalCommandRemote) int) int {
-	remote, err := goalCommandRemoteOpener(context.Background())
+func withGoalCommandRemote(stderr io.Writer, run func(context.Context, goalCommandRemote) int) int {
+	ctx, cancel := context.WithTimeout(context.Background(), client.GoalRequestTimeout)
+	defer cancel()
+	remote, err := goalCommandRemoteOpener(ctx)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, client.PresentGoalRequestError(err))
 		return 1
 	}
 	defer func() { _ = remote.Close() }()
-	return run(remote)
+	return run(ctx, remote)
 }
 
 func goalSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -105,12 +104,10 @@ func goalShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return withGoalCommandRemote(stderr, func(remote goalCommandRemote) int {
-		ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
-		defer cancel()
+	return withGoalCommandRemote(stderr, func(ctx context.Context, remote goalCommandRemote) int {
 		resp, err := remote.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: target})
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			fmt.Fprintln(stderr, client.PresentGoalRequestError(err))
 			return 1
 		}
 		if *jsonOut {
@@ -143,9 +140,7 @@ func goalSetSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		actor = "agent"
 		runID, stepID = sessionenv.LookupRunStepID(os.LookupEnv)
 	}
-	return withGoalCommandRemote(stderr, func(remote goalCommandRemote) int {
-		ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
-		defer cancel()
+	return withGoalCommandRemote(stderr, func(ctx context.Context, remote goalCommandRemote) int {
 		resp, err := remote.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{SessionID: target, Objective: objective, Actor: actor, RunID: runID, StepID: stepID})
 		if err != nil {
 			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
@@ -180,9 +175,7 @@ func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr
 		return 1
 	}
 	req := serverapi.RuntimeGoalStatusRequest{SessionID: target, Actor: "user"}
-	return withGoalCommandRemote(stderr, func(remote goalCommandRemote) int {
-		ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
-		defer cancel()
+	return withGoalCommandRemote(stderr, func(ctx context.Context, remote goalCommandRemote) int {
 		var (
 			resp    serverapi.RuntimeGoalShowResponse
 			callErr error
@@ -217,12 +210,10 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return withGoalCommandRemote(stderr, func(remote goalCommandRemote) int {
-		showCtx, showCancel := context.WithTimeout(context.Background(), goalCommandTimeout)
-		current, err := remote.ShowGoal(showCtx, serverapi.RuntimeGoalShowRequest{SessionID: target})
-		showCancel()
+	return withGoalCommandRemote(stderr, func(ctx context.Context, remote goalCommandRemote) int {
+		current, err := remote.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: target})
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			fmt.Fprintln(stderr, client.PresentGoalRequestError(err))
 			return 1
 		}
 		if goalAlreadyComplete(current.Goal) {
@@ -243,9 +234,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			actor = "agent"
 			runID, stepID = sessionenv.LookupRunStepID(os.LookupEnv)
 		}
-		completeCtx, completeCancel := context.WithTimeout(context.Background(), goalCommandTimeout)
-		defer completeCancel()
-		resp, err := remote.CompleteGoal(completeCtx, serverapi.RuntimeGoalStatusRequest{SessionID: target, Actor: actor, RunID: runID, StepID: stepID})
+		resp, err := remote.CompleteGoal(ctx, serverapi.RuntimeGoalStatusRequest{SessionID: target, Actor: actor, RunID: runID, StepID: stepID})
 		if err != nil {
 			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
@@ -278,9 +267,7 @@ func goalClearSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, prompts.RenderGoalAgentCommandDeniedPrompt())
 		return 1
 	}
-	return withGoalCommandRemote(stderr, func(remote goalCommandRemote) int {
-		ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
-		defer cancel()
+	return withGoalCommandRemote(stderr, func(ctx context.Context, remote goalCommandRemote) int {
 		if _, err := remote.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{SessionID: target, Actor: "user"}); err != nil {
 			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
@@ -306,9 +293,7 @@ func openGoalCommandRemote(ctx context.Context) (goalCommandRemote, error) {
 	if err != nil {
 		return nil, err
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, goalCommandTimeout)
-	defer cancel()
-	remote, err := client.DialConfiguredRemote(dialCtx, cfg)
+	remote, err := client.DialConfiguredRemote(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -334,5 +319,5 @@ func goalMutationCommandError(sessionID string, err error) error {
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return goalRuntimeUnavailablePresentationError{SessionID: strings.TrimSpace(sessionID)}
 	}
-	return err
+	return client.PresentGoalRequestError(err)
 }

@@ -48,8 +48,8 @@ func TestTranscriptContextGoalAndCompactionFactsRejectInvalidState(t *testing.T)
 	if err := (TranscriptContextUsage{WindowTokens: 0}).Validate(); err == nil {
 		t.Fatal("accepted context usage without a window")
 	}
-	if err := (GoalMutationResult{Pending: &GoalPreview{Objective: "queued", Status: RuntimeGoalStatusPaused}}).Validate(); err == nil {
-		t.Fatal("accepted non-active Goal preview")
+	if err := (GoalMutationResult{Goal: &Goal{}}).Validate(); err == nil {
+		t.Fatal("accepted invalid durable goal")
 	}
 	if err := (TranscriptGoalStatus{Goal: &TranscriptGoal{
 		Goal:      &Goal{ID: "goal-1", Objective: "Ship it", Status: RuntimeGoalStatusComplete, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)},

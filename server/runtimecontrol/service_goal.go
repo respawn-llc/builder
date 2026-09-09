@@ -197,36 +197,22 @@ func (s *Service) applyExactAgentGoalMutation(
 ) (runtime.GoalCommandResult, error) {
 	var result runtime.GoalCommandResult
 	err := s.authority.WithCurrentRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		availability, err := engine.GoalAvailability()
-		if err != nil {
-			return err
-		}
 		active := engine.ActiveRun()
 		if active == nil || active.RunID != runID.String() || active.StepID != stepID.String() {
 			return runtime.ErrAgentGoalStepInactive
 		}
-		var (
-			goal         session.GoalState
-			queued       bool
-			operationErr error
-		)
+		var operation runtime.CurrentGoalOperation
 		switch mutation.kind {
 		case goalMutationSet:
-			goal, queued, operationErr = engine.QueueAgentShellSetGoalForStep(stepID.String(), mutation.Objective, mutation.Actor)
+			operation = runtime.CurrentGoalSet{Objective: mutation.Objective, Actor: mutation.Actor}
 		case goalMutationStatus:
-			goal, queued, operationErr = engine.QueueGoalStatusForStep(stepID.String(), mutation.Status, mutation.Actor)
+			operation = runtime.CurrentGoalStatus{Status: mutation.Status, Actor: mutation.Actor}
 		default:
 			return errors.New("agent Goal mutation kind is invalid")
 		}
-		if operationErr != nil {
-			return operationErr
-		}
-		if !queued {
-			return runtime.ErrAgentGoalStepInactive
-		}
-		result = runtimeGoalResult(goal, false, runtime.GoalCommandQueued, session.CommitReceipt{}, session.CommitReceipt{})
-		result.Availability = &availability
-		return nil
+		var err error
+		result, err = engine.ApplyGoalForStep(stepID.String(), operation)
+		return err
 	})
 	return result, err
 }
@@ -323,8 +309,7 @@ func runtimeGoalResult(
 }
 
 func goalResultAccepted(result runtime.GoalCommandResult) bool {
-	return result.Disposition == runtime.GoalCommandQueued ||
-		result.Disposition == runtime.GoalCommandNoop ||
+	return result.Disposition == runtime.GoalCommandNoop ||
 		result.MetadataReceipt.Committed ||
 		result.NoticeReceipt.Committed
 }

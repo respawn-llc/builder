@@ -173,12 +173,3 @@ func (s *goalLoopState) CommitInterrupt() {
 	}
 	s.mu.Unlock()
 }
-
-func (s *goalLoopState) RestartNeeded() bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.interruptPending || s.lifecycle.IsSuspended()
-}
