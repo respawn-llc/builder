@@ -161,16 +161,17 @@ type Engine struct {
 	outputMutationMu sync.Mutex
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
-	queuedUserWorkMu          sync.Mutex
-	queuedUserWorkScheduled   bool
-	queuedUserWorkCompletion  runtimeDeferred[struct{}]
-	queuedUserWorkPauseCount  int
-	liveRun                   *liveRunCoordinator
-	activeStepGoalMutationsMu sync.Mutex
-	activeStepGoalMutations   map[string][]activeStepGoalMutation
-	pendingGoalLoopStart      bool
-	diagnostics               *diagnosticDedupeStore
-	toolCallStarts            *pendingToolCallStartStore
+	queuedUserWorkMu         sync.Mutex
+	queuedUserWorkScheduled  bool
+	queuedUserWorkCompletion runtimeDeferred[struct{}]
+	queuedUserWorkPauseCount int
+	liveRun                  *liveRunCoordinator
+	// Goal commits and notice admission share an order, independently of EIQ execution.
+	goalMutationMu         sync.Mutex
+	pendingGoalLoopStartMu sync.Mutex
+	pendingGoalLoopStart   bool
+	diagnostics            *diagnosticDedupeStore
+	toolCallStarts         *pendingToolCallStartStore
 
 	usageState           *usageTrackingState
 	goalLoop             *goalLoopState
@@ -1433,7 +1434,6 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 		stepID,
 		steerResultGroupCloseIntent(collector),
 	)
-	var goalErr error
 	if fatal := collector.fatalSnapshot(); fatal != nil {
 		return acceptedResponsePostJoinOutcome{}, fatal
 	}
@@ -1443,10 +1443,6 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 	}
 	if closeErr != nil {
 		return acceptedResponsePostJoinOutcome{results: results}, closeErr
-	}
-	goalErr = e.drainActiveStepGoalMutations(stepID)
-	if goalErr != nil {
-		return acceptedResponsePostJoinOutcome{results: results}, goalErr
 	}
 	return acceptedResponsePostJoinOutcome{
 		results:     results,

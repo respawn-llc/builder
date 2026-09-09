@@ -33,6 +33,9 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	if _, err := engine.SetGoal(context.Background(), "ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if len(events) != 2 {
 		t.Fatalf("events len = %d, want 2: %+v", len(events), events)
@@ -61,30 +64,19 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	}
 }
 
-func TestAcceptedGoalMutationContinuesAfterCallerCancellationStopsWait(t *testing.T) {
+func TestCommittedGoalReminderSurvivesCallerCancellation(t *testing.T) {
 	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), &fakeClient{}, Config{Model: "gpt-5"})
 	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("pause Runtime FIFO: %v", err)
 	}
 	caller, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		_, err := engine.SetGoal(caller, "accepted after disconnect", session.GoalActorUser)
-		done <- err
-	}()
-	waitForPendingRuntimeOperation(t, engine)
-
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("canceled Goal wait = %v, want canceled", err)
-		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("canceled Goal caller remained blocked")
+	result, err := engine.SetGoal(caller, "accepted after disconnect", session.GoalActorUser)
+	if err != nil || !result.MetadataReceipt.Committed {
+		t.Fatalf("SetGoal = %+v, %v", result, err)
 	}
-	if goal := engine.Goal(); goal != nil {
-		t.Fatalf("Goal applied before protected Runtime boundary: %+v", goal)
+	cancel()
+	if goal := engine.Goal(); goal == nil || goal.ID != result.ID {
+		t.Fatalf("Goal not persisted before protected Runtime boundary: %+v", goal)
 	}
 	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("drain accepted Goal mutation: %v", err)
@@ -94,7 +86,7 @@ func TestAcceptedGoalMutationContinuesAfterCallerCancellationStopsWait(t *testin
 	}
 }
 
-func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
+func TestAgentGoalPersistsBeforeReminderDrainsAfterToolCompletion(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
@@ -103,11 +95,15 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	stepID := runtimeTestStepID("goal-shell-drain")
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: stepID, snapshot: &RunSnapshot{RunID: "run-1", StepID: stepID}}
 
-	if _, queued, err := engine.QueueAgentShellSetGoal("queued goal", session.GoalActorAgent); err != nil || !queued {
-		t.Fatalf("QueueAgentShellSetGoal queued=%t err=%v, want queued", queued, err)
+	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	if g := engine.Goal(); g != nil {
-		t.Fatalf("goal applied before drain: %+v", g)
+	result, err := engine.ApplyGoalForStep(stepID, CurrentGoalSet{Objective: "queued goal", Actor: session.GoalActorAgent})
+	if err != nil || !result.MetadataReceipt.Committed {
+		t.Fatalf("ApplyGoalForStep = %+v, %v", result, err)
+	}
+	if g := engine.Goal(); g == nil || g.ID != result.ID {
+		t.Fatalf("goal not persisted before drain: %+v", g)
 	}
 	assistant := llm.Message{
 		Role:  llm.RoleAssistant,
@@ -120,16 +116,16 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
-	result := tools.Result{
+	toolResult := tools.Result{
 		CallID:  "call-shell",
 		Name:    toolspec.ToolExecCommand,
 		Output:  json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`),
 		Summary: textutil.Value("ok"),
 	}
-	if err := engine.steer(stepID, steerToolCompletionIntent(result)); err != nil {
+	if err := engine.steer(stepID, steerToolCompletionIntent(toolResult)); err != nil {
 		t.Fatalf("append tool completion: %v", err)
 	}
-	if err := engine.drainActiveStepGoalMutations(stepID); err != nil {
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("drain goal mutations: %v", err)
 	}
 
@@ -165,17 +161,17 @@ func TestQueuedAgentShellGoalCompleteSeesQueuedSet(t *testing.T) {
 	stepID := runtimeTestStepID("goal-shell-complete")
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: stepID, snapshot: &RunSnapshot{RunID: "run-1", StepID: stepID}}
 
-	if _, queued, err := engine.QueueAgentShellSetGoal("queued goal", session.GoalActorAgent); err != nil || !queued {
-		t.Fatalf("QueueAgentShellSetGoal queued=%t err=%v, want queued", queued, err)
+	if _, err := engine.ApplyGoalForStep(stepID, CurrentGoalSet{Objective: "queued goal", Actor: session.GoalActorAgent}); err != nil {
+		t.Fatal(err)
 	}
-	accepted, queued, err := engine.QueueAgentShellCompleteGoal(session.GoalActorAgent)
-	if err != nil || !queued {
-		t.Fatalf("QueueAgentShellCompleteGoal queued=%t err=%v, want queued completion of the queued set", queued, err)
+	accepted, err := engine.ApplyGoalForStep(stepID, CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorAgent})
+	if err != nil || !accepted.MetadataReceipt.Committed {
+		t.Fatalf("ApplyGoalForStep = %+v, %v", accepted, err)
 	}
 	if accepted.Objective != "queued goal" || accepted.Status != session.GoalStatusComplete {
 		t.Fatalf("accepted completion = %+v, want completed 'queued goal'", accepted)
 	}
-	if err := engine.drainActiveStepGoalMutations(stepID); err != nil {
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("drain goal mutations: %v", err)
 	}
 	if g := engine.Goal(); g == nil || g.Objective != "queued goal" || g.Status != session.GoalStatusComplete {
@@ -191,14 +187,14 @@ func TestQueuedAgentShellGoalSetRejectsPendingActiveGoal(t *testing.T) {
 	stepID := runtimeTestStepID("goal-shell-overwrite")
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: stepID, snapshot: &RunSnapshot{RunID: "run-1", StepID: stepID}}
 
-	if _, queued, err := engine.QueueAgentShellSetGoal("first goal", session.GoalActorAgent); err != nil || !queued {
-		t.Fatalf("QueueAgentShellSetGoal first queued=%t err=%v, want queued", queued, err)
+	if _, err := engine.ApplyGoalForStep(stepID, CurrentGoalSet{Objective: "first goal", Actor: session.GoalActorAgent}); err != nil {
+		t.Fatal(err)
 	}
 	var blocked session.GoalAgentOverwriteBlockedError
-	if _, queued, err := engine.QueueAgentShellSetGoal("second goal", session.GoalActorAgent); queued || !errors.As(err, &blocked) {
-		t.Fatalf("QueueAgentShellSetGoal second queued=%t err=%T %[2]v, want overwrite blocked", queued, err)
+	if _, err := engine.ApplyGoalForStep(stepID, CurrentGoalSet{Objective: "second goal", Actor: session.GoalActorAgent}); !errors.As(err, &blocked) {
+		t.Fatalf("second set = %v, want overwrite blocked", err)
 	}
-	if err := engine.drainActiveStepGoalMutations(stepID); err != nil {
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("drain goal mutations: %v", err)
 	}
 	if g := engine.Goal(); g == nil || g.Objective != "first goal" || g.Status != session.GoalStatusActive {
@@ -215,15 +211,15 @@ func TestAgentShellGoalSetForEndedStepIsRejected(t *testing.T) {
 	endedStepID := runtimeTestStepID("ended-goal-shell-step")
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: activeStepID, snapshot: &RunSnapshot{RunID: "run-2", StepID: activeStepID}}
 
-	if _, queued, err := engine.QueueAgentShellSetGoalForStep(endedStepID, "stale background goal", session.GoalActorAgent); queued || !errors.Is(err, ErrAgentGoalStepInactive) {
-		t.Fatalf("QueueAgentShellSetGoalForStep queued=%t err=%v, want inactive originating step", queued, err)
+	if _, err := engine.ApplyGoalForStep(endedStepID, CurrentGoalSet{Objective: "stale background goal", Actor: session.GoalActorAgent}); !errors.Is(err, ErrAgentGoalStepInactive) {
+		t.Fatalf("ApplyGoalForStep = %v, want inactive originating step", err)
 	}
 	if g := engine.Goal(); g != nil {
 		t.Fatalf("stale background shell mutated goal: %+v", g)
 	}
 }
 
-func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
+func TestUserGoalPersistsDuringActiveStep(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -231,17 +227,17 @@ func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
 	stepID := runtimeTestStepID("user-goal-mutation")
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: stepID, snapshot: &RunSnapshot{RunID: "run-1", StepID: stepID}}
 
-	accepted, queued, err := engine.QueueGoalSetForActiveStep("queued user goal", session.GoalActorUser)
-	if err != nil || !queued {
-		t.Fatalf("QueueGoalSetForActiveStep queued=%t err=%v, want queued", queued, err)
+	accepted, err := engine.ApplyGoalForStep(stepID, CurrentGoalSet{Objective: "queued user goal", Actor: session.GoalActorUser})
+	if err != nil || !accepted.MetadataReceipt.Committed {
+		t.Fatalf("ApplyGoalForStep = %+v, %v", accepted, err)
 	}
 	if accepted.Objective != "queued user goal" || accepted.Status != session.GoalStatusActive {
 		t.Fatalf("accepted goal = %+v, want active queued user goal", accepted)
 	}
-	if g := engine.Goal(); g != nil {
-		t.Fatalf("goal applied before drain: %+v", g)
+	if g := engine.Goal(); g == nil || g.ID != accepted.ID {
+		t.Fatalf("goal not persisted before drain: %+v", g)
 	}
-	if err := engine.drainActiveStepGoalMutations(stepID); err != nil {
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("drain goal mutations: %v", err)
 	}
 	if g := engine.Goal(); g == nil || g.Objective != "queued user goal" || g.Status != session.GoalStatusActive {
@@ -261,20 +257,23 @@ func TestQueuedActiveGoalResumeRestartsSuspendedGoalLoop(t *testing.T) {
 	}
 	engine.goalLoopState().Suspend()
 
-	accepted, queued, err := engine.QueueGoalStatusForActiveStep(session.GoalStatusActive, session.GoalActorUser)
-	if err != nil || !queued {
-		t.Fatalf("QueueGoalStatusForActiveStep queued=%t err=%v, want queued suspended resume", queued, err)
+	if err := engine.pauseRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := engine.ApplyGoalForStep(stepID, CurrentGoalStatus{Status: session.GoalStatusActive, Actor: session.GoalActorUser})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if accepted.Status != session.GoalStatusActive {
 		t.Fatalf("accepted status = %q, want active", accepted.Status)
 	}
-	if engine.pendingGoalLoopStart {
+	if engine.GoalLoopRunning() {
 		t.Fatal("goal loop restart must wait until active-step mutation drain")
 	}
-	if err := engine.drainActiveStepGoalMutations(stepID); err != nil {
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
 		t.Fatalf("drain goal mutations: %v", err)
 	}
-	if !engine.pendingGoalLoopStart {
+	if !engine.GoalLoopRunning() {
 		t.Fatal("expected queued active resume to schedule goal loop restart")
 	}
 }
@@ -292,8 +291,8 @@ func TestGoalMutationDuringClosingActiveStepReturnsBusy(t *testing.T) {
 	}
 	lifecycle.closeActiveStepQueue(stepID)
 
-	if _, queued, err := engine.QueueGoalSetForActiveStep("late goal", session.GoalActorUser); queued || !errors.Is(err, ErrAgentBusy) {
-		t.Fatalf("QueueGoalSetForActiveStep queued=%t err=%v, want busy without queue", queued, err)
+	if _, err := engine.ApplyGoalForStep(stepID, CurrentGoalSet{Objective: "late goal", Actor: session.GoalActorUser}); !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("ApplyGoalForStep = %v, want busy", err)
 	}
 	if g := engine.Goal(); g != nil {
 		t.Fatalf("goal applied while active-step queue is closing: %+v", g)
@@ -315,11 +314,17 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	assertGoalFeedbackThenStatusEvent(t, events, 0, set.GoalState, false)
 
 	paused, err := engine.SetGoalStatus(t.Context(), session.GoalStatusPaused, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("pause goal: %v", err)
+	}
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	assertGoalFeedbackThenStatusEvent(t, events, 2, paused.GoalState, false)
 
@@ -327,11 +332,17 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume goal: %v", err)
 	}
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	assertGoalFeedbackThenStatusEvent(t, events, 4, active.GoalState, false)
 
 	complete, err := engine.SetGoalStatus(t.Context(), session.GoalStatusComplete, session.GoalActorAgent)
 	if err != nil {
 		t.Fatalf("complete goal: %v", err)
+	}
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	assertGoalFeedbackThenStatusEvent(t, events, 6, complete.GoalState, false)
 
@@ -339,10 +350,13 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clear goal: %v", err)
 	}
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	assertGoalFeedbackThenStatusEvent(t, events, 8, cleared.GoalState, true)
 }
 
-func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *testing.T) {
+func TestGoalPersistenceAndReminderAdmissionHaveTheSameOrder(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 4)
 	var eventsMu sync.Mutex
@@ -373,9 +387,14 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		_, err := engine.SetGoal(context.Background(), "second goal", session.GoalActorUser)
 		secondDone <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
-	if goal := store.Meta().Goal; goal == nil || goal.Objective != "first goal" {
-		t.Fatalf("second mutation interleaved before first status event completed: %+v", goal)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if goal := store.Meta().Goal; goal == nil || goal.Objective != "second goal" {
+		t.Fatalf("second mutation did not persist while feedback was blocked: %+v", goal)
 	}
 	eventsMu.Lock()
 	if len(events) != 0 {
@@ -385,11 +404,8 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 
 	engine.outputMutationMu.Unlock()
 	outputLocked = false
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first SetGoal: %v", err)
-	}
-	if err := <-secondDone; err != nil {
-		t.Fatalf("second SetGoal: %v", err)
+	if err := engine.drainRuntimeOperations(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 
 	eventsMu.Lock()
@@ -951,8 +967,8 @@ func TestGoalLoopResumeDuringInterruptedTurnDoesNotLaunchDuplicateLoop(t *testin
 	if err := engine.Interrupt(); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
-	if _, queued, err := engine.QueueGoalStatusForActiveStep(session.GoalStatusActive, session.GoalActorUser); err != nil || !queued {
-		t.Fatalf("queue Goal resume during interrupted Step: queued=%t err=%v", queued, err)
+	if _, err := engine.SetGoalStatusAndStartLoop(t.Context(), session.GoalStatusActive, session.GoalActorUser); err != nil {
+		t.Fatal(err)
 	}
 	client.assertNotStarted(t, 2)
 
@@ -1007,9 +1023,9 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 	}()
 	waitGoalLoopContinuationEnforced(t, engine, false)
 
-	accepted, queued, err := engine.QueueGoalStatusForActiveStep(session.GoalStatusActive, session.GoalActorUser)
-	if err != nil || !queued {
-		t.Fatalf("QueueGoalStatusForActiveStep queued=%t err=%v, want queued resume during in-flight interrupt", queued, err)
+	accepted, err := engine.SetGoalStatusAndStartLoop(t.Context(), session.GoalStatusActive, session.GoalActorUser)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if accepted.Status != session.GoalStatusActive {
 		t.Fatalf("accepted status = %q, want active", accepted.Status)
@@ -1232,12 +1248,9 @@ func goalDeveloperMessages(t *testing.T, events []testPersistedEvent) []llm.Mess
 }
 
 func mustQueueAgentGoalCompletion(engine *Engine) {
-	_, queued, err := engine.QueueAgentShellCompleteGoal(session.GoalActorAgent)
+	_, err := engine.ApplyGoalForStep(engine.ActiveRun().StepID, CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorAgent})
 	if err != nil {
 		panic(fmt.Sprintf("queue active-Step Goal completion: %v", err))
-	}
-	if !queued {
-		panic("active-Step Goal completion was not queued")
 	}
 }
 

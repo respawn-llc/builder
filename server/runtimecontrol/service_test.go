@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"core/prompts"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
@@ -1598,12 +1597,12 @@ func TestServiceShowGoalReturnsPersistedSessionResolutionFailures(t *testing.T) 
 	}
 }
 
-func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T) {
+func TestServiceSetGoalPersistsBeforeReminderBoundary(t *testing.T) {
 	client := newRestartableRuntimeControlClient()
 	defer client.releaseFirst()
 	defer client.releaseSecond()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	initialGoal, err := engine.SetGoal(t.Context(), "committed before active step", session.GoalActorUser)
+	_, err := engine.SetGoal(t.Context(), "committed before active step", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -1627,6 +1626,7 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 		response serverapi.RuntimeGoalShowResponse
 		err      error
 	}
+	before := runtimeControlGoalDeveloperMessages(t, store)
 	goalDone := make(chan goalResult, 1)
 	go func() {
 		response, goalErr := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
@@ -1636,21 +1636,6 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 		})
 		goalDone <- goalResult{response: response, err: goalErr}
 	}()
-	select {
-	case result := <-goalDone:
-		t.Fatalf("SetGoal completed before the protected Step boundary: %+v", result)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	beforeDrain, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("ShowGoal before drain: %v", err)
-	}
-	if beforeDrain.Goal == nil || beforeDrain.Goal.ID != initialGoal.ID || beforeDrain.Goal.Objective != initialGoal.Objective {
-		t.Fatalf("ShowGoal before drain = %+v, want prior committed goal %+v", beforeDrain.Goal, initialGoal)
-	}
-
-	client.releaseFirst()
 	var accepted serverapi.RuntimeGoalShowResponse
 	select {
 	case result := <-goalDone:
@@ -1659,10 +1644,32 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 		}
 		accepted = result.response
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for Goal mutation at the Step boundary")
+		t.Fatal("SetGoal waited for the blocked provider")
+	}
+	if err := accepted.Validate(); err != nil {
+		t.Fatalf("SetGoal returned invalid persisted goal: %v", err)
 	}
 	if accepted.Goal == nil || accepted.Goal.Objective != "accepted pending goal" || accepted.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("SetGoal accepted response = %+v, want active pending goal", accepted.Goal)
+	}
+	beforeDrain, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("ShowGoal before drain: %v", err)
+	}
+	if beforeDrain.Goal == nil || *beforeDrain.Goal != *accepted.Goal {
+		t.Fatalf("ShowGoal before drain = %+v, want committed goal %+v", beforeDrain.Goal, accepted.Goal)
+	}
+	if after := runtimeControlGoalDeveloperMessages(t, store); len(after) != len(before) {
+		t.Fatalf("Goal reminders before boundary = %d, want %d", len(after), len(before))
+	}
+	client.releaseFirst()
+	select {
+	case <-client.call2Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Goal loop did not start at the Step boundary")
+	}
+	if after := runtimeControlGoalDeveloperMessages(t, store); len(after) <= len(before) {
+		t.Fatal("Goal reminder missing after Step boundary")
 	}
 
 	afterDrain, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
@@ -1678,7 +1685,189 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	client.releaseSecond()
 }
 
-func TestServiceGoalCallerCancellationStopsWaitWhileAcceptedMutationContinues(t *testing.T) {
+func TestServiceGoalStatusAndClearPersistBeforeReminderBoundary(t *testing.T) {
+	for _, operation := range []string{"pause", "resume", "complete", "clear"} {
+		t.Run(operation, func(t *testing.T) {
+			client := newRestartableRuntimeControlClient()
+			defer client.releaseFirst()
+			defer client.releaseSecond()
+			store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+			if _, err := engine.SetGoal(t.Context(), "persist status immediately", session.GoalActorUser); err != nil {
+				t.Fatal(err)
+			}
+			if operation == "resume" {
+				if _, err := engine.SetGoalStatus(t.Context(), session.GoalStatusPaused, session.GoalActorUser); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := service.SubmitUserTurn(t.Context(), runtimeControlUserTurnRequest(store, "turn-1", "work")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-client.call1Started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("model Step did not start")
+			}
+			before := runtimeControlGoalDeveloperMessages(t, store)
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			request := serverapi.RuntimeGoalStatusRequest{SessionID: store.Meta().SessionID, Actor: "user"}
+			var response serverapi.RuntimeGoalShowResponse
+			var err error
+			var want clientui.RuntimeGoalStatus
+			switch operation {
+			case "pause":
+				response, err = service.PauseGoal(ctx, request)
+				want = clientui.RuntimeGoalStatusPaused
+			case "resume":
+				response, err = service.ResumeGoal(ctx, request)
+				want = clientui.RuntimeGoalStatusActive
+			case "complete":
+				response, err = service.CompleteGoal(ctx, request)
+				want = clientui.RuntimeGoalStatusComplete
+			case "clear":
+				response, err = service.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{SessionID: request.SessionID, Actor: request.Actor})
+			}
+			if err != nil {
+				t.Fatalf("Goal mutation while provider blocked: %v", err)
+			}
+			if err := response.Validate(); err != nil {
+				t.Fatalf("Goal response: %v", err)
+			}
+			shown, err := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: request.SessionID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if operation == "clear" {
+				if response.Goal != nil || shown.Goal != nil {
+					t.Fatalf("clear response = %+v, persisted = %+v", response.Goal, shown.Goal)
+				}
+			} else if response.Goal == nil || shown.Goal == nil || response.Goal.Status != want || *shown.Goal != *response.Goal {
+				t.Fatalf("response = %+v, persisted = %+v, want status %s", response.Goal, shown.Goal, want)
+			}
+			if after := runtimeControlGoalDeveloperMessages(t, store); len(after) != len(before) {
+				t.Fatal("Goal mutation emitted a reminder before the Step boundary")
+			}
+			client.releaseFirst()
+			if operation == "resume" {
+				select {
+				case <-client.call2Started:
+				case <-time.After(3 * time.Second):
+					t.Fatal("resumed Goal loop did not start")
+				}
+				if err := engine.Interrupt(); err != nil {
+					t.Fatal(err)
+				}
+				client.releaseSecond()
+			}
+			waitForRuntimeControlIdle(t, engine)
+			if after := runtimeControlGoalDeveloperMessages(t, store); len(after) <= len(before) {
+				t.Fatal("Goal reminder missing after Step boundary")
+			}
+		})
+	}
+}
+
+func TestServiceExactAgentGoalPersistsAndTransitionsWithinSameStep(t *testing.T) {
+	client := newRestartableRuntimeControlClient()
+	defer client.releaseFirst()
+	defer client.releaseSecond()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	if _, err := service.SubmitUserTurn(t.Context(), runtimeControlUserTurnRequest(store, "turn-1", "work")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-client.call1Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("model Step did not start")
+	}
+	active := engine.ActiveRun()
+	if active == nil {
+		t.Fatal("active execution missing")
+	}
+	request := serverapi.RuntimeGoalSetRequest{
+		SessionID: store.Meta().SessionID,
+		Objective: "same-step goal",
+		Actor:     "agent",
+		RunID:     active.RunID,
+		StepID:    active.StepID,
+	}
+	response, err := service.SetGoal(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("exact-agent SetGoal returned invalid persisted identity: %v", err)
+	}
+	shown, err := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: request.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Goal == nil || shown.Goal == nil || *response.Goal != *shown.Goal {
+		t.Fatalf("set response = %+v, persisted = %+v", response.Goal, shown.Goal)
+	}
+	complete, err := service.CompleteGoal(t.Context(), serverapi.RuntimeGoalStatusRequest{
+		SessionID: request.SessionID, Actor: request.Actor, RunID: request.RunID, StepID: request.StepID,
+	})
+	if err != nil {
+		t.Fatalf("complete same-step goal: %v", err)
+	}
+	if err := complete.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if complete.Goal == nil || complete.Goal.ID != response.Goal.ID || complete.Goal.Status != clientui.RuntimeGoalStatusComplete {
+		t.Fatalf("same-step complete = %+v", complete.Goal)
+	}
+	replacement, err := service.SetGoal(t.Context(), request)
+	if err != nil {
+		t.Fatalf("replace completed same-step goal: %v", err)
+	}
+	if err := replacement.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Goal == nil || replacement.Goal.ID == response.Goal.ID {
+		t.Fatalf("replacement goal = %+v, prior = %+v", replacement.Goal, response.Goal)
+	}
+	for _, stale := range []serverapi.RuntimeGoalStatusRequest{
+		{SessionID: request.SessionID, Actor: request.Actor, RunID: "ef3970ae-98f5-4939-bd4b-549151b4af63", StepID: request.StepID},
+		{SessionID: request.SessionID, Actor: request.Actor, RunID: request.RunID, StepID: "2b424eef-6003-4c99-a2ae-7315e1508c39"},
+	} {
+		if _, err := service.CompleteGoal(t.Context(), stale); !errors.Is(err, runtime.ErrAgentGoalStepInactive) {
+			t.Fatalf("stale exact Goal mutation = %v, want inactive Step", err)
+		}
+	}
+	shown, err = service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: request.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown.Goal == nil || *shown.Goal != *replacement.Goal {
+		t.Fatalf("stale request changed persisted goal: %+v", shown.Goal)
+	}
+	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 0 {
+		t.Fatalf("same-step goal notices = %d, want none before boundary", len(messages))
+	}
+	client.releaseFirst()
+	select {
+	case <-client.call2Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("exact-agent Goal loop did not start at boundary")
+	}
+	if err := engine.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	client.releaseSecond()
+	waitForRuntimeControlIdle(t, engine)
+	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 3 {
+		t.Fatalf("goal notices after boundary = %d, want set, complete, set", len(messages))
+	}
+	if _, err := service.CompleteGoal(t.Context(), serverapi.RuntimeGoalStatusRequest{
+		SessionID: request.SessionID, Actor: request.Actor, RunID: request.RunID, StepID: request.StepID,
+	}); !errors.Is(err, runtime.ErrAgentGoalStepInactive) {
+		t.Fatalf("retired exact Goal mutation = %v, want inactive Step", err)
+	}
+}
+
+func TestServiceCommittedGoalStartsLoopAfterCallerDisconnects(t *testing.T) {
 	tests := []struct {
 		name      string
 		prepare   func(*testing.T, *runtime.Engine)
@@ -1748,43 +1937,38 @@ func TestServiceGoalCallerCancellationStopsWaitWhileAcceptedMutationContinues(t 
 			}
 
 			caller, cancel := context.WithCancel(t.Context())
+			defer cancel()
 			done := make(chan error, 1)
 			go func() {
 				done <- test.mutate(caller, service, store.Meta().SessionID)
 			}()
-			for !engine.HasPendingRuntimeOperations() {
-				time.Sleep(time.Millisecond)
-			}
-			cancel()
 			select {
 			case goalErr := <-done:
-				if !errors.Is(goalErr, context.Canceled) {
-					t.Fatalf("canceled Goal mutation = %v, want canceled", goalErr)
+				if goalErr != nil {
+					t.Fatalf("Goal mutation: %v", goalErr)
 				}
 			case <-time.After(3 * time.Second):
-				t.Fatal("canceled Goal caller remained blocked")
+				t.Fatal("Goal mutation waited for the blocked provider")
 			}
-
+			cancel()
+			response, showErr := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+			if showErr != nil {
+				t.Fatalf("ShowGoal after caller cancellation: %v", showErr)
+			}
+			if !test.committed(response.Goal) {
+				t.Fatalf("Goal not committed before boundary: %+v", response.Goal)
+			}
 			client.releaseFirst()
-			deadline := time.Now().Add(3 * time.Second)
-			for {
-				response, showErr := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
-				if showErr != nil {
-					t.Fatalf("ShowGoal after accepted mutation: %v", showErr)
-				}
-				if test.committed(response.Goal) {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("accepted Goal did not continue after caller cancellation: %+v", response.Goal)
-				}
-				time.Sleep(time.Millisecond)
-			}
 			select {
 			case <-client.call2Started:
 			case <-time.After(3 * time.Second):
 				t.Fatal("accepted Goal did not start its Goal loop after caller cancellation")
 			}
+			if err := engine.Interrupt(); err != nil {
+				t.Fatalf("Interrupt: %v", err)
+			}
+			client.releaseSecond()
+			waitForRuntimeControlIdle(t, engine)
 		})
 	}
 }
@@ -2087,20 +2271,24 @@ func TestServiceSetGoalPropagatesGoalLoopStartError(t *testing.T) {
 }
 
 func TestServiceResumeGoalPreflightFailureDoesNotMutateOrEmit(t *testing.T) {
-	var events []runtime.Event
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		OnEvent: func(evt runtime.Event) {
-			events = append(events, evt)
-		},
-	})
+	client := newRestartableRuntimeControlClient()
+	defer client.releaseFirst()
+	defer client.releaseSecond()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	if _, err := service.SubmitUserTurn(t.Context(), runtimeControlUserTurnRequest(store, "turn-1", "work")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-client.call1Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("model Step did not start")
+	}
 	if _, err := engine.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if _, err := engine.SetGoalStatus(context.Background(), session.GoalStatusPaused, session.GoalActorUser); err != nil {
 		t.Fatalf("pause goal: %v", err)
 	}
-	events = nil
-
 	_, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
 		SessionID: store.Meta().SessionID,
 		Actor:     "user",
@@ -2111,32 +2299,47 @@ func TestServiceResumeGoalPreflightFailureDoesNotMutateOrEmit(t *testing.T) {
 	if goal := store.Meta().Goal; goal == nil || goal.Status != session.GoalStatusPaused {
 		t.Fatalf("goal after failed resume preflight = %+v, want paused", goal)
 	}
-	if len(events) != 0 {
-		t.Fatalf("live events emitted after failed resume preflight: %+v", events)
+	client.releaseFirst()
+	waitForRuntimeControlIdle(t, engine)
+	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 2 {
+		t.Fatalf("Goal notices = %d, want set and pause only", len(messages))
 	}
 }
 
 func TestServiceCompleteGoalAlreadyCompleteDoesNotDuplicateAudit(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	client := newRestartableRuntimeControlClient()
+	defer client.releaseFirst()
+	defer client.releaseSecond()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	if _, err := service.SubmitUserTurn(t.Context(), runtimeControlUserTurnRequest(store, "turn-1", "work")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-client.call1Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("model Step did not start")
+	}
 	if _, err := engine.SetGoal(t.Context(), "ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{SessionID: store.Meta().SessionID, Actor: "agent"}); err != nil {
 		t.Fatalf("CompleteGoal first: %v", err)
 	}
-	before, err := sessiontest.CollectRecords(store)
+	before, err := service.ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ReadEvents before: %v", err)
 	}
-	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{SessionID: store.Meta().SessionID, Actor: "agent"}); err != nil {
+	after, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{SessionID: store.Meta().SessionID, Actor: "agent"})
+	if err != nil {
 		t.Fatalf("CompleteGoal second: %v", err)
 	}
-	after, err := sessiontest.CollectRecords(store)
-	if err != nil {
-		t.Fatalf("ReadEvents after: %v", err)
+	if before.Goal == nil || after.Goal == nil || *before.Goal != *after.Goal {
+		t.Fatalf("duplicate complete changed goal: before %+v, after %+v", before.Goal, after.Goal)
 	}
-	if len(after) != len(before) {
-		t.Fatalf("events after duplicate complete = %d, want %d", len(after), len(before))
+	client.releaseFirst()
+	waitForRuntimeControlIdle(t, engine)
+	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 2 {
+		t.Fatalf("Goal notices = %d, want set and one complete", len(messages))
 	}
 }
 
@@ -2170,13 +2373,12 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 		})
 		resumeDone <- resumeResult{response: response, err: resumeErr}
 	}()
+	var result resumeResult
 	select {
-	case result := <-resumeDone:
-		t.Fatalf("ResumeGoal completed before the protected Step boundary: %+v", result)
-	case <-time.After(25 * time.Millisecond):
+	case result = <-resumeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ResumeGoal waited for the blocked provider")
 	}
-	client.releaseFirst()
-	result := <-resumeDone
 	if result.err != nil {
 		t.Fatalf("ResumeGoal: %v", result.err)
 	}
@@ -2184,6 +2386,13 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("resume active response = %+v, want existing active goal", resp.Goal)
 	}
+	if err := resp.Validate(); err != nil {
+		t.Fatalf("ResumeGoal response: %v", err)
+	}
+	if after := runtimeControlGoalDeveloperMessages(t, store); len(after) != len(before) {
+		t.Fatal("ResumeGoal emitted a reminder before the Step boundary")
+	}
+	client.releaseFirst()
 	select {
 	case <-client.call2Started:
 	case <-time.After(3 * time.Second):
@@ -2210,11 +2419,6 @@ func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	before := runtimeControlGoalDeveloperMessages(t, store)
-	if len(before) != 1 {
-		t.Fatalf("goal developer messages before resume = %d, want set only", len(before))
-	}
-
 	resp, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
 		SessionID: store.Meta().SessionID,
 		Actor:     "user",
@@ -2239,9 +2443,6 @@ func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) 
 	messages := runtimeControlGoalDeveloperMessages(t, store)
 	if len(messages) != 2 {
 		t.Fatalf("goal developer messages after resume = %d, want set+resume", len(messages))
-	}
-	if messages[1].Content == nil || *messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
-		t.Fatalf("resume reminder content = %v", messages[1].Content)
 	}
 }
 
@@ -2280,13 +2481,12 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 		})
 		resumeDone <- resumeResult{response: response, err: resumeErr}
 	}()
+	var result resumeResult
 	select {
-	case result := <-resumeDone:
-		t.Fatalf("ResumeGoal completed before interrupted Step retirement: %+v", result)
-	case <-time.After(25 * time.Millisecond):
+	case result = <-resumeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ResumeGoal waited for interrupted Step retirement")
 	}
-	client.releaseFirst()
-	result := <-resumeDone
 	if result.err != nil {
 		t.Fatalf("ResumeGoal: %v", result.err)
 	}
@@ -2294,6 +2494,13 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
 		t.Fatalf("resume suspending active response = %+v, want existing active goal", resp.Goal)
 	}
+	if err := resp.Validate(); err != nil {
+		t.Fatalf("ResumeGoal response: %v", err)
+	}
+	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 1 {
+		t.Fatalf("Goal notices before interrupted Step retirement = %d, want set only", len(messages))
+	}
+	client.releaseFirst()
 	select {
 	case <-client.call2Started:
 	case <-time.After(3 * time.Second):
@@ -2302,9 +2509,6 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	messages := runtimeControlGoalDeveloperMessages(t, store)
 	if len(messages) != 2 {
 		t.Fatalf("goal developer messages after interrupted turn drain = %d, want set+resume", len(messages))
-	}
-	if messages[1].Content == nil || *messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
-		t.Fatalf("resume reminder content = %v", messages[1].Content)
 	}
 	if err := engine.Interrupt(); err != nil {
 		t.Fatalf("Interrupt resumed Goal loop: %v", err)

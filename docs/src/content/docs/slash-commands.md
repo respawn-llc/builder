@@ -31,6 +31,8 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 | `/init <instructions>`                                                                  | optional free-form text      | Run repository initialization. It reuses an empty session; otherwise it starts a fresh child session.                                                              |
 | `/prompt:<name>`                                                                        | optional trailing arguments  | Run a server-owned custom prompt command.                                                                                                                          |
 
+Goal changes are saved immediately, including during model work. Confirmation means the goal is saved; the model receives its reminder at the next step boundary.
+
 Kent discovers Markdown prompt commands on the server that owns the attached Project Workspace. Remote clients do not read server paths or receive prompt bodies in the command catalog.
 
 The effective roots, in descending precedence, are:
